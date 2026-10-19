@@ -11,3 +11,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+smallvec = { version = "1.16.3", features = ["serde", "union", "const_generics"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+serde_json = "1.0.154"
