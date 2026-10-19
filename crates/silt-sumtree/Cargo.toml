@@ -1,0 +1,13 @@
+[package]
+name = "silt-sumtree"
+description = "Persistent B-tree with summaries (trimmed fork of Zed's sum_tree)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

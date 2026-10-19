@@ -1,0 +1,17 @@
+[package]
+name = "silt-fake-agent"
+description = "Scripted ACP agent used in tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "silt-fake-agent"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]

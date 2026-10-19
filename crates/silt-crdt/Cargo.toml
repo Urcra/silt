@@ -1,0 +1,13 @@
+[package]
+name = "silt-crdt"
+description = "Eg-walker-style text CRDT with fragment index, anchors and attribution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
