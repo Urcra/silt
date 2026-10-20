@@ -139,6 +139,7 @@ export interface Presence {
   device: string
   file: string | null
   draft: string
+  agent: { name: string; state: string; streaming: string } | null
   age_ms: number
 }
 
@@ -146,6 +147,25 @@ export interface ReplicaDeltas {
   total: number
   deltas: string
   writable: boolean
+}
+
+export interface AgentStatus {
+  agent: string
+  state: 'starting' | 'ready' | 'working' | 'exited'
+  streaming: string
+  thinking: string
+  permissions: { id: number; title: string; options: [string, string][] }[]
+  error: string | null
+}
+
+export interface LiveState {
+  deltas: number
+  agent: AgentStatus | null
+}
+
+export interface AgentChoices {
+  agents: { id: string; name: string; description: string }[]
+  clones: { repo: string; path: string }[]
 }
 
 export interface Notification {
@@ -187,6 +207,14 @@ export const api = {
   presence: (id: string, state: { file: string | null; draft: string; leaving?: boolean }) =>
     request<{ people: Presence[] }>('POST', `${thread(id)}/presence`, state),
   liveUrl: (id: string) => `${thread(id)}/live?token=${token()}`,
+  agents: () => request<AgentChoices>('GET', '/api/agents'),
+  startAgent: (agent: string, where: { thread: string } | { clone: string }) =>
+    request<string>('POST', '/api/agents/start', { agent, ...where }),
+  prompt: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/prompt`, { text }),
+  cancelTurn: (id: string) => request<string>('POST', `${thread(id)}/agent/cancel`),
+  answer: (id: string, permission: number, option: string | null) =>
+    request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
+  stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
   inbox: (all: boolean) =>
     request<Notification[]>('GET', `/api/inbox${all ? '?all=true' : ''}`),
   readNotifications: (read: { ids?: number[]; all?: boolean }) => request<string>('POST', '/api/inbox/read', read),

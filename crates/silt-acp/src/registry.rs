@@ -133,7 +133,7 @@ pub fn cached(data_dir: &Path) -> Vec<AgentInfo> {
 }
 
 /// Downloads the registry into the cache when it is older than a day.
-pub async fn refresh(data_dir: &Path) {
+pub async fn refresh(data_dir: PathBuf) {
     let cache = data_dir.join("acp-registry.json");
     let fresh = std::fs::metadata(&cache)
         .and_then(|metadata| metadata.modified())

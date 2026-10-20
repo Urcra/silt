@@ -237,7 +237,13 @@ export function ThreadView({ id }: { id: string }) {
         )}
         {showDiff && diff.error && <p className="text-sm text-rose-700">{diff.error}</p>}
         {showDiff && diff.data !== undefined && <Diff text={diff.data} />}
-        {history.data?.thread && <LivePanel thread={history.data.thread} onChange={history.reload} />}
+        {history.data?.thread && (
+          <LivePanel
+            thread={history.data.thread}
+            onChange={history.reload}
+            lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}
+          />
+        )}
         {history.error && <p className="text-rose-700">{history.error}</p>}
         <div className="mt-4 space-y-1">
           {(history.data?.entries ?? []).map((entry, index, entries) => (

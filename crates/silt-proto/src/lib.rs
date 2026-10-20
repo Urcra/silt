@@ -406,6 +406,19 @@ pub struct PresenceUpdate {
     /// They closed the thread.
     #[serde(default)]
     pub leaving: bool,
+    /// The agent their machine runs in the thread, if any.
+    #[serde(default)]
+    pub agent: Option<AgentActivity>,
+}
+
+/// An agent at work in a thread, as its co-viewers see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentActivity {
+    pub name: String,
+    pub state: String,
+    /// What it is saying right now, not recorded yet.
+    #[serde(default)]
+    pub streaming: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +427,8 @@ pub struct Presence {
     pub device: String,
     pub file: Option<String>,
     pub draft: String,
+    #[serde(default)]
+    pub agent: Option<AgentActivity>,
     /// Milliseconds since they were last heard from.
     pub age_ms: u64,
 }

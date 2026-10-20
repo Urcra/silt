@@ -13,8 +13,19 @@ use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Recorde
 
 pub const AGENT: &str = "acp";
 
-pub fn session(agent: &str) -> String {
-    json!({"t": "session", "agent": agent}).to_string()
+/// Which agent ran the session: its registry id, its name, and its own id
+/// for the session, to load it again.
+pub fn session(id: &str, name: &str, native: &str) -> String {
+    json!({"t": "session", "id": id, "name": name, "native": native}).to_string()
+}
+
+/// The registry id and native session id a `session` record names.
+pub fn session_of(line: &str) -> Option<(String, String)> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    (record["t"] == "session").then(|| {
+        let field = |key: &str| record[key].as_str().unwrap_or_default().to_owned();
+        (field("id"), field("native"))
+    })
 }
 
 pub fn prompt(text: &str, by: &str) -> String {
@@ -150,7 +161,7 @@ mod tests {
     #[test]
     fn records_read_back_as_a_conversation() {
         let lines = [
-            session("Fake agent"),
+            session("fake", "Fake agent", "s1"),
             prompt("add acp", "alice"),
             thought("planning"),
             tool_call("c1", "Edit src/main.rs", "edit", Some(&json!({"path": "src/main.rs"}))),
@@ -166,5 +177,7 @@ mod tests {
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(marks.first(), Some(&Mark::PromptSubmitted));
         assert_eq!(marks.last(), Some(&Mark::Stopped));
+        assert_eq!(session_of(&lines[0]), Some(("fake".into(), "s1".into())));
+        assert_eq!(session_of(&lines[1]), None);
     }
 }

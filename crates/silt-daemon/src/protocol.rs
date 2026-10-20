@@ -143,6 +143,29 @@ pub enum Request {
     Live { thread: String },
     /// Lets `user` write into the thread, or stops it (ADR 0014).
     ThreadShare { thread: String, user: String, remove: bool },
+    /// The agents the web UI can start, and the clones to start new threads
+    /// in.
+    AcpAgents,
+    /// Starts an ACP agent in `thread`, or in a new thread of `clone`
+    /// (ADR 0014). Answers with the thread.
+    AcpStart {
+        #[serde(default)]
+        thread: Option<String>,
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        agent: String,
+    },
+    /// Sends the person's draft, with teammates' drafts, as the next prompt.
+    AcpPrompt { thread: String, text: String },
+    AcpCancel { thread: String },
+    /// Answers a permission request with an option, or refuses it.
+    AcpAnswer {
+        thread: String,
+        id: u64,
+        #[serde(default)]
+        option: Option<String>,
+    },
+    AcpStop { thread: String },
     Shutdown,
 }
 
@@ -458,4 +481,45 @@ pub struct ReplicaDeltas {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveState {
     pub deltas: usize,
+    /// The agent the web UI started in the thread, if any.
+    pub agent: Option<AgentStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStatus {
+    pub agent: String,
+    /// `starting`, `ready`, `working` or `exited`.
+    pub state: String,
+    /// What the agent is saying or thinking right now, not recorded yet.
+    pub streaming: String,
+    pub thinking: String,
+    pub permissions: Vec<PermissionAsked>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionAsked {
+    pub id: u64,
+    pub title: String,
+    /// Option ids and labels.
+    pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChoices {
+    pub agents: Vec<AgentChoice>,
+    pub clones: Vec<CloneInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChoice {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloneInfo {
+    pub repo: String,
+    pub path: PathBuf,
 }

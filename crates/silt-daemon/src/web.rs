@@ -69,6 +69,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
         .route("/api/threads/{id}/git/{oid}", get(git_text))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
+        .route("/api/agents", get(agents))
+        .route("/api/agents/start", post(agent_start))
+        .route("/api/threads/{id}/agent/prompt", post(agent_prompt))
+        .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
+        .route("/api/threads/{id}/agent/answer", post(agent_answer))
+        .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/inbox", get(inbox))
         .route("/api/inbox/read", post(inbox_read))
         .route("/api/mrs", get(merge_requests))
@@ -313,6 +319,61 @@ async fn live(State(web): State<Web>, Path(thread): Path<String>) -> HttpRespons
     axum::response::sse::Sse::new(stream)
         .keep_alive(axum::response::sse::KeepAlive::default())
         .into_response()
+}
+
+async fn agents(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::AcpAgents).await
+}
+
+#[derive(Deserialize)]
+struct AgentStart {
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    clone: Option<std::path::PathBuf>,
+    agent: String,
+}
+
+async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {
+    let request = Request::AcpStart {
+        thread: body.thread,
+        clone: body.clone,
+        agent: body.agent,
+    };
+    ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct AgentPrompt {
+    text: String,
+}
+
+async fn agent_prompt(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
+    ask(&web, Request::AcpPrompt { thread, text: body.text }).await
+}
+
+async fn agent_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::AcpCancel { thread }).await
+}
+
+#[derive(Deserialize)]
+struct AgentAnswer {
+    id: u64,
+    #[serde(default)]
+    option: Option<String>,
+}
+
+async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentAnswer>) -> HttpResponse {
+    let request = Request::AcpAnswer {
+        thread,
+        id: body.id,
+        option: body.option,
+    };
+    ask(&web, request).await
+}
+
+async fn agent_stop(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::AcpStop { thread }).await
 }
 
 #[derive(Deserialize)]

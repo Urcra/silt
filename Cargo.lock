@@ -4215,6 +4215,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "silt-acp",
  "silt-agents",
  "silt-checkout",
  "silt-crdt",

@@ -60,4 +60,75 @@ test('two people edit one thread live, see each other and their drafts', async (
 
   await bob.getByLabel('draft').fill('now add tests for bob')
   await expect(alice.getByTestId('presence')).toContainText('bob is here viewing src/main.rs and drafting: now add tests for bob')
+  await alice.context().close()
+  await bob.context().close()
+})
+
+test('an agent started from the web UI takes everyone\'s drafts and asks before editing', async ({ browser }) => {
+  const alice = await (await browser.newContext()).newPage()
+  const bob = await (await browser.newContext()).newPage()
+  await openFile(alice, live.alice)
+  await openFile(bob, live.bob)
+  await bob.getByLabel('draft').fill('mind the tests')
+  await expect(alice.getByTestId('presence')).toContainText('drafting: mind the tests')
+
+  await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await alice.getByRole('button', { name: 'Start agent' }).click()
+  await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
+
+  await alice.getByLabel('draft').fill('add acp')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  const asked = alice.getByRole('group', { name: 'permission' })
+  await expect(asked).toContainText('Edit src/main.rs')
+  await asked.getByRole('button', { name: 'Allow' }).click()
+
+  await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  const reply = alice.getByText(/^Done: You are continuing a conversation/)
+  await expect(reply).toContainText('add acp')
+  await expect(reply).toContainText('bob: mind the tests')
+  await expect(bob.getByText('› add acp')).toBeVisible()
+  await expect(bob.getByText('bob: mind the tests').first()).toBeVisible()
+  await expect(bob.getByLabel('draft')).toHaveValue('')
+  await expect(bob.getByTestId('editor')).toContainText('fn acp() {}', { timeout: 15_000 })
+
+  await alice.getByRole('button', { name: 'Stop agent' }).click()
+  await expect(alice.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await alice.getByRole('button', { name: 'Start agent' }).click()
+  await alice.getByLabel('draft').fill('once more')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
+  // The agent loaded its earlier session, so it needs no primer this time.
+  await expect(alice.getByText('Done: once more', { exact: true })).toBeVisible()
+  await alice.getByLabel('draft').fill('not this')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
+  await expect(alice.getByText('I was not allowed to edit.')).toBeVisible()
+
+  const changed = await alice.evaluate(async (thread) => {
+    const get = async (path: string) =>
+      (
+        await fetch(`/api/threads/${thread}/${path}`, {
+          headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}` },
+        })
+      ).json()
+    const turns = (await get('turns')) as { number: number; prompt: string }[]
+    const turn = turns.find((candidate) => candidate.prompt.startsWith('once more'))
+    return turn ? ((await get(`diff?turn=${turn.number}`)) as string) : 'no such turn'
+  }, live.thread)
+  expect(changed).toContain('+fn acp() {}')
+  await alice.context().close()
+  await bob.context().close()
+})
+
+test('a new thread starts with an agent in a known clone', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await page.getByLabel('draft').fill('hello')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('Done: hello')).toBeVisible()
 })

@@ -1,20 +1,27 @@
 import { EditorView, basicSetup } from 'codemirror'
 import { useEffect, useRef, useState } from 'react'
-import { api, type Presence } from '../api'
+import { api, type LiveState, type Presence } from '../api'
 import { LiveReplica } from '../replica'
+import { AgentPanel } from './Agent'
 
 const HEARTBEAT_MS = 2000
 const EDIT_DEBOUNCE_MS = 150
 
-/** Counts the thread's changes as the daemon streams them. */
-function useChanges(thread: string): number {
-  const [changes, setChanges] = useState(0)
+/** The thread's live state as the daemon streams it, and how often it changed. */
+function useLive(thread: string): { changes: number; state: LiveState | null } {
+  const [live, setLive] = useState<{ changes: number; state: LiveState | null }>({ changes: 0, state: null })
   useEffect(() => {
     const source = new EventSource(api.liveUrl(thread))
-    source.addEventListener('state', () => setChanges((value) => value + 1))
+    source.addEventListener('state', (event) =>
+      setLive((previous) => {
+        const state = JSON.parse((event as MessageEvent<string>).data) as LiveState
+        const grew = previous.state === null || previous.state.deltas !== state.deltas
+        return { changes: previous.changes + (grew ? 1 : 0), state }
+      }),
+    )
     return () => source.close()
   }, [thread])
-  return changes
+  return live
 }
 
 /** Tells the others what this viewer is doing; returns what they are doing. */
@@ -126,12 +133,21 @@ function FileEditor({ replica, path, changes }: { replica: LiveReplica; path: st
 }
 
 /** Who else is here, their drafts and the thread's files, live (ADR 0014). */
-export function LivePanel({ thread, onChange }: { thread: string; onChange?: () => void }) {
+export function LivePanel({
+  thread,
+  onChange,
+  lastPrompt,
+}: {
+  thread: string
+  onChange?: () => void
+  /** The latest prompt in the conversation, to clear a draft once it was sent. */
+  lastPrompt?: string
+}) {
   const [replica, setReplica] = useState<LiveReplica>()
   const [error, setError] = useState<string>()
   const [file, setFile] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const changes = useChanges(thread)
+  const { changes, state } = useLive(thread)
   const people = usePresence(thread, file, draft)
   const changed = useRef(onChange)
   useEffect(() => {
@@ -140,6 +156,11 @@ export function LivePanel({ thread, onChange }: { thread: string; onChange?: () 
   useEffect(() => {
     if (changes > 0) changed.current?.()
   }, [changes])
+  const sent = useRef(lastPrompt)
+  useEffect(() => {
+    if (lastPrompt !== sent.current && draft.trim() && lastPrompt?.includes(draft.trim())) setDraft('')
+    sent.current = lastPrompt
+  }, [lastPrompt, draft])
 
   useEffect(() => {
     let current = true
@@ -180,6 +201,7 @@ export function LivePanel({ thread, onChange }: { thread: string; onChange?: () 
           rows={2}
         />
       </label>
+      <AgentPanel thread={thread} status={state?.agent ?? null} draft={draft} onSent={() => setDraft('')} people={people} />
       {error && <p className="text-rose-700">{error}</p>}
       {replica && (
         <div className="mt-3 grid grid-cols-[12rem_1fr] gap-3">

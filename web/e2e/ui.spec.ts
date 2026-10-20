@@ -21,7 +21,7 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(page.getByTestId('compaction')).toBeVisible()
   await expect(page.getByText('Compaction summary: Summary: farewell was added to main.')).toBeVisible()
   await expect(page.getByText('Recorded with claude')).toBeVisible()
-  await page.getByLabel('agent').selectOption('codex')
+  await page.getByLabel('agent', { exact: true }).selectOption('codex')
   await expect(page.getByRole('button', { name: /^silt resume \w+ --agent codex$/ })).toBeVisible()
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()

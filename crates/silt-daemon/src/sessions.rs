@@ -748,7 +748,7 @@ impl Core {
 
     /// Stores one transcript record, indexes its text, and applies the turn
     /// marks it carries for agents without Silt's hooks.
-    async fn record_line(&mut self, session_id: &str, key: &str, line: String) -> Result<(), CoreError> {
+    pub(crate) async fn record_line(&mut self, session_id: &str, key: &str, line: String) -> Result<(), CoreError> {
         let session = self.session_mut(session_id).expect("caller checked");
         let agent = session.agent;
         let read = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);

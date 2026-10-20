@@ -75,6 +75,7 @@ impl Core {
         let family = self.threads[&thread].family;
         Ok(LiveState {
             deltas: self.local_log(family).len(),
+            agent: self.agent_status(thread),
         })
     }
 }

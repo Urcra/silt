@@ -96,13 +96,7 @@ impl Core {
             }
             repo.root().to_owned()
         } else {
-            let base = base.ok_or_else(|| CoreError::Invalid("the thread has no base commit".into()))?;
-            let path = repo.managed_checkout_path(&thread.to_string());
-            if path.exists() {
-                path
-            } else {
-                repo.create_managed_checkout(&thread.to_string(), base, None)?.path
-            }
+            managed_checkout_path(repo, thread, base)?
         };
         let checkout_id = self.attach_checkout(thread, &checkout_path, !here).await?;
         self.materialize(checkout_id).await?;
@@ -126,6 +120,31 @@ impl Core {
             agent: agent.map_or_else(String::new, |agent| agent.command().to_owned()),
             start,
         })
+    }
+
+    /// Materializes `thread` in a managed checkout of the clone at `cwd`,
+    /// for an agent the web UI starts. Returns the checkout's id and path.
+    pub(crate) async fn check_out_managed(&mut self, thread: ThreadId, cwd: &Path) -> Result<(i64, PathBuf), CoreError> {
+        let (repo, base) = self.prepare_thread(thread, cwd, false).await?;
+        self.take_lease(thread).await?;
+        let path = managed_checkout_path(&repo, thread, base)?;
+        let checkout_id = self.attach_checkout(thread, &path, true).await?;
+        self.materialize(checkout_id).await?;
+        Ok((checkout_id, path))
+    }
+
+    /// The thread's conversation so far, rendered for a new session to
+    /// start from, if it has one.
+    pub(crate) fn primer(&self, thread: ThreadId) -> Option<String> {
+        let family = self.families.get(&self.threads.get(&thread)?.family)?;
+        let history: Vec<&Delta> = family
+            .history(thread)
+            .into_iter()
+            .filter(|item| item.source != HistorySource::Upstream)
+            .map(|item| item.delta)
+            .collect();
+        let entries = conversation(&history);
+        (!entries.is_empty()).then(|| render_transcript(&entries, &thread.to_string(), "an earlier agent", PRIMED_BUDGET))
     }
 
     /// Pulls everything the server has for the family, so a resume never
@@ -555,6 +574,16 @@ impl Core {
             recorded.attachments.push((name, self.blob(blob).await?));
         }
         Ok(recorded)
+    }
+}
+
+fn managed_checkout_path(repo: &Repo, thread: ThreadId, base: Option<GitOid>) -> Result<PathBuf, CoreError> {
+    let base = base.ok_or_else(|| CoreError::Invalid("the thread has no base commit".into()))?;
+    let path = repo.managed_checkout_path(&thread.to_string());
+    if path.exists() {
+        Ok(path)
+    } else {
+        Ok(repo.create_managed_checkout(&thread.to_string(), base, None)?.path)
     }
 }
 

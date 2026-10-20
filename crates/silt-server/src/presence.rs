@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use axum::Json;
 use axum::extract::{Extension, Query, State};
 use serde::Deserialize;
-use silt_proto::{Presence, PresenceReply, PresenceUpdate};
+use silt_proto::{AgentActivity, Presence, PresenceReply, PresenceUpdate};
 use silt_types::{DeviceId, ThreadId};
 
 use crate::{ApiError, Caller, Server, not_found};
@@ -19,6 +19,7 @@ pub(crate) struct Entry {
     user: String,
     file: Option<String>,
     draft: String,
+    agent: Option<AgentActivity>,
     at: Instant,
 }
 
@@ -40,6 +41,7 @@ impl Board {
                 device: device.to_string(),
                 file: entry.file.clone(),
                 draft: entry.draft.clone(),
+                agent: entry.agent.clone(),
                 age_ms: u64::try_from(entry.at.elapsed().as_millis()).unwrap_or(u64::MAX),
             })
             .collect();
@@ -74,6 +76,7 @@ pub(crate) async fn update(
                 user,
                 file: update.file,
                 draft: update.draft,
+                agent: update.agent,
                 at: Instant::now(),
             },
         );

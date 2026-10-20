@@ -36,6 +36,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
     let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
+    tokio::spawn(silt_acp::registry::refresh(data_dir.to_owned()));
 
     if socket.exists() {
         fs::remove_file(socket)?;
@@ -82,6 +83,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::CloseTool { session_id, reply } => core.close_tool(&session_id, reply).await,
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
+            Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
             Event::Pushed {
                 family,
                 generation,

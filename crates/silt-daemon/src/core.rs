@@ -35,6 +35,7 @@ pub enum Event {
     Listed(Result<Listing, String>, Instant),
     Discovered { token: u64, found: Option<silt_agents::Found> },
     Snapshotted { session_id: String, result: Result<Vec<String>, String> },
+    Acp { thread: ThreadId, run: u64, event: crate::acp::AcpEvent },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +94,8 @@ pub struct Core {
     /// Clones this machine knows by repository, for projecting families
     /// that started elsewhere.
     pub(crate) clones: HashMap<String, PathBuf>,
+    /// Agents the web UI started, by thread.
+    pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -149,6 +152,7 @@ impl Core {
             trash_changed: HashMap::new(),
             collaborators: HashMap::new(),
             clones: HashMap::new(),
+            acp: HashMap::new(),
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -335,6 +339,16 @@ impl Core {
                 draft,
                 leaving,
             } => to_response(self.presence(&thread, file, draft, leaving).await),
+            Request::AcpAgents => Response::ok(self.acp_agents()),
+            Request::AcpStart { thread, clone, agent } => {
+                to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
+            }
+            Request::AcpPrompt { thread, text } => to_response(self.acp_prompt(&thread, &text).await),
+            Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel)),
+            Request::AcpAnswer { thread, id, option } => {
+                to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }))
+            }
+            Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop)),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -903,6 +917,11 @@ impl Core {
             file,
             draft,
             leaving,
+            agent: self.agent_status(thread).filter(|status| status.state != "exited").map(|status| silt_proto::AgentActivity {
+                name: status.agent,
+                state: status.state,
+                streaming: status.streaming,
+            }),
         };
         remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
     }
@@ -910,15 +929,29 @@ impl Core {
     /// Teammates' current drafts for the thread's next prompt, for its
     /// agent (ADR 0014).
     pub(crate) async fn teammates_drafts(&self, thread: ThreadId) -> Option<String> {
-        let remote = self.remote.as_ref()?;
-        let reply = remote.present(thread).await.ok()?;
-        let drafts: Vec<String> = reply
-            .people
-            .iter()
-            .filter(|person| !person.draft.trim().is_empty())
-            .map(|person| format!("- {}: {}", person.user, person.draft.trim()))
+        let drafts: Vec<String> = self
+            .teammates_draft_list(thread)
+            .await
+            .into_iter()
+            .map(|(user, draft)| format!("- {user}: {draft}"))
             .collect();
         (!drafts.is_empty()).then(|| format!("Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}", drafts.join("\n")))
+    }
+
+    /// Who else is drafting a prompt for the thread, and what.
+    pub(crate) async fn teammates_draft_list(&self, thread: ThreadId) -> Vec<(String, String)> {
+        let Some(remote) = self.remote.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(reply) = remote.present(thread).await else {
+            return Vec::new();
+        };
+        reply
+            .people
+            .into_iter()
+            .filter(|person| !person.draft.trim().is_empty())
+            .map(|person| (person.user, person.draft.trim().to_owned()))
+            .collect()
     }
 
     fn remember_clone(&mut self, cwd: &Path) {

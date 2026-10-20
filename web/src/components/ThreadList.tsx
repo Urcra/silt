@@ -1,6 +1,7 @@
 import { api, short } from '../api'
 import { href } from '../router'
 import { useLoad } from '../useLoad'
+import { NewAgentThread } from './Agent'
 import { Search } from './Search'
 
 export function ThreadList() {
@@ -9,6 +10,7 @@ export function ThreadList() {
     <div>
       <Search />
       <h2 className="mb-2 text-lg font-semibold">Threads</h2>
+      <NewAgentThread />
       {threads.error && <p className="text-rose-700">{threads.error}</p>}
       <table className="w-full text-left text-sm">
         <thead className="text-xs text-neutral-500">

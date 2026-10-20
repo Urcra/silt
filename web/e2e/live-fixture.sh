@@ -1,7 +1,7 @@
 #!/bin/sh
 # A server with two people, Alice and Bob, each with a daemon and a clone.
 # Alice records a thread with the fake Claude and shares it with Bob; both
-# open the web UI. Prints the details as one JSON line.
+# open the web UI. Both can start the scripted ACP agent from it. Prints the details as one JSON line.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
@@ -34,7 +34,8 @@ machine() {
     export CLAUDE_CONFIG_DIR="$work/$user/claude"
     export SILT_CLAUDE_BIN="$root/web/e2e/fake-claude.sh"
     export SILT_HOOK="$silt hook"
-    mkdir -p "$CLAUDE_CONFIG_DIR"
+    mkdir -p "$CLAUDE_CONFIG_DIR" "$SILT_HOME"
+    printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}]\n' "$root/target/debug/silt-fake-agent" > "$SILT_HOME/agents.json"
     git clone -q "$work/origin.git" "$work/$user/repo"
     cd "$work/$user/repo"
     printf '%s\n' "$password" | "$silt" auth login --server "$url" --user "$user" > /dev/null
