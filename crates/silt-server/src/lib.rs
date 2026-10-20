@@ -35,6 +35,7 @@ pub mod config;
 mod git;
 mod inbox;
 mod index;
+mod lifecycle;
 mod orgs;
 mod pages;
 mod sign_in;
@@ -82,6 +83,8 @@ struct Shared {
     data_dir: std::path::PathBuf,
     config: Config,
     http: reqwest::Client,
+    /// Threads purged for good; their deltas are never stored again.
+    purged: Mutex<std::collections::HashSet<ThreadId>>,
 }
 
 #[derive(Clone)]
@@ -120,6 +123,7 @@ impl Server {
         index::clear(&mut tx).await?;
         index::write(&mut tx, &index_rows).await?;
         tx.commit().await?;
+        let purged = lifecycle::load_purged(&db).await?;
         Ok(Self {
             shared: Arc::new(Shared {
                 db,
@@ -129,6 +133,7 @@ impl Server {
                 waiters: Mutex::new(HashMap::new()),
                 index: Mutex::new(index),
                 data_dir: data_dir.to_owned(),
+                purged: Mutex::new(purged),
                 config,
                 http: reqwest::Client::builder()
                     .timeout(Duration::from_secs(20))
@@ -161,6 +166,10 @@ impl Server {
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))
+            .route("/v1/threads/{id}/delete", post(lifecycle::delete))
+            .route("/v1/threads/{id}/restore", post(lifecycle::restore))
+            .route("/v1/threads/{id}/purge", post(lifecycle::purge))
+            .route("/v1/trash", get(lifecycle::trash))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
@@ -191,6 +200,10 @@ impl Server {
     }
 
     pub async fn serve(self, listener: TcpListener) -> std::io::Result<()> {
+        if let Err(error) = self.purge_expired().await {
+            tracing::warn!(%error, "could not purge the trash");
+        }
+        self.keep_trash_tidy();
         axum::serve(listener, self.router()).await
     }
 }
@@ -462,7 +475,13 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
             owner: row.get("owner"),
         })
         .collect();
-    Ok(Json(Listing { families, threads }))
+    let (deleted, purged) = server.lifecycle().await?;
+    Ok(Json(Listing {
+        families,
+        threads,
+        deleted,
+        purged,
+    }))
 }
 
 async fn register_thread(
@@ -532,12 +551,13 @@ async fn push(
 ) -> Result<Json<PushReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
     claim_family(&server, family, caller).await?;
+    let pushed = server.without_purged(body.deltas).await;
     let mut rooms = server.shared.rooms.lock().await;
     let room = rooms
         .entry(family)
         .or_insert_with(|| Room::new(server.shared.generation));
     let before = room.seq();
-    let outcome = room.push(body.deltas).map_err(|error| match error {
+    let outcome = room.push(pushed).map_err(|error| match error {
         PushError::Conflict(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::Conflict { delta }),
         PushError::MissingParents(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::MissingParents { delta }),
         PushError::Invalid { reason, .. } => bad_request(reason),

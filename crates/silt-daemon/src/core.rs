@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
+use crate::lifecycle::Lifecycle;
 use crate::protocol::{Mount, Request, Response};
 use crate::sessions::{PendingSession, Session};
 use crate::remote::{self, Remote};
@@ -81,6 +82,8 @@ pub struct Core {
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
+    /// Threads in the trash, hidden until restored or purged.
+    pub(crate) deleted: HashSet<ThreadId>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -133,6 +136,7 @@ impl Core {
             next_token: 0,
             change_noticed: None,
             importing: false,
+            deleted: HashSet::new(),
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -148,6 +152,7 @@ impl Core {
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
         }
+        core.deleted = core.store.deleted_threads().await?.into_iter().collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -298,6 +303,10 @@ impl Core {
             }
             Request::Inbox { all } => to_response(self.inbox(all).await),
             Request::InboxRead { read } => to_response(self.inbox_read(&read).await.map(|()| "read")),
+            Request::ThreadDelete { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Delete).await),
+            Request::ThreadRestore { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Restore).await),
+            Request::ThreadPurge { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Purge).await),
+            Request::Trash => Response::ok(self.trash()),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);

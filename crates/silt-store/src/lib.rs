@@ -248,6 +248,51 @@ impl Store {
         Ok(())
     }
 
+    /// Replaces the family's deltas with `deltas`, after some were purged,
+    /// and starts its sync over.
+    pub async fn replace_deltas(&self, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
+        self.clear_deltas(family).await?;
+        self.append_deltas(family, deltas).await
+    }
+
+    /// Marks a thread as in the trash (`Some`) or back out of it (`None`).
+    pub async fn set_thread_deleted(&self, thread: ThreadId, deleted_ms: Option<i64>) -> Result<(), StoreError> {
+        sqlx::query("UPDATE threads SET deleted_ms = ? WHERE id = ?")
+            .bind(deleted_ms)
+            .bind(id_bytes(thread.0))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn deleted_threads(&self) -> Result<Vec<ThreadId>, StoreError> {
+        sqlx::query("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|row| Ok(ThreadId(id_from(row.get("id"))?)))
+            .collect()
+    }
+
+    /// Forgets a thread here: its sessions, checkouts and search entries.
+    /// Files on disk stay.
+    pub async fn remove_thread(&self, thread: ThreadId) -> Result<(), StoreError> {
+        let id = id_bytes(thread.0);
+        let mut tx = self.pool.begin().await?;
+        for statement in [
+            "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions WHERE thread_id = ?)",
+            "DELETE FROM sessions WHERE thread_id = ?",
+            "DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?)",
+            "DELETE FROM checkouts WHERE thread_id = ?",
+            "DELETE FROM search WHERE thread_id = ?",
+            "DELETE FROM threads WHERE id = ?",
+        ] {
+            sqlx::query(statement).bind(&id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
         let rows = sqlx::query("SELECT data FROM deltas WHERE family_id = ? ORDER BY seq")

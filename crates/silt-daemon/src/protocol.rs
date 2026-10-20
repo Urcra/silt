@@ -109,6 +109,13 @@ pub enum Request {
         all: bool,
     },
     InboxRead { read: silt_proto::InboxRead },
+    /// Moves a thread to the trash, everywhere (ADR 0013).
+    ThreadDelete { thread: String },
+    ThreadRestore { thread: String },
+    /// Removes a thread in the trash for good, everywhere.
+    ThreadPurge { thread: String },
+    /// The threads in the trash.
+    Trash,
     Shutdown,
 }
 

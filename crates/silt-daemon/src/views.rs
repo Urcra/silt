@@ -11,11 +11,17 @@ use crate::transcripts::native_entries;
 use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 
 impl Core {
+    /// Every thread here but those in the trash.
     pub(crate) fn thread_summaries(&self) -> Vec<ThreadSummary> {
+        self.summaries(|thread| !self.deleted.contains(&thread))
+    }
+
+    pub(crate) fn summaries(&self, include: impl Fn(ThreadId) -> bool) -> Vec<ThreadSummary> {
         let device = self.remote.as_ref().map(|remote| remote.config.device);
         let mut summaries: Vec<ThreadSummary> = self
             .thread_records()
             .values()
+            .filter(|record| include(record.id))
             .map(|record| {
                 let deltas: Vec<&Delta> = self
                     .local_log(record.family)

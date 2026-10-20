@@ -165,6 +165,17 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
+    /// Moves the thread to the trash, out of it, or purges it for good
+    /// (`delete`, `restore` or `purge`).
+    pub async fn thread_lifecycle(&self, thread: ThreadId, action: &str) -> Result<(), RemoteError> {
+        let response = self
+            .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/{action}"))
+            .send()
+            .await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     /// Signs this device out on the server.
     pub async fn logout(&self) -> Result<(), RemoteError> {
         checked(self.request(reqwest::Method::DELETE, "/v1/device").send().await?).await?;

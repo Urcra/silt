@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use silt_types::BlobHash;
 use tokio::fs;
@@ -35,6 +36,35 @@ impl BlobStore {
 
     pub async fn get(&self, hash: BlobHash) -> io::Result<Vec<u8>> {
         fs::read(self.path(hash)).await
+    }
+
+    /// Every stored blob and when it was written.
+    pub async fn list(&self) -> io::Result<Vec<(BlobHash, SystemTime)>> {
+        let mut found = Vec::new();
+        let Ok(mut dirs) = fs::read_dir(&self.root).await else {
+            return Ok(found);
+        };
+        while let Some(dir) = dirs.next_entry().await? {
+            let prefix = dir.file_name().to_string_lossy().into_owned();
+            if prefix.len() != 2 || !dir.file_type().await?.is_dir() {
+                continue;
+            }
+            let mut files = fs::read_dir(dir.path()).await?;
+            while let Some(file) = files.next_entry().await? {
+                let name = format!("{prefix}{}", file.file_name().to_string_lossy());
+                if let Ok(hash) = name.parse::<BlobHash>() {
+                    found.push((hash, file.metadata().await?.modified()?));
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    pub async fn remove(&self, hash: BlobHash) -> io::Result<()> {
+        match fs::remove_file(self.path(hash)).await {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
     }
 
     fn path(&self, hash: BlobHash) -> PathBuf {

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use exn::Exn;
-use silt_daemon::protocol::SearchFilters;
+use silt_daemon::protocol::{Request, SearchFilters};
 use silt_proto::OrgChange;
 
 #[derive(Debug, Parser)]
@@ -77,6 +77,11 @@ enum Command {
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
+    },
+    /// Delete, restore or purge a thread
+    Thread {
+        #[command(subcommand)]
+        command: ThreadCommand,
     },
     /// What you should hear about: merge requests, comments and mentions
     Inbox {
@@ -281,6 +286,19 @@ enum AuthCommand {
     Logout,
     /// Show which server this machine syncs with
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum ThreadCommand {
+    /// Move a thread of yours to the trash, on every device
+    Delete { thread: String },
+    /// Bring a thread back from the trash
+    Restore { thread: String },
+    /// Remove a thread in the trash for good, keeping only what forks of it
+    /// build on
+    Purge { thread: String },
+    /// List the threads in the trash
+    Trash,
 }
 
 #[derive(Debug, Subcommand)]
@@ -502,6 +520,12 @@ fn main() -> Result<(), Exn<CliError>> {
             }),
             AuthCommand::Logout => admin::auth_logout(),
             AuthCommand::Status => commands::auth_status(),
+        },
+        Command::Thread { command } => match command {
+            ThreadCommand::Delete { thread } => commands::thread_change(Request::ThreadDelete { thread }),
+            ThreadCommand::Restore { thread } => commands::thread_change(Request::ThreadRestore { thread }),
+            ThreadCommand::Purge { thread } => commands::thread_change(Request::ThreadPurge { thread }),
+            ThreadCommand::Trash => commands::trash(),
         },
         Command::Inbox { all, command } => match command {
             None => commands::inbox(all),

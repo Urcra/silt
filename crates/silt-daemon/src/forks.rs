@@ -461,7 +461,7 @@ pub(crate) fn short_mr(id: DeltaId) -> String {
     format!("{}.{}", &actor[actor.len() - 6..], id.lamport.0)
 }
 
-fn short(thread: ThreadId) -> String {
+pub(crate) fn short(thread: ThreadId) -> String {
     let id = thread.to_string();
     id[id.len().saturating_sub(12)..].to_owned()
 }

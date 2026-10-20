@@ -55,6 +55,27 @@ impl fmt::Display for BlobHash {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid blob hash {0:?}: expected 64 hex digits")]
+pub struct ParseBlobHashError(String);
+
+impl FromStr for BlobHash {
+    type Err = ParseBlobHashError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let invalid = || ParseBlobHashError(text.to_owned());
+        if text.len() != 64 || !text.is_ascii() {
+            return Err(invalid());
+        }
+        let mut bytes = [0u8; 32];
+        for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().chunks(2)) {
+            let pair = std::str::from_utf8(pair).map_err(|_| invalid())?;
+            *byte = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
 impl fmt::Debug for BlobHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BlobHash({self})")

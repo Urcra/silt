@@ -280,6 +280,7 @@ impl Core {
             }
         }
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
+        self.follow_trash(&listing.deleted, &listing.purged, &remote_threads).await;
         for info in listing.threads {
             if let Some(known) = self.threads.get(&info.id) {
                 if known.owner != info.owner && !info.owner.is_empty() {
@@ -314,7 +315,7 @@ impl Core {
         let unregistered: Vec<ThreadRecord> = self
             .threads
             .values()
-            .filter(|thread| !remote_threads.contains(&thread.id))
+            .filter(|thread| !remote_threads.contains(&thread.id) && !self.deleted.contains(&thread.id))
             .cloned()
             .collect();
         for thread in unregistered {

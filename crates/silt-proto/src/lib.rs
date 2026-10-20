@@ -97,6 +97,12 @@ pub struct FamilyInfo {
 pub struct Listing {
     pub families: Vec<FamilyInfo>,
     pub threads: Vec<ThreadInfo>,
+    /// Threads in the trash; they stay hidden until restored or purged.
+    #[serde(default)]
+    pub deleted: Vec<ThreadId>,
+    /// Threads purged for good: every device drops them (ADR 0013).
+    #[serde(default)]
+    pub purged: Vec<ThreadId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -340,3 +340,58 @@ fn the_inbox_hears_about_merge_requests_comments_and_mentions() {
     assert!(alice.stdout(&["inbox"]).contains("nothing new"));
     assert!(alice.stdout(&["inbox", "--all"]).contains("bob asks to merge"));
 }
+
+#[test]
+fn deleted_threads_hide_everywhere_and_purged_ones_are_gone() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    assert!(eventually(|| bob.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
+    bob.silt_with(&["fork", &thread], &[("FAKE_EXPECT", "Please-add-a-farewell"), ("FAKE_SAY", "Bob keeps this")]);
+    let fork = bob
+        .stdout(&["log"])
+        .lines()
+        .find(|line| line.contains(&format!("fork of {thread}")))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("the fork is listed")
+        .to_owned();
+
+    let refused = bob.run(&["thread", "delete", &thread]);
+    assert!(!refused.status.success(), "only the owner deletes a thread");
+    assert!(alice.stdout(&["thread", "delete", &thread]).contains("is in the trash"));
+    assert!(alice.log_line(&thread).is_none());
+    assert!(alice.stdout(&["thread", "trash"]).contains(&thread));
+    assert!(eventually(|| bob.log_line(&thread).is_none()), "Bob's machine hides it too");
+    assert!(!alice.run(&["thread", "purge", &fork]).status.success(), "purging needs the trash and ownership");
+
+    alice.silt(&["thread", "restore", &thread]);
+    assert!(alice.log_line(&thread).is_some());
+    assert!(eventually(|| bob.log_line(&thread).is_some()), "and shows it again once restored");
+
+    alice.silt(&["thread", "delete", &thread]);
+    assert!(alice.stdout(&["thread", "purge", &thread]).contains("purged for good"));
+    assert!(alice.stdout(&["thread", "trash"]).contains("the trash is empty"));
+    assert!(eventually(|| bob.log_line(&thread).is_none()), "Bob's machine drops it");
+    let show = bob.stdout(&["show", &fork]);
+    assert!(
+        show.contains("> Please add a farewell line") && show.contains("> Bob keeps this"),
+        "the fork keeps what it built on: {show}"
+    );
+
+    alice.silt(&["claude"]);
+    let second = alice
+        .stdout(&["log"])
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .find(|id| *id != fork)
+        .expect("a second thread")
+        .to_owned();
+    assert!(eventually(|| bob.log_line(&second).is_some_and(|line| line.contains("2 msgs"))));
+    alice.silt(&["thread", "delete", &second]);
+    alice.silt(&["thread", "purge", &second]);
+    assert!(eventually(|| bob.log_line(&second).is_none()));
+    bob.silt(&["daemon", "stop"]);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert!(bob.log_line(&second).is_none(), "a restarted device doesn't bring it back");
+    assert!(alice.log_line(&second).is_none());
+}

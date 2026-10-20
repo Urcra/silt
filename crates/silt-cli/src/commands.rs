@@ -476,6 +476,24 @@ pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) ->
     Ok(())
 }
 
+pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let message: String = call(&request)?;
+    println!("{message}");
+    Ok(())
+}
+
+pub fn trash() -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let threads: Vec<ThreadSummary> = call(&Request::Trash)?;
+    if threads.is_empty() {
+        println!("the trash is empty");
+    } else {
+        print!("{}", render::threads(&threads));
+    }
+    Ok(())
+}
+
 pub fn inbox(all: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let entries: Vec<silt_daemon::protocol::InboxEntry> = call(&Request::Inbox { all })?;
