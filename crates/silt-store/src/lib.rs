@@ -313,13 +313,16 @@ impl Store {
     pub async fn remove_thread(&self, thread: ThreadId) -> Result<(), StoreError> {
         let id = id_bytes(thread.0);
         let mut tx = self.write_transaction().await?;
+        // Sessions go by their thread and by their checkout: a checkout
+        // rebound to this thread may still hold sessions of another.
         for statement in [
-            "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions WHERE thread_id = ?)",
-            "DELETE FROM sessions WHERE thread_id = ?",
-            "DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?)",
-            "DELETE FROM checkouts WHERE thread_id = ?",
-            "DELETE FROM search WHERE thread_id = ?",
-            "DELETE FROM threads WHERE id = ?",
+            "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions
+             WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1))",
+            "DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
+            "DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
+            "DELETE FROM checkouts WHERE thread_id = ?1",
+            "DELETE FROM search WHERE thread_id = ?1",
+            "DELETE FROM threads WHERE id = ?1",
         ] {
             sqlx::query(statement).bind(&id).execute(&mut *tx).await?;
         }

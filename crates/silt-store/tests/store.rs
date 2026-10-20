@@ -115,6 +115,39 @@ async fn session_offsets_persist() {
 }
 
 #[tokio::test]
+async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
+    let (_dir, store) = store_with_thread().await;
+    let checkout = store
+        .add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1)
+        .await
+        .expect("checkout");
+    let session = SessionRecord {
+        agent: "claude-code".into(),
+        session_id: "abc".into(),
+        thread: THREAD,
+        checkout_id: checkout.id,
+    };
+    store.add_session(&session, 1).await.expect("session");
+    const RECOVERY: ThreadId = ThreadId(12);
+    store
+        .create_thread(&ThreadRecord {
+            id: RECOVERY,
+            family: FAMILY,
+            repo_root: PathBuf::from("/repo"),
+            repo: "github.com/u/repo".into(),
+            created_ms: 2,
+            owner: String::new(),
+        })
+        .await
+        .expect("thread");
+    store.rebind_checkout(checkout.id, RECOVERY, ActorId(6)).await.expect("rebinds");
+
+    store.remove_thread(RECOVERY).await.expect("removes the thread and the checkout's sessions");
+    assert!(store.checkouts().await.expect("checkouts").is_empty());
+    assert!(store.sessions().await.expect("sessions").is_empty());
+}
+
+#[tokio::test]
 async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
     let (_dir, store) = store_with_thread().await;
     let delta = DeltaId::new(ActorId(1), Lamport(4));
