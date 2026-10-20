@@ -4145,10 +4145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "silt-api"
-version = "0.0.1"
-
-[[package]]
 name = "silt-checkout"
 version = "0.0.1"
 dependencies = [
@@ -4384,10 +4380,6 @@ dependencies = [
  "silt-types",
  "thiserror",
 ]
-
-[[package]]
-name = "silt-term"
-version = "0.0.1"
 
 [[package]]
 name = "silt-types"
