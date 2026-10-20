@@ -6,10 +6,11 @@ use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, Op, SessionFile, SessionRef};
 use silt_store::ThreadRecord;
-use silt_types::{ActorId, BlobHash, FamilyId, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, RepoBases, now_ms};
+use crate::remote::Remote;
 use crate::sessions::{NewSession, resolve_agent};
 use crate::disk;
 use crate::protocol::{AgentStart, Resumed};
@@ -178,21 +179,29 @@ impl Core {
         let mut after = 0;
         let mut last = None;
         loop {
-            let (_, outcome, error) = remote.pull(family, after, last, std::time::Duration::ZERO).await;
-            let deltas = match outcome {
-                silt_sync::Outcome::Pulled(deltas) => deltas,
-                _ => {
-                    return Err(CoreError::Invalid(format!(
-                        "could not fetch the thread from the server: {}",
-                        error.map_or_else(|| "no answer".to_owned(), |error| error.to_string())
-                    )));
-                }
-            };
+            let deltas = pull_page(&remote, family, after, last).await?;
             let Some((seq, delta)) = deltas.last() else {
                 return Ok(());
             };
             (after, last) = (*seq, Some(delta.span.first()));
             self.apply_pulled(family, deltas.into_iter().map(|(_, delta)| delta).collect()).await?;
+        }
+    }
+
+    /// Everything the server has for the family, with its sequence numbers,
+    /// changing nothing here.
+    pub(crate) async fn fetch_family(&self, family: FamilyId) -> Result<Vec<(u64, Delta)>, CoreError> {
+        let Some(remote) = &self.remote else {
+            return Err(CoreError::Invalid("not signed in to a server".into()));
+        };
+        let mut fetched: Vec<(u64, Delta)> = Vec::new();
+        loop {
+            let (after, last) = fetched.last().map_or((0, None), |(seq, delta)| (*seq, Some(delta.span.first())));
+            let page = pull_page(remote, family, after, last).await?;
+            if page.is_empty() {
+                return Ok(fetched);
+            }
+            fetched.extend(page);
         }
     }
 
@@ -604,6 +613,18 @@ impl Core {
             recorded.attachments.push((name, bytes));
         }
         Ok(recorded)
+    }
+}
+
+/// One page of the family's deltas after server sequence `after`.
+async fn pull_page(remote: &Remote, family: FamilyId, after: u64, last: Option<DeltaId>) -> Result<Vec<(u64, Delta)>, CoreError> {
+    let (_, outcome, error) = remote.pull(family, after, last, std::time::Duration::ZERO).await;
+    match outcome {
+        silt_sync::Outcome::Pulled(deltas) => Ok(deltas),
+        _ => Err(CoreError::Invalid(format!(
+            "could not fetch the thread from the server: {}",
+            error.map_or_else(|| "no answer".to_owned(), |error| error.to_string())
+        ))),
     }
 }
 

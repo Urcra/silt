@@ -225,23 +225,7 @@ impl Store {
     /// Appends deltas after the family's existing ones, keeping their order.
     pub async fn append_deltas(&self, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM deltas WHERE family_id = ?")
-            .bind(id_bytes(family.0))
-            .fetch_one(&mut *tx)
-            .await?;
-        for (seq, delta) in (next..).zip(deltas) {
-            sqlx::query(
-                "INSERT INTO deltas (family_id, seq, actor, lamport, len, data) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(id_bytes(family.0))
-            .bind(seq)
-            .bind(id_bytes(delta.span.actor.0))
-            .bind(lamport_i64(delta.span.start))
-            .bind(i64::try_from(delta.span.len).unwrap_or(i64::MAX))
-            .bind(postcard::to_allocvec(delta)?)
-            .execute(&mut *tx)
-            .await?;
-        }
+        append_deltas_in(&mut tx, family, deltas).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -250,18 +234,20 @@ impl Store {
     /// the server.
     pub async fn clear_deltas(&self, family: FamilyId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        for statement in ["DELETE FROM deltas WHERE family_id = ?", "DELETE FROM sync_state WHERE family_id = ?"] {
-            sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
-        }
+        clear_deltas_in(&mut tx, family).await?;
         tx.commit().await?;
         Ok(())
     }
 
-    /// Replaces the family's deltas with `deltas`, after some were purged,
-    /// and starts its sync over.
+    /// Replaces the family's deltas with `deltas`, after some were purged or
+    /// the server's history replaced this machine's, and starts its sync
+    /// over. Either all of it happens or none.
     pub async fn replace_deltas(&self, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
-        self.clear_deltas(family).await?;
-        self.append_deltas(family, deltas).await
+        let mut tx = self.write_transaction().await?;
+        clear_deltas_in(&mut tx, family).await?;
+        append_deltas_in(&mut tx, family, deltas).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Marks a thread as in the trash (`Some`) or back out of it (`None`).
@@ -591,6 +577,32 @@ impl Store {
             })
             .collect()
     }
+}
+
+async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
+    let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM deltas WHERE family_id = ?")
+        .bind(id_bytes(family.0))
+        .fetch_one(&mut *tx)
+        .await?;
+    for (seq, delta) in (next..).zip(deltas) {
+        sqlx::query("INSERT INTO deltas (family_id, seq, actor, lamport, len, data) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(id_bytes(family.0))
+            .bind(seq)
+            .bind(id_bytes(delta.span.actor.0))
+            .bind(lamport_i64(delta.span.start))
+            .bind(i64::try_from(delta.span.len).unwrap_or(i64::MAX))
+            .bind(postcard::to_allocvec(delta)?)
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> Result<(), StoreError> {
+    for statement in ["DELETE FROM deltas WHERE family_id = ?", "DELETE FROM sync_state WHERE family_id = ?"] {
+        sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
+    }
+    Ok(())
 }
 
 /// Turns free text into an FTS5 query of quoted prefix terms, so user input

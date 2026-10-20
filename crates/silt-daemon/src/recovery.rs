@@ -6,12 +6,12 @@
 use std::collections::{BTreeMap, HashSet};
 
 use silt_checkout::Bridge;
-use silt_log::{ConvOp, Delta, Op};
+use silt_log::{ConvOp, Delta, Family, LogError, Op};
 use silt_sync::ClientSync;
 use silt_types::{ActorId, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
-use crate::core::{Core, CoreError};
+use crate::core::{Core, CoreError, RepoBases};
 
 impl Core {
     pub(crate) async fn recover_diverged(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
@@ -38,12 +38,28 @@ impl Core {
             .map(|thread| (*thread, family.conversation(*thread).cloned().collect()))
             .collect();
 
-        self.families.remove(&family_id);
+        // The server's version is fetched and projected before anything
+        // here changes, so a failure leaves this machine's history intact.
+        let fetched = self.fetch_family(family_id).await?;
+        let mut replacement = Family::new();
+        let mut kept = Vec::new();
+        for (_, delta) in &fetched {
+            match replacement.apply(delta.clone(), &mut RepoBases(&repo)) {
+                Ok(_) => kept.push(delta.clone()),
+                Err(LogError::MissingBase(oid)) => {
+                    return Err(CoreError::Invalid(format!(
+                        "the server's version needs git object {oid}, which this clone lacks; fetch origin and try again"
+                    )));
+                }
+                Err(error) => warn!(%error, id = %delta.span.first(), "skipping a delta from the server that can't apply here"),
+            }
+        }
+        self.store.replace_deltas(family_id, &kept).await?;
+        let last = fetched.last().map(|(seq, delta)| (*seq, delta.span.first()));
+        let sync = ClientSync::new(None, kept.len() as u64, last.map_or(0, |(seq, _)| seq), last.map(|(_, id)| id), 0);
+        self.syncs.insert(family_id, sync);
         self.raw.remove(&family_id);
-        self.store.clear_deltas(family_id).await?;
-        self.syncs.insert(family_id, ClientSync::default());
-        self.catch_up(family_id).await?;
-        self.project_family(family_id, &repo)?;
+        self.families.insert(family_id, replacement);
 
         for (thread, conversation) in conversations {
             let recovery = self.fork_thread(thread).await?;
