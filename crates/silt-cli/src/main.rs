@@ -403,6 +403,21 @@ enum ServerCommand {
         #[command(subcommand)]
         command: UserCommand,
     },
+    /// Copy the server's data to a new directory; safe while it runs
+    Backup {
+        dest: PathBuf,
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+    /// Put a backup in place as the server's data; stop the server first
+    Restore {
+        backup: PathBuf,
+        #[arg(long)]
+        data: Option<PathBuf>,
+        /// Replace the data that is there
+        #[arg(long)]
+        replace: bool,
+    },
     /// Print a sign-up link for one person
     Invite {
         #[arg(long)]
@@ -611,6 +626,8 @@ fn main() -> Result<(), Exn<CliError>> {
                 UserCommand::Admin { name, revoke } => admin::user_admin(data, &name, revoke),
             },
             ServerCommand::Invite { data, org, days } => admin::invite(data, org, days),
+            ServerCommand::Backup { dest, data } => admin::backup(data, &dest),
+            ServerCommand::Restore { backup, data, replace } => admin::restore(&backup, data, replace),
         },
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),

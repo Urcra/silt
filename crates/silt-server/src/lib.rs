@@ -31,6 +31,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 
 pub mod accounts;
+pub mod backup;
 pub mod config;
 mod git;
 mod inbox;

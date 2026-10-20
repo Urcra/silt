@@ -225,6 +225,22 @@ pub fn invite(data: Option<PathBuf>, org: Option<String>, days: u32) -> Result<(
     Ok(())
 }
 
+pub fn backup(data: Option<PathBuf>, dest: &std::path::Path) -> Result<(), Exn<CliError>> {
+    let data = server_data(data);
+    let copied = runtime()?
+        .block_on(silt_server::backup::backup(&data, dest))
+        .or_raise(|| CliError(format!("could not back up {}", data.display())))?;
+    println!("backed up {} to {} ({} MB)", data.display(), dest.display(), copied.bytes / 1_000_000);
+    Ok(())
+}
+
+pub fn restore(backup: &std::path::Path, data: Option<PathBuf>, replace: bool) -> Result<(), Exn<CliError>> {
+    let data = server_data(data);
+    silt_server::backup::restore(backup, &data, replace).or_raise(|| CliError(format!("could not restore into {}", data.display())))?;
+    println!("restored {} into {}; start the server, and devices push back anything newer", backup.display(), data.display());
+    Ok(())
+}
+
 fn save(config: &RemoteConfig) -> Result<(), Exn<CliError>> {
     remote::save_config(&paths::data_dir(), config).or_raise(|| CliError("could not save the server settings".into()))?;
     if is_running() {
