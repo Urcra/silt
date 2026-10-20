@@ -43,6 +43,11 @@ enum Command {
         #[arg(required = true)]
         query: Vec<String>,
     },
+    /// Run or administer a self-hosted sync server
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+    },
     /// Manage the background daemon
     Daemon {
         #[command(subcommand)]
@@ -71,6 +76,24 @@ enum DaemonCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ServerCommand {
+    /// Serve the sync API
+    Run {
+        /// Address to listen on
+        #[arg(long, default_value = "127.0.0.1:7450")]
+        listen: String,
+        /// Server data directory; defaults to `server` in the Silt data directory
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+    /// Print a one-time code a device uses with `silt auth login`
+    Pair {
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum DevCommand {
     /// Show milestone and task progress from ROADMAP.md and TASKS.md
     Status {
@@ -92,6 +115,10 @@ fn main() -> Result<(), Exn<CliError>> {
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn } => commands::diff(&thread, turn),
         Command::Search { query } => commands::search(&query.join(" ")),
+        Command::Server { command } => match command {
+            ServerCommand::Run { listen, data } => commands::server_run(&listen, data),
+            ServerCommand::Pair { data } => commands::server_pair(data),
+        },
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),

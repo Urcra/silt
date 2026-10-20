@@ -11,3 +11,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+silt-log = { path = "../silt-log" }
+silt-types = { path = "../silt-types" }

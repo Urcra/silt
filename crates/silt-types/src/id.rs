@@ -74,6 +74,17 @@ impl fmt::Display for DeltaId {
     }
 }
 
+impl FromStr for DeltaId {
+    type Err = ParseActorIdError;
+
+    /// Parses the `actor.lamport` form produced by `Display`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = || ParseActorIdError(s.to_owned());
+        let (actor, lamport) = s.split_once('.').ok_or_else(invalid)?;
+        Ok(Self::new(actor.parse()?, Lamport(lamport.parse().map_err(|_| invalid())?)))
+    }
+}
+
 /// A contiguous run of ids from one actor: `[start, start + len)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeltaSpan {
@@ -141,6 +152,13 @@ mod tests {
         let a = DeltaId::new(ActorId(1), Lamport(100));
         let b = DeltaId::new(ActorId(2), Lamport(1));
         assert!(a < b);
+    }
+
+    #[test]
+    fn delta_id_round_trips_as_text() {
+        let id = DeltaId::new(ActorId(7), Lamport(42));
+        assert_eq!(id.to_string().parse::<DeltaId>(), Ok(id));
+        assert!("nonsense".parse::<DeltaId>().is_err());
     }
 
     #[test]

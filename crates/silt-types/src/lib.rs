@@ -10,7 +10,7 @@ mod frontier;
 mod id;
 mod oid;
 
-pub use entity::{BlobHash, FamilyId, ThreadId};
+pub use entity::{BlobHash, DeviceId, FamilyId, ThreadId};
 pub use frontier::{Frontier, Version};
 pub use id::{ActorId, DeltaId, DeltaSpan, Lamport, ParseActorIdError};
 pub use oid::{GitOid, ParseGitOidError};

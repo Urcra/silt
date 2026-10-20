@@ -37,6 +37,10 @@ hex_id!(
     /// One line of work (a conversation and the code it changes) within a family.
     ThreadId
 );
+hex_id!(
+    /// A machine running a Silt daemon.
+    DeviceId
+);
 
 /// BLAKE3 hash of a stored blob.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

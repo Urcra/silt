@@ -223,3 +223,37 @@ fn short(thread: &str) -> &str {
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
+
+fn server_data(data: Option<PathBuf>) -> PathBuf {
+    data.unwrap_or_else(|| paths::data_dir().join("server"))
+}
+
+pub fn server_run(listen: &str, data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()))
+        .with_writer(io::stderr)
+        .init();
+    let data = server_data(data);
+    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
+    runtime.block_on(async {
+        let server = silt_server::Server::open(&data)
+            .await
+            .or_raise(|| CliError(format!("cannot open server data in {}", data.display())))?;
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .or_raise(|| CliError(format!("cannot listen on {listen}")))?;
+        eprintln!("silt server listening on {listen}, data in {}", data.display());
+        server.serve(listener).await.or_raise(|| CliError("the server stopped".into()))
+    })
+}
+
+pub fn server_pair(data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+    let data = server_data(data);
+    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
+    let code = runtime
+        .block_on(silt_server::create_pairing_code(&data))
+        .or_raise(|| CliError("cannot create a pairing code".into()))?;
+    println!("{code}");
+    eprintln!("valid for 15 minutes; on the device run: silt auth login --server <url> --code {code}");
+    Ok(())
+}
