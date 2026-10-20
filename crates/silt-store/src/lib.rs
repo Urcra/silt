@@ -200,14 +200,14 @@ impl Store {
             return Ok(SyncState::default());
         };
         Ok(SyncState {
-            generation: row.get::<Option<i64>, _>("generation").map(|generation| generation as u64),
+            generation: row.get::<Option<i64>, _>("generation").map(i64::cast_unsigned),
             pushed: u64::try_from(row.get::<i64, _>("pushed")).unwrap_or_default(),
             pulled: u64::try_from(row.get::<i64, _>("pulled")).unwrap_or_default(),
             last_pulled: match row.get::<Option<&[u8]>, _>("last_pulled") {
                 Some(bytes) => Some(postcard::from_bytes(bytes)?),
                 None => None,
             },
-            view: row.get::<i64, _>("view") as u64,
+            view: row.get::<i64, _>("view").cast_unsigned(),
         })
     }
 
@@ -222,11 +222,11 @@ impl Store {
                  pulled = excluded.pulled, last_pulled = excluded.last_pulled, view = excluded.view",
         )
         .bind(id_bytes(family.0))
-        .bind(state.generation.map(|generation| generation as i64))
+        .bind(state.generation.map(u64::cast_signed))
         .bind(i64::try_from(state.pushed).unwrap_or(i64::MAX))
         .bind(i64::try_from(state.pulled).unwrap_or(i64::MAX))
         .bind(last_pulled)
-        .bind(state.view as i64)
+        .bind(state.view.cast_signed())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -279,12 +279,14 @@ impl Store {
 
     /// Adds secrets to this machine's overlay (ADR 0015).
     pub async fn learn_secrets(&self, secrets: &[String]) -> Result<(), StoreError> {
+        let mut tx = self.write_transaction().await?;
         for secret in secrets {
             sqlx::query("INSERT INTO secret_overlay (secret) VALUES (?) ON CONFLICT DO NOTHING")
                 .bind(secret)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 

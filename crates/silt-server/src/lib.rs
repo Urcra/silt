@@ -636,7 +636,7 @@ async fn push(
         }
     }
     Ok(Json(PushReply {
-        accepted: outcome.accepted,
+        accepted: u64::try_from(outcome.accepted).unwrap_or(u64::MAX),
         seq: outcome.seq,
     }))
 }

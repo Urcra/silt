@@ -123,7 +123,7 @@ pub struct PushRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushReply {
-    pub accepted: usize,
+    pub accepted: u64,
     pub seq: u64,
 }
 
