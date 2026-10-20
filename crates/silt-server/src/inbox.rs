@@ -2,6 +2,9 @@
 //! a decision on one, a comment or an `@mention`, and read with
 //! `GET /v1/inbox`.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
 use axum::Json;
 use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
@@ -12,9 +15,13 @@ use silt_types::ThreadId;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
+use crate::visibility::Viewer;
 use crate::{ApiError, Caller, Server, id_bytes, id_from, now_ms};
 
 const INBOX_LIMIT: i64 = 200;
+/// Mentions past this many in one message notify nobody, so one message
+/// can't make the server look up every account.
+const MENTIONS_LIMIT: usize = 20;
 
 /// One notification to write.
 struct Note {
@@ -59,6 +66,20 @@ fn clip(text: &str) -> String {
     }
 }
 
+/// Viewers loaded once per notified user within one push.
+#[derive(Default)]
+struct Viewers(HashMap<i64, Viewer>);
+
+impl Viewers {
+    async fn sees(&mut self, server: &Server, user: i64, thread: ThreadId) -> Result<bool, sqlx::Error> {
+        let viewer = match self.0.entry(user) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(server.viewer(user).await?),
+        };
+        Ok(viewer.sees_thread(thread))
+    }
+}
+
 impl Server {
     /// Writes the notifications `stored` deltas, pushed by `actor`, cause.
     pub(crate) async fn notify(&self, stored: &[Delta], actor: Caller) -> Result<(), sqlx::Error> {
@@ -68,10 +89,12 @@ impl Server {
             .fetch_one(db)
             .await?
             .get("name");
+        let mut viewers = Viewers::default();
         let mut notes = Vec::new();
         for delta in stored {
             let mut mentioned = String::new();
             match &delta.op {
+                Op::Mr(MrOp::Opened { target, .. }) if !viewers.sees(self, actor.user, *target).await? => {}
                 Op::Mr(MrOp::Opened { target, title, summary }) => {
                     if let Some(owner) = owner(db, *target).await? {
                         notes.push(Note {
@@ -114,7 +137,7 @@ impl Server {
                 }
                 _ => {}
             }
-            for name in mentions(&mentioned) {
+            for name in mentions(&mentioned).into_iter().take(MENTIONS_LIMIT) {
                 let Some(user) = crate::accounts::user_by_name(db, &name).await? else {
                     continue;
                 };
@@ -122,7 +145,7 @@ impl Server {
                     Op::Mr(MrOp::Opened { target, .. }) => *target,
                     _ => delta.thread,
                 };
-                if self.viewer(user.id).await?.sees_thread(thread) {
+                if viewers.sees(self, user.id, thread).await? {
                     notes.push(Note {
                         user: user.id,
                         kind: "mention",

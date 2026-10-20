@@ -588,3 +588,73 @@ async fn a_private_fork_stays_hidden_until_offered_back() {
     assert_eq!(pulled.deltas.len(), 4, "a merge request shares the fork's work with the target");
     assert_ne!(alice.listing().await.families[0].view, view_before, "clients learn to read the family again");
 }
+
+#[tokio::test]
+async fn merge_requests_notify_only_about_threads_the_asker_sees() {
+    use silt_log::MrOp;
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (alice, _) = Client::login_as(data.path(), &base, "alice").await;
+    let (bob, _) = Client::login_as(data.path(), &base, "bob").await;
+    alice.register("github.com/u/r").await;
+    let mut family = Family::new();
+    let mut write = |actor: u128, thread: ThreadId, parents: silt_types::Frontier, op: Op| {
+        let delta = family.delta(ActorId(actor), thread, Author::User, 0, parents, op);
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        delta
+    };
+    let file = Op::Create {
+        kind: InodeKind::File,
+        parent: Parent::Root,
+        name: "a.rs".into(),
+        content: Content::Empty,
+        executable: false,
+    };
+    let source = write(1, THREAD, silt_types::Frontier::root(), file);
+    assert_eq!(alice.push(vec![source.clone()]).await.status(), StatusCode::OK);
+    let info = |id| ThreadInfo {
+        id,
+        family: FAMILY,
+        repo: "github.com/u/r".into(),
+        created_ms: 2,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+
+    const PRIVATE: ThreadId = ThreadId(76);
+    let status = alice.request(reqwest::Method::POST, "/v1/threads").json(&info(PRIVATE)).send().await.expect("sends").status();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let private = VisibilityRequest {
+        repo: None,
+        thread: Some(PRIVATE),
+        visibility: Visibility::Private,
+    };
+    assert_eq!(alice.set_visibility(&private).await, StatusCode::NO_CONTENT);
+    let hidden = write(1, PRIVATE, silt_types::Frontier::single(source.span.last()), Op::Fork { from: THREAD });
+    assert_eq!(alice.push(vec![hidden]).await.status(), StatusCode::OK);
+
+    const FORK: ThreadId = ThreadId(77);
+    let status = bob.request(reqwest::Method::POST, "/v1/threads").json(&info(FORK)).send().await.expect("sends").status();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let forked = write(2, FORK, silt_types::Frontier::single(source.span.last()), Op::Fork { from: THREAD });
+    let mr = |target| {
+        Op::Mr(MrOp::Opened {
+            target,
+            title: "click here".into(),
+            summary: String::new(),
+        })
+    };
+    let into_private = write(2, FORK, silt_types::Frontier::single(forked.span.last()), mr(PRIVATE));
+    let into_main = write(2, FORK, silt_types::Frontier::single(into_private.span.last()), mr(THREAD));
+    assert_eq!(bob.push(vec![forked, into_private]).await.status(), StatusCode::OK);
+    let inbox = || async {
+        let reply: silt_proto::InboxReply = alice.request(reqwest::Method::GET, "/v1/inbox").send().await.expect("sends").json().await.expect("inbox");
+        reply.notifications
+    };
+    assert!(inbox().await.is_empty(), "bob can't see the private thread, so he can't ping its owner about it");
+    assert_eq!(bob.push(vec![into_main]).await.status(), StatusCode::OK);
+    let notifications = inbox().await;
+    assert_eq!(notifications.len(), 1);
+    assert_eq!((notifications[0].kind.as_str(), notifications[0].thread), ("mr_opened", THREAD));
+}
