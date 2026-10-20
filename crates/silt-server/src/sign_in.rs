@@ -43,11 +43,36 @@ pub(crate) struct Endpoints {
     pub(crate) provider: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Discovery {
     authorization_endpoint: String,
     token_endpoint: String,
     userinfo_endpoint: String,
+}
+
+/// How long a provider's discovery document is reused. Signing in starts
+/// without an account, so it must not cost a request to the provider each
+/// time.
+const DISCOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+static DISCOVERED: std::sync::Mutex<Option<(String, Discovery, std::time::Instant)>> = std::sync::Mutex::new(None);
+
+async fn discover(http: &reqwest::Client, issuer: &str) -> Result<Discovery, SignInError> {
+    if let Some((cached_for, discovery, at)) = DISCOVERED.lock().expect("lock").as_ref()
+        && cached_for == issuer
+        && at.elapsed() < DISCOVERY_TTL
+    {
+        return Ok(discovery.clone());
+    }
+    let discovery: Discovery = http
+        .get(format!("{issuer}/.well-known/openid-configuration"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    *DISCOVERED.lock().expect("lock") = Some((issuer.to_owned(), discovery.clone(), std::time::Instant::now()));
+    Ok(discovery)
 }
 
 /// The endpoints of `provider` (`github` or `oidc`).
@@ -69,13 +94,7 @@ pub(crate) async fn endpoints(config: &Config, http: &reqwest::Client, provider:
         "oidc" => {
             let oidc = config.auth.oidc.as_ref().ok_or_else(|| SignInError::NotConfigured("OIDC".into()))?;
             let issuer = oidc.issuer.trim_end_matches('/');
-            let discovery: Discovery = http
-                .get(format!("{issuer}/.well-known/openid-configuration"))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
+            let discovery = discover(http, issuer).await?;
             Ok(Endpoints {
                 authorize: discovery.authorization_endpoint,
                 token: discovery.token_endpoint,

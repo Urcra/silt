@@ -270,6 +270,9 @@ impl Server {
                 if let Err(error) = server.purge_expired().await {
                     tracing::warn!(%error, "could not purge the trash");
                 }
+                if let Err(error) = crate::accounts::sweep_expired(server.db()).await {
+                    tracing::warn!(%error, "could not remove expired sign-ins");
+                }
             }
         });
     }

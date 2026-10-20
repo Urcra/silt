@@ -380,6 +380,21 @@ pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: i64) 
     Ok(updated == 1)
 }
 
+/// Removes expired sign-in leftovers. Device requests and sign-in states
+/// are created without an account, so they must not pile up.
+pub(crate) async fn sweep_expired(db: &SqlitePool) -> Result<(), sqlx::Error> {
+    let now = now_ms();
+    for statement in [
+        "DELETE FROM device_requests WHERE expires_ms <= ?",
+        "DELETE FROM sign_in_states WHERE expires_ms <= ?",
+        "DELETE FROM pairing_codes WHERE expires_ms <= ?",
+        "DELETE FROM web_sessions WHERE expires_ms <= ?",
+    ] {
+        sqlx::query(statement).bind(now).execute(db).await?;
+    }
+    Ok(())
+}
+
 /// Refuses a waiting request; one already approved stays approved.
 pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<bool, sqlx::Error> {
     let denied = sqlx::query("DELETE FROM device_requests WHERE user_code = ? AND user_id IS NULL")
