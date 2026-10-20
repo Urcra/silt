@@ -1,6 +1,7 @@
 //! Reads repositories with gix and runs the `git` CLI for writes and for the
 //! cases gix doesn't cover, so behaviour matches the user's own git (ADR 0002).
 
+mod checkout;
 mod filters;
 mod remote;
 
@@ -12,6 +13,7 @@ use std::process::{Command, Stdio};
 use gix::bstr::ByteSlice;
 use silt_types::GitOid;
 
+pub use checkout::ManagedCheckout;
 pub use filters::Filters;
 pub use remote::normalize_remote;
 
