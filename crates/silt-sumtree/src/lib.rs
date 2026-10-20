@@ -1,7 +1,8 @@
 // Vendored from Zed (https://github.com/zed-industries/zed, crates/sum_tree),
 // Copyright Zed Industries, Inc., licensed under the Apache License, Version 2.0.
 // Modified for Silt: removed the rayon-based parallel constructors, tracing
-// instrumentation and the logging test setup.
+// instrumentation and the logging test setup; added `update_item` and
+// `splice_item`.
 
 mod cursor;
 mod tree_map;
@@ -607,6 +608,124 @@ impl<T: Item> SumTree<T> {
                 } else {
                     None
                 }
+            }
+        }
+    }
+
+    /// Updates, in place, the first item whose summary satisfies `found`,
+    /// where `found` must hold for a subtree's summary exactly when it holds
+    /// for one of the subtree's items (e.g. "max key is at least k"). Nodes
+    /// are only copied when shared with another tree. Returns whether an item
+    /// was found.
+    pub fn update_item(
+        &mut self,
+        mut found: impl FnMut(&T::Summary) -> bool,
+        f: impl FnOnce(&mut T),
+        cx: <T::Summary as Summary>::Context<'_>,
+    ) -> bool {
+        self.update_item_recursive(&mut found, f, cx).is_some()
+    }
+
+    fn update_item_recursive(
+        &mut self,
+        found: &mut impl FnMut(&T::Summary) -> bool,
+        f: impl FnOnce(&mut T),
+        cx: <T::Summary as Summary>::Context<'_>,
+    ) -> Option<T::Summary> {
+        match Arc::make_mut(&mut self.0) {
+            Node::Internal {
+                summary,
+                child_summaries,
+                child_trees,
+                ..
+            } => {
+                let index = child_summaries.iter().position(&mut *found)?;
+                child_summaries[index] = child_trees[index].update_item_recursive(found, f, cx)?;
+                *summary = sum(child_summaries.iter(), cx);
+                Some(summary.clone())
+            }
+            Node::Leaf {
+                summary,
+                items,
+                item_summaries,
+            } => {
+                let index = item_summaries.iter().position(&mut *found)?;
+                f(&mut items[index]);
+                item_summaries[index] = items[index].summary(cx);
+                *summary = sum(item_summaries.iter(), cx);
+                Some(summary.clone())
+            }
+        }
+    }
+
+    /// Replaces, in place, the first item whose summary satisfies `found`
+    /// (see [`SumTree::update_item`]) with the items `f` returns, of which
+    /// there must be at most `max_items`. Returns `false` without changing the
+    /// tree when there is no such item or its leaf has no room, so callers can
+    /// fall back to slicing.
+    pub fn splice_item<I: IntoIterator<Item = T>>(
+        &mut self,
+        mut found: impl FnMut(&T::Summary) -> bool,
+        max_items: usize,
+        f: impl FnOnce(T) -> I,
+        cx: <T::Summary as Summary>::Context<'_>,
+    ) -> bool {
+        if !self.leaf_has_room(&mut found, max_items) {
+            return false;
+        }
+        self.splice_item_recursive(&mut found, f, cx).is_some()
+    }
+
+    fn leaf_has_room(&self, found: &mut impl FnMut(&T::Summary) -> bool, max_items: usize) -> bool {
+        match &*self.0 {
+            Node::Internal {
+                child_summaries,
+                child_trees,
+                ..
+            } => child_summaries
+                .iter()
+                .position(&mut *found)
+                .is_some_and(|index| child_trees[index].leaf_has_room(found, max_items)),
+            Node::Leaf { item_summaries, .. } => {
+                item_summaries.iter().any(&mut *found)
+                    && item_summaries.len() - 1 + max_items <= 2 * TREE_BASE
+            }
+        }
+    }
+
+    fn splice_item_recursive<I: IntoIterator<Item = T>>(
+        &mut self,
+        found: &mut impl FnMut(&T::Summary) -> bool,
+        f: impl FnOnce(T) -> I,
+        cx: <T::Summary as Summary>::Context<'_>,
+    ) -> Option<T::Summary> {
+        match Arc::make_mut(&mut self.0) {
+            Node::Internal {
+                summary,
+                child_summaries,
+                child_trees,
+                ..
+            } => {
+                let index = child_summaries.iter().position(&mut *found)?;
+                child_summaries[index] = child_trees[index].splice_item_recursive(found, f, cx)?;
+                *summary = sum(child_summaries.iter(), cx);
+                Some(summary.clone())
+            }
+            Node::Leaf {
+                summary,
+                items,
+                item_summaries,
+            } => {
+                let index = item_summaries.iter().position(&mut *found)?;
+                let item = items.remove(index);
+                item_summaries.remove(index);
+                for (offset, new_item) in f(item).into_iter().enumerate() {
+                    let new_summary = new_item.summary(cx);
+                    items.insert(index + offset, new_item).unwrap_oob();
+                    item_summaries.insert(index + offset, new_summary).unwrap_oob();
+                }
+                *summary = sum(item_summaries.iter(), cx);
+                Some(summary.clone())
             }
         }
     }
@@ -1320,6 +1439,32 @@ mod tests {
     use super::*;
     use rand::{distr::StandardUniform, prelude::*};
     use std::cmp;
+
+    #[test]
+    fn update_item_changes_one_item_in_place() {
+        let mut tree = SumTree::default();
+        tree.extend(0..50u8, ());
+        assert!(tree.update_item(|summary: &IntegersSummary| summary.max >= 20, |item| *item = 200, ()));
+        let mut expected: Vec<u8> = (0..50).collect();
+        expected[20] = 200;
+        assert_eq!(tree.items(()), expected);
+        assert_eq!(tree.summary().sum, expected.iter().map(|n| *n as usize).sum::<usize>());
+        assert!(!tree.update_item(|summary: &IntegersSummary| summary.max == 255, |_| {}, ()));
+    }
+
+    #[test]
+    fn splice_item_replaces_one_item_with_several() {
+        let mut tree = SumTree::default();
+        tree.extend([0u8, 2, 4], ());
+        assert!(tree.splice_item(|summary: &IntegersSummary| summary.max >= 2, 2, |item| [item, item + 1], ()));
+        assert_eq!(tree.items(()), vec![0, 2, 3, 4]);
+        assert_eq!(tree.summary().count, 4);
+        assert!(
+            !tree.splice_item(|summary: &IntegersSummary| summary.max >= 2, 2, |item| [item, item], ()),
+            "a full leaf refuses"
+        );
+        assert_eq!(tree.items(()), vec![0, 2, 3, 4]);
+    }
 
     #[test]
     fn test_extend_and_push_tree() {
