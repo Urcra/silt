@@ -2,6 +2,7 @@
 //! cases gix doesn't cover, so behaviour matches the user's own git (ADR 0002).
 
 mod bundle;
+pub mod conventions;
 mod checkout;
 mod filters;
 mod remote;

@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
-use crate::protocol::{HookReply, Request, Response, SessionStarted};
+use crate::protocol::{HookReply, Mount, Request, Response, SessionStarted};
 use crate::remote::{self, Remote};
 use crate::watch::{self, Watcher};
 
@@ -465,6 +465,7 @@ impl Core {
         }
         Ok(SessionStarted {
             thread: thread.to_string(),
+            mount: isolated.then(|| self.mount(&repo)),
             checkout: checkout_path,
             agent_cwd,
         })
@@ -1243,6 +1244,21 @@ impl Core {
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
     /// family grow concurrently, and an actor's deltas must form one chain.
+    pub(crate) fn mount(&self, source: &Repo) -> Mount {
+        let project = match source.remote_url("origin").ok().flatten() {
+            Some(url) => silt_git::normalize_remote(&url),
+            None => source.root().to_string_lossy().into_owned(),
+        };
+        let project: String = project
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' { ch } else { '-' })
+            .collect();
+        Mount {
+            source: source.root().to_owned(),
+            shared: self.data_dir.join("linked").join(project.trim_matches('-')),
+        }
+    }
+
     pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
         self.actor.derive(thread.0)
     }

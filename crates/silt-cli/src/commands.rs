@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use silt_agents::claude;
+use silt_git::conventions::{self, LinkOutcome, PrepareOutcome};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
+    CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
     SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 
@@ -119,6 +120,9 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
         isolated,
     })?;
     eprintln!("silt: recording thread {} in {}", short(&started.thread), started.checkout.display());
+    if let Some(mount) = &started.mount {
+        mount_checkout(mount, &started.checkout, &started.thread);
+    }
 
     let status = run_claude(&["--session-id", &session_id], args, &started.agent_cwd, &started.thread)?;
     call::<String>(&Request::EndSession {
@@ -186,8 +190,53 @@ fn current_dir() -> Result<PathBuf, Exn<CliError>> {
     env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))
 }
 
+/// Links the project's shared paths into a newly mounted managed checkout
+/// and runs its `prepare` script there. Problems are reported, not fatal:
+/// the agent can still work, and the user sees what went wrong.
+fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
+    match silt_git::Repo::discover(checkout)
+        .and_then(|repo| conventions::link_shared_paths(&repo, &mount.source, &mount.shared))
+    {
+        Ok(outcomes) => {
+            for outcome in outcomes {
+                match outcome {
+                    LinkOutcome::Linked { path, seeded: true } => {
+                        eprintln!("silt: linked {path}, shared by this project's checkouts (copied from your clone)");
+                    }
+                    LinkOutcome::Linked { path, seeded: false } => eprintln!("silt: linked {path}"),
+                    LinkOutcome::AlreadyLinked { .. } => {}
+                    LinkOutcome::NotIgnored { path } => {
+                        eprintln!("silt: not linking {path}: only git-ignored paths can be linked");
+                    }
+                    LinkOutcome::Occupied { path } => {
+                        eprintln!("silt: not linking {path}: the checkout already has something there");
+                    }
+                }
+            }
+        }
+        Err(error) => eprintln!("silt: could not link shared paths: {error}"),
+    }
+    let source = mount.source.to_string_lossy();
+    let checkout_dir = checkout.to_string_lossy();
+    let envs = [("SILT_THREAD", thread), ("SILT_CHECKOUT", &*checkout_dir), ("SILT_SOURCE", &*source)];
+    match conventions::run_prepare(checkout, &envs) {
+        Ok(None) => {}
+        Ok(Some(PrepareOutcome::Ran { script, status })) if !status.success() => {
+            eprintln!("silt: {} failed ({status}); continuing", script.display());
+        }
+        Ok(Some(PrepareOutcome::Ran { .. })) => {}
+        Ok(Some(PrepareOutcome::NotExecutable { script })) => {
+            eprintln!("silt: not running {}: it is not executable", script.display());
+        }
+        Err(error) => eprintln!("silt: could not run prepare: {error}"),
+    }
+}
+
 /// Runs the agent on a resumed or forked session, if the thread has one.
 fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliError>> {
+    if let Some(mount) = &resumed.mount {
+        mount_checkout(mount, &resumed.checkout, &resumed.thread);
+    }
     let Some(session_id) = resumed.session_id else {
         eprintln!("silt: the thread has no agent session to continue");
         return Ok(());

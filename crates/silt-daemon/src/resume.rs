@@ -109,6 +109,7 @@ impl Core {
         };
         Ok(Resumed {
             thread: thread.to_string(),
+            mount: (!here).then(|| self.mount(repo)),
             checkout: checkout_path,
             agent_cwd,
             session_id,

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::{PollWatcher, RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, RecommendedCache, new_debouncer, new_debouncer_opt};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -11,7 +11,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// are not trusted: every reported path is re-read and compared.
 #[expect(dead_code, reason = "the debouncer is only held so the watch keeps running")]
 pub enum Watcher {
-    Native(Debouncer<RecommendedWatcher, RecommendedCache>),
+    Native(Debouncer<RecommendedWatcher, NoCache>),
     Poll(Debouncer<PollWatcher, NoCache>),
 }
 
@@ -57,15 +57,18 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
         }
         Err(_) => on_change(vec![rescan_root.clone()]),
     };
+    // Linked paths (`.agents/linked`) are symlinks to shared trees such as
+    // `node_modules`, which are ignored and too big to watch.
+    let config = notify::Config::default().with_follow_symlinks(false);
     if needs_polling(root) {
-        let config = notify::Config::default()
-            .with_poll_interval(POLL_INTERVAL)
-            .with_compare_contents(true);
+        let config = config.with_poll_interval(POLL_INTERVAL).with_compare_contents(true);
         let mut debouncer = new_debouncer_opt::<_, PollWatcher, NoCache>(DEBOUNCE, None, handler, NoCache, config)?;
         debouncer.watch(root, RecursiveMode::Recursive)?;
         Ok(Watcher::Poll(debouncer))
     } else {
-        let mut debouncer = new_debouncer(DEBOUNCE, None, handler)?;
+        // inotify pairs renames itself; a file-id cache would walk the
+        // linked trees anyway.
+        let mut debouncer = new_debouncer_opt::<_, RecommendedWatcher, NoCache>(DEBOUNCE, None, handler, NoCache, config)?;
         debouncer.watch(root, RecursiveMode::Recursive)?;
         Ok(Watcher::Native(debouncer))
     }

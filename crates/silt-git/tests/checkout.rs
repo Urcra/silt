@@ -123,3 +123,51 @@ fn bundles_carry_commits_origin_does_not_have() {
     assert!(other.has_commit(local));
     assert_eq!(stdout(git(other.root(), &["rev-parse", "refs/silt/threads/t9"])), local.to_string());
 }
+
+#[test]
+fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
+    use std::os::unix::fs::PermissionsExt;
+    use silt_git::conventions::{LinkOutcome, PrepareOutcome, link_shared_paths, run_prepare};
+
+    let dir = source_repo();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".agents")).expect("mkdir");
+    fs::write(root.join(".gitignore"), "node_modules/\n.env\n").expect("write");
+    fs::write(root.join(".agents/linked"), "node_modules\n.env\ncache\na.txt\n").expect("write");
+    fs::write(root.join(".agents/prepare"), "#!/bin/sh\npwd > prepared.txt\necho \"$SILT_THREAD\" >> prepared.txt\n").expect("write");
+    fs::set_permissions(root.join(".agents/prepare"), fs::Permissions::from_mode(0o755)).expect("chmod");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "conventions"]);
+    fs::create_dir_all(root.join("node_modules/left-pad")).expect("mkdir");
+    fs::write(root.join("node_modules/left-pad/index.js"), "pad").expect("write");
+    let repo = Repo::discover(root).expect("discovers");
+    let base = repo.head_commit().expect("head").expect("commit");
+    let checkout = repo.create_managed_checkout("t5", base, None).expect("creates");
+    let checkout_repo = Repo::discover(&checkout.path).expect("discovers the checkout");
+    let shared = tempfile::tempdir().expect("temp dir");
+
+    let outcomes = link_shared_paths(&checkout_repo, root, shared.path()).expect("links");
+    assert_eq!(
+        outcomes,
+        vec![
+            LinkOutcome::Linked { path: "node_modules".into(), seeded: true },
+            LinkOutcome::Linked { path: ".env".into(), seeded: false },
+            LinkOutcome::NotIgnored { path: "cache".into() },
+            LinkOutcome::NotIgnored { path: "a.txt".into() },
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(checkout.path.join("node_modules/left-pad/index.js")).expect("seeded"),
+        "pad"
+    );
+    assert_eq!(stdout(git(&checkout.path, &["status", "--porcelain"])), "", "links are ignored");
+    let again = link_shared_paths(&checkout_repo, root, shared.path()).expect("links again");
+    assert_eq!(again[0], LinkOutcome::AlreadyLinked { path: "node_modules".into() });
+
+    let outcome = run_prepare(&checkout.path, &[("SILT_THREAD", "t5")]).expect("runs");
+    assert!(matches!(outcome, Some(PrepareOutcome::Ran { status, .. }) if status.success()));
+    assert_eq!(
+        fs::read_to_string(checkout.path.join("prepared.txt")).expect("prepared"),
+        format!("{}\nt5\n", checkout.path.display())
+    );
+}

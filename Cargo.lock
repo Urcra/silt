@@ -4081,6 +4081,7 @@ dependencies = [
  "serde_json",
  "silt-agents",
  "silt-daemon",
+ "silt-git",
  "silt-mcp",
  "silt-proto",
  "silt-server",

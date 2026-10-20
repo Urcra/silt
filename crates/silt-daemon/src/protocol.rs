@@ -115,6 +115,17 @@ pub struct SessionStarted {
     pub checkout: PathBuf,
     /// Where to start the agent so its relative position in the repo is kept.
     pub agent_cwd: PathBuf,
+    pub mount: Option<Mount>,
+}
+
+/// A managed checkout that was just mounted, for the CLI to link shared
+/// paths into and run `prepare` in, where the user sees the output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mount {
+    /// The clone the checkout was made from.
+    pub source: PathBuf,
+    /// Where this project's linked paths live on this machine.
+    pub shared: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +216,7 @@ pub struct Resumed {
     pub agent_cwd: PathBuf,
     /// The agent session to continue, when the thread has one.
     pub session_id: Option<String>,
+    pub mount: Option<Mount>,
 }
 
 /// What a hook should hand back to the agent.
