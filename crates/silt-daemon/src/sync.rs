@@ -245,7 +245,17 @@ impl Core {
         };
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
         for info in listing.threads {
-            if self.threads.contains_key(&info.id) {
+            if let Some(known) = self.threads.get(&info.id) {
+                if known.owner != info.owner && !info.owner.is_empty() {
+                    let updated = ThreadRecord {
+                        owner: info.owner.clone(),
+                        ..known.clone()
+                    };
+                    if let Err(error) = self.store.create_thread(&updated).await {
+                        warn!(%error, "could not record a thread's owner");
+                    }
+                    self.threads.insert(info.id, updated);
+                }
                 continue;
             }
             let record = ThreadRecord {
@@ -254,6 +264,7 @@ impl Core {
                 repo_root: Default::default(),
                 repo: info.repo,
                 created_ms: info.created_ms,
+                owner: info.owner,
             };
             if let Err(error) = self.store.create_thread(&record).await {
                 warn!(%error, "could not record a thread from the server");
@@ -285,6 +296,7 @@ impl Core {
             repo: thread.repo.clone(),
             created_ms: thread.created_ms,
             lease: None,
+            owner: String::new(),
         };
         tokio::spawn(async move {
             if let Err(error) = remote.register_thread(&info).await {

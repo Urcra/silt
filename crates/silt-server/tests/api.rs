@@ -6,8 +6,8 @@ use reqwest::StatusCode;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Delta, Family, Op};
 use silt_proto::{
-    ErrorReply, GENERATION_HEADER, Lease, LeaseRequest, Listing, LoginReply, LoginRequest, PROTOCOL_HEADER,
-    PullReply, PushReply, PushRequest, ThreadInfo,
+    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL_HEADER, PullReply,
+    PushReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_server::{Server, create_pairing_code};
 use silt_store::BlobStore;
@@ -32,7 +32,11 @@ struct Client {
 
 impl Client {
     async fn login(data: &Path, base: &str) -> (Self, DeviceId) {
-        let code = create_pairing_code(data).await.expect("code");
+        Self::login_as(data, base, "owner").await
+    }
+
+    async fn login_as(data: &Path, base: &str, user: &str) -> (Self, DeviceId) {
+        let code = create_pairing_code(data, user).await.expect("code");
         let http = reqwest::Client::new();
         let reply: LoginReply = http
             .post(format!("{base}/v1/login"))
@@ -47,6 +51,7 @@ impl Client {
             .json()
             .await
             .expect("login reply");
+        assert_eq!(reply.user, user);
         (
             Self {
                 http,
@@ -241,6 +246,7 @@ async fn blobs_threads_and_leases() {
         repo: "github.com/u/r".into(),
         created_ms: 1,
         lease: None,
+        owner: String::new(),
     };
     client
         .request(reqwest::Method::POST, "/v1/threads")
@@ -251,7 +257,6 @@ async fn blobs_threads_and_leases() {
     for epoch in 1..=2 {
         let lease: Lease = client
             .request(reqwest::Method::POST, &format!("/v1/threads/{THREAD}/lease"))
-            .json(&LeaseRequest { device })
             .send()
             .await
             .expect("sends")
@@ -270,4 +275,92 @@ async fn blobs_threads_and_leases() {
         .expect("listing");
     assert_eq!(listing.threads[0].lease, Some(Lease { device, epoch: 2 }));
     assert_eq!(listing.threads[0].repo, "github.com/u/r");
+    assert_eq!(listing.threads[0].owner, "owner");
+}
+
+impl Client {
+    async fn listing(&self) -> Listing {
+        self.request(reqwest::Method::GET, "/v1/listing")
+            .send()
+            .await
+            .expect("sends")
+            .json()
+            .await
+            .expect("listing")
+    }
+
+    async fn register(&self, repo: &str) -> StatusCode {
+        let thread = ThreadInfo {
+            id: THREAD,
+            family: FAMILY,
+            repo: repo.into(),
+            created_ms: 1,
+            lease: None,
+            owner: String::new(),
+        };
+        self.request(reqwest::Method::POST, "/v1/threads")
+            .json(&thread)
+            .send()
+            .await
+            .expect("sends")
+            .status()
+    }
+
+    async fn set_visibility(&self, request: &VisibilityRequest) -> StatusCode {
+        self.request(reqwest::Method::PUT, "/v1/visibility")
+            .json(request)
+            .send()
+            .await
+            .expect("sends")
+            .status()
+    }
+}
+
+#[tokio::test]
+async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (alice, _) = Client::login_as(data.path(), &base, "alice").await;
+    let (bob, _) = Client::login_as(data.path(), &base, "bob").await;
+    assert_eq!(alice.register("github.com/u/r").await, StatusCode::NO_CONTENT);
+    assert_eq!(alice.push(deltas(2)).await.status(), StatusCode::OK);
+
+    let listing = bob.listing().await;
+    assert_eq!(listing.threads.len(), 1, "projects are team-visible by default");
+    assert_eq!(listing.threads[0].owner, "alice");
+    let response = bob
+        .request(reqwest::Method::POST, &format!("/v1/threads/{THREAD}/lease"))
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(matches!(response.json::<ErrorReply>().await.expect("body"), ErrorReply::Forbidden { .. }));
+    let pulled: PullReply = bob.pull("after=0").await.json().await.expect("pull");
+    assert_eq!(pulled.deltas.len(), 2, "teammates can read, and so fork, the family");
+
+    let private_family = VisibilityRequest {
+        repo: None,
+        family: Some(FAMILY),
+        visibility: Visibility::Private,
+    };
+    assert_eq!(bob.set_visibility(&private_family).await, StatusCode::FORBIDDEN);
+    assert_eq!(alice.set_visibility(&private_family).await, StatusCode::NO_CONTENT);
+    assert!(bob.listing().await.threads.is_empty());
+    assert!(bob.listing().await.families.is_empty());
+    assert_eq!(bob.pull("after=0").await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(bob.push(deltas(3)).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(alice.listing().await.threads.len(), 1);
+
+    let team_family = VisibilityRequest {
+        visibility: Visibility::Team,
+        ..private_family
+    };
+    assert_eq!(alice.set_visibility(&team_family).await, StatusCode::NO_CONTENT);
+    let private_project = VisibilityRequest {
+        repo: Some("github.com/u/r".into()),
+        family: None,
+        visibility: Visibility::Private,
+    };
+    assert_eq!(bob.set_visibility(&private_project).await, StatusCode::NO_CONTENT);
+    assert_eq!(bob.listing().await.threads.len(), 1, "the family's own setting wins over its project's");
 }

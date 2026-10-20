@@ -180,7 +180,10 @@ pub fn auth_login(server: &str, code: &str, name: Option<String>) -> Result<(), 
     if is_running() {
         call::<String>(&Request::Reload)?;
     }
-    println!("logged in to {} as device {} ({name})", config.url, config.device);
+    println!(
+        "logged in to {} as {}, device {} ({name})",
+        config.url, config.user, config.device
+    );
     Ok(())
 }
 
@@ -315,11 +318,11 @@ pub fn server_run(listen: &str, data: Option<PathBuf>) -> Result<(), Exn<CliErro
     })
 }
 
-pub fn server_pair(data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+pub fn server_pair(data: Option<PathBuf>, user: &str) -> Result<(), Exn<CliError>> {
     let data = server_data(data);
     let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
     let code = runtime
-        .block_on(silt_server::create_pairing_code(&data))
+        .block_on(silt_server::create_pairing_code(&data, user))
         .or_raise(|| CliError("cannot create a pairing code".into()))?;
     println!("{code}");
     eprintln!("valid for 15 minutes; on the device run: silt auth login --server <url> --code {code}");

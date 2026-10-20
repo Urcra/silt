@@ -267,3 +267,155 @@ fn edits_interleaved_with_conversation_stay_fast() {
     assert!(text(&family, main).starts_with(&"x".repeat(4000)));
     eprintln!("4000 interleaved edits took {:?}", started.elapsed());
 }
+
+const FORK: ThreadId = ThreadId(8);
+
+fn on_thread(family: &mut Family, actor: ActorId, thread: ThreadId, parents: Frontier, op: Op) -> Delta {
+    let delta = family.delta(actor, thread, Author::User, 0, parents, op);
+    assert_eq!(family.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    delta
+}
+
+fn say(family: &mut Family, thread: ThreadId, line: &str) -> Delta {
+    let head = family.thread_head(thread);
+    on_thread(
+        family,
+        DAEMON.derive(thread.0),
+        thread,
+        head,
+        Op::Conv(ConvOp::Native {
+            session: SessionRef {
+                agent: "claude-code".into(),
+                id: format!("s{}", thread.0),
+            },
+            file: SessionFile::Main,
+            line: line.into(),
+        }),
+    )
+}
+
+fn insert(family: &mut Family, actor: ActorId, thread: ThreadId, inode: InodeId, pos: usize, content: &str) -> Delta {
+    let head = family.thread_head(thread);
+    on_thread(
+        family,
+        actor,
+        thread,
+        head,
+        Op::Text {
+            inode,
+            op: TextOp::Insert {
+                pos,
+                content: content.into(),
+            },
+        },
+    )
+}
+
+fn lines(family: &Family, thread: ThreadId) -> Vec<(String, silt_log::HistorySource)> {
+    family
+        .history(thread)
+        .into_iter()
+        .map(|item| {
+            let text = match &item.delta.op {
+                Op::Conv(ConvOp::Native { line, .. }) => line.clone(),
+                Op::Merge { from, mr } => format!("merge from {} ({})", from.0, mr.is_some()),
+                other => format!("{other:?}"),
+            };
+            (text, item.source)
+        })
+        .collect()
+}
+
+fn view_text(family: &Family, thread: ThreadId, inode: InodeId) -> String {
+    match family.thread_view(thread).file(inode) {
+        Some(FileView::Text(text)) => text,
+        other => panic!("not text: {other:?}"),
+    }
+}
+
+#[test]
+fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
+    use silt_log::HistorySource::{Inherited, Own, Upstream};
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    say(&mut family, THREAD, "source 1");
+    insert(&mut family, CHECKOUT_A, THREAD, main, 0, "// a\n");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    say(&mut family, THREAD, "source 2");
+    insert(&mut family, CHECKOUT_A, THREAD, main, 5, "// a2\n");
+    say(&mut family, FORK, "fork 1");
+    insert(&mut family, ActorId(9), FORK, main, 0, "// fork\n");
+
+    assert_eq!(
+        lines(&family, FORK),
+        vec![("source 1".into(), Inherited), ("fork 1".into(), Own)]
+    );
+    assert_eq!(view_text(&family, FORK, main), "// fork\n// a\nfn main() {}\n");
+    assert_eq!(view_text(&family, THREAD, main), "// a\n// a2\nfn main() {}\n");
+
+    let parents: Frontier = family
+        .thread_head(FORK)
+        .ids()
+        .iter()
+        .chain(family.thread_head(THREAD).ids())
+        .copied()
+        .collect();
+    on_thread(&mut family, DAEMON.derive(FORK.0), FORK, parents, Op::Merge { from: THREAD, mr: None });
+    assert_eq!(
+        lines(&family, FORK),
+        vec![
+            ("source 1".into(), Inherited),
+            ("fork 1".into(), Own),
+            ("source 2".into(), Upstream),
+            (format!("merge from {} (false)", THREAD.0), Own),
+        ]
+    );
+    assert_eq!(view_text(&family, FORK, main), "// fork\n// a\n// a2\nfn main() {}\n");
+    assert_eq!(view_text(&family, THREAD, main), "// a\n// a2\nfn main() {}\n", "the source never changes");
+    assert_eq!(lines(&family, THREAD), vec![("source 1".into(), Own), ("source 2".into(), Own)]);
+}
+
+#[test]
+fn merge_requests_open_and_resolve_once() {
+    use silt_log::{MrOp, MrStatus};
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    insert(&mut family, ActorId(9), FORK, main, 0, "// fork\n");
+    let head = family.thread_head(FORK);
+    let opened = on_thread(
+        &mut family,
+        ActorId(9),
+        FORK,
+        head,
+        Op::Mr(MrOp::Opened {
+            target: THREAD,
+            title: "Add a comment".into(),
+            summary: "One line.".into(),
+        }),
+    );
+    let mr = opened.span.first();
+    assert_eq!(family.merge_requests()[0].status, MrStatus::Open);
+    assert_eq!(family.merge_requests()[0].fork, FORK);
+
+    let parents: Frontier = family.thread_head(THREAD).ids().iter().copied().chain([mr]).collect();
+    on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, parents, Op::Merge { from: FORK, mr: Some(mr) });
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, head, Op::Mr(MrOp::Approved { mr }));
+    let head = family.thread_head(THREAD);
+    on_thread(
+        &mut family,
+        DAEMON.derive(THREAD.0),
+        THREAD,
+        head,
+        Op::Mr(MrOp::Declined {
+            mr,
+            reason: "too late".into(),
+        }),
+    );
+    assert_eq!(family.merge_requests()[0].status, MrStatus::Approved);
+    assert_eq!(view_text(&family, THREAD, main), "// fork\nfn main() {}\n");
+    assert_eq!(view_text(&family, FORK, main), "// fork\nfn main() {}\n");
+}

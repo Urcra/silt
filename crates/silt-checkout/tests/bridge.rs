@@ -117,7 +117,7 @@ fn touched_inode(delta: &Delta) -> Option<silt_crdt::InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => None,
     }
 }
 

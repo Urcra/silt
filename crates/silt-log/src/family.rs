@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, TextDoc, TextError, TextEvent,
@@ -7,7 +7,7 @@ use silt_crdt::{
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
 
-use crate::delta::{Author, Content, Delta, Op};
+use crate::delta::{Author, Content, Delta, MrOp, Op};
 
 /// Supplies the text of git blobs, which the projection needs the first
 /// time a file that came from git is edited.
@@ -84,6 +84,45 @@ pub struct ThreadState {
     pub lease: Option<(DeviceId, u64)>,
     /// The thread this one was forked from.
     pub forked_from: Option<ThreadId>,
+    /// Where it forked: the fork delta's parents.
+    pub fork_point: Option<Frontier>,
+    /// Indices into the family log of the thread's merges.
+    pub merges: Vec<usize>,
+}
+
+/// One step of a thread's history as [`Family::history`] tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryItem<'a> {
+    pub delta: &'a Delta,
+    pub source: HistorySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistorySource {
+    /// Recorded in the thread itself, including its merges.
+    Own,
+    /// From the thread's source chain, before the fork point.
+    Inherited,
+    /// From the thread a pull brought in; listed just before that pull.
+    Upstream,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeRequest {
+    pub id: DeltaId,
+    pub fork: ThreadId,
+    pub target: ThreadId,
+    pub title: String,
+    pub summary: String,
+    pub opened_ms: i64,
+    pub status: MrStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MrStatus {
+    Open,
+    Approved,
+    Declined { reason: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +208,85 @@ impl Family {
 
     pub fn threads(&self) -> impl Iterator<Item = (&ThreadId, &ThreadState)> {
         self.threads.iter()
+    }
+
+    /// The thread's conversation as its agent and its readers should see it:
+    /// for a fork, the source chain's conversation up to the fork point, then
+    /// its own, with what each pull brought in from upstream just before it.
+    pub fn history(&self, thread: ThreadId) -> Vec<HistoryItem<'_>> {
+        let Some(state) = self.threads.get(&thread) else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        if let (Some(source), Some(point)) = (state.forked_from, &state.fork_point) {
+            let before = self.graph.version_vector(point);
+            items.extend(
+                self.history(source)
+                    .into_iter()
+                    .filter(|item| before.contains(item.delta.span.first()))
+                    .map(|item| HistoryItem {
+                        source: HistorySource::Inherited,
+                        ..item
+                    }),
+            );
+        }
+        let mut seen: HashSet<DeltaId> =
+            items.iter().map(|item| item.delta.span.first()).collect();
+        let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
+        own.sort_unstable();
+        for index in own {
+            let delta = &self.log[index];
+            if let Op::Merge { from, mr: None } = delta.op {
+                let merged = self.graph.version_vector(&delta.parents);
+                for item in self.history(from) {
+                    let id = item.delta.span.first();
+                    if merged.contains(id) && seen.insert(id) {
+                        items.push(HistoryItem {
+                            delta: item.delta,
+                            source: HistorySource::Upstream,
+                        });
+                    }
+                }
+            }
+            seen.insert(delta.span.first());
+            items.push(HistoryItem {
+                delta,
+                source: HistorySource::Own,
+            });
+        }
+        items
+    }
+
+    /// Every merge request in the family, oldest first.
+    pub fn merge_requests(&self) -> Vec<MergeRequest> {
+        let mut requests: Vec<MergeRequest> = Vec::new();
+        for delta in &self.log {
+            let Op::Mr(op) = &delta.op else {
+                continue;
+            };
+            match op {
+                MrOp::Opened { target, title, summary } => requests.push(MergeRequest {
+                    id: delta.span.first(),
+                    fork: delta.thread,
+                    target: *target,
+                    title: title.clone(),
+                    summary: summary.clone(),
+                    opened_ms: delta.time_ms,
+                    status: MrStatus::Open,
+                }),
+                MrOp::Approved { mr } | MrOp::Declined { mr, .. } => {
+                    if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
+                        && request.status == MrStatus::Open
+                    {
+                        request.status = match op {
+                            MrOp::Declined { reason, .. } => MrStatus::Declined { reason: reason.clone() },
+                            _ => MrStatus::Approved,
+                        };
+                    }
+                }
+            }
+        }
+        requests
     }
 
     pub fn conversation(&self, thread: ThreadId) -> impl DoubleEndedIterator<Item = &Delta> {
@@ -299,7 +417,7 @@ impl Family {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => {}
         }
         Ok(false)
     }
@@ -374,7 +492,7 @@ impl Family {
                     state.executable_stamp = Stamp::from(id);
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => {}
         }
         Ok(())
     }
@@ -392,6 +510,10 @@ impl Family {
         }
         if let Op::Fork { from } = delta.op {
             thread.forked_from = Some(from);
+            thread.fork_point = Some(delta.parents.clone());
+        }
+        if let Op::Merge { .. } = delta.op {
+            thread.merges.push(index);
         }
         if let Op::Lease { device, epoch } = delta.op
             && thread.lease.is_none_or(|(_, current)| epoch > current)

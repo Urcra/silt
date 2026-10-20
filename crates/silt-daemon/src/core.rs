@@ -339,6 +339,7 @@ impl Core {
                 .map(|url| silt_git::normalize_remote(&url))
                 .unwrap_or_default(),
             created_ms: now_ms(),
+            owner: self.own_user(),
         };
         self.store.create_thread(&record).await?;
         self.register_thread(&record);
@@ -346,7 +347,7 @@ impl Core {
 
         let mut family = Family::new();
         let branch = repo.head_branch()?;
-        let deltas = import(&mut family, self.actor, thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
+        let deltas = import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
         self.store.append_deltas(family_id, &deltas).await?;
         self.families.insert(family_id, family);
 
@@ -833,8 +834,9 @@ impl Core {
     }
 
     pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
+        let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
-        let delta = family.delta(self.actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
+        let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.store.append_deltas(family_id, std::slice::from_ref(&delta)).await?;
         Ok(delta)
@@ -1071,12 +1073,13 @@ impl Core {
             return Ok(());
         };
         let blob = self.store.blobs().put(&bytes).await?;
+        let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("thread's family is loaded");
         let op = Op::Git(GitOp::Bundle {
             commits: vec![commit],
             blob,
         });
-        let delta = family.delta(self.actor, thread, Author::Import, now_ms(), family.thread_head(thread), op);
+        let delta = family.delta(actor, thread, Author::Import, now_ms(), family.thread_head(thread), op);
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.store.append_deltas(family_id, &[delta]).await?;
         Ok(())
@@ -1097,9 +1100,10 @@ impl Core {
             let (family_id, thread) = (checkout.family, checkout.record.thread);
             let branch = checkout.repo.head_branch()?;
             let repo = Repo::discover(&checkout.record.path)?;
+            let actor = self.thread_actor(thread);
             let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
             let op = Op::Git(GitOp::Committed { commit: head, branch });
-            let delta = family.delta(self.actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
+            let delta = family.delta(actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
             family.apply(delta.clone(), &mut HashMap::new())?;
             self.store.append_deltas(family_id, &[delta]).await?;
             repo.protect(&thread.to_string(), head)?;
@@ -1147,6 +1151,17 @@ impl Core {
         Ok(())
     }
 
+    /// The actor for this daemon's own deltas in one thread. Threads of a
+    /// family grow concurrently, and an actor's deltas must form one chain.
+    pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
+        self.actor.derive(thread.0)
+    }
+
+    /// This device's user on the server; empty without one.
+    pub(crate) fn own_user(&self) -> String {
+        self.remote.as_ref().map(|remote| remote.config.user.clone()).unwrap_or_default()
+    }
+
     /// Starts a new thread in `from`'s family at `from`'s current head.
     pub(crate) async fn fork_thread(&mut self, from: ThreadId) -> Result<ThreadId, CoreError> {
         let source = self.threads[&from].clone();
@@ -1154,13 +1169,15 @@ impl Core {
         let record = ThreadRecord {
             id: fork,
             created_ms: now_ms(),
+            owner: self.own_user(),
             ..source.clone()
         };
         self.store.create_thread(&record).await?;
         self.register_thread(&record);
         self.threads.insert(fork, record);
+        let actor = self.thread_actor(fork);
         let family = self.families.get_mut(&source.family).expect("forked thread's family is loaded");
-        let delta = family.delta(self.actor, fork, Author::User, now_ms(), family.thread_head(from), Op::Fork { from });
+        let delta = family.delta(actor, fork, Author::User, now_ms(), family.thread_head(from), Op::Fork { from });
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.store.append_deltas(source.family, &[delta]).await?;
         Ok(fork)
@@ -1183,7 +1200,7 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => None,
     }
 }
 

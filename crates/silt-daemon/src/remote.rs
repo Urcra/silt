@@ -6,8 +6,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
-    ErrorReply, GENERATION_HEADER, Lease, LeaseRequest, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
-    PullReply, PushRequest, ThreadInfo,
+    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
+    PullReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_sync::Outcome;
 use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
@@ -19,6 +19,9 @@ pub struct RemoteConfig {
     pub token: String,
     pub device: DeviceId,
     pub name: String,
+    /// The user this device belongs to on the server.
+    #[serde(default)]
+    pub user: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +70,7 @@ pub async fn login(url: &str, code: &str, name: &str) -> Result<RemoteConfig, Re
         token: reply.token,
         device: reply.device,
         name: name.to_owned(),
+        user: reply.user,
     })
 }
 
@@ -105,12 +109,28 @@ impl Remote {
     pub async fn take_lease(&self, thread: ThreadId) -> Result<Lease, RemoteError> {
         let response = self
             .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/lease"))
-            .json(&LeaseRequest {
-                device: self.config.device,
-            })
             .send()
             .await?;
         Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn set_visibility(
+        &self,
+        repo: Option<String>,
+        family: Option<FamilyId>,
+        visibility: Visibility,
+    ) -> Result<(), RemoteError> {
+        let response = self
+            .request(reqwest::Method::PUT, "/v1/visibility")
+            .json(&VisibilityRequest {
+                repo,
+                family,
+                visibility,
+            })
+            .send()
+            .await?;
+        checked(response).await?;
+        Ok(())
     }
 
     pub async fn put_blob(&self, hash: BlobHash, bytes: Vec<u8>) -> Result<(), RemoteError> {

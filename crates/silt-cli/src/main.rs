@@ -121,6 +121,9 @@ enum ServerCommand {
     Pair {
         #[arg(long)]
         data: Option<PathBuf>,
+        /// The user the device will belong to; created if missing
+        #[arg(long, default_value = "owner")]
+        user: String,
     },
 }
 
@@ -153,7 +156,7 @@ fn main() -> Result<(), Exn<CliError>> {
         Command::Search { query } => commands::search(&query.join(" ")),
         Command::Server { command } => match command {
             ServerCommand::Run { listen, data } => commands::server_run(&listen, data),
-            ServerCommand::Pair { data } => commands::server_pair(data),
+            ServerCommand::Pair { data, user } => commands::server_pair(data, &user),
         },
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),

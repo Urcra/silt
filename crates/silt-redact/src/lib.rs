@@ -7,7 +7,7 @@
 use std::env;
 
 use silt_crdt::TextOp;
-use silt_log::{ConvOp, Delta, Op};
+use silt_log::{ConvOp, Delta, MrOp, Op};
 
 const MIN_SECRET_LEN: usize = 8;
 const MIN_TOKEN_BODY: usize = 16;
@@ -49,6 +49,11 @@ impl Redactor {
             } => *content = self.mask(content),
             Op::Conv(ConvOp::Native { line, .. }) => *line = self.replace(line),
             Op::Conv(ConvOp::Title(title)) => *title = self.replace(title),
+            Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
+                *title = self.replace(title);
+                *summary = self.replace(summary);
+            }
+            Op::Mr(MrOp::Declined { reason, .. }) => *reason = self.replace(reason),
             _ => {}
         }
         delta

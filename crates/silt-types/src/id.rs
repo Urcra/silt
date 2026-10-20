@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ActorId(pub u128);
 
+impl ActorId {
+    /// A distinct actor for one part of this replica's work, such as one
+    /// thread. The same inputs always give the same actor.
+    pub fn derive(self, salt: u128) -> Self {
+        let mut state = self.0 ^ salt.rotate_left(64).wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835);
+        state ^= state >> 67;
+        state = state.wrapping_mul(0xd6e8_feb8_6659_fd93_9e37_79b9_7f4a_7c15);
+        state ^= state >> 61;
+        Self(state)
+    }
+}
+
 impl fmt::Display for ActorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:032x}", self.0)

@@ -36,6 +36,8 @@ pub struct ThreadRecord {
     /// The repository's normalized origin URL.
     pub repo: String,
     pub created_ms: i64,
+    /// The owning user's name on the server; empty when unknown.
+    pub owner: String,
 }
 
 /// How far a family has been synced with the server.
@@ -126,14 +128,17 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         sqlx::query(
-            "INSERT INTO threads (id, family_id, repo_root, repo, created_ms) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (id) DO UPDATE SET repo_root = excluded.repo_root WHERE excluded.repo_root != ''",
+            "INSERT INTO threads (id, family_id, repo_root, repo, created_ms, owner) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (id) DO UPDATE SET
+                 repo_root = CASE WHEN excluded.repo_root != '' THEN excluded.repo_root ELSE threads.repo_root END,
+                 owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE threads.owner END",
         )
             .bind(id_bytes(thread.id.0))
             .bind(id_bytes(thread.family.0))
             .bind(path_text(&thread.repo_root))
             .bind(&thread.repo)
             .bind(thread.created_ms)
+            .bind(&thread.owner)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -141,7 +146,7 @@ impl Store {
     }
 
     pub async fn threads(&self) -> Result<Vec<ThreadRecord>, StoreError> {
-        let rows = sqlx::query("SELECT id, family_id, repo_root, repo, created_ms FROM threads ORDER BY created_ms")
+        let rows = sqlx::query("SELECT id, family_id, repo_root, repo, created_ms, owner FROM threads ORDER BY created_ms")
             .fetch_all(&self.pool)
             .await?;
         rows.iter()
@@ -152,6 +157,7 @@ impl Store {
                     repo_root: PathBuf::from(row.get::<String, _>("repo_root")),
                     repo: row.get("repo"),
                     created_ms: row.get("created_ms"),
+                    owner: row.get("owner"),
                 })
             })
             .collect()

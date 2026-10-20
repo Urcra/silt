@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::extract::{Path as UrlPath, Query, Request, State};
+use axum::extract::{Extension, Path as UrlPath, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -17,8 +17,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use silt_log::Delta;
 use silt_proto::{
-    ErrorReply, FamilyInfo, GENERATION_HEADER, Lease, LeaseRequest, Listing, LoginReply, LoginRequest, PROTOCOL,
-    PROTOCOL_HEADER, PullReply, PushReply, PushRequest, ThreadInfo,
+    ErrorReply, FamilyInfo, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
+    PullReply, PushReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -97,6 +97,7 @@ impl Server {
             .route("/v1/threads/{id}/lease", post(take_lease))
             .route("/v1/families/{id}/deltas", post(push).get(pull))
             .route("/v1/blobs/{hash}", put(put_blob).get(get_blob))
+            .route("/v1/visibility", put(set_visibility))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         Router::new()
             .route("/v1/login", post(login))
@@ -110,16 +111,24 @@ impl Server {
     }
 }
 
-/// Creates a one-time code that lets a device log in, valid for 15 minutes.
-pub async fn create_pairing_code(data_dir: &Path) -> Result<String, ServerError> {
+/// Creates a one-time code that lets a device of `user` log in, valid for
+/// 15 minutes. The user is created if it doesn't exist.
+pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, ServerError> {
     tokio::fs::create_dir_all(data_dir).await?;
     let db = open_db(data_dir).await?;
-    let code: String = uuid::Uuid::new_v4().simple().to_string()[..10].to_owned();
-    sqlx::query("INSERT INTO pairing_codes (code_hash, expires_ms) VALUES (?, ?)")
-        .bind(hash(&code).to_vec())
-        .bind(now_ms() + PAIRING_TTL_MS)
+    sqlx::query("INSERT OR IGNORE INTO users (name) VALUES (?)")
+        .bind(user)
         .execute(&db)
         .await?;
+    let code: String = uuid::Uuid::new_v4().simple().to_string()[..10].to_owned();
+    sqlx::query(
+        "INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?",
+    )
+    .bind(hash(&code).to_vec())
+    .bind(now_ms() + PAIRING_TTL_MS)
+    .bind(user)
+    .execute(&db)
+    .await?;
     Ok(code)
 }
 
@@ -164,6 +173,73 @@ fn bad_request(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, ErrorReply::Invalid { message: message.into() })
 }
 
+fn forbidden(message: impl Into<String>) -> ApiError {
+    ApiError(StatusCode::FORBIDDEN, ErrorReply::Forbidden { message: message.into() })
+}
+
+fn not_found() -> ApiError {
+    ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound)
+}
+
+/// The authenticated device and the user it belongs to.
+#[derive(Debug, Clone, Copy)]
+struct Caller {
+    device: DeviceId,
+    user: i64,
+}
+
+/// Families a user may see (ADR 0010): their own, and those whose
+/// effective visibility is `team`. Expects the families table as `f` and
+/// binds the user's id. A macro, so queries stay static strings.
+macro_rules! visible_to_user {
+    () => {
+        "(f.owner_id = ?
+          OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')"
+    };
+}
+
+enum FamilyAccess {
+    /// No device has registered or pushed it yet.
+    Unknown,
+    Visible { owner: i64 },
+    Hidden,
+}
+
+async fn family_access(db: &SqlitePool, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
+    let row = sqlx::query(concat!(
+        "SELECT f.owner_id, ",
+        visible_to_user!(),
+        " AS visible FROM families f WHERE f.id = ?"
+    ))
+    .bind(user)
+    .bind(id_bytes(family.0))
+    .fetch_optional(db)
+    .await?;
+    Ok(match row {
+        None => FamilyAccess::Unknown,
+        Some(row) if row.get::<bool, _>("visible") => FamilyAccess::Visible {
+            owner: row.get("owner_id"),
+        },
+        Some(_) => FamilyAccess::Hidden,
+    })
+}
+
+/// Lets `caller` read or write the family, claiming it when it's new.
+async fn claim_family(db: &SqlitePool, family: FamilyId, caller: Caller) -> Result<(), ApiError> {
+    match family_access(db, family, caller.user).await? {
+        FamilyAccess::Visible { .. } => Ok(()),
+        FamilyAccess::Hidden => Err(not_found()),
+        FamilyAccess::Unknown => {
+            sqlx::query("INSERT OR IGNORE INTO families (id, owner_id) VALUES (?, ?)")
+                .bind(id_bytes(family.0))
+                .bind(caller.user)
+                .execute(db)
+                .await?;
+            Ok(())
+        }
+    }
+}
+
 /// Rejects other protocol versions and stamps every response with the
 /// server's generation.
 async fn protocol(State(server): State<Server>, request: Request, next: Next) -> Response {
@@ -197,19 +273,22 @@ async fn authenticate(State(server): State<Server>, mut request: Request, next: 
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_owned);
-    let device = match token {
-        Some(token) => sqlx::query("SELECT id FROM devices WHERE token_hash = ?")
+    let caller = match token {
+        Some(token) => sqlx::query("SELECT id, user_id FROM devices WHERE token_hash = ?")
             .bind(hash(&token).to_vec())
             .fetch_optional(&server.shared.db)
             .await
             .ok()
             .flatten()
-            .map(|row| DeviceId(id_from(row.get("id")))),
+            .map(|row| Caller {
+                device: DeviceId(id_from(row.get("id"))),
+                user: row.get("user_id"),
+            }),
         None => None,
     };
-    match device {
-        Some(device) => {
-            request.extensions_mut().insert(device);
+    match caller {
+        Some(caller) => {
+            request.extensions_mut().insert(caller);
             next.run(request).await
         }
         None => ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized).into_response(),
@@ -218,40 +297,66 @@ async fn authenticate(State(server): State<Server>, mut request: Request, next: 
 
 async fn login(State(server): State<Server>, Json(body): Json<LoginRequest>) -> Result<Json<LoginReply>, ApiError> {
     let db = &server.shared.db;
-    let removed = sqlx::query("DELETE FROM pairing_codes WHERE code_hash = ? AND expires_ms > ?")
+    let code = sqlx::query("DELETE FROM pairing_codes WHERE code_hash = ? AND expires_ms > ? RETURNING user_id")
         .bind(hash(&body.code).to_vec())
         .bind(now_ms())
-        .execute(db)
-        .await?
-        .rows_affected();
-    if removed == 0 {
+        .fetch_optional(db)
+        .await?;
+    let Some(code) = code else {
         return Err(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized));
-    }
+    };
+    let user: i64 = code.get("user_id");
     let device = DeviceId(uuid::Uuid::new_v4().as_u128());
     let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms) VALUES (?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, user_id) VALUES (?, ?, ?, ?, ?)")
         .bind(id_bytes(device.0))
         .bind(&body.name)
         .bind(hash(&token).to_vec())
         .bind(now_ms())
+        .bind(user)
         .execute(db)
         .await?;
-    Ok(Json(LoginReply { device, token }))
+    let name = sqlx::query("SELECT name FROM users WHERE id = ?")
+        .bind(user)
+        .fetch_one(db)
+        .await?
+        .get("name");
+    Ok(Json(LoginReply {
+        device,
+        token,
+        user: name,
+    }))
 }
 
-async fn listing(State(server): State<Server>) -> Result<Json<Listing>, ApiError> {
+async fn listing(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<Listing>, ApiError> {
+    let visible: std::collections::HashSet<FamilyId> =
+        sqlx::query(concat!("SELECT f.id FROM families f WHERE ", visible_to_user!()))
+            .bind(caller.user)
+            .fetch_all(&server.shared.db)
+            .await?
+            .iter()
+            .map(|row| FamilyId(id_from(row.get("id"))))
+            .collect();
     let families = server
         .shared
         .rooms
         .lock()
         .await
         .iter()
+        .filter(|(id, _)| visible.contains(id))
         .map(|(id, room)| FamilyInfo { id: *id, seq: room.seq() })
         .collect();
-    let rows = sqlx::query(
-        "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id, l.epoch
-         FROM threads t LEFT JOIN leases l ON l.thread_id = t.id ORDER BY t.created_ms",
-    )
+    let rows = sqlx::query(concat!(
+        "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id, l.epoch, u.name AS owner
+         FROM threads t
+         JOIN families f ON f.id = t.family_id
+         JOIN users u ON u.id = t.owner_id
+         LEFT JOIN leases l ON l.thread_id = t.id
+         WHERE ",
+        visible_to_user!(),
+        " ORDER BY t.created_ms"
+    ))
+    .bind(caller.user)
     .fetch_all(&server.shared.db)
     .await?;
     let threads = rows
@@ -265,34 +370,55 @@ async fn listing(State(server): State<Server>) -> Result<Json<Listing>, ApiError
                 device: DeviceId(id_from(device)),
                 epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default(),
             }),
+            owner: row.get("owner"),
         })
         .collect();
     Ok(Json(Listing { families, threads }))
 }
 
-async fn register_thread(State(server): State<Server>, Json(thread): Json<ThreadInfo>) -> Result<StatusCode, ApiError> {
-    sqlx::query("INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms) VALUES (?, ?, ?, ?)")
+async fn register_thread(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Json(thread): Json<ThreadInfo>,
+) -> Result<StatusCode, ApiError> {
+    let db = &server.shared.db;
+    claim_family(db, thread.family, caller).await?;
+    sqlx::query("UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL")
+        .bind(id_bytes(thread.id.0))
+        .bind(&thread.repo)
+        .bind(id_bytes(thread.family.0))
+        .execute(db)
+        .await?;
+    sqlx::query("INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id) VALUES (?, ?, ?, ?, ?)")
         .bind(id_bytes(thread.id.0))
         .bind(id_bytes(thread.family.0))
         .bind(&thread.repo)
         .bind(thread.created_ms)
-        .execute(&server.shared.db)
+        .bind(caller.user)
+        .execute(db)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Moves the thread's lease to the calling device. Only the owner's
+/// devices may; anyone else forks the thread instead (ADR 0010).
 async fn take_lease(
     State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
     UrlPath(thread): UrlPath<String>,
-    Json(body): Json<LeaseRequest>,
 ) -> Result<Json<Lease>, ApiError> {
     let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
-    let known = sqlx::query("SELECT 1 FROM threads WHERE id = ?")
+    let row = sqlx::query("SELECT family_id, owner_id FROM threads WHERE id = ?")
         .bind(id_bytes(thread.0))
         .fetch_optional(&server.shared.db)
-        .await?;
-    if known.is_none() {
-        return Err(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound));
+        .await?
+        .ok_or_else(not_found)?;
+    let family = FamilyId(id_from(row.get("family_id")));
+    if !matches!(family_access(&server.shared.db, family, caller.user).await?, FamilyAccess::Visible { .. }) {
+        return Err(not_found());
+    }
+    if row.get::<i64, _>("owner_id") != caller.user {
+        return Err(forbidden("this thread belongs to another user; fork it to continue the work"));
     }
     let row = sqlx::query(
         "INSERT INTO leases (thread_id, device_id, epoch) VALUES (?, ?, 1)
@@ -300,21 +426,23 @@ async fn take_lease(
          RETURNING epoch",
     )
     .bind(id_bytes(thread.0))
-    .bind(id_bytes(body.device.0))
+    .bind(id_bytes(caller.device.0))
     .fetch_one(&server.shared.db)
     .await?;
     Ok(Json(Lease {
-        device: body.device,
+        device: caller.device,
         epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default(),
     }))
 }
 
 async fn push(
     State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
     UrlPath(family): UrlPath<String>,
     Json(body): Json<PushRequest>,
 ) -> Result<Json<PushReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
+    claim_family(&server.shared.db, family, caller).await?;
     let mut rooms = server.shared.rooms.lock().await;
     let room = rooms
         .entry(family)
@@ -362,10 +490,14 @@ struct PullQuery {
 
 async fn pull(
     State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
     UrlPath(family): UrlPath<String>,
     Query(query): Query<PullQuery>,
 ) -> Result<Json<PullReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
+    if let FamilyAccess::Hidden = family_access(&server.shared.db, family, caller.user).await? {
+        return Err(not_found());
+    }
     let last = match &query.last {
         Some(last) => Some(DeltaId::from_str(last).map_err(|_| bad_request("invalid cursor"))?),
         None => None,
@@ -392,6 +524,43 @@ async fn pull(
         }
         let _ = tokio::time::timeout_at(deadline, waiting).await;
     }
+}
+
+async fn set_visibility(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Json(body): Json<VisibilityRequest>,
+) -> Result<StatusCode, ApiError> {
+    let db = &server.shared.db;
+    let visibility = match body.visibility {
+        Visibility::Private => "private",
+        Visibility::Team => "team",
+    };
+    match (body.repo, body.family) {
+        (Some(repo), None) => {
+            sqlx::query(
+                "INSERT INTO projects (repo, visibility) VALUES (?, ?)
+                 ON CONFLICT (repo) DO UPDATE SET visibility = excluded.visibility",
+            )
+            .bind(repo)
+            .bind(visibility)
+            .execute(db)
+            .await?;
+        }
+        (None, Some(family)) => match family_access(db, family, caller.user).await? {
+            FamilyAccess::Visible { owner } if owner == caller.user => {
+                sqlx::query("UPDATE families SET visibility = ? WHERE id = ?")
+                    .bind(visibility)
+                    .bind(id_bytes(family.0))
+                    .execute(db)
+                    .await?;
+            }
+            FamilyAccess::Visible { .. } => return Err(forbidden("only the thread's owner can change its visibility")),
+            FamilyAccess::Hidden | FamilyAccess::Unknown => return Err(not_found()),
+        },
+        _ => return Err(bad_request("give either a repository or a family")),
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn put_blob(

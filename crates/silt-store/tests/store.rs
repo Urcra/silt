@@ -18,6 +18,7 @@ async fn store_with_thread() -> (tempfile::TempDir, Store) {
             repo_root: PathBuf::from("/repo"),
             repo: "github.com/u/repo".into(),
             created_ms: 1,
+            owner: String::new(),
         })
         .await
         .expect("thread");

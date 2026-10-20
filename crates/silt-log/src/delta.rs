@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
-use silt_types::{BlobHash, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
+use silt_types::{BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,21 @@ pub enum Op {
     /// The first delta of a thread forked from `from`; its parents are the
     /// point it forked at, so it shares all history up to there.
     Fork { from: ThreadId },
+    /// Brings `from`'s work into this thread (ADR 0010). The parents are
+    /// this thread's head and the merged point. A pull when `mr` is `None`,
+    /// otherwise the approval of that merge request.
+    Merge { from: ThreadId, mr: Option<DeltaId> },
+    Mr(MrOp),
+}
+
+/// A merge request's life (ADR 0010). It is identified by the id of its
+/// `Opened` delta, which is on the fork, so the delta's parents are the
+/// fork's head being offered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MrOp {
+    Opened { target: ThreadId, title: String, summary: String },
+    Approved { mr: DeltaId },
+    Declined { mr: DeltaId, reason: String },
 }
 
 impl Op {
@@ -127,6 +142,14 @@ pub enum ConvOp {
     /// tool results) on the recording machine. Transcripts name them by
     /// absolute path, so a restore rewrites `dir` to the new location.
     SessionDir { session: SessionRef, dir: String },
+    /// A merge request from `from` was merged into this thread. The fork's
+    /// own conversation stays in the fork; this is the link and summary.
+    Merged {
+        from: ThreadId,
+        mr: DeltaId,
+        title: String,
+        summary: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

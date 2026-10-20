@@ -171,9 +171,10 @@ impl Core {
             .await
             .map_err(|error| CoreError::Invalid(format!("could not take the thread's lease: {error}")))?;
         let family_id = self.threads[&thread].family;
+        let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("projected above");
         let delta = family.delta(
-            self.actor,
+            actor,
             thread,
             Author::User,
             now_ms(),
