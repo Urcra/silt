@@ -343,9 +343,10 @@ impl Core {
             Request::Presence {
                 thread,
                 file,
+                line,
                 draft,
                 leaving,
-            } => to_response(self.presence(&thread, file, draft, leaving).await),
+            } => to_response(self.presence(&thread, file, line, draft, leaving).await),
             Request::AcpAgents => Response::ok(self.acp_agents()),
             Request::AcpStart { thread, clone, agent } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
@@ -914,7 +915,7 @@ impl Core {
         remote.inbox_read(read).await.map_err(|error| CoreError::Invalid(error.to_string()))
     }
 
-    async fn presence(&self, selector: &str, file: Option<String>, draft: String, leaving: bool) -> Result<silt_proto::PresenceReply, CoreError> {
+    async fn presence(&self, selector: &str, file: Option<String>, line: Option<u32>, draft: String, leaving: bool) -> Result<silt_proto::PresenceReply, CoreError> {
         let thread = self.find_thread(selector)?;
         let Some(remote) = &self.remote else {
             return Ok(silt_proto::PresenceReply::default());
@@ -922,6 +923,7 @@ impl Core {
         let update = silt_proto::PresenceUpdate {
             thread,
             file,
+            line,
             draft,
             leaving,
             agent: self.agent_status(thread).filter(|status| status.state != "exited").map(|status| silt_proto::AgentActivity {

@@ -18,6 +18,7 @@ const TTL: Duration = Duration::from_secs(15);
 pub(crate) struct Entry {
     user: String,
     file: Option<String>,
+    line: Option<u32>,
     draft: String,
     agent: Option<AgentActivity>,
     at: Instant,
@@ -40,6 +41,7 @@ impl Board {
                 user: entry.user.clone(),
                 device: device.to_string(),
                 file: entry.file.clone(),
+                line: entry.line,
                 draft: entry.draft.clone(),
                 agent: entry.agent.clone(),
                 age_ms: u64::try_from(entry.at.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -75,6 +77,7 @@ pub(crate) async fn update(
             Entry {
                 user,
                 file: update.file,
+                line: update.line,
                 draft: update.draft,
                 agent: update.agent,
                 at: Instant::now(),

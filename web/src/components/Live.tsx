@@ -25,12 +25,26 @@ function useLive(thread: string): { changes: number; state: LiveState | null } {
 }
 
 /** Tells the others what this viewer is doing; returns what they are doing. */
-function usePresence(thread: string, file: string | null, draft: string): Presence[] {
-  const [people, setPeople] = useState<Presence[]>([])
-  const state = useRef({ file, draft })
+function usePresence(
+  thread: string,
+  file: string | null,
+  line: number | null,
+  draft: string,
+  onPeople: (people: Presence[]) => void,
+): Presence[] {
+  const [people, setPresent] = useState<Presence[]>([])
+  const heard = useRef(onPeople)
   useEffect(() => {
-    state.current = { file, draft }
-  }, [file, draft])
+    heard.current = onPeople
+  })
+  const setPeople = (present: Presence[]) => {
+    setPresent(present)
+    heard.current(present)
+  }
+  const state = useRef({ file, line, draft })
+  useEffect(() => {
+    state.current = { file, line, draft }
+  }, [file, line, draft])
   useEffect(() => {
     let alive = true
     const beat = () =>
@@ -47,9 +61,15 @@ function usePresence(thread: string, file: string | null, draft: string): Presen
     }
   }, [thread])
   useEffect(() => {
-    void api.presence(thread, { file, draft }).then((reply) => setPeople(reply.people), () => undefined)
-  }, [thread, file, draft])
+    void api.presence(thread, { file, line, draft }).then((reply) => setPeople(reply.people), () => undefined)
+  }, [thread, file, line, draft])
   return people
+}
+
+/** Puts the cursor on `line` and scrolls it into the middle. */
+function showLine(view: EditorView, line: number) {
+  const at = view.state.doc.line(Math.min(Math.max(line, 1), view.state.doc.lines)).from
+  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) })
 }
 
 /** Applies `next` to the editor as the smallest change, so cursors keep their place. */
@@ -68,7 +88,32 @@ function replaceText(view: EditorView, next: string) {
   view.dispatch({ changes: { from: start, to: current.length - end, insert: next.slice(start, next.length - end) } })
 }
 
-function FileEditor({ replica, path, changes }: { replica: LiveReplica; path: string; changes: number }) {
+function FileEditor({
+  replica,
+  path,
+  changes,
+  onLine,
+  reveal,
+  onType,
+}: {
+  replica: LiveReplica
+  path: string
+  changes: number
+  /** Where this viewer's cursor moved, as a line from 1. */
+  onLine: (line: number) => void
+  /** A line to show, from someone being followed. */
+  reveal: number | null
+  /** This viewer typed, which ends following someone. */
+  onType: () => void
+}) {
+  const lineChanged = useRef(onLine)
+  const typed = useRef(onType)
+  const revealed = useRef(reveal)
+  useEffect(() => {
+    lineChanged.current = onLine
+    typed.current = onType
+    revealed.current = reveal
+  })
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -91,13 +136,18 @@ function FileEditor({ replica, path, changes }: { replica: LiveReplica; path: st
         extensions: [
           basicSetup,
           EditorView.editable.of(replica.writable),
+          EditorView.domEventHandlers({ keydown: () => typed.current() }),
           EditorView.updateListener.of((update) => {
+            if (update.selectionSet || update.docChanged) {
+              lineChanged.current(update.state.doc.lineAt(update.state.selection.main.head).number)
+            }
             if (!update.docChanged || applying.current) return
             if (pending.current) clearTimeout(pending.current)
             pending.current = setTimeout(() => void flush(), EDIT_DEBOUNCE_MS)
           }),
         ],
       })
+      if (revealed.current !== null) showLine(view.current, revealed.current)
     })
     return () => {
       current = false
@@ -123,6 +173,10 @@ function FileEditor({ replica, path, changes }: { replica: LiveReplica; path: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changes])
 
+  useEffect(() => {
+    if (view.current && reveal !== null) showLine(view.current, reveal)
+  }, [reveal, path])
+
   return (
     <div>
       {!replica.writable && <p className="text-xs text-neutral-500">Read only: ask the owner to share the thread to edit it.</p>}
@@ -147,8 +201,24 @@ export function LivePanel({
   const [error, setError] = useState<string>()
   const [file, setFile] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [line, setLine] = useState<number | null>(null)
+  const [following, setFollowing] = useState<string | null>(null)
   const { changes, state } = useLive(thread)
-  const people = usePresence(thread, file, draft)
+  const people = usePresence(thread, file, line, draft, (present) => {
+    const followed = present.find((person) => person.device === following)?.file
+    if (followed) setFile(followed)
+  })
+  const leader = people.find((person) => person.device === following)
+  const follow = (device: string | null) => {
+    const followed = people.find((person) => person.device === device)?.file
+    if (followed) setFile(followed)
+    setFollowing(device)
+  }
+  const open = (path: string) => {
+    setFollowing(null)
+    setFile(path)
+    setLine(null)
+  }
   const changed = useRef(onChange)
   useEffect(() => {
     changed.current = onChange
@@ -181,11 +251,20 @@ export function LivePanel({
           <li key={person.device}>
             <span className="font-medium">{person.user}</span> is here
             {person.file && <> viewing {person.file}</>}
+            {person.file && person.line !== null && <> at line {person.line}</>}
             {person.draft && (
               <>
                 {' '}
                 and drafting: <span className="italic">{person.draft}</span>
               </>
+            )}{' '}
+            {person.file && (
+              <button
+                className="text-xs text-sky-700"
+                onClick={() => follow(following === person.device ? null : person.device)}
+              >
+                {following === person.device ? `Stop following ${person.user}` : `Follow ${person.user}`}
+              </button>
             )}
           </li>
         ))}
@@ -208,13 +287,23 @@ export function LivePanel({
           <ul aria-label="files" className="text-sm">
             {replica.paths().map((path) => (
               <li key={path}>
-                <button className={path === file ? 'font-semibold' : 'text-sky-700'} onClick={() => setFile(path)}>
+                <button className={path === file ? 'font-semibold' : 'text-sky-700'} onClick={() => open(path)}>
                   {path}
                 </button>
               </li>
             ))}
           </ul>
-          {file && <FileEditor key={file} replica={replica} path={file} changes={changes} />}
+          {file && (
+            <FileEditor
+              key={file}
+              replica={replica}
+              path={file}
+              changes={changes}
+              onLine={setLine}
+              reveal={leader && leader.file === file ? leader.line : null}
+              onType={() => setFollowing(null)}
+            />
+          )}
         </div>
       )}
     </section>

@@ -128,6 +128,8 @@ pub enum Request {
         #[serde(default)]
         file: Option<String>,
         #[serde(default)]
+        line: Option<u32>,
+        #[serde(default)]
         draft: String,
         #[serde(default)]
         leaving: bool,

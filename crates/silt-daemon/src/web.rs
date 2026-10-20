@@ -278,6 +278,8 @@ struct PresenceBody {
     #[serde(default)]
     file: Option<String>,
     #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
     draft: String,
     #[serde(default)]
     leaving: bool,
@@ -287,6 +289,7 @@ async fn presence(State(web): State<Web>, Path(thread): Path<String>, Json(body)
     let request = Request::Presence {
         thread,
         file: body.file,
+        line: body.line,
         draft: body.draft,
         leaving: body.leaving,
     };

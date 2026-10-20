@@ -400,6 +400,9 @@ pub struct PresenceUpdate {
     /// The file they have open, if any.
     #[serde(default)]
     pub file: Option<String>,
+    /// The line their cursor is on in that file, from 1, for following them.
+    #[serde(default)]
+    pub line: Option<u32>,
     /// Their draft of the next prompt.
     #[serde(default)]
     pub draft: String,
@@ -426,6 +429,8 @@ pub struct Presence {
     pub user: String,
     pub device: String,
     pub file: Option<String>,
+    #[serde(default)]
+    pub line: Option<u32>,
     pub draft: String,
     #[serde(default)]
     pub agent: Option<AgentActivity>,

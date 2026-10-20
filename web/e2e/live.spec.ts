@@ -90,7 +90,32 @@ test('two people edit one thread live, see each other and their drafts', async (
     .toBe('// alice was here\nfn main() {}\nfn farewell() {}\nfn bob() {}\n')
 
   await bob.getByLabel('draft').fill('now add tests for bob')
-  await expect(alice.getByTestId('presence')).toContainText('bob is here viewing src/main.rs and drafting: now add tests for bob')
+  await expect(alice.getByTestId('presence')).toContainText('and drafting: now add tests for bob')
+  await alice.context().close()
+  await bob.context().close()
+})
+
+test('following a co-viewer shows their file and line', async ({ browser }) => {
+  const alice = await (await browser.newContext()).newPage()
+  const bob = await (await browser.newContext()).newPage()
+  await alice.goto(live.alice)
+  await alice.getByRole('link', { name: live.thread }).click()
+  await openFile(bob, live.bob)
+
+  const code = bob.getByTestId('editor').locator('.cm-content')
+  await code.click()
+  await bob.keyboard.press('ControlOrMeta+Home')
+  await bob.keyboard.press('ArrowDown')
+  await bob.keyboard.press('ArrowDown')
+  await expect(alice.getByTestId('presence')).toContainText('bob is here viewing src/main.rs at line 3')
+
+  await alice.getByRole('button', { name: 'Follow bob' }).click()
+  await expect(alice.getByTestId('editor').locator('.cm-activeLine')).toHaveText('fn farewell() {}')
+  await bob.keyboard.press('ArrowUp')
+  await expect(alice.getByTestId('editor').locator('.cm-activeLine')).toHaveText('fn main() {}', { timeout: 10_000 })
+
+  await alice.getByRole('button', { name: 'Stop following bob' }).click()
+  await expect(alice.getByRole('button', { name: 'Follow bob' })).toBeVisible()
   await alice.context().close()
   await bob.context().close()
 })

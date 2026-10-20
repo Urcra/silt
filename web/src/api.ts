@@ -138,6 +138,7 @@ export interface Presence {
   user: string
   device: string
   file: string | null
+  line: number | null
   draft: string
   agent: { name: string; state: string; streaming: string } | null
   age_ms: number
@@ -204,7 +205,7 @@ export const api = {
   replica: (id: string, after: number) => request<ReplicaDeltas>('GET', `${thread(id)}/replica?after=${after}`),
   gitText: (id: string, oid: string) => request<string>('GET', `${thread(id)}/git/${oid}`),
   sendDeltas: (id: string, deltas: string) => request<number>('POST', `${thread(id)}/replica`, { deltas }),
-  presence: (id: string, state: { file: string | null; draft: string; leaving?: boolean }) =>
+  presence: (id: string, state: { file: string | null; line: number | null; draft: string; leaving?: boolean }) =>
     request<{ people: Presence[] }>('POST', `${thread(id)}/presence`, state),
   liveUrl: (id: string) => `${thread(id)}/live?token=${token()}`,
   agents: () => request<AgentChoices>('GET', '/api/agents'),
