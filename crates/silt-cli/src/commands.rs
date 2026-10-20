@@ -700,6 +700,19 @@ pub fn sandbox(writable: Vec<PathBuf>, network: bool, command: &[String]) -> Res
     Err(Exn::new(CliError(format!("cannot run {program}: {error}"))))
 }
 
+/// Serves the harness to the ACP client on stdin and stdout.
+pub fn harness() -> Result<(), Exn<CliError>> {
+    let config = silt_harness::Config {
+        silt: env::current_exe().or_raise(|| CliError("cannot find the silt binary".into()))?,
+        state_dir: paths::data_dir().join("harness"),
+        unsandboxed: env::var_os("SILT_HARNESS_UNSANDBOXED").is_some_and(|value| value == "1"),
+    };
+    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the runtime".into()))?;
+    runtime
+        .block_on(silt_harness::serve(config))
+        .or_raise(|| CliError("the harness stopped".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

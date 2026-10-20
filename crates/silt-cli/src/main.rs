@@ -204,6 +204,10 @@ enum Command {
         agent: Option<String>,
         event: String,
     },
+    /// Serve Silt's own coding agent over ACP on stdin and stdout, on
+    /// ANTHROPIC_API_KEY or an OpenAI-compatible API (OPENAI_API_KEY,
+    /// OPENAI_BASE_URL, SILT_HARNESS_MODEL)
+    Harness,
     /// Run a command that can read the system but write only the given
     /// directories and a private /tmp, without network unless --net
     Sandbox {
@@ -657,6 +661,7 @@ fn main() -> Result<(), Exn<CliError>> {
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
         Command::Sandbox { writable, net, command } => commands::sandbox(writable, net, &command),
+        Command::Harness => commands::harness(),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())

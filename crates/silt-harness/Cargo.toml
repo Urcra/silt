@@ -1,0 +1,24 @@
+[package]
+name = "silt-harness"
+description = "Silt's own coding agent, served over ACP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-client-protocol = { version = "3.4", features = ["stdio"] }
+reqwest = { version = "0.13.5", features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "time", "fs", "process"] }
+uuid = { version = "1.28.0", features = ["v7"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
