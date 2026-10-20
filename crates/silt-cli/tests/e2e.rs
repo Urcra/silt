@@ -378,3 +378,15 @@ fn diffs_start_from_the_base_asked_for() {
     let refused = env.run(&["diff", &thread, "--base", "commit:0000000"]);
     assert!(String::from_utf8_lossy(&refused.stderr).contains("never was at a commit"));
 }
+
+#[test]
+fn uncommitted_changes_are_where_a_thread_starts_not_its_edits() {
+    let env = Env::new();
+    fs::write(env.repo.join("notes.md"), "draft\n").expect("write");
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    let show = env.stdout(&["show", &thread]);
+    assert!(!show.contains("notes.md"), "{show}");
+    let diff = env.stdout(&["diff", &thread]);
+    assert!(diff.contains("+fn farewell() {}") && !diff.contains("draft"), "{diff}");
+}

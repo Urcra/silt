@@ -136,6 +136,7 @@ impl Core {
         agent: &str,
         session_id: Option<&str>,
         isolated: bool,
+        already_ran: bool,
     ) -> Result<SessionStarted, CoreError> {
         let agent = resolve_agent(agent)?;
         let cwd = cwd.canonicalize()?;
@@ -208,7 +209,10 @@ impl Core {
         };
         let checkout_id = checkout.id;
         self.start_checkout(checkout, BTreeMap::new())?;
-        self.rescan(checkout_id).await?;
+        self.importing = !already_ran;
+        let scanned = self.rescan(checkout_id).await;
+        self.importing = false;
+        scanned?;
 
         // `join("")` would add a trailing slash, which changes Claude's slug.
         let agent_cwd = if relative.as_os_str().is_empty() {
@@ -855,21 +859,31 @@ impl Core {
     }
 
     /// Takes the changes in again once the transcripts have caught up.
-    pub(crate) fn settle_changes(&mut self, checkout: i64, paths: Vec<PathBuf>) {
+    pub(crate) fn settle_changes(&mut self, checkout: i64, paths: Vec<PathBuf>, noticed: Instant) {
         let events = self.events.clone();
         tokio::spawn(async move {
             tokio::time::sleep(TRANSCRIPT_LAG).await;
             let _ = events.send(Event::Changed {
                 checkout,
                 paths,
+                noticed,
                 settled: true,
             });
         });
     }
 
     pub(crate) fn author_for(&self, checkout: i64) -> Author {
+        if self.importing {
+            return Author::Import;
+        }
         let sessions = || self.sessions.iter().filter(|session| session.record.checkout_id == checkout);
-        let settling = |at: &Instant| at.elapsed() < MARK_SETTLE;
+        // A mark read close to when the edit was noticed, before or after,
+        // was written around the edit: transcripts trail the edits.
+        let noticed = self.change_noticed.unwrap_or_else(Instant::now);
+        let settling = |at: &Instant| {
+            let apart = if *at > noticed { *at - noticed } else { noticed - *at };
+            apart < MARK_SETTLE
+        };
         if let Some(author) = sessions().find_map(|session| {
             let closed = session.closed_tool.as_ref().filter(|(_, at)| settling(at)).map(|(tool, _)| tool);
             session.open_tool.as_ref().or(closed).map(|tool| Author::Agent {

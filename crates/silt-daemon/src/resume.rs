@@ -400,7 +400,8 @@ impl Core {
                 ..Default::default()
             };
             let transcript = target.restore(checkout, &agent_cwd, &recorded)?;
-            let blob = self.store.blobs().put(lines.join("\n").as_bytes()).await?;
+            // Blobs reach the server as they are, so secrets go first.
+            let blob = self.store.blobs().put(self.redactor.replace(&lines.join("\n")).as_bytes()).await?;
             self.register_session(NewSession {
                 agent: target,
                 id: new_id.clone(),

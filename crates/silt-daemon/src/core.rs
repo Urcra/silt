@@ -22,9 +22,10 @@ use crate::watch::{self, Watcher};
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
-    /// Paths in a checkout may have changed; `settled` once the agents'
-    /// transcripts have had time to catch up.
-    Changed { checkout: i64, paths: Vec<PathBuf>, settled: bool },
+    /// Paths in a checkout may have changed, as the watcher noticed at
+    /// `noticed`; `settled` once the agents' transcripts have had time to
+    /// catch up.
+    Changed { checkout: i64, paths: Vec<PathBuf>, noticed: Instant, settled: bool },
     Tick,
     CloseTool { session_id: String, reply: oneshot::Sender<Response> },
     Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
@@ -74,6 +75,12 @@ pub struct Core {
     /// Readers for indexing what other machines record.
     pub(crate) index_transcripts: silt_agents::Transcripts,
     pub(crate) next_token: u64,
+    /// When the watcher noticed the changes being taken in, for crediting
+    /// them to the tool that was running then.
+    pub(crate) change_noticed: Option<Instant>,
+    /// Set while a new thread takes in its clone's uncommitted changes,
+    /// which are part of where it starts, not edits made in it.
+    pub(crate) importing: bool,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -124,6 +131,8 @@ impl Core {
             pending: Vec::new(),
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
+            change_noticed: None,
+            importing: false,
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -208,7 +217,8 @@ impl Core {
                 agent,
                 session_id,
                 isolated,
-            } => to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated).await),
+                existing,
+            } => to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await),
             Request::Hook { event, input } => match self.hook(&event, input, reply).await {
                 Some((response, reply)) => {
                     let _ = reply.send(response);
@@ -291,15 +301,17 @@ impl Core {
         let _ = reply.send(response);
     }
 
-    pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>, settled: bool) {
+    pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>, noticed: Instant, settled: bool) {
         if !settled && self.marks_from_transcripts(checkout) {
-            self.settle_changes(checkout, paths);
+            self.settle_changes(checkout, paths, noticed);
             return;
         }
         self.tail_marked_sessions(checkout).await;
+        self.change_noticed = Some(noticed);
         if let Err(error) = self.ingest_paths(checkout, paths).await {
             warn!(%error, checkout, "could not record changes");
         }
+        self.change_noticed = None;
     }
 
     pub async fn tick(&mut self) {
@@ -329,6 +341,7 @@ impl Core {
             let _ = events.send(Event::Changed {
                 checkout: id,
                 paths,
+                noticed: Instant::now(),
                 settled: false,
             });
         })?;

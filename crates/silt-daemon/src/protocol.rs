@@ -14,6 +14,10 @@ pub enum Request {
         agent: String,
         session_id: Option<String>,
         isolated: bool,
+        /// The session already ran, so the clone's uncommitted changes may
+        /// be its edits rather than where it started.
+        #[serde(default)]
+        existing: bool,
     },
     /// An agent hook fired; the input is what the agent passed to the hook.
     Hook { event: String, input: serde_json::Value },

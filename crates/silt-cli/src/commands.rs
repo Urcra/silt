@@ -129,6 +129,7 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
         agent: agent.id().into(),
         session_id: session_id.clone(),
         isolated,
+        existing: false,
     })?;
     eprintln!("silt: recording thread {} in {}", short(&started.thread), started.checkout.display());
     if let Some(mount) = &started.mount {
@@ -375,6 +376,7 @@ pub fn track(agent: &str) -> Result<(), Exn<CliError>> {
         agent: agent.id().into(),
         session_id: Some(found.id),
         isolated: false,
+        existing: true,
     })?;
     println!("tracking session in thread {}", short(&started.thread));
     Ok(())
