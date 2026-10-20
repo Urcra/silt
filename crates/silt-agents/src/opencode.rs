@@ -17,21 +17,28 @@ use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Recorde
 
 pub const AGENT: &str = "opencode";
 
+/// Runs `opencode` and returns its output. The output goes through a file:
+/// OpenCode cuts its output short when writing large amounts to a pipe.
 fn opencode(args: &[&str], cwd: Option<&Path>) -> io::Result<Vec<u8>> {
     let launch = Launch::new("opencode");
+    let output_path = std::env::temp_dir().join(format!("silt-opencode-{}-{}.out", std::process::id(), crate::now_ms()));
+    let output = fs::File::create(&output_path)?;
     let mut command = Command::new(&launch.program);
-    command.args(args).stdin(Stdio::null()).stderr(Stdio::piped());
+    command.args(args).stdin(Stdio::null()).stdout(output).stderr(Stdio::piped());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let output = command.output()?;
-    if output.status.success() {
-        Ok(output.stdout)
+    let result = command.output();
+    let stdout = fs::read(&output_path);
+    let _ = fs::remove_file(&output_path);
+    let result = result?;
+    if result.status.success() {
+        stdout
     } else {
         Err(io::Error::other(format!(
             "opencode {} failed: {}",
             args.first().unwrap_or(&""),
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&result.stderr).trim()
         )))
     }
 }
@@ -267,7 +274,8 @@ impl Agent for OpenCode {
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
         let listed = opencode(&["session", "list", "--format", "json"], Some(cwd)).ok()?;
-        let sessions: Vec<Value> = serde_json::from_slice(&listed).ok()?;
+        let start = listed.iter().position(|byte| *byte == b'[')?;
+        let sessions: Vec<Value> = serde_json::from_slice(&listed[start..]).ok()?;
         let cwd = cwd.to_string_lossy();
         sessions
             .into_iter()

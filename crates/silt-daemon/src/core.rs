@@ -22,7 +22,9 @@ use crate::watch::{self, Watcher};
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
-    Changed { checkout: i64, paths: Vec<PathBuf> },
+    /// Paths in a checkout may have changed; `settled` once the agents'
+    /// transcripts have had time to catch up.
+    Changed { checkout: i64, paths: Vec<PathBuf>, settled: bool },
     Tick,
     CloseTool { session_id: String, reply: oneshot::Sender<Response> },
     Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
@@ -289,7 +291,11 @@ impl Core {
         let _ = reply.send(response);
     }
 
-    pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>) {
+    pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>, settled: bool) {
+        if !settled && self.marks_from_transcripts(checkout) {
+            self.settle_changes(checkout, paths);
+            return;
+        }
         self.tail_marked_sessions(checkout).await;
         if let Err(error) = self.ingest_paths(checkout, paths).await {
             warn!(%error, checkout, "could not record changes");
@@ -320,7 +326,11 @@ impl Core {
         let events = self.events.clone();
         let id = record.id;
         let watcher = watch::watch(&record.path, move |paths| {
-            let _ = events.send(Event::Changed { checkout: id, paths });
+            let _ = events.send(Event::Changed {
+                checkout: id,
+                paths,
+                settled: false,
+            });
         })?;
         let bridge = Bridge::new(record.actor, record.thread, entries);
         self.checkouts.insert(

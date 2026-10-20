@@ -14,7 +14,7 @@ test('lists threads from the daemon', async () => {
     'fetch',
     vi.fn(async (path: string) => {
       const body = path.startsWith('/api/threads')
-        ? [{ id: '0123456789abcdef0123456789abcdef', repo: 'github.com/u/r', title: 'Fix the lexer', created_ms: 1, messages: 2, edits: 3, location: 'here', forked_from: null }]
+        ? [{ id: '0123456789abcdef0123456789abcdef', repo: 'github.com/u/r', title: 'Fix the lexer', agent: 'claude', created_ms: 1, messages: 2, edits: 3, location: 'here', forked_from: null }]
         : []
       return new Response(JSON.stringify(body), { status: 200 })
     }),

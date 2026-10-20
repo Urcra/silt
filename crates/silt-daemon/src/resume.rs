@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use silt_agents::{Agent, Entry, RecordedSession, SessionIds, Transcripts, render_transcript};
+use silt_agents::{Agent, Entry, RecordedSession, Rewrites, SessionIds, Transcripts, render_transcript};
 use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, Op, SessionFile, SessionRef};
@@ -393,6 +393,7 @@ impl Core {
         let entries = conversation(&history);
         let new_id = uuid::Uuid::now_v7().to_string();
         if let Some(lines) = target.translate(&entries, &agent_cwd, &new_id) {
+            let lines = self.relocate_side_files(&history, &session, source, &new_id, lines).await?;
             let recorded = RecordedSession {
                 id: new_id.clone(),
                 main: lines.clone(),
@@ -455,6 +456,39 @@ impl Core {
             agent_cwd,
             start: AgentStart::Primed { id, prompt },
         }))
+    }
+
+    /// Writes the side files of the session a translation came from, such
+    /// as large tool outputs it refers to by path, under Silt's data dir,
+    /// and points the translated lines there.
+    async fn relocate_side_files(
+        &self,
+        history: &[&Delta],
+        session: &SessionRef,
+        source: &'static dyn Agent,
+        new_id: &str,
+        lines: Vec<String>,
+    ) -> Result<Vec<String>, CoreError> {
+        let recorded = self.recorded_session(history, session, false, source).await?;
+        if recorded.attachments.is_empty() {
+            return Ok(lines);
+        }
+        let dir = self.data_dir.join("side-files").join(new_id);
+        for (name, bytes) in &recorded.attachments {
+            let relative = Path::new(name);
+            if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+                let path = dir.join(relative);
+                std::fs::create_dir_all(path.parent().expect("joined onto the dir"))?;
+                std::fs::write(path, bytes)?;
+            }
+        }
+        let new_dir = dir.to_string_lossy();
+        let rewrites = recorded
+            .former_dirs
+            .iter()
+            .filter(|former| !former.is_empty())
+            .fold(Rewrites::default(), |rewrites, former| rewrites.with(former, &new_dir));
+        Ok(lines.iter().map(|line| rewrites.apply(line)).collect())
     }
 
     /// The latest session of the thread as recorded across machines and

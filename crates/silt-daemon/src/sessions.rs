@@ -23,6 +23,13 @@ use crate::protocol::{HookReply, Response, SessionStarted};
 /// How long after a tool finishes its file changes still count as its own;
 /// covers the watcher's debounce.
 const TOOL_SETTLE: Duration = Duration::from_millis(250);
+/// How long edits wait for the transcript of an agent without Silt's
+/// hooks: agents flush their transcripts late, and some only write a tool
+/// call once it finished.
+const TRANSCRIPT_LAG: Duration = Duration::from_millis(400);
+/// How long a tool or turn read as finished from a transcript still owns
+/// the edits that arrive; longer than the lag plus a tick of tailing.
+const MARK_SETTLE: Duration = Duration::from_millis(1000);
 /// How often a session kept in a store rather than a file is read again.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(3);
 const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
@@ -581,6 +588,14 @@ impl Core {
             .filter(|session| session.record.thread == thread && session.live)
             .map(|session| session.record.session_id.clone())
             .collect();
+        // Edits still waiting for the transcript are taken in now, while
+        // the marks just read still own them.
+        let checkouts: HashSet<i64> = self
+            .sessions
+            .iter()
+            .filter(|session| session.record.thread == thread)
+            .map(|session| session.record.checkout_id)
+            .collect();
         for id in ids {
             let snapshot = self.session(&id).and_then(|session| {
                 let found = Found {
@@ -601,6 +616,11 @@ impl Core {
                     }
                 }
                 None => self.tail_session(&id).await?,
+            }
+            for checkout in &checkouts {
+                if self.checkouts.contains_key(checkout) {
+                    self.rescan(*checkout).await?;
+                }
             }
             if let Some(session) = self.session_mut(&id) {
                 session.live = false;
@@ -824,9 +844,32 @@ impl Core {
         }
     }
 
+    /// Whether a running agent on `checkout` marks its turns only in its
+    /// transcript.
+    pub(crate) fn marks_from_transcripts(&self, checkout: i64) -> bool {
+        self.pending.iter().any(|pending| pending.checkout_id == checkout)
+            || self
+                .sessions
+                .iter()
+                .any(|session| session.record.checkout_id == checkout && session.live && !session.agent.hooks())
+    }
+
+    /// Takes the changes in again once the transcripts have caught up.
+    pub(crate) fn settle_changes(&mut self, checkout: i64, paths: Vec<PathBuf>) {
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(TRANSCRIPT_LAG).await;
+            let _ = events.send(Event::Changed {
+                checkout,
+                paths,
+                settled: true,
+            });
+        });
+    }
+
     pub(crate) fn author_for(&self, checkout: i64) -> Author {
         let sessions = || self.sessions.iter().filter(|session| session.record.checkout_id == checkout);
-        let settling = |at: &Instant| at.elapsed() < TOOL_SETTLE;
+        let settling = |at: &Instant| at.elapsed() < MARK_SETTLE;
         if let Some(author) = sessions().find_map(|session| {
             let closed = session.closed_tool.as_ref().filter(|(_, at)| settling(at)).map(|(tool, _)| tool);
             session.open_tool.as_ref().or(closed).map(|tool| Author::Agent {

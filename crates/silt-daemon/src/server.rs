@@ -72,7 +72,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 return Ok(());
             }
             Event::Request(request, reply) => core.request(request, reply).await,
-            Event::Changed { checkout, paths } => core.changed(checkout, paths).await,
+            Event::Changed { checkout, paths, settled } => core.changed(checkout, paths, settled).await,
             Event::Tick => core.tick().await,
             Event::CloseTool { session_id, reply } => core.close_tool(&session_id, reply).await,
             Event::Discovered { token, found } => core.discovered(token, found).await,

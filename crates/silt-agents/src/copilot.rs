@@ -13,6 +13,9 @@ use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Recorde
 
 pub const AGENT: &str = "copilot-cli";
 
+/// The version translated sessions claim to come from; Copilot requires one.
+const TRANSLATED_VERSION: &str = "1.0.100";
+
 pub fn home() -> Option<PathBuf> {
     std::env::var_os("COPILOT_HOME")
         .map(PathBuf::from)
@@ -108,13 +111,14 @@ pub fn event_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<Str
     let mut parent: Option<String> = None;
     let mut lines = Vec::new();
     let mut push = |kind: &str, data: Value| {
-        let event_id = format!("silt-{id}-{}", lines.len());
+        // Copilot rejects events whose ids aren't UUIDs.
+        let event_id = crate::derived_uuid(id, lines.len());
         lines.push(json!({"type": kind, "data": data, "id": event_id, "timestamp": timestamp, "parentId": parent}).to_string());
         parent = Some(event_id);
     };
     push(
         "session.start",
-        json!({"sessionId": id, "version": 1, "producer": "copilot-agent", "startTime": timestamp, "context": {"cwd": cwd, "gitRoot": cwd}}),
+        json!({"sessionId": id, "version": 1, "producer": "copilot-agent", "copilotVersion": TRANSLATED_VERSION, "startTime": timestamp, "context": {"cwd": cwd, "gitRoot": cwd}}),
     );
     for (index, (role, text)) in messages.iter().enumerate() {
         let turn = index.to_string();
@@ -349,6 +353,12 @@ mod tests {
         let second: Value = serde_json::from_str(&lines[2]).expect("json");
         let first: Value = serde_json::from_str(&lines[1]).expect("json");
         assert_eq!(second["parentId"], first["id"]);
+        for line in &lines {
+            let event: Value = serde_json::from_str(line).expect("json");
+            assert!(uuid::Uuid::parse_str(event["id"].as_str().expect("id")).is_ok(), "Copilot needs UUID ids: {event}");
+        }
+        let start: Value = serde_json::from_str(&lines[0]).expect("json");
+        assert!(start["data"]["copilotVersion"].is_string());
         assert_eq!(read_line(&lines[2]).entries, vec![Entry::Assistant { text: "hello".into() }]);
     }
 }

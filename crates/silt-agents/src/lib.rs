@@ -88,6 +88,8 @@ pub struct McpServer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchPlan {
     pub start: Start,
+    /// Where the agent runs.
+    pub cwd: PathBuf,
     pub mcp: McpServer,
     /// Shell command that forwards hook events: `<command> <Event>`.
     pub hook_command: String,
@@ -260,4 +262,15 @@ pub(crate) fn modified_ms(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let elapsed = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     i64::try_from(elapsed.as_millis()).ok()
+}
+
+/// A stable UUID-shaped id for the `index`th translated line of a session.
+pub(crate) fn derived_uuid(session: &str, index: usize) -> String {
+    let mut hash: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    for byte in session.bytes().chain(index.to_le_bytes()) {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013B);
+    }
+    let hex = format!("{hash:032x}");
+    format!("{}-{}-4{}-8{}-{}", &hex[..8], &hex[8..12], &hex[13..16], &hex[17..20], &hex[20..])
 }

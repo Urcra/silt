@@ -115,6 +115,20 @@ fn a_thread_moves_from_claude_to_codex_and_back() {
         &[("FAKE_EXPECT", "Please-add-a-farewell-line Done:-farewell-added")],
     );
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").ends_with("fn codex() {}\n"));
+    let rollouts: String = walk(&world.home.agents.join("codex/sessions"))
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap_or_default())
+        .collect();
+    let saved = rollouts
+        .split("saved to ")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("the translation mentions the saved tool output")
+        .to_owned();
+    assert_eq!(
+        fs::read_to_string(&saved).unwrap_or_else(|_| panic!("the tool output the translation points to exists here: {saved}")),
+        "big output\n"
+    );
     let show = world.home.stdout(&["show", &thread]);
     assert!(show.contains("> Continuing in codex") && show.contains("Codex says done."), "{show}");
 
@@ -153,4 +167,17 @@ fn other_agents_start_primed_with_the_conversation() {
         eventually(|| world.home.stdout(&["show", &thread]).contains("OpenCode says done.")),
         "the primed session is recorded in the same thread"
     );
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }

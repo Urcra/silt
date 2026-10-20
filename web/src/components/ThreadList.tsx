@@ -15,6 +15,7 @@ export function ThreadList() {
           <tr>
             <th className="py-1">Thread</th>
             <th>Title</th>
+            <th>Agent</th>
             <th>Where</th>
             <th>Messages</th>
             <th>Edits</th>
@@ -35,6 +36,7 @@ export function ThreadList() {
                   <span className="ml-2 text-xs text-violet-700">fork of {short(thread.forked_from)}</span>
                 )}
               </td>
+              <td>{thread.agent ?? ''}</td>
               <td>{thread.location}</td>
               <td>{thread.messages}</td>
               <td>{thread.edits}</td>

@@ -55,6 +55,12 @@ impl Core {
                         title(&inherited)
                     }),
                     created_ms: record.created_ms,
+                    agent: conversation.iter().rev().find_map(|delta| match &delta.op {
+                        Op::Conv(ConvOp::Native { session, .. }) => {
+                            Some(silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()))
+                        }
+                        _ => None,
+                    }),
                     messages: {
                         let mut transcripts = Transcripts::default();
                         conversation

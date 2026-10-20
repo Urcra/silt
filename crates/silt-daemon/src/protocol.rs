@@ -150,6 +150,9 @@ pub struct ThreadSummary {
     pub id: String,
     pub repo: String,
     pub title: Option<String>,
+    /// The command of the agent that recorded its latest session.
+    #[serde(default)]
+    pub agent: Option<String>,
     pub created_ms: i64,
     pub messages: usize,
     pub edits: usize,

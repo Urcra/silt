@@ -178,6 +178,7 @@ impl Run<'_> {
         let rules = agent_conventions::discover_rules(self.checkout, self.cwd, home.as_deref());
         let plan = LaunchPlan {
             start,
+            cwd: self.cwd.to_owned(),
             mcp: McpServer {
                 command: exe.clone(),
                 args: vec![

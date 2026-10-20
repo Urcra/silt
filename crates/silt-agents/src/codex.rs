@@ -50,6 +50,8 @@ fn rollouts(home: &Path) -> Vec<PathBuf> {
 
 fn rollout_id(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_string_lossy().into_owned();
+    // A reverted thread's rollout is `…-<thread>_<rollout>`.
+    let stem = stem.split('_').next().unwrap_or(&stem).to_owned();
     // `rollout-YYYY-MM-DDThh-mm-ss-<uuid>`, where a uuid has five parts.
     let parts: Vec<&str> = stem.rsplitn(6, '-').collect();
     (parts.len() == 6).then(|| parts[..5].iter().rev().copied().collect::<Vec<_>>().join("-"))
@@ -77,15 +79,22 @@ pub fn read_line(line: &str) -> Read {
     let field = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
     let mut read = Read::default();
     match (kind, payload.get("type").and_then(Value::as_str).unwrap_or_default()) {
+        // What the user typed comes from the user-message events: user-role
+        // response items also carry the context Codex injects.
         ("response_item", "message") => {
-            let text = content_text(payload.get("content"));
             let entry = match field("role").as_str() {
-                "user" if is_context(&text) => Entry::Other { kind: "context".into() },
-                "user" => Entry::User { text },
-                "assistant" => Entry::Assistant { text },
+                "assistant" => Entry::Assistant {
+                    text: content_text(payload.get("content")),
+                },
                 other => Entry::Other { kind: format!("{other}_message") },
             };
             read.entries.push(entry);
+        }
+        ("event_msg", "user_message") => read.entries.push(Entry::User { text: field("message") }),
+        ("event_msg", "item_completed") if payload.pointer("/item/type").and_then(Value::as_str) == Some("UserMessage") => {
+            read.entries.push(Entry::User {
+                text: content_text(payload.pointer("/item/content")),
+            });
         }
         ("response_item", "reasoning") => {
             let text = payload
@@ -144,12 +153,6 @@ pub fn read_line(line: &str) -> Read {
         (kind, inner) => read.entries.push(Entry::Other { kind: format!("{kind}:{inner}") }),
     }
     read
-}
-
-/// Codex adds its environment and AGENTS.md files as user messages.
-fn is_context(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("<environment_context>") || text.starts_with("# AGENTS.md instructions") || text.starts_with("<user_instructions>")
 }
 
 fn content_text(content: Option<&Value>) -> String {
@@ -263,6 +266,7 @@ impl Agent for Codex {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
         let cwd = cwd.to_string_lossy();
         rollouts(&home()?)
             .into_iter()
@@ -334,10 +338,12 @@ mod tests {
 
     #[test]
     fn reads_messages_tools_turns_and_compaction() {
-        let user = r#"{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"List the files"}]}}"#;
+        let user = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"List the files"}}"#;
         assert_eq!(read_line(user).entries, vec![Entry::User { text: "List the files".into() }]);
+        let paginated = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"1","content":[{"type":"text","text":"List the files","text_elements":[]}]}}}"#;
+        assert_eq!(read_line(paginated).entries, vec![Entry::User { text: "List the files".into() }]);
         let context = r#"{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context><cwd>/x</cwd></environment_context>"}]}}"#;
-        assert_eq!(read_line(context).entries, vec![Entry::Other { kind: "context".into() }]);
+        assert_eq!(read_line(context).entries, vec![Entry::Other { kind: "user_message".into() }]);
         let call = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"ls\"]}","call_id":"call_1"}}"#;
         let read = read_line(call);
         assert_eq!(
@@ -368,6 +374,8 @@ mod tests {
     fn rollout_names_carry_the_id() {
         let path = Path::new("/h/sessions/2026/10/20/rollout-2026-10-20T12-00-00-0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01.jsonl");
         assert_eq!(rollout_id(path).as_deref(), Some("0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01"));
+        let reverted = Path::new("/h/sessions/2026/10/20/rollout-2026-10-20T12-00-00-0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01_0199f3a1-0000-7b1a-9d3e-5a6b7c8d9e02.jsonl");
+        assert_eq!(rollout_id(reverted).as_deref(), Some("0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01"));
     }
 
     #[test]

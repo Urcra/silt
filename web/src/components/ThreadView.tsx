@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
+import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
 import { href } from '../router'
 import { useLoad } from '../useLoad'
 import { Diff } from './Diff'
@@ -153,6 +153,7 @@ export function ThreadView({ id }: { id: string }) {
   const comments = useLoad(() => api.comments(id), `comments:${id}`)
   const [showDiff, setShowDiff] = useState(false)
   const [base, setBase] = useState('')
+  const [agent, setAgent] = useState('')
   const [commit, setCommit] = useState('')
   const diffBase = base === 'commit' ? (commit ? `commit:${commit}` : '') : base
   const diff = useLoad(
@@ -181,9 +182,27 @@ export function ThreadView({ id }: { id: string }) {
             </a>
           </p>
         )}
-        <div className="my-3 flex flex-wrap gap-2">
-          <Copy command={`silt resume ${short(fullId)}`} />
-          <Copy command={`silt fork ${short(fullId)}`} />
+        {summary?.agent && <p className="text-sm text-neutral-600">Recorded with {summary.agent}</p>}
+        <div className="my-3 flex flex-wrap items-center gap-2">
+          <label className="text-sm" htmlFor="continue-agent">
+            Continue with
+          </label>
+          <select
+            id="continue-agent"
+            aria-label="agent"
+            value={agent}
+            onChange={(event) => setAgent(event.target.value)}
+            className="rounded border border-neutral-300 px-2 py-1 text-sm"
+          >
+            <option value="">{summary?.agent ?? 'its agent'}</option>
+            {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <Copy command={`silt resume ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
+          <Copy command={`silt fork ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <button className="text-sm text-sky-700" onClick={() => setShowDiff(!showDiff)}>
             {showDiff ? 'Hide' : 'Show'} all changes
           </button>

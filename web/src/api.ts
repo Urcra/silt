@@ -33,6 +33,8 @@ export interface ThreadSummary {
   id: string
   repo: string
   title: string | null
+  /** The command of the agent that recorded the latest session. */
+  agent: string | null
   created_ms: number
   messages: number
   edits: number
@@ -158,3 +160,6 @@ export const api = {
 export function short(id: string): string {
   return id.slice(-12)
 }
+
+/** Agent CLIs Silt can continue a thread with. */
+export const AGENTS = ['claude', 'codex', 'gemini', 'opencode', 'copilot'] as const

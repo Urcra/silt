@@ -21,6 +21,7 @@ line() { printf '{"timestamp":"%s","type":"%s","payload":%s}\n' "$now" "$1" "$2"
 turn() {
     line event_msg '{"type":"task_started","turn_id":"t"}'
     line response_item "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"$1\"}]}"
+    line event_msg "{\"type\":\"user_message\",\"message\":\"$1\"}"
     line response_item "{\"type\":\"function_call\",\"name\":\"apply_patch\",\"arguments\":\"{\\\"path\\\":\\\"$(pwd)/src/main.rs\\\"}\",\"call_id\":\"$2\"}"
     printf '%s\n' "$3" >> src/main.rs
     sleep 0.5
@@ -71,9 +72,8 @@ say() { printf '%s\n' "$1" >> "$file"; }
 turn() {
     say "{\"id\":\"u-$2\",\"timestamp\":\"$now\",\"type\":\"user\",\"content\":[{\"text\":\"$1\"}]}"
     say "{\"id\":\"g-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"\",\"thoughts\":[]}"
-    say "{\"id\":\"g-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"\",\"thoughts\":[],\"toolCalls\":[{\"id\":\"edit-$2\",\"name\":\"replace\",\"args\":{\"file_path\":\"$(pwd)/src/main.rs\"},\"status\":\"executing\"}]}"
+    # Like Gemini, the tool call is only written once the tool finished.
     printf '%s\n' "$3" >> src/main.rs
-    sleep 0.5
     say "{\"id\":\"g-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"\",\"thoughts\":[],\"toolCalls\":[{\"id\":\"edit-$2\",\"name\":\"replace\",\"args\":{\"file_path\":\"$(pwd)/src/main.rs\"},\"result\":[{\"functionResponse\":{\"id\":\"edit-$2\",\"name\":\"replace\",\"response\":{\"output\":\"replaced\"}}}],\"status\":\"success\"}]}"
     say "{\"id\":\"a-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"Gemini says done.\",\"thoughts\":[]}"
     say '{"$set":{"lastUpdated":"now"}}'
@@ -123,9 +123,10 @@ event() { n=$((n + 1)); printf '{"type":"%s","data":%s,"id":"%s-%s","timestamp":
 turn() {
     event user.message "{\"content\":\"$1\",\"transformedContent\":\"$1\"}"
     event assistant.message "{\"content\":\"\",\"toolRequests\":[{\"toolCallId\":\"$2\",\"name\":\"edit\",\"arguments\":{\"path\":\"$(pwd)/src/main.rs\"}}]}"
-    event tool.execution_start "{\"toolCallId\":\"$2\",\"toolName\":\"edit\"}"
+    # Like Copilot, events reach the file a little after they happen.
     printf '%s\n' "$3" >> src/main.rs
-    sleep 0.5
+    sleep 0.1
+    event tool.execution_start "{\"toolCallId\":\"$2\",\"toolName\":\"edit\"}"
     event tool.execution_complete "{\"toolCallId\":\"$2\",\"success\":true,\"result\":{\"content\":\"edited\"}}"
     event assistant.message '{"content":"Copilot says done.","toolRequests":[]}'
 }

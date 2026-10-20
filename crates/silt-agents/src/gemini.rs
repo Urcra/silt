@@ -47,10 +47,32 @@ fn registry(gemini: &Path) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-/// The project's chats directory if Gemini has registered `cwd`.
+/// The project's chats directory if Gemini has registered `cwd`, in its
+/// registry or by the owner marker in a project directory, as Gemini
+/// itself looks it up.
 fn chats_dir(gemini: &Path, cwd: &Path) -> Option<PathBuf> {
-    let slug = registry(gemini).get(&*cwd.to_string_lossy())?.as_str()?.to_owned();
+    let path = cwd.to_string_lossy();
+    let slug = registry(gemini)
+        .get(&*path)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            fs::read_dir(gemini.join("tmp")).ok()?.flatten().find_map(|entry| {
+                let owner = fs::read_to_string(entry.path().join(".project_root")).ok()?;
+                (owner.trim() == path).then(|| entry.file_name().to_string_lossy().into_owned())
+            })
+        })?;
     Some(gemini.join("tmp").join(slug).join("chats"))
+}
+
+/// What Gemini records as a session's `projectHash`: the SHA-256 of the
+/// project directory, in hex.
+pub fn project_hash(cwd: &Path) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(cwd.to_string_lossy().as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Registers `cwd` the way Gemini CLI does, so a restored session is found
@@ -149,6 +171,12 @@ impl Reader for GeminiReader {
         };
         let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
         let content = value.get("content");
+        // On resume Gemini repeats the tool results of the last turn under
+        // `<message id>_response`; they were read with the turn.
+        if id.ends_with("_response") {
+            read.entries.push(Entry::Other { kind: "replayed".into() });
+            return read;
+        }
         let seen = self.messages.entry(id.to_owned()).or_default();
         match kind {
             "user" => {
@@ -267,11 +295,12 @@ fn response_text(response: Option<&Value>) -> String {
     }
 }
 
-/// Session lines holding `messages` as plain text.
-pub fn session_lines(messages: &[(Role, String)], id: &str) -> Vec<String> {
+/// Session lines holding `messages` as plain text. Gemini skips sessions
+/// without a `projectHash`.
+pub fn session_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<String> {
     let timestamp = crate::time::timestamp_now();
     let mut lines = vec![
-        json!({"sessionId": id, "projectHash": "", "startTime": timestamp, "lastUpdated": timestamp, "kind": "main"}).to_string(),
+        json!({"sessionId": id, "projectHash": project_hash(cwd), "startTime": timestamp, "lastUpdated": timestamp, "kind": "main"}).to_string(),
     ];
     for (index, (role, text)) in messages.iter().enumerate() {
         let message = match role {
@@ -351,8 +380,8 @@ impl Agent for Gemini {
         Ok(path)
     }
 
-    fn translate(&self, entries: &[Entry], _cwd: &Path, id: &str) -> Option<Vec<String>> {
-        Some(session_lines(&translated_text(entries), id))
+    fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
+        Some(session_lines(&translated_text(entries), cwd, id))
     }
 
     fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
@@ -373,6 +402,9 @@ impl Agent for Gemini {
                 prompt = Some(text.clone());
             }
         }
+        // Registered before the run: Gemini's own registration replaces
+        // the overlay's copy, which is dropped afterwards.
+        claim_chats_dir(&gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?, &plan.cwd)?;
         let overlay = overlay_home(plan)?;
         launch.env("GEMINI_CLI_HOME", overlay);
         for arg in &plan.args {
@@ -387,8 +419,9 @@ impl Agent for Gemini {
 
 /// Gemini CLI takes no per-run settings, so it runs with a home of its own
 /// that links everything to the real `~/.gemini` except the settings,
-/// which add Silt's MCP server, and the global context file, which adds
-/// the session's instructions. Sessions still land in the real home.
+/// which add Silt's MCP server, the global context file, which adds the
+/// session's instructions, and the project registry, which Gemini replaces
+/// by renaming a new file over it. Sessions still land in the real home.
 fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
     let real = gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
     fs::create_dir_all(&real)?;
@@ -403,7 +436,7 @@ fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
     }
     for entry in fs::read_dir(&real)?.flatten() {
         let name = entry.file_name();
-        if name != "settings.json" && name != "GEMINI.md" {
+        if name != "settings.json" && name != "GEMINI.md" && name != "projects.json" {
             std::os::unix::fs::symlink(entry.path(), dir.join(&name))?;
         }
     }
@@ -414,9 +447,8 @@ fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
             std::os::unix::fs::symlink(path, dir.join(shared))?;
         }
     }
-    if !dir.join("projects.json").exists() {
-        fs::write(real.join("projects.json"), r#"{"projects":{}}"#)?;
-        std::os::unix::fs::symlink(real.join("projects.json"), dir.join("projects.json"))?;
+    if real.join("projects.json").exists() {
+        fs::copy(real.join("projects.json"), dir.join("projects.json"))?;
     }
     let mut settings: Value = fs::read_to_string(real.join("settings.json"))
         .ok()
@@ -465,6 +497,7 @@ mod tests {
             r#"{"id":"g","timestamp":"t","type":"gemini","content":"","thoughts":[]}"#,
             r#"{"id":"g","timestamp":"t","type":"gemini","content":"","thoughts":[],"toolCalls":[{"id":"ls_1","name":"list_directory","args":{"dir_path":"src"},"result":[{"functionResponse":{"id":"ls_1","name":"list_directory","response":{"output":"main.rs"}}}],"status":"success"}]}"#,
             r#"{"id":"r","timestamp":"t","type":"user","content":[{"functionResponse":{"id":"ls_1","name":"list_directory","response":{"output":"main.rs"}}}]}"#,
+            r#"{"id":"g_response","timestamp":"t","type":"user","content":[{"functionResponse":{"id":"old_1","name":"x","response":{"output":"again"}}}]}"#,
             r#"{"$set":{"lastUpdated":"t"}}"#,
             r#"{"id":"a","timestamp":"t","type":"gemini","content":"There is one file.","thoughts":[{"subject":"Looking","description":"at src"}]}"#,
             r#"{"id":"a","timestamp":"t","type":"gemini","content":"There is one file.","thoughts":[{"subject":"Looking","description":"at src"}],"tokens":{"total":1}}"#,
@@ -499,12 +532,21 @@ mod tests {
     }
 
     #[test]
+    fn translated_sessions_name_their_project() {
+        let lines = session_lines(&[(Role::User, "hi".into())], Path::new("/w/repo"), "s");
+        let meta: Value = serde_json::from_str(&lines[0]).expect("json");
+        assert_eq!(meta["projectHash"].as_str().map(str::len), Some(64));
+    }
+
+    #[test]
     fn restored_sessions_are_registered_where_gemini_looks() {
         let gemini = tempfile::tempdir().expect("temp dir");
         let dir = claim_chats_dir(gemini.path(), Path::new("/w/My_Proj")).expect("claims");
         assert_eq!(dir, gemini.path().join("tmp/my-proj/chats"));
         let other = claim_chats_dir(gemini.path(), Path::new("/x/my-proj")).expect("claims");
         assert_eq!(other, gemini.path().join("tmp/my-proj-1/chats"));
-        assert_eq!(chats_dir(gemini.path(), Path::new("/w/My_Proj")), Some(dir));
+        assert_eq!(chats_dir(gemini.path(), Path::new("/w/My_Proj")), Some(dir.clone()));
+        fs::write(gemini.path().join("projects.json"), r#"{"projects":{}}"#).expect("write");
+        assert_eq!(chats_dir(gemini.path(), Path::new("/w/My_Proj")), Some(dir), "found by its marker");
     }
 }
