@@ -159,9 +159,13 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
+        // Its own process group, so stopping it stops what it started too,
+        // such as the agent `npx` runs.
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", start.program))?;
+    let group = child.id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
     let stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
@@ -179,7 +183,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
     let quiet = replaying.clone();
     let asked = events.clone();
     let parked = waiting.clone();
-    let result = Client
+    let session = Client
         .builder()
         .name("silt")
         .on_receive_notification(
@@ -217,7 +221,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                 .agent_info
                 .as_ref()
                 .map_or_else(|| start.program.clone(), |info| info.name.clone());
-            let session: SessionId = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
+            let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
                 Some(id) => {
                     replaying.store(true, Ordering::SeqCst);
                     let loaded = connection
@@ -225,7 +229,14 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                         .block_task()
                         .await;
                     replaying.store(false, Ordering::SeqCst);
-                    loaded?;
+                    // A session made on another machine can't be loaded
+                    // here; the daemon primes a new one instead.
+                    loaded.ok().map(|_| id)
+                }
+                None => None,
+            };
+            let session: SessionId = match loaded {
+                Some(id) => {
                     let _ = events.send(Event::Ready {
                         session: id.clone(),
                         loaded: true,
@@ -269,6 +280,12 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                     }
                     Command::Cancel => {
                         connection.send_notification(CancelNotification::new(session.clone()))?;
+                        // The protocol asks clients to answer every pending
+                        // permission request once they cancel.
+                        let parked: Vec<_> = waiting.lock().expect("lock").drain().map(|(_, responder)| responder).collect();
+                        for responder in parked {
+                            responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled))?;
+                        }
                     }
                     Command::Answer { id, option } => {
                         let responder = waiting.lock().expect("lock").remove(&id);
@@ -285,7 +302,20 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
             }
             Ok(())
         })
-        .await;
+;
+    // The agent may die without closing the connection cleanly; its exit
+    // ends the session either way.
+    let result = tokio::select! {
+        result = session => result.map_err(|error| error.to_string()),
+        status = child.wait() => match status {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("the agent exited with {status}")),
+            Err(error) => Err(error.to_string()),
+        },
+    };
+    if let Some(group) = group {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
     let _ = child.kill().await;
-    result.map_err(|error| error.to_string())
+    result
 }

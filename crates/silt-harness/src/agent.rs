@@ -19,12 +19,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use silt_redact::{Overlay, Redactor};
 
-use crate::model::{Backend, Message, Part, Role};
+use crate::model::{Backend, Message, Part, Role, Stop};
 use crate::tools::{self, Outcome, Workspace};
 
 /// Most model calls one prompt may take.
 const MAX_STEPS: usize = 50;
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Longest a model may take to answer one request.
+const MODEL_TIMEOUT: Duration = Duration::from_secs(600);
+/// Secrets the harness learned while redacting, in its state directory.
+const LEARNED_SECRETS: &str = "learned-secrets";
 const RULES_BUDGET: usize = 8_000;
 
 /// Where the harness runs and how.
@@ -51,12 +55,54 @@ struct Session {
     messages: Vec<Message>,
     workspace: Workspace,
     always_run: bool,
-    cancelled: Arc<AtomicBool>,
+    cancel: Arc<Cancel>,
 }
 
-/// Each session, with its cancel flag outside the session's lock, which
+/// A turn's cancel signal: waiting for the model, for the person's
+/// permission or for a command all stop when it fires.
+#[derive(Default)]
+struct Cancel {
+    requested: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl Cancel {
+    fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        self.wake.notify_waiters();
+    }
+
+    fn reset(&self) {
+        self.requested.store(false, Ordering::SeqCst);
+    }
+
+    fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    async fn requested(&self) {
+        loop {
+            let woken = self.wake.notified();
+            if self.is_requested() {
+                return;
+            }
+            woken.await;
+        }
+    }
+}
+
+/// Each session, with its cancel signal outside the session's lock, which
 /// a prompt holds for its whole turn.
-type Sessions = Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<tokio::sync::Mutex<Session>>)>>>;
+type Sessions = Arc<Mutex<HashMap<String, (Arc<Cancel>, Arc<tokio::sync::Mutex<Session>>)>>>;
+
+/// Adds `parts` to the conversation as the person's turn, joining the turn
+/// before when that was theirs too: APIs expect turns to alternate.
+fn push_user(messages: &mut Vec<Message>, parts: Vec<Part>) {
+    match messages.last_mut() {
+        Some(last) if last.role == Role::User => last.parts.extend(parts),
+        _ => messages.push(Message { role: Role::User, parts }),
+    }
+}
 
 struct Harness {
     config: Config,
@@ -132,11 +178,32 @@ impl Harness {
     /// `text` as the model may see it.
     fn redact(&self, text: &str) -> String {
         let (redacted, found) = self.redactor.replace_found(text);
-        let mut overlay = self.overlay.lock().expect("lock");
-        for secret in found {
-            overlay.learn(secret);
+        let learned: Vec<String> = {
+            let mut overlay = self.overlay.lock().expect("lock");
+            found.into_iter().filter(|secret| overlay.learn(secret.clone())).collect()
+        };
+        if !learned.is_empty() {
+            self.remember(&learned);
         }
         redacted
+    }
+
+    /// Keeps secrets learned while redacting, so placeholders the model
+    /// repeats after a restart still get them back.
+    fn remember(&self, secrets: &[String]) {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _ = std::fs::create_dir_all(&self.config.state_dir);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(self.config.state_dir.join(LEARNED_SECRETS));
+        if let Ok(mut file) = file {
+            for secret in secrets {
+                let _ = writeln!(file, "{secret}");
+            }
+        }
     }
 
     fn reveal(&self, text: &str) -> String {
@@ -162,18 +229,18 @@ impl Harness {
     }
 
     fn open(&self, id: &str, cwd: PathBuf, messages: Vec<Message>) -> agent_client_protocol::Result<()> {
-        let cancelled = Arc::<AtomicBool>::default();
+        let cancel = Arc::<Cancel>::default();
         let session = Session {
             workspace: Workspace::new(&cwd).map_err(failed)?,
             cwd,
             messages,
             always_run: false,
-            cancelled: cancelled.clone(),
+            cancel: cancel.clone(),
         };
         self.sessions
             .lock()
             .expect("lock")
-            .insert(id.to_owned(), (cancelled, Arc::new(tokio::sync::Mutex::new(session))));
+            .insert(id.to_owned(), (cancel, Arc::new(tokio::sync::Mutex::new(session))));
         Ok(())
     }
 
@@ -187,80 +254,129 @@ impl Harness {
     }
 
     async fn prompt(&self, connection: &ConnectionTo<Client>, id: &SessionId, prompt: String) -> agent_client_protocol::Result<StopReason> {
+        if prompt.trim().is_empty() {
+            return Err(failed("the prompt has no text"));
+        }
         let backend = Backend::from_env(|name| std::env::var(name).ok()).map_err(failed)?;
         let session = self.session(&id.to_string())?;
         let mut session = session.lock().await;
-        session.cancelled.store(false, Ordering::SeqCst);
-        session.messages.push(Message {
-            role: Role::User,
-            parts: vec![Part::Text { text: self.redact(&prompt) }],
-        });
+        let cancel = session.cancel.clone();
+        push_user(&mut session.messages, vec![Part::Text { text: self.redact(&prompt) }]);
         let system = self.redact(&system_prompt(&session.workspace));
         let specs = tools::specs();
         let notify = |update| connection.send_notification(SessionNotification::new(id.clone(), update));
         for _ in 0..MAX_STEPS {
-            if session.cancelled.load(Ordering::SeqCst) {
+            if cancel.is_requested() {
                 self.save(&id.to_string(), &session);
                 return Ok(StopReason::Cancelled);
             }
-            let reply = backend.complete(&self.http, &system, &session.messages, &specs).await.map_err(failed)?;
+            let reply = tokio::select! {
+                reply = backend.complete(&self.http, &system, &session.messages, &specs) => reply.map_err(failed)?,
+                () = cancel.requested() => {
+                    self.save(&id.to_string(), &session);
+                    return Ok(StopReason::Cancelled);
+                }
+            };
             for part in &reply.parts {
                 if let Part::Text { text: said } = part {
                     notify(SessionUpdate::AgentMessageChunk(text(self.reveal(said))))?;
                 }
             }
-            session.messages.push(Message {
-                role: Role::Assistant,
-                parts: reply.parts.clone(),
-            });
+            // An empty answer would make every later request invalid.
+            if !reply.parts.is_empty() {
+                session.messages.push(Message {
+                    role: Role::Assistant,
+                    parts: reply.parts.clone(),
+                });
+            }
             let uses: Vec<(String, String, Value)> = reply
                 .tool_uses()
                 .map(|(call, name, input)| (call.to_owned(), name.to_owned(), input.clone()))
                 .collect();
             if uses.is_empty() {
                 self.save(&id.to_string(), &session);
-                return Ok(StopReason::EndTurn);
-            }
-            let mut results = Vec::new();
-            for (call, name, input) in uses {
-                let started = ToolCall::new(call.clone(), title(&name, &input))
-                    .kind(kind(&name))
-                    .status(ToolCallStatus::InProgress)
-                    .raw_input(input.clone());
-                notify(SessionUpdate::ToolCall(started))?;
-                let outcome = if session.cancelled.load(Ordering::SeqCst) {
-                    Err("cancelled".to_owned())
-                } else {
-                    let revealed = reveal_json(&self.overlay.lock().expect("lock"), &input);
-                    self.use_tool(connection, id, &mut session, &call, &name, &revealed).await?
-                };
-                let (status, output, is_error) = match outcome {
-                    Ok(output) => (ToolCallStatus::Completed, output, false),
-                    Err(error) => (ToolCallStatus::Failed, error, true),
-                };
-                let shown = ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(output.clone()))));
-                let finished = ToolCallUpdate::new(call.clone(), ToolCallUpdateFields::new().status(status).content(vec![shown]));
-                notify(SessionUpdate::ToolCallUpdate(finished))?;
-                results.push(Part::ToolResult {
-                    id: call,
-                    output: self.redact(&output),
-                    is_error,
+                return Ok(match reply.stop {
+                    Stop::Done => StopReason::EndTurn,
+                    Stop::MaxTokens => StopReason::MaxTokens,
+                    Stop::Refused => StopReason::Refusal,
                 });
             }
-            session.messages.push(Message {
-                role: Role::User,
-                parts: results,
-            });
+            // Every tool use gets its result, even when the turn ends early:
+            // a use without one makes every later request invalid.
+            let mut results = Vec::new();
+            let mut failure = None;
+            for (call, name, input) in uses {
+                if failure.is_some() || cancel.is_requested() {
+                    results.push(Part::ToolResult {
+                        id: call,
+                        output: "not run".into(),
+                        is_error: true,
+                    });
+                    continue;
+                }
+                match self.use_and_report(connection, id, &mut session, &cancel, call.clone(), &name, &input).await {
+                    Ok(result) => results.push(result),
+                    Err(error) => {
+                        results.push(Part::ToolResult {
+                            id: call,
+                            output: "not run".into(),
+                            is_error: true,
+                        });
+                        failure = Some(error);
+                    }
+                }
+            }
+            push_user(&mut session.messages, results);
             self.save(&id.to_string(), &session);
+            if let Some(error) = failure {
+                return Err(error);
+            }
         }
         Ok(StopReason::MaxTurnRequests)
     }
 
+    /// Runs one tool use, telling the client as it starts and ends, and
+    /// returns its result for the model.
+    #[expect(clippy::too_many_arguments, reason = "the turn's context, passed along rather than bundled for one call")]
+    async fn use_and_report(
+        &self,
+        connection: &ConnectionTo<Client>,
+        id: &SessionId,
+        session: &mut Session,
+        cancel: &Cancel,
+        call: String,
+        name: &str,
+        input: &Value,
+    ) -> agent_client_protocol::Result<Part> {
+        let notify = |update| connection.send_notification(SessionNotification::new(id.clone(), update));
+        let started = ToolCall::new(call.clone(), title(name, input))
+            .kind(kind(name))
+            .status(ToolCallStatus::InProgress)
+            .raw_input(input.clone());
+        notify(SessionUpdate::ToolCall(started))?;
+        let revealed = reveal_json(&self.overlay.lock().expect("lock"), input);
+        let outcome = self.use_tool(connection, id, session, cancel, &call, name, &revealed).await?;
+        let (status, output, is_error) = match outcome {
+            Ok(output) => (ToolCallStatus::Completed, output, false),
+            Err(error) => (ToolCallStatus::Failed, error, true),
+        };
+        let shown = ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(output.clone()))));
+        let finished = ToolCallUpdate::new(call.clone(), ToolCallUpdateFields::new().status(status).content(vec![shown]));
+        notify(SessionUpdate::ToolCallUpdate(finished))?;
+        Ok(Part::ToolResult {
+            id: call,
+            output: self.redact(&output),
+            is_error,
+        })
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "the turn's context, passed along rather than bundled for one call")]
     async fn use_tool(
         &self,
         connection: &ConnectionTo<Client>,
         id: &SessionId,
         session: &mut Session,
+        cancel: &Cancel,
         call: &str,
         name: &str,
         input: &Value,
@@ -275,12 +391,19 @@ impl Harness {
                     return Ok(Err("`command` is missing".into()));
                 };
                 if !session.always_run {
-                    match self.ask_to_run(connection, id, call, command).await? {
+                    let answer = tokio::select! {
+                        answer = self.ask_to_run(connection, id, call, command) => answer?,
+                        () = cancel.requested() => return Ok(Err("cancelled".into())),
+                    };
+                    match answer {
                         Some(always) => session.always_run |= always,
                         None => return Ok(Err("the user did not allow this command".into())),
                     }
                 }
-                self.run(session.workspace.root(), command).await
+                tokio::select! {
+                    outcome = self.run(session.workspace.root(), command) => outcome,
+                    () = cancel.requested() => Err("cancelled".into()),
+                }
             }
             other => Err(format!("there is no tool {other}")),
         })
@@ -354,12 +477,17 @@ pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
         }
         None => Vec::new(),
     };
-    let redactor = Redactor::from_env().with(from_file);
+    let learned = silt_redact::read_secrets_file(&config.state_dir.join(LEARNED_SECRETS)).unwrap_or_default();
+    let redactor = Redactor::from_env().with(from_file).with(learned);
     let overlay = Mutex::new(Overlay::new(redactor.secrets().iter().cloned()));
     let harness = Arc::new(Harness {
         config,
         sessions: Sessions::default(),
-        http: reqwest::Client::new(),
+        http: reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(MODEL_TIMEOUT)
+            .build()
+            .map_err(failed)?,
         redactor,
         overlay,
     });
@@ -413,6 +541,11 @@ pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
             async move |request: PromptRequest, responder, connection| {
                 let harness = prompted.clone();
                 let worker = connection.clone();
+                // Reset here, in order with the notifications: a cancel that
+                // arrives before the turn starts still counts.
+                if let Some((cancel, _)) = harness.sessions.lock().expect("lock").get(&request.session_id.to_string()) {
+                    cancel.reset();
+                }
                 connection.spawn(async move {
                     let stop = harness.prompt(&worker, &request.session_id, prompt_text(&request)).await;
                     match stop {
@@ -425,8 +558,8 @@ pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
         )
         .on_receive_notification(
             async move |cancel: CancelNotification, _connection| {
-                if let Some((cancelled, _)) = cancelling.sessions.lock().expect("lock").get(&cancel.session_id.to_string()) {
-                    cancelled.store(true, Ordering::SeqCst);
+                if let Some((signal, _)) = cancelling.sessions.lock().expect("lock").get(&cancel.session_id.to_string()) {
+                    signal.request();
                 }
                 Ok(())
             },
@@ -435,3 +568,23 @@ pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
         .connect_to(Stdio::new())
         .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_persons_turns_are_joined() {
+        let mut messages = Vec::new();
+        push_user(&mut messages, vec![Part::Text { text: "a".into() }]);
+        push_user(&mut messages, vec![Part::Text { text: "b".into() }]);
+        assert_eq!(messages.len(), 1);
+        messages.push(Message {
+            role: Role::Assistant,
+            parts: vec![Part::Text { text: "ok".into() }],
+        });
+        push_user(&mut messages, vec![Part::Text { text: "c".into() }]);
+        assert_eq!(messages.len(), 3);
+    }
+}
+

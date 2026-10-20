@@ -57,14 +57,53 @@ async fn a_session_streams_asks_permission_and_loads_again() {
     agent.send(Command::Stop);
     while !matches!(next(&mut events).await, Event::Exited) {}
 
-    // A new process can load the session only if the agent kept it; this
-    // one keeps sessions in memory, so it starts a new one when it can't.
+    // This agent keeps sessions in memory, so a new process can't load the
+    // session: the host starts a new one instead.
     let (sender, mut events) = mpsc::unbounded_channel();
     let again = start(Start { load: Some(session), ..options }, sender);
-    match next(&mut events).await {
-        Event::Ready { loaded, .. } => assert!(loaded, "the agent says it loads sessions"),
-        Event::Failed(_) => {}
-        other => panic!("unexpected {other:?}"),
-    }
+    assert!(matches!(next(&mut events).await, Event::Ready { loaded: false, .. }));
     again.send(Command::Stop);
+}
+
+fn options(dir: &std::path::Path, env: Vec<(String, String)>) -> Start {
+    std::fs::create_dir_all(dir.join("src")).expect("mkdir");
+    std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").expect("write");
+    Start {
+        program: env!("CARGO_BIN_EXE_silt-fake-agent").into(),
+        args: Vec::new(),
+        env,
+        cwd: dir.to_owned(),
+        mcp: None,
+        load: None,
+    }
+}
+
+#[tokio::test]
+async fn an_agent_that_dies_is_reported_gone() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), vec![("FAKE_ACP_CRASH".into(), "1".into())]), sender);
+    assert!(matches!(next(&mut events).await, Event::Ready { .. }));
+    agent.send(Command::Prompt("crash".into()));
+    while !matches!(next(&mut events).await, Event::Exited) {}
+}
+
+#[tokio::test]
+async fn cancelling_answers_the_pending_permission_request() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), Vec::new()), sender);
+    assert!(matches!(next(&mut events).await, Event::Ready { .. }));
+    agent.send(Command::Prompt("then cancel".into()));
+    while !matches!(next(&mut events).await, Event::Permission(_)) {}
+    agent.send(Command::Cancel);
+    loop {
+        match next(&mut events).await {
+            Event::TurnEnded { .. } => break,
+            Event::Update(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\n");
+    agent.send(Command::Stop);
 }

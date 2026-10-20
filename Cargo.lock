@@ -4124,6 +4124,7 @@ version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
  "futures",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.1",

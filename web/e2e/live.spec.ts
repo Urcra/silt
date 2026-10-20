@@ -155,8 +155,9 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await alice.getByLabel('draft').fill('once more')
   await alice.getByRole('button', { name: 'Send' }).click()
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
-  // The agent loaded its earlier session, so it needs no primer this time.
-  await expect(alice.getByText('Done: once more', { exact: true })).toBeVisible()
+  // A new process of this agent can't load its earlier session, so it starts
+  // a new one primed with the conversation.
+  await expect(alice.getByText(/^Done: You are continuing a conversation[\s\S]*once more$/)).toBeVisible()
   await alice.getByLabel('draft').fill('not this')
   await alice.getByRole('button', { name: 'Send' }).click()
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()

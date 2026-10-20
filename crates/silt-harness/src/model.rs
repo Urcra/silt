@@ -26,10 +26,21 @@ pub struct Message {
     pub parts: Vec<Part>,
 }
 
+/// Why the model stopped answering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Stop {
+    #[default]
+    Done,
+    /// It ran out of room for its answer.
+    MaxTokens,
+    Refused,
+}
+
 /// What the model answered: text and the tools it wants run.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Reply {
     pub parts: Vec<Part>,
+    pub stop: Stop,
 }
 
 impl Reply {
@@ -103,10 +114,16 @@ impl Backend {
                 .header("x-api-key", &self.key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&anthropic_request(&self.model, system, messages, tools)),
-            Api::OpenAi => client
-                .post(format!("{base}/chat/completions"))
-                .bearer_auth(&self.key)
-                .json(&openai_request(&self.model, system, messages, tools)),
+            Api::OpenAi => {
+                let mut body = openai_request(&self.model, system, messages, tools);
+                // OpenAI's reasoning models only take the newer name, which
+                // other compatible servers may not know.
+                if base.contains("api.openai.com") {
+                    body["max_completion_tokens"] = body["max_tokens"].take();
+                    body.as_object_mut().map(|fields| fields.remove("max_tokens"));
+                }
+                client.post(format!("{base}/chat/completions")).bearer_auth(&self.key).json(&body)
+            }
         };
         let response = request.send().await?;
         let status = response.status();
@@ -173,7 +190,12 @@ pub fn anthropic_reply(body: &Value) -> Reply {
             _ => None,
         })
         .collect();
-    Reply { parts }
+    let stop = match body["stop_reason"].as_str() {
+        Some("max_tokens") => Stop::MaxTokens,
+        Some("refusal") => Stop::Refused,
+        _ => Stop::Done,
+    };
+    Reply { parts, stop }
 }
 
 pub fn openai_request(model: &str, system: &str, messages: &[Message], tools: &[Tool]) -> Value {
@@ -230,6 +252,11 @@ pub fn openai_request(model: &str, system: &str, messages: &[Message], tools: &[
 }
 
 pub fn openai_reply(body: &Value) -> Reply {
+    let stop = match body["choices"][0]["finish_reason"].as_str() {
+        Some("length") => Stop::MaxTokens,
+        Some("content_filter") => Stop::Refused,
+        _ => Stop::Done,
+    };
     let message = &body["choices"][0]["message"];
     let mut parts = Vec::new();
     if let Some(text) = message["content"].as_str().filter(|text| !text.is_empty()) {
@@ -243,7 +270,7 @@ pub fn openai_reply(body: &Value) -> Reply {
             input: serde_json::from_str(arguments).unwrap_or(Value::Null),
         });
     }
-    Reply { parts }
+    Reply { parts, stop }
 }
 
 #[cfg(test)]
@@ -319,5 +346,13 @@ mod tests {
             "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "list_files", "arguments": "{}"}}],
         }}]}));
         assert_eq!(reply.tool_uses().count(), 1);
+    }
+
+    #[test]
+    fn stop_reasons_come_through() {
+        assert_eq!(anthropic_reply(&json!({"content": [], "stop_reason": "max_tokens"})).stop, Stop::MaxTokens);
+        assert_eq!(anthropic_reply(&json!({"content": [], "stop_reason": "refusal"})).stop, Stop::Refused);
+        assert_eq!(openai_reply(&json!({"choices": [{"finish_reason": "length", "message": {}}]})).stop, Stop::MaxTokens);
+        assert_eq!(openai_reply(&json!({"choices": [{"finish_reason": "stop", "message": {"content": "hi"}}]})).stop, Stop::Done);
     }
 }

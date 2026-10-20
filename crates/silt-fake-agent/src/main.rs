@@ -1,7 +1,8 @@
 //! A scripted ACP agent for tests. Each prompt makes it think, ask
 //! permission to edit `src/main.rs`, append `FAKE_ACP_LINE` (default
 //! `fn acp() {}`) when allowed, and answer. It can load the sessions it
-//! made, replaying what was said.
+//! made in the same process, replaying what was said, and refuses others.
+//! With `FAKE_ACP_CRASH` set it dies on a prompt.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -62,8 +63,11 @@ async fn main() -> Result<()> {
             async move |request: LoadSessionRequest, responder, connection| {
                 let said = {
                     let mut state = loading.lock().expect("lock");
+                    let Some(said) = state.said.get(&request.session_id.to_string()).cloned() else {
+                        return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such session"));
+                    };
                     state.cwd.insert(request.session_id.to_string(), request.cwd.clone());
-                    state.said.get(&request.session_id.to_string()).cloned().unwrap_or_default()
+                    said
                 };
                 for (by_user, line) in said {
                     let update = if by_user {
@@ -92,6 +96,9 @@ async fn main() -> Result<()> {
                         })
                         .collect();
                     let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
+                    if std::env::var_os("FAKE_ACP_CRASH").is_some() {
+                        std::process::exit(9);
+                    }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
                     let call = ToolCall::new("call-1", "Edit src/main.rs")
                         .kind(ToolKind::Edit)
