@@ -3263,6 +3263,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-agents"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "silt-api"
 version = "0.0.1"
 
