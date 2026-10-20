@@ -1,13 +1,17 @@
 [package]
 name = "silt-sumtree"
-description = "Persistent B-tree with summaries (trimmed fork of Zed's sum_tree)"
+description = "Persistent B-tree with summaries (vendored from Zed's sum_tree, Apache-2.0)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "Apache-2.0"
 publish.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
+heapless = "0.9.3"
+
+[dev-dependencies]
+rand = "0.10.3"
