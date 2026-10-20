@@ -4174,6 +4174,7 @@ dependencies = [
  "silt-git",
  "silt-mcp",
  "silt-proto",
+ "silt-sandbox",
  "silt-server",
  "tempfile",
  "thiserror",
@@ -4290,6 +4291,15 @@ version = "0.0.1"
 dependencies = [
  "silt-crdt",
  "silt-log",
+]
+
+[[package]]
+name = "silt-sandbox"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "rustix",
+ "thiserror",
 ]
 
 [[package]]

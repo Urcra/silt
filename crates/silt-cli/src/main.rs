@@ -204,6 +204,18 @@ enum Command {
         agent: Option<String>,
         event: String,
     },
+    /// Run a command that can read the system but write only the given
+    /// directories and a private /tmp, without network unless --net
+    Sandbox {
+        /// A directory the command may write to; repeatable
+        #[arg(long = "write", value_name = "DIR")]
+        writable: Vec<PathBuf>,
+        /// Keep the network
+        #[arg(long)]
+        net: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
     /// Serve Silt's history tools to an agent over MCP on stdio
     #[command(hide = true)]
     Mcp {
@@ -644,6 +656,7 @@ fn main() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
+        Command::Sandbox { writable, net, command } => commands::sandbox(writable, net, &command),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())

@@ -688,6 +688,18 @@ fn shell_quote(path: &Path) -> String {
 
 
 
+/// Runs `command` in the sandbox in place of this process.
+pub fn sandbox(writable: Vec<PathBuf>, network: bool, command: &[String]) -> Result<(), Exn<CliError>> {
+    use std::os::unix::process::CommandExt;
+
+    let (program, args) = command.split_first().ok_or_else(|| CliError("give a command to run".into()))?;
+    silt_sandbox::Sandbox { writable, network }
+        .enter()
+        .or_raise(|| CliError("cannot set up the sandbox".into()))?;
+    let error = Command::new(program).args(args).exec();
+    Err(Exn::new(CliError(format!("cannot run {program}: {error}"))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,3 +713,4 @@ mod tests {
         assert!(parse_date("7d").is_ok_and(|ms| ms > 1_700_000_000_000));
     }
 }
+
