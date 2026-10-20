@@ -153,7 +153,7 @@ impl Bridge {
                     .entries
                     .get(path)
                     .filter(|entry| entry.inode == inode)
-                    .map_or_else(|| writer.family.graph().frontier().clone(), |entry| entry.version.clone());
+                    .map_or_else(|| writer.family.thread_head(self.thread), |entry| entry.version.clone());
                 writer.update(self.actor, inode, &disk, version)?;
                 inode
             }
@@ -170,7 +170,7 @@ impl Bridge {
                 path: path.to_owned(),
                 inode,
                 content,
-                executable: family.is_executable(inode),
+                executable: family.thread_view(self.thread).is_executable(inode),
                 version: version.clone(),
             });
         }
@@ -428,7 +428,7 @@ impl Writer<'_> {
                 )?;
             }
         }
-        if disk.executable != self.family.is_executable(inode) {
+        if disk.executable != self.family.thread_view(self.thread).is_executable(inode) {
             self.tree_op(
                 actor,
                 Op::SetExecutable {

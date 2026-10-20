@@ -271,6 +271,27 @@ fn a_fork_sees_its_own_edits_and_the_source_does_not() {
 }
 
 #[test]
+fn an_edit_without_a_record_of_the_disk_does_not_take_in_a_forks_work() {
+    let mut family = imported_family();
+    let mut source = Checkout::new(1, &family);
+    let fork = ThreadId(2);
+    let fork_delta = family.delta(ActorId(100), fork, Author::User, 0, family.thread_head(THREAD), silt_log::Op::Fork { from: THREAD });
+    family.apply(fork_delta, &mut bases()).expect("forks");
+    let mut forked = Checkout::on_thread(3, fork, &family);
+    forked.edit(&mut family, "README.md", Some("# readme\nfork work\n"));
+
+    source.bridge.record_removed("README.md");
+    let edits = source.edit(&mut family, "README.md", Some("# readme\nsource work\n"));
+    let fork_head = family.thread_head(fork);
+    assert!(
+        edits.iter().all(|delta| fork_head.ids().iter().all(|id| !family.graph().is_ancestor(*id, &delta.parents))),
+        "the source's edit doesn't build on the fork"
+    );
+    let readme = family.tree().paths()["README.md"];
+    assert_eq!(family.thread_view(THREAD).file(readme), Some(FileView::Text("# readme\nsource work\n".into())));
+}
+
+#[test]
 fn a_rename_is_a_move_so_concurrent_edits_follow_the_file() {
     let mut family = imported_family();
     let mut a = Checkout::new(1, &family);
