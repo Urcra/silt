@@ -1,6 +1,7 @@
 mod delta;
 mod family;
 mod purge;
+mod stored;
 
 pub use delta::{
     ShapeError,
@@ -11,3 +12,4 @@ pub use family::{
     ThreadView,
 };
 pub use purge::kept_after_purge;
+pub use stored::{DELTA_FORMAT, StoredError, decode_stored, encode_stored};

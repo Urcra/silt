@@ -226,10 +226,11 @@ impl Server {
                 room.push(kept.clone()).map_err(|error| std::io::Error::other(error.to_string()))?;
             }
             for (seq, delta) in (1..).zip(&kept) {
-                sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, ?, ?)")
+                sqlx::query("INSERT INTO deltas (family_id, seq, format, data) VALUES (?, ?, ?, ?)")
                     .bind(id_bytes(family.0))
                     .bind(seq)
-                    .bind(postcard::to_allocvec(delta)?)
+                    .bind(silt_log::DELTA_FORMAT)
+                    .bind(silt_log::encode_stored(delta)?)
                     .execute(&mut *tx)
                     .await?;
             }

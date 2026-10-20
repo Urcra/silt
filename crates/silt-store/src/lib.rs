@@ -21,6 +21,8 @@ pub enum StoreError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("stored record could not be decoded")]
     Decode(#[from] postcard::Error),
+    #[error(transparent)]
+    Delta(#[from] silt_log::StoredError),
     #[error("blob store I/O error")]
     Io(#[from] std::io::Error),
     #[error("stored {what} has an invalid length")]
@@ -352,12 +354,12 @@ impl Store {
 
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
-        let rows = sqlx::query("SELECT data FROM deltas WHERE family_id = ? ORDER BY seq")
+        let rows = sqlx::query("SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq")
             .bind(id_bytes(family.0))
             .fetch_all(&self.pool)
             .await?;
         rows.iter()
-            .map(|row| Ok(postcard::from_bytes(row.get::<&[u8], _>("data"))?))
+            .map(|row| Ok(silt_log::decode_stored(row.get("format"), row.get::<&[u8], _>("data"))?))
             .collect()
     }
 
@@ -622,13 +624,14 @@ async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, del
         .fetch_one(&mut *tx)
         .await?;
     for (seq, delta) in (next..).zip(deltas) {
-        sqlx::query("INSERT INTO deltas (family_id, seq, actor, lamport, len, data) VALUES (?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(id_bytes(family.0))
             .bind(seq)
             .bind(id_bytes(delta.span.actor.0))
             .bind(lamport_i64(delta.span.start))
             .bind(i64::try_from(delta.span.len).unwrap_or(i64::MAX))
-            .bind(postcard::to_allocvec(delta)?)
+            .bind(silt_log::DELTA_FORMAT)
+            .bind(silt_log::encode_stored(delta)?)
             .execute(&mut *tx)
             .await?;
     }

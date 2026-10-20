@@ -75,6 +75,8 @@ pub enum ServerError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("stored delta could not be decoded")]
     Decode(#[from] postcard::Error),
+    #[error(transparent)]
+    Stored(#[from] silt_log::StoredError),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -120,12 +122,13 @@ impl Server {
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let purged = lifecycle::load_purged(&db).await?;
         let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
-        let rows = sqlx::query("SELECT family_id, data FROM deltas ORDER BY family_id, seq")
+        let rows = sqlx::query("SELECT family_id, format, data FROM deltas ORDER BY family_id, seq")
             .fetch_all(&db)
             .await?;
         for row in rows {
             let family = FamilyId(id_from(row.get("family_id")));
-            stored.entry(family).or_default().push(postcard::from_bytes(row.get::<&[u8], _>("data"))?);
+            let delta = silt_log::decode_stored(row.get("format"), row.get::<&[u8], _>("data"))?;
+            stored.entry(family).or_default().push(delta);
         }
         let mut rooms: HashMap<FamilyId, Room> = HashMap::new();
         let mut index = Index::default();
@@ -618,11 +621,14 @@ async fn push(
     for delta in &stored {
         // Numbered after what is stored rather than by the room, which may
         // have skipped a stored delta that no longer applies.
-        sqlx::query("INSERT INTO deltas (family_id, seq, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2 FROM deltas WHERE family_id = ?1")
-            .bind(id_bytes(family.0))
-            .bind(postcard::to_allocvec(delta).map_err(ServerError::from)?)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO deltas (family_id, seq, format, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3 FROM deltas WHERE family_id = ?1",
+        )
+        .bind(id_bytes(family.0))
+        .bind(silt_log::DELTA_FORMAT)
+        .bind(silt_log::encode_stored(delta).map_err(ServerError::from)?)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     let outcome = room.commit(prepared);
