@@ -186,6 +186,7 @@ impl Core {
     pub(crate) async fn create_thread(&mut self, cwd: &Path, isolated: bool, already_ran: bool) -> Result<CreatedThread, CoreError> {
         let cwd = cwd.canonicalize()?;
         let repo = Repo::discover(&cwd)?;
+        self.remember_clone(&cwd).await;
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
         let head = repo.head_commit()?;
         let files: Vec<ImportFile> = match head {

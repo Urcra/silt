@@ -265,6 +265,25 @@ impl Store {
         Ok(())
     }
 
+    pub async fn remember_clone(&self, repo: &str, path: &Path) -> Result<(), StoreError> {
+        sqlx::query("INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path")
+            .bind(repo)
+            .bind(path.to_string_lossy())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Clones remembered by repository.
+    pub async fn clones(&self) -> Result<Vec<(String, PathBuf)>, StoreError> {
+        Ok(sqlx::query("SELECT repo, path FROM clones")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|row| (row.get("repo"), PathBuf::from(row.get::<String, _>("path"))))
+            .collect())
+    }
+
     pub async fn deleted_threads(&self) -> Result<Vec<ThreadId>, StoreError> {
         sqlx::query("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(&self.pool)

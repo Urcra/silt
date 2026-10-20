@@ -169,6 +169,13 @@ impl Core {
             core.threads.insert(thread.id, thread);
         }
         core.deleted = core.store.deleted_threads().await?.into_iter().collect();
+        core.clones = core
+            .store
+            .clones()
+            .await?
+            .into_iter()
+            .filter(|(_, path)| path.join(".git").exists())
+            .collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -299,7 +306,7 @@ impl Core {
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
             Request::OpenWeb { cwd } => {
                 if let Some(cwd) = cwd {
-                    self.remember_clone(&cwd);
+                    self.remember_clone(&cwd).await;
                 }
                 to_response(self.open_web().await)
             }
@@ -954,13 +961,23 @@ impl Core {
             .collect()
     }
 
-    fn remember_clone(&mut self, cwd: &Path) {
+    /// Notes the clone at `cwd`, here and in the store, so agents can start
+    /// new threads in it after a restart.
+    pub(crate) async fn remember_clone(&mut self, cwd: &Path) {
         let Ok(repo) = Repo::discover(cwd) else {
             return;
         };
-        if let Ok(Some(url)) = repo.remote_url("origin") {
-            self.clones.insert(silt_git::normalize_remote(&url), repo.root().to_owned());
+        let Ok(Some(url)) = repo.remote_url("origin") else {
+            return;
+        };
+        let identity = silt_git::normalize_remote(&url);
+        if self.clones.get(&identity).map(PathBuf::as_path) == Some(repo.root()) {
+            return;
         }
+        if let Err(error) = self.store.remember_clone(&identity, repo.root()).await {
+            warn!(%error, "could not remember the clone");
+        }
+        self.clones.insert(identity, repo.root().to_owned());
     }
 
     /// Whether this machine's user may write into `thread`: its owner or a
