@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use silt_daemon::protocol::{MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
+use silt_daemon::protocol::{InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
 
 /// The last 12 hex digits: UUIDv7 ids share their leading time digits.
 fn short(id: &str) -> &str {
@@ -81,7 +81,23 @@ pub fn search(hits: &[SearchResult]) -> String {
         out.push_str("no matches\n");
     }
     for hit in hits {
-        let _ = writeln!(out, "{}  {:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
+        let who = match (&hit.owner, &hit.status) {
+            (Some(owner), Some(status)) => format!("{owner}, {status}  "),
+            _ => String::new(),
+        };
+        let _ = writeln!(out, "{}  {who}{:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
+    }
+    out
+}
+
+pub fn in_flight(found: &[InFlight]) -> String {
+    let mut out = String::new();
+    if found.is_empty() {
+        out.push_str("no other thread is changing this\n");
+    }
+    for item in found {
+        let owner = if item.owner.is_empty() { "you" } else { item.owner.as_str() };
+        let _ = writeln!(out, "{}  {owner:<10} {}", short(&item.thread), item.files.join(", "));
     }
     out
 }

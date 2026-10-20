@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use exn::Exn;
+use silt_daemon::protocol::SearchFilters;
 
 #[derive(Debug, Parser)]
 #[command(name = "silt", version, about = "Resume, fork and search your agent sessions")]
@@ -82,10 +83,35 @@ enum Command {
         #[arg(long)]
         turn: Option<usize>,
     },
-    /// Search conversations
+    /// Search conversations: your team's through the server when connected
     Search {
         #[arg(required = true)]
         query: Vec<String>,
+        /// Repository, as its normalized origin URL (github.com/org/repo)
+        #[arg(long)]
+        repo: Option<String>,
+        /// The owning user
+        #[arg(long)]
+        author: Option<String>,
+        /// active, idle or merged
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        /// Threads that changed this file, or anything under this directory
+        #[arg(long)]
+        file: Option<String>,
+        /// YYYY-MM-DD, or a number of days ago such as 7d
+        #[arg(long)]
+        since: Option<String>,
+        /// YYYY-MM-DD, or a number of days ago such as 7d
+        #[arg(long)]
+        until: Option<String>,
+    },
+    /// Other threads changing a file or directory of this repository
+    InFlight {
+        #[arg(default_value = ".")]
+        path: String,
     },
     /// Run or administer a self-hosted sync server
     Server {
@@ -237,7 +263,28 @@ fn main() -> Result<(), Exn<CliError>> {
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn } => commands::diff(&thread, turn),
-        Command::Search { query } => commands::search(&query.join(" ")),
+        Command::Search {
+            query,
+            repo,
+            author,
+            status,
+            branch,
+            file,
+            since,
+            until,
+        } => commands::search(
+            &query.join(" "),
+            SearchFilters {
+                repo,
+                author,
+                status,
+                branch,
+                file,
+                since: since.as_deref().map(commands::parse_date).transpose()?,
+                until: until.as_deref().map(commands::parse_date).transpose()?,
+            },
+        ),
+        Command::InFlight { path } => commands::in_flight(&path),
         Command::Server { command } => match command {
             ServerCommand::Run { listen, data } => commands::server_run(&listen, data),
             ServerCommand::Pair { data, user } => commands::server_pair(data, &user),

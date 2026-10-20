@@ -4144,6 +4144,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "silt-agents",
  "silt-crdt",
  "silt-log",
  "silt-proto",

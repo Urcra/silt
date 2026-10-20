@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
     ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
-    PullReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
+    InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
+    VisibilityRequest,
 };
 use silt_sync::Outcome;
 use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
@@ -131,6 +132,16 @@ impl Remote {
             .await?;
         checked(response).await?;
         Ok(())
+    }
+
+    pub async fn search(&self, query: &SearchQuery) -> Result<SearchReply, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/search").query(query).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn in_flight(&self, query: &InFlightQuery) -> Result<InFlightReply, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/in-flight").query(query).send().await?;
+        Ok(checked(response).await?.json().await?)
     }
 
     pub async fn put_blob(&self, hash: BlobHash, bytes: Vec<u8>) -> Result<(), RemoteError> {

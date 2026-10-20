@@ -202,3 +202,24 @@ fn a_private_project_stays_invisible_to_teammates() {
     alice.silt(&["visibility", "team", "--thread", &thread]);
     assert!(eventually(|| bob.log_line(&thread).is_some()), "the thread's own setting opens it up");
 }
+
+#[test]
+fn search_and_in_flight_span_the_team() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    let short = &thread[thread.len() - 12..];
+    assert!(eventually(|| bob.stdout(&["search", "farewell", "--author", "alice"]).contains(short)));
+    let found = bob.stdout(&["search", "farewell", "--file", "src", "--since", "1d", "--status", "active"]);
+    assert!(found.contains(short) && found.contains("alice, active"), "{found}");
+    assert!(bob.stdout(&["search", "farewell", "--author", "bob"]).contains("no matches"));
+    assert!(bob.stdout(&["search", "farewell", "--file", "docs"]).contains("no matches"));
+
+    let flight = bob.stdout(&["in-flight", "src/main.rs"]);
+    assert!(flight.contains(short) && flight.contains("alice"), "{flight}");
+    assert!(bob.stdout(&["in-flight", "README.md"]).contains("no other thread"));
+    assert!(
+        alice.stdout(&["in-flight", "src"]).contains("no other thread"),
+        "a thread doesn't list itself where it is checked out"
+    );
+}

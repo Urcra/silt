@@ -364,3 +364,123 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
     assert_eq!(bob.set_visibility(&private_project).await, StatusCode::NO_CONTENT);
     assert_eq!(bob.listing().await.threads.len(), 1, "the family's own setting wins over its project's");
 }
+
+/// A thread that edits `src/lexer.rs` on branch `main` and talks about it.
+fn lexer_work() -> Vec<Delta> {
+    use silt_crdt::InodeId;
+    use silt_log::{ConvOp, GitOp, SessionFile, SessionRef};
+    let mut family = Family::new();
+    let mut deltas = Vec::new();
+    let mut add = |family: &mut Family, op: Op| {
+        let delta = family.delta(ActorId(1), THREAD, Author::User, now(), family.thread_head(THREAD), op);
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        deltas.push(delta.clone());
+        delta.span.first()
+    };
+    add(
+        &mut family,
+        Op::Git(GitOp::Genesis {
+            commit: silt_types::GitOid([1; 20]),
+            branch: Some("main".into()),
+        }),
+    );
+    let src = add(
+        &mut family,
+        Op::Create {
+            kind: InodeKind::Dir,
+            parent: Parent::Root,
+            name: "src".into(),
+            content: Content::Empty,
+            executable: false,
+        },
+    );
+    add(
+        &mut family,
+        Op::Create {
+            kind: InodeKind::File,
+            parent: Parent::Dir(InodeId(src)),
+            name: "lexer.rs".into(),
+            content: Content::Empty,
+            executable: false,
+        },
+    );
+    add(
+        &mut family,
+        Op::Conv(ConvOp::Native {
+            session: SessionRef {
+                agent: "claude-code".into(),
+                id: "s".into(),
+            },
+            file: SessionFile::Main,
+            line: r#"{"type":"user","message":{"role":"user","content":"Fix the tokenizer bug in the lexer"}}"#.into(),
+        }),
+    );
+    deltas
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or_default())
+}
+
+impl Client {
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> T {
+        self.request(reqwest::Method::GET, path)
+            .send()
+            .await
+            .expect("sends")
+            .json()
+            .await
+            .expect("json")
+    }
+}
+
+#[tokio::test]
+async fn search_filters_and_in_flight_respect_visibility() {
+    use silt_proto::{InFlightReply, SearchReply};
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (alice, _) = Client::login_as(data.path(), &base, "alice").await;
+    let (bob, _) = Client::login_as(data.path(), &base, "bob").await;
+    alice.register("github.com/u/r").await;
+    assert_eq!(alice.push(lexer_work()).await.status(), StatusCode::OK);
+
+    let found: SearchReply = bob.get_json("/v1/search?q=tokeniz").await;
+    assert_eq!(found.hits.len(), 1, "prefix search over teammates' visible threads");
+    let hit = &found.hits[0];
+    assert_eq!((hit.owner.as_str(), hit.status.as_str()), ("alice", "active"));
+    assert_eq!(hit.branch.as_deref(), Some("main"));
+    assert!(hit.snippet.contains("[tokenizer]"), "{}", hit.snippet);
+    for (filters, expected) in [
+        ("&repo=github.com/u/r&author=alice&branch=main&status=active&file=src", 1),
+        ("&file=src/lexer.rs", 1),
+        ("&author=bob", 0),
+        ("&file=docs", 0),
+        ("&status=merged", 0),
+        ("&since=4102444800000", 0),
+    ] {
+        let found: SearchReply = bob.get_json(&format!("/v1/search?q=lexer{filters}")).await;
+        assert_eq!(found.hits.len(), expected, "{filters}");
+    }
+
+    let flight: InFlightReply = bob.get_json("/v1/in-flight?repo=github.com/u/r&path=src").await;
+    assert_eq!(flight.threads.len(), 1);
+    assert_eq!(flight.threads[0].paths, vec!["src/lexer.rs".to_owned()]);
+    let flight: InFlightReply = bob.get_json("/v1/in-flight?repo=github.com/u/r&path=docs").await;
+    assert!(flight.threads.is_empty());
+
+    alice
+        .set_visibility(&VisibilityRequest {
+            repo: None,
+            family: Some(FAMILY),
+            visibility: Visibility::Private,
+        })
+        .await;
+    let found: SearchReply = bob.get_json("/v1/search?q=lexer").await;
+    assert!(found.hits.is_empty());
+    let flight: InFlightReply = bob.get_json("/v1/in-flight?repo=github.com/u/r").await;
+    assert!(flight.threads.is_empty());
+    let found: SearchReply = alice.get_json("/v1/search?q=lexer").await;
+    assert_eq!(found.hits.len(), 1);
+}

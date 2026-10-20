@@ -20,7 +20,14 @@ pub enum Request {
     Threads,
     Show { thread: String },
     Diff { thread: String, turn: Option<usize> },
-    Search { query: String, limit: u32 },
+    /// Searches the server when connected (with `filters`), else this
+    /// machine's index.
+    Search {
+        query: String,
+        limit: u32,
+        #[serde(default)]
+        filters: SearchFilters,
+    },
     /// Re-reads the server settings after `silt auth login`.
     Reload,
     Status,
@@ -128,6 +135,31 @@ pub struct SearchResult {
     pub thread: String,
     pub kind: String,
     pub snippet: String,
+    /// Set when the server answered.
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+}
+
+/// Server search filters (ADR 0011); dates are milliseconds since the epoch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchFilters {
+    pub repo: Option<String>,
+    pub author: Option<String>,
+    pub status: Option<String>,
+    pub branch: Option<String>,
+    pub file: Option<String>,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
+impl SearchFilters {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

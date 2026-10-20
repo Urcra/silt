@@ -18,7 +18,8 @@ use serde::Deserialize;
 use silt_log::Delta;
 use silt_proto::{
     ErrorReply, FamilyInfo, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
-    PullReply, PushReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
+    InFlightQuery, InFlightReply, InFlightThread, PullReply, PushReply, PushRequest, SearchHit, SearchQuery, SearchReply,
+    ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -28,12 +29,19 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 
+mod index;
+
+use index::Index;
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// Longest a pull waits for new deltas.
 const MAX_WAIT: Duration = Duration::from_secs(30);
 const PULL_LIMIT: usize = 1000;
 const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
+/// Threads written to within this long are `active`.
+const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
+const SEARCH_LIMIT: u32 = 50;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -53,6 +61,8 @@ struct Shared {
     generation: u64,
     rooms: Mutex<HashMap<FamilyId, Room>>,
     waiters: Mutex<HashMap<FamilyId, Arc<Notify>>>,
+    /// Locked after `rooms` when both are needed.
+    index: Mutex<Index>,
 }
 
 #[derive(Clone)]
@@ -68,17 +78,24 @@ impl Server {
         let db = open_db(data_dir).await?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let mut rooms: HashMap<FamilyId, Room> = HashMap::new();
+        let mut index = Index::default();
+        let mut index_rows = Vec::new();
         let rows = sqlx::query("SELECT family_id, data FROM deltas ORDER BY family_id, seq")
             .fetch_all(&db)
             .await?;
         for row in rows {
             let family = FamilyId(id_from(row.get("family_id")));
             let delta: Delta = postcard::from_bytes(row.get::<&[u8], _>("data"))?;
+            index_rows.extend(index.observe(family, &delta));
             let room = rooms.entry(family).or_insert_with(|| Room::new(generation));
             if let Err(error) = room.push(vec![delta]) {
                 tracing::warn!(%error, "skipping a stored delta that no longer applies");
             }
         }
+        let mut tx = db.begin().await?;
+        index::clear(&mut tx).await?;
+        index::write(&mut tx, &index_rows).await?;
+        tx.commit().await?;
         Ok(Self {
             shared: Arc::new(Shared {
                 db,
@@ -86,6 +103,7 @@ impl Server {
                 generation,
                 rooms: Mutex::new(rooms),
                 waiters: Mutex::new(HashMap::new()),
+                index: Mutex::new(index),
             }),
         })
     }
@@ -98,6 +116,8 @@ impl Server {
             .route("/v1/families/{id}/deltas", post(push).get(pull))
             .route("/v1/blobs/{hash}", put(put_blob).get(get_blob))
             .route("/v1/visibility", put(set_visibility))
+            .route("/v1/search", get(search))
+            .route("/v1/in-flight", get(in_flight))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         Router::new()
             .route("/v1/login", post(login))
@@ -459,7 +479,12 @@ async fn push(
         .zip(before + 1..)
         .map(|(delta, seq)| (seq, delta))
         .collect();
+    let index_rows: Vec<index::Row> = {
+        let mut index = server.shared.index.lock().await;
+        stored.iter().flat_map(|(_, delta)| index.observe(family, delta)).collect()
+    };
     let mut tx = server.shared.db.begin().await?;
+    index::write(&mut tx, &index_rows).await?;
     for (seq, delta) in &stored {
         sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, ?, ?)")
             .bind(id_bytes(family.0))
@@ -563,6 +588,128 @@ async fn set_visibility(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Full-text search over the conversations of every family the caller can
+/// see, with filters (ADR 0011).
+async fn search(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<SearchReply>, ApiError> {
+    let terms = fts_query(&query.q);
+    if terms.is_empty() {
+        return Ok(Json(SearchReply { hits: Vec::new() }));
+    }
+    let rows = sqlx::query(
+        "SELECT s.thread_id, s.kind, snippet(search, 0, '[', ']', '…', 12) AS snippet, CAST(s.time_ms AS INTEGER) AS time_ms,
+                t.repo, u.name AS owner, a.branch,
+                CASE WHEN COALESCE(a.merged, 0) = 1 THEN 'merged'
+                     WHEN COALESCE(a.last_ms, 0) >= ?1 THEN 'active' ELSE 'idle' END AS status
+         FROM search s
+         JOIN threads t ON t.id = s.thread_id
+         JOIN families f ON f.id = t.family_id
+         JOIN users u ON u.id = t.owner_id
+         LEFT JOIN thread_activity a ON a.thread_id = t.id
+         WHERE search MATCH ?2
+           AND (f.owner_id = ?3
+                OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')
+           AND (?4 IS NULL OR t.repo = ?4)
+           AND (?5 IS NULL OR u.name = ?5)
+           AND (?6 IS NULL OR a.branch = ?6)
+           AND (?7 IS NULL OR CAST(s.time_ms AS INTEGER) >= ?7)
+           AND (?8 IS NULL OR CAST(s.time_ms AS INTEGER) <= ?8)
+           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM touches th
+                                      WHERE th.thread_id = t.id AND (th.path = ?9 OR th.path LIKE ?9 || '/%')))
+           AND (?10 IS NULL OR status = ?10)
+         ORDER BY rank
+         LIMIT ?11",
+    )
+    .bind(now_ms() - ACTIVE_MS)
+    .bind(terms)
+    .bind(caller.user)
+    .bind(&query.repo)
+    .bind(&query.author)
+    .bind(&query.branch)
+    .bind(query.since)
+    .bind(query.until)
+    .bind(query.file.as_deref().map(|file| file.trim_end_matches('/')))
+    .bind(&query.status)
+    .bind(query.limit.unwrap_or(SEARCH_LIMIT).min(500))
+    .fetch_all(&server.shared.db)
+    .await?;
+    let hits = rows
+        .iter()
+        .map(|row| SearchHit {
+            thread: ThreadId(id_from(row.get("thread_id"))),
+            repo: row.get("repo"),
+            owner: row.get("owner"),
+            status: row.get("status"),
+            branch: row.get("branch"),
+            kind: row.get("kind"),
+            snippet: row.get("snippet"),
+            time_ms: row.get("time_ms"),
+        })
+        .collect();
+    Ok(Json(SearchReply { hits }))
+}
+
+/// Visible threads of a repository that changed a path, most recently
+/// active first.
+async fn in_flight(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Query(query): Query<InFlightQuery>,
+) -> Result<Json<InFlightReply>, ApiError> {
+    let path = query.path.trim_matches('/');
+    let rows = sqlx::query(
+        "SELECT t.id, u.name AS owner, th.path, th.last_ms,
+                CASE WHEN COALESCE(a.merged, 0) = 1 THEN 'merged'
+                     WHEN COALESCE(a.last_ms, 0) >= ?1 THEN 'active' ELSE 'idle' END AS status
+         FROM touches th
+         JOIN threads t ON t.id = th.thread_id
+         JOIN families f ON f.id = t.family_id
+         JOIN users u ON u.id = t.owner_id
+         LEFT JOIN thread_activity a ON a.thread_id = t.id
+         WHERE t.repo = ?2
+           AND (?3 = '' OR th.path = ?3 OR th.path LIKE ?3 || '/%')
+           AND (f.owner_id = ?4
+                OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')
+         ORDER BY th.last_ms DESC",
+    )
+    .bind(now_ms() - ACTIVE_MS)
+    .bind(&query.repo)
+    .bind(path)
+    .bind(caller.user)
+    .fetch_all(&server.shared.db)
+    .await?;
+    let mut threads: Vec<InFlightThread> = Vec::new();
+    for row in &rows {
+        let thread = ThreadId(id_from(row.get("id")));
+        let path: String = row.get("path");
+        match threads.iter_mut().find(|found| found.thread == thread) {
+            Some(found) => found.paths.push(path),
+            None => threads.push(InFlightThread {
+                thread,
+                owner: row.get("owner"),
+                status: row.get("status"),
+                paths: vec![path],
+                last_ms: row.get("last_ms"),
+            }),
+        }
+    }
+    Ok(Json(InFlightReply { threads }))
+}
+
+/// Free text as an FTS5 query of quoted prefix terms, so input can't be
+/// read as query syntax.
+fn fts_query(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.replace('"', ""))
+        .filter(|word| !word.is_empty())
+        .map(|word| format!("\"{word}\"*"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 async fn put_blob(
     State(server): State<Server>,
     UrlPath(hash_hex): UrlPath<String>,
@@ -612,7 +759,7 @@ fn hash(text: &str) -> [u8; 32] {
     *blake3::hash(text.as_bytes()).as_bytes()
 }
 
-fn id_bytes(id: u128) -> Vec<u8> {
+pub(crate) fn id_bytes(id: u128) -> Vec<u8> {
     id.to_be_bytes().to_vec()
 }
 

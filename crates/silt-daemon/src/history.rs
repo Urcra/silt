@@ -151,9 +151,36 @@ impl Core {
         Ok(file_touches(family, inode, |delta| head.contains(delta.span.first())))
     }
 
-    /// [`Core::in_flight`] for the repository at `cwd`, leaving out the
-    /// thread checked out there; `path` is relative to `cwd`.
-    pub(crate) fn in_flight_at(&self, cwd: &std::path::Path, path: &str) -> Result<Vec<InFlight>, CoreError> {
+    /// Who else is changing `path` (relative to `cwd`): the server's view
+    /// when connected, else what this machine knows.
+    pub(crate) async fn in_flight_anywhere(&self, cwd: &std::path::Path, path: &str) -> Result<Vec<InFlight>, CoreError> {
+        let (identity, relative, here) = self.repo_path(cwd, path)?;
+        let Some(remote) = &self.remote else {
+            return Ok(self.in_flight(&identity, &relative, here));
+        };
+        let reply = remote
+            .in_flight(&silt_proto::InFlightQuery {
+                repo: identity,
+                path: relative,
+            })
+            .await
+            .map_err(|error| CoreError::Invalid(format!("the server could not answer: {error}")))?;
+        Ok(reply
+            .threads
+            .into_iter()
+            .filter(|thread| Some(thread.thread) != here)
+            .map(|thread| InFlight {
+                thread: thread.thread.to_string(),
+                owner: thread.owner,
+                files: thread.paths,
+                last_ms: thread.last_ms,
+            })
+            .collect())
+    }
+
+    /// The repository identity at `cwd`, `path` relative to the checkout
+    /// root, and the thread checked out there.
+    fn repo_path(&self, cwd: &std::path::Path, path: &str) -> Result<(String, String, Option<ThreadId>), CoreError> {
         let cwd = cwd.canonicalize()?;
         let repo = silt_git::Repo::discover(&cwd)?;
         let identity = repo
@@ -172,7 +199,7 @@ impl Core {
             .unwrap_or_else(|| repo.root().to_owned());
         let relative = cwd.join(path);
         let relative = relative.strip_prefix(&root).unwrap_or(&relative).to_string_lossy().replace('\\', "/");
-        Ok(self.in_flight(&identity, &relative, here))
+        Ok((identity, relative, here))
     }
 
     /// Other threads of the same repository that changed `path` (a file or

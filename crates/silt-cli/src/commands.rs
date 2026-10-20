@@ -11,8 +11,8 @@ use silt_agents::claude;
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    DaemonStatus, HookReply, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchResult, SessionStarted,
-    ShowLine, ThreadSummary,
+    DaemonStatus, HookReply, InFlight, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
+    SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 
 use crate::CliError;
@@ -399,14 +399,57 @@ pub fn diff(thread: &str, turn: Option<usize>) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn search(query: &str) -> Result<(), Exn<CliError>> {
+pub fn search(query: &str, filters: SearchFilters) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let hits: Vec<SearchResult> = call(&Request::Search {
         query: query.into(),
         limit: 20,
+        filters,
     })?;
     print!("{}", render::search(&hits));
     Ok(())
+}
+
+pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let found: Vec<InFlight> = call(&Request::InFlight {
+        cwd: current_dir()?,
+        path: path.into(),
+    })?;
+    print!("{}", render::in_flight(&found));
+    Ok(())
+}
+
+/// Milliseconds since the epoch for `YYYY-MM-DD` (UTC midnight) or `<n>d`
+/// (n days ago).
+pub fn parse_date(text: &str) -> Result<i64, Exn<CliError>> {
+    const DAY_MS: i64 = 86_400_000;
+    if let Some(days) = text.strip_suffix('d') {
+        let days: i64 = days.parse().map_err(|_| fail(format!("invalid number of days in {text:?}")))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or_default());
+        return Ok(now - days * DAY_MS);
+    }
+    let parts: Vec<i64> = text.split('-').filter_map(|part| part.parse().ok()).collect();
+    let [year, month, day] = parts[..] else {
+        return Err(fail(format!("expected YYYY-MM-DD or a number of days like 7d, not {text:?}")));
+    };
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(fail(format!("invalid date {text:?}")));
+    }
+    Ok(days_from_civil(year, month, day) * DAY_MS)
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
+/// algorithm).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 fn short(thread: &str) -> &str {
@@ -449,4 +492,18 @@ pub fn server_pair(data: Option<PathBuf>, user: &str) -> Result<(), Exn<CliError
     println!("{code}");
     eprintln!("valid for 15 minutes; on the device run: silt auth login --server <url> --code {code}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dates_parse_as_utc_midnight() {
+        assert_eq!(parse_date("1970-01-02").ok(), Some(86_400_000));
+        assert_eq!(parse_date("2026-10-20").ok(), Some(1_792_454_400_000));
+        assert!(parse_date("2026-13-01").is_err());
+        assert!(parse_date("yesterday").is_err());
+        assert!(parse_date("7d").is_ok_and(|ms| ms > 1_700_000_000_000));
+    }
 }

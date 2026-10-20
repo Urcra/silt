@@ -7,7 +7,7 @@ use silt_types::{FamilyId, Frontier, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
-use crate::protocol::{FileEdit, SearchResult, ShowLine, ThreadSummary};
+use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 
 impl Core {
     pub(crate) fn thread_summaries(&self) -> Vec<ThreadSummary> {
@@ -237,7 +237,42 @@ impl Core {
         changes
     }
 
-    pub(crate) async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, CoreError> {
+    pub(crate) async fn search(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
+        if let Some(remote) = &self.remote {
+            let request = silt_proto::SearchQuery {
+                q: query.to_owned(),
+                repo: filters.repo.clone(),
+                author: filters.author.clone(),
+                status: filters.status.clone(),
+                branch: filters.branch.clone(),
+                file: filters.file.clone(),
+                since: filters.since,
+                until: filters.until,
+                limit: Some(limit),
+            };
+            match remote.search(&request).await {
+                Ok(reply) => {
+                    return Ok(reply
+                        .hits
+                        .into_iter()
+                        .map(|hit| SearchResult {
+                            thread: hit.thread.to_string(),
+                            kind: hit.kind,
+                            snippet: hit.snippet,
+                            owner: Some(hit.owner),
+                            status: Some(hit.status),
+                            repo: Some(hit.repo),
+                        })
+                        .collect());
+                }
+                Err(error) if !filters.is_empty() => {
+                    return Err(CoreError::Invalid(format!("the server could not search: {error}")));
+                }
+                Err(error) => tracing::warn!(%error, "server search failed; searching this machine"),
+            }
+        } else if !filters.is_empty() {
+            return Err(CoreError::Invalid("search filters need a server; use `silt auth login`".into()));
+        }
         Ok(self
             .store()
             .search(query, limit)
@@ -247,6 +282,9 @@ impl Core {
                 thread: hit.thread.to_string(),
                 kind: hit.kind,
                 snippet: hit.snippet,
+                owner: None,
+                status: None,
+                repo: None,
             })
             .collect())
     }

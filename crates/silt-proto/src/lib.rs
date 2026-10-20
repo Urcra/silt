@@ -100,3 +100,60 @@ pub enum ErrorReply {
     NotFound,
     ProtocolMismatch { supported: Vec<u32> },
 }
+
+/// Filters for `GET /v1/search`; every one is optional except `q`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+    pub repo: Option<String>,
+    /// The owning user's name.
+    pub author: Option<String>,
+    /// `active`, `idle` or `merged`.
+    pub status: Option<String>,
+    pub branch: Option<String>,
+    /// A path, or a directory to match everything under it.
+    pub file: Option<String>,
+    /// Milliseconds since the Unix epoch.
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub thread: ThreadId,
+    pub repo: String,
+    pub owner: String,
+    pub status: String,
+    pub branch: Option<String>,
+    pub kind: String,
+    pub snippet: String,
+    pub time_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchReply {
+    pub hits: Vec<SearchHit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlightQuery {
+    pub repo: String,
+    /// A path, a directory, or empty for the whole repository.
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlightThread {
+    pub thread: ThreadId,
+    pub owner: String,
+    pub status: String,
+    pub paths: Vec<String>,
+    pub last_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlightReply {
+    pub threads: Vec<InFlightThread>,
+}

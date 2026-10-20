@@ -246,7 +246,7 @@ impl Core {
             Request::Diff { thread, turn } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn)))
             }
-            Request::Search { query, limit } => to_response(self.search(&query, limit).await),
+            Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {
                 self.remote = remote::load_config(&self.data_dir).map(Remote::new);
                 self.syncs.clear();
@@ -295,7 +295,7 @@ impl Core {
             Request::FileHistory { thread, path } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_history(thread, &path)))
             }
-            Request::InFlight { cwd, path } => to_response(self.in_flight_at(&cwd, &path)),
+            Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }

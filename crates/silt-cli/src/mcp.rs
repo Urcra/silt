@@ -113,6 +113,7 @@ impl silt_mcp::Backend for DaemonTools {
                 let hits: Vec<SearchResult> = ask(&Request::Search {
                     query: text_arg(arguments, "query")?,
                     limit: u32::try_from(number_arg(arguments, "limit").unwrap_or(20)).unwrap_or(20),
+                    filters: Default::default(),
                 })?;
                 if hits.is_empty() {
                     return Ok("No matches.".into());
