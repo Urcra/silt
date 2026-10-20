@@ -42,12 +42,30 @@ button, .button {{ display: inline-block; margin-top: 1rem; padding: .5rem 1rem;
     ))
 }
 
-/// Only paths on this server, so sign-in can't redirect elsewhere.
+/// Only paths on this server, so sign-in can't redirect elsewhere. Browsers
+/// drop tabs and line breaks from URLs, turning `/\t/evil.example` into
+/// `//evil.example`, so no whitespace or control character passes.
 fn safe_next(next: Option<&str>) -> String {
     match next {
-        Some(next) if next.starts_with('/') && !next.starts_with("//") && !next.contains('\\') => next.to_owned(),
+        Some(next)
+            if next.starts_with('/')
+                && !next.starts_with("//")
+                && !next.contains('\\')
+                && !next.chars().any(|char| char.is_control() || char.is_whitespace()) =>
+        {
+            next.to_owned()
+        }
         _ => "/".to_owned(),
     }
+}
+
+/// The cookie that ties a sign-in through a provider to the browser that
+/// started it: without it, someone could send a victim the callback of a
+/// sign-in they started themselves and sign the victim in as them.
+const SIGN_IN_COOKIE: &str = "silt_sign_in";
+
+fn secure_attribute(server: &Server) -> &'static str {
+    if server.config().public_url().starts_with("https://") { "; Secure" } else { "" }
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -356,7 +374,13 @@ pub(crate) async fn provider_start(
     if accounts::save_sign_in(server.db(), &provider, &state, &saved).await.is_err() {
         return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not start signing in.");
     }
-    Redirect::to(&sign_in::authorize_url(&endpoints, &redirect_uri(&server, &provider), &state, &saved.verifier)).into_response()
+    let mut response =
+        Redirect::to(&sign_in::authorize_url(&endpoints, &redirect_uri(&server, &provider), &state, &saved.verifier)).into_response();
+    let cookie = format!("{SIGN_IN_COOKIE}={state}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=900{}", secure_attribute(&server));
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("the state is ASCII"));
+    response
 }
 
 #[derive(Deserialize)]
@@ -369,6 +393,7 @@ pub(crate) struct CallbackQuery {
 pub(crate) async fn provider_callback(
     State(server): State<Server>,
     UrlPath(provider): UrlPath<String>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
     if let Some(error) = query.error {
@@ -377,6 +402,12 @@ pub(crate) async fn provider_callback(
     let (Some(code), Some(state)) = (query.code, query.state) else {
         return error_page(StatusCode::BAD_REQUEST, "The provider sent no code.");
     };
+    if cookie_value(&headers, SIGN_IN_COOKIE).as_deref() != Some(state.as_str()) {
+        return error_page(
+            StatusCode::BAD_REQUEST,
+            "This sign-in was started in another browser; start it again here.",
+        );
+    }
     let saved = match accounts::take_sign_in(server.db(), &provider, &state).await {
         Ok(Some(saved)) => saved,
         _ => return error_page(StatusCode::BAD_REQUEST, "This sign-in expired or was already used; try again."),
@@ -455,6 +486,8 @@ mod tests {
         assert_eq!(safe_next(Some("/device?code=AB")), "/device?code=AB");
         assert_eq!(safe_next(Some("//evil.example")), "/");
         assert_eq!(safe_next(Some("https://evil.example")), "/");
+        assert_eq!(safe_next(Some("/\t/evil.example")), "/");
+        assert_eq!(safe_next(Some("/\r\nSet-Cookie: x")), "/");
         assert_eq!(safe_next(None), "/");
         assert_eq!(escape("<a href=\"x\">"), "&lt;a href=&quot;x&quot;&gt;");
     }

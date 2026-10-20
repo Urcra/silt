@@ -306,10 +306,11 @@ async fn provider_sign_in(base: &str, provider: &Shared, kind: &str, query: &str
     assert_eq!(params["redirect_uri"], format!("{base}/auth/{kind}/callback"));
     let code = format!("code-{}", params["state"]);
     provider.lock().expect("lock").challenges.insert(code.clone(), params["code_challenge"].clone());
-    http.get(format!("{base}/auth/{kind}/callback?code={code}&state={}", params["state"]))
-        .send()
-        .await
-        .expect("sends")
+    let cookie = start.headers()[SET_COOKIE].to_str().expect("ascii").split(';').next().expect("cookie").to_owned();
+    let callback = format!("{base}/auth/{kind}/callback?code={code}&state={}", params["state"]);
+    let elsewhere = http.get(&callback).send().await.expect("sends");
+    assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST, "a callback from another browser is refused");
+    http.get(&callback).header(COOKIE, cookie).send().await.expect("sends")
 }
 
 #[tokio::test]
