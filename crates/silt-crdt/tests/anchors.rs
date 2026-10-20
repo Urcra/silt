@@ -55,6 +55,19 @@ fn deleted_target_is_outdated_but_still_placed() {
 }
 
 #[test]
+fn a_character_typed_after_a_version_sits_after_what_was_there_then() {
+    let mut replica = TextReplica::new(A);
+    replica.insert(0, "ab").expect("insert");
+    let version = replica.frontier().clone();
+    replica.insert(2, "cd").expect("typing on");
+    let on_d = replica.doc().anchor(3, Bias::Right).expect("anchor");
+    assert_eq!(
+        replica.doc().resolve_at(replica.graph(), &version, &on_d),
+        Ok(ResolvedAnchor { pos: 2, outdated: true })
+    );
+}
+
+#[test]
 fn document_edges() {
     let mut replica = TextReplica::new(A);
     replica.insert(0, "abc").expect("insert");

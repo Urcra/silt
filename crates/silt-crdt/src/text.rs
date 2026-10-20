@@ -495,7 +495,13 @@ impl TextDoc {
             let visible = fragment.visible_len_at(&vv);
             if fragment.locator == locator {
                 let offset = offset as usize;
-                return Ok(place(before, offset, offset < visible, anchor.bias));
+                // Only a prefix of the fragment may be visible then; a char
+                // past it sits after that prefix, not before it.
+                return Ok(if offset < visible {
+                    place(before, offset, true, anchor.bias)
+                } else {
+                    place(before + visible, 0, false, anchor.bias)
+                });
             }
             before += visible;
         }
