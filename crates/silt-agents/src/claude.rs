@@ -64,11 +64,11 @@ pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &Record
         &root.to_string_lossy(),
     );
     fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
-    fs::write(&paths.transcript, rewrites.lines(&session.main))?;
+    crate::replace_transcript(&paths.transcript, &rewrites.lines(&session.main))?;
     if !session.subagents.is_empty() {
         fs::create_dir_all(&paths.subagents)?;
         for (name, lines) in &session.subagents {
-            fs::write(paths.subagents.join(format!("{name}.jsonl")), rewrites.lines(lines))?;
+            crate::replace_transcript(&paths.subagents.join(format!("{name}.jsonl")), &rewrites.lines(lines))?;
         }
     }
     for (name, bytes) in &session.attachments {

@@ -376,7 +376,7 @@ impl Agent for Gemini {
             });
         let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
         fs::create_dir_all(&dir)?;
-        fs::write(&path, rewrites.lines(&session.main))?;
+        crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
         Ok(path)
     }
 

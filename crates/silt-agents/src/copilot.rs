@@ -215,7 +215,7 @@ impl Agent for Copilot {
         let dir = session_dir(&home, &session.id);
         let rewrites = Rewrites::new(session, Some(&dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
         fs::create_dir_all(&dir)?;
-        fs::write(dir.join("events.jsonl"), rewrites.lines(&session.main))?;
+        crate::replace_transcript(&dir.join("events.jsonl"), &rewrites.lines(&session.main))?;
         fs::write(dir.join("workspace.yaml"), workspace_yaml(&session.id, cwd, root))?;
         for (name, bytes) in &session.attachments {
             let relative = Path::new(name);

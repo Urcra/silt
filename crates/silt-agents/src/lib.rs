@@ -262,6 +262,29 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// Writes a restored transcript in place of whatever the agent has there.
+/// The new file is renamed into place whole, so a crash leaves the old one.
+/// An old one that isn't the start of the new one has lines the recording
+/// lacks, written while Silt wasn't looking; it is kept beside the new one.
+pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<()> {
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("a transcript has a directory"))?;
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    match std::fs::read(path) {
+        Ok(existing) if !content.as_bytes().starts_with(&existing) => {
+            let backup = dir.join(format!("{name}.before-silt-{}", now_ms()));
+            std::fs::copy(path, &backup)?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let staged = dir.join(format!(".{name}.{}.silt-tmp", std::process::id()));
+    let mut file = std::fs::File::create(&staged)?;
+    std::io::Write::write_all(&mut file, content.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&staged, path)
+}
+
 /// Milliseconds since the epoch of a file's last change.
 pub(crate) fn modified_ms(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
@@ -278,4 +301,30 @@ pub(crate) fn derived_uuid(session: &str, index: usize) -> String {
     }
     let hex = format!("{hash:032x}");
     format!("{}-{}-4{}-8{}-{}", &hex[..8], &hex[8..12], &hex[13..16], &hex[17..20], &hex[20..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn backups(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .expect("lists")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".before-silt-"))
+            .count()
+    }
+
+    #[test]
+    fn a_transcript_with_lines_the_recording_lacks_is_kept() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("session.jsonl");
+        replace_transcript(&path, "one\n").expect("writes");
+        replace_transcript(&path, "one\ntwo\n").expect("extends");
+        assert_eq!(backups(dir.path()), 0, "the recording only adds to what is there");
+        std::fs::write(&path, "one\ntwo\nwritten outside silt\n").expect("the agent goes on");
+        replace_transcript(&path, "one\ntwo\nthree\n").expect("restores");
+        assert_eq!(std::fs::read_to_string(&path).expect("reads"), "one\ntwo\nthree\n");
+        assert_eq!(backups(dir.path()), 1, "the lines Silt never saw are kept");
+    }
 }
