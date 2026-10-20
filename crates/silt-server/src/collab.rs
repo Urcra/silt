@@ -32,17 +32,15 @@ pub(crate) async fn share(
     if owner != caller.user {
         return Err(forbidden("only the thread's owner shares it"));
     }
-    let user = crate::accounts::user_by_name(db, &request.user)
-        .await?
-        .ok_or_else(|| bad_request(format!("no user named {}", request.user)))?;
+    let user = crate::orgs::named_user(&server, caller.user, &request.user).await?;
     if request.remove {
         sqlx::query("DELETE FROM thread_collaborators WHERE thread_id = ? AND user_id = ?")
             .bind(id_bytes(thread.0))
-            .bind(user.id)
+            .bind(user)
             .execute(db)
             .await?;
     } else {
-        if !server.viewer(user.id).await?.sees_thread(thread) {
+        if !server.viewer(user).await?.sees_thread(thread) {
             return Err(bad_request(format!(
                 "{} can't see this thread; change its visibility first",
                 request.user
@@ -50,7 +48,7 @@ pub(crate) async fn share(
         }
         sqlx::query("INSERT OR IGNORE INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)")
             .bind(id_bytes(thread.0))
-            .bind(user.id)
+            .bind(user)
             .execute(db)
             .await?;
     }

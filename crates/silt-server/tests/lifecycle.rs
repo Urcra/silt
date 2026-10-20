@@ -163,6 +163,25 @@ async fn only_the_owner_and_collaborators_write_a_thread() {
 }
 
 #[tokio::test]
+async fn sharing_does_not_list_the_accounts() {
+    let (_data, alice, _bob) = two_people().await;
+    let mut family = Family::new();
+    let first = delta(&mut family, MAIN, file("a"));
+    alice.register(MAIN).await;
+    alice.push(&[first]).await;
+    let share = |user: &str| {
+        alice
+            .request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators"))
+            .json(&silt_proto::ShareRequest { user: user.into(), remove: true })
+            .send()
+    };
+    for n in 0..10 {
+        assert_eq!(share(&format!("guess{n}")).await.expect("sends").status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(share("bob").await.expect("sends").status(), StatusCode::TOO_MANY_REQUESTS, "known names wait too");
+}
+
+#[tokio::test]
 async fn nobody_writes_as_another_persons_device() {
     let (_data, alice, bob) = two_people().await;
     let mut family = Family::new();

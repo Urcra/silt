@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
-use silt_proto::{OrgChange, OrgInfo, OrgMember, OrgsReply, TeamInfo, Visibility};
+use silt_proto::{ErrorReply, OrgChange, OrgInfo, OrgMember, OrgsReply, TeamInfo, Visibility};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
@@ -62,11 +62,24 @@ async fn org_id(db: &SqlitePool, name: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| bad_request(format!("no org named {name}")))
 }
 
-async fn user_id(db: &SqlitePool, name: &str) -> Result<i64, ApiError> {
-    accounts::user_by_name(db, name)
-        .await?
-        .map(|user| user.id)
-        .ok_or_else(|| bad_request(format!("no user named {name}")))
+/// The id of the user `asker` named. Unknown names count against the asker,
+/// so nobody signed in can use this to list the server's accounts.
+pub(crate) async fn named_user(server: &Server, asker: i64, name: &str) -> Result<i64, ApiError> {
+    let guesses = format!("user-names:{asker}");
+    let checks = &server.shared.passwords;
+    if checks.cooling_down(&guesses) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorReply::Invalid { message: "too many unknown user names; try again in a while".into() },
+        ));
+    }
+    match accounts::user_by_name(server.db(), name).await? {
+        Some(user) => Ok(user.id),
+        None => {
+            checks.record(&guesses, false);
+            Err(bad_request(format!("no user named {name}")))
+        }
+    }
 }
 
 pub(crate) async fn is_admin(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
@@ -198,12 +211,12 @@ pub(crate) async fn change(
         OrgChange::AddMember { org, user, owner } => {
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
-            add_member(db, &org, user_id(db, &user).await?, owner).await?;
+            add_member(db, &org, named_user(&server, caller.user, &user).await?, owner).await?;
         }
         OrgChange::RemoveMember { org, user } => {
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
-            let user = user_id(db, &user).await?;
+            let user = named_user(&server, caller.user, &user).await?;
             let owners: i64 = sqlx::query("SELECT COUNT(*) AS owners FROM org_members WHERE org_id = ? AND role = 'owner' AND user_id != ?")
                 .bind(org_id)
                 .bind(user)
@@ -248,7 +261,7 @@ pub(crate) async fn change(
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
             let team = team_id(db, org_id, &team).await?;
-            let user = user_id(db, &user).await?;
+            let user = named_user(&server, caller.user, &user).await?;
             if role(db, org_id, user).await?.is_none() {
                 return Err(bad_request("add the user to the org first"));
             }
@@ -263,7 +276,7 @@ pub(crate) async fn change(
             require_owner(db, org_id, caller.user).await?;
             sqlx::query("DELETE FROM team_members WHERE team_id = ? AND user_id = ?")
                 .bind(team_id(db, org_id, &team).await?)
-                .bind(user_id(db, &user).await?)
+                .bind(named_user(&server, caller.user, &user).await?)
                 .execute(db)
                 .await?;
         }

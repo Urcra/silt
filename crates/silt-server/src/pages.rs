@@ -11,7 +11,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Deserialize;
 
 use crate::Server;
-use crate::accounts::{self, NewUser, SignInState, User};
+use crate::accounts::{self, AccountError, NewUser, SignInState, User};
 use crate::config::SignupPolicy;
 use crate::sign_in;
 
@@ -344,6 +344,14 @@ pub(crate) async fn signup(State(server): State<Server>, headers: HeaderMap, For
         password: Some(&form.password),
         admin: false,
     };
+    // A failed sign-up gives the invite back, so without a limit one invite
+    // could test every name for an account.
+    let guesses = invite.as_ref().map(|invite| format!("invite-names:{invite}"));
+    if let Some(guesses) = &guesses
+        && server.shared.passwords.cooling_down(guesses)
+    {
+        return error_page(StatusCode::TOO_MANY_REQUESTS, "Too many names that are taken; try again in a while.");
+    }
     let claimed = match &invite {
         Some(token) => match accounts::claim_invite(server.db(), token).await {
             Ok(Some(claimed)) => Some(claimed),
@@ -363,6 +371,9 @@ pub(crate) async fn signup(State(server): State<Server>, headers: HeaderMap, For
         Err(error) => {
             if let Some(claimed) = claimed {
                 let _ = claimed.release(server.db()).await;
+            }
+            if let (Some(guesses), AccountError::Taken(_)) = (&guesses, &error) {
+                server.shared.passwords.record(guesses, false);
             }
             let mut back = format!("/signup?next={}&error={}", sign_in::encode(&next), sign_in::encode(&error.to_string()));
             if let Some(invite) = &invite {
