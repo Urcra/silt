@@ -12,9 +12,13 @@ use silt_types::DeviceId;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
-use crate::{Server, ServerError, hash, id_bytes, now_ms, open_db};
+use crate::{Server, ServerError, hash, id_bytes, id_from, now_ms, open_db};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const DEVICE_IDLE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+/// How stale `last_used_ms` may get before a request rewrites it, so most
+/// requests don't write.
+const DEVICE_USE_GRANULARITY_MS: i64 = 60 * 60 * 1000;
 pub(crate) const DEVICE_REQUEST_TTL_MS: i64 = 15 * 60 * 1000;
 const SIGN_IN_TTL_MS: i64 = 10 * 60 * 1000;
 /// Letters that can't be misread for each other, for codes people type.
@@ -82,6 +86,7 @@ pub struct User {
     pub email: Option<String>,
     pub admin: bool,
     pub has_password: bool,
+    pub disabled: bool,
 }
 
 fn user_from(row: &sqlx::sqlite::SqliteRow) -> User {
@@ -92,13 +97,14 @@ fn user_from(row: &sqlx::sqlite::SqliteRow) -> User {
         email: row.get("email"),
         admin: row.get::<i64, _>("admin") != 0,
         has_password: row.get::<Option<String>, _>("password_hash").is_some(),
+        disabled: row.get::<i64, _>("disabled") != 0,
     }
 }
 
 /// A static query selecting the columns `user_from` reads.
 macro_rules! users_query {
     ($rest:literal) => {
-        concat!("SELECT id, name, display_name, email, admin, password_hash FROM users ", $rest)
+        concat!("SELECT id, name, display_name, email, admin, password_hash, disabled FROM users ", $rest)
     };
 }
 
@@ -250,17 +256,18 @@ pub(crate) async fn check_password(server: &Server, name: &str, password: &str) 
         .await
         && stored.is_some();
     checks.record(name, matches);
-    Ok(row.filter(|_| matches).map(|row| user_from(&row)))
+    Ok(row.filter(|_| matches).map(|row| user_from(&row)).filter(|user| !user.disabled))
 }
 
 /// Registers a device of `user` and returns its token, shown only now.
 pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Result<LoginReply, sqlx::Error> {
     let device = DeviceId(uuid::Uuid::new_v4().as_u128());
     let token = random_token();
-    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, user_id) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, last_used_ms, user_id) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(id_bytes(device.0))
         .bind(name)
         .bind(hash(&token).to_vec())
+        .bind(now_ms())
         .bind(now_ms())
         .bind(user)
         .execute(db)
@@ -277,13 +284,101 @@ pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Resu
     })
 }
 
-pub(crate) async fn revoke_device(db: &SqlitePool, device: DeviceId) -> Result<(), sqlx::Error> {
+/// The device and user a device token stands for, unless the token lapsed
+/// from disuse or its user is disabled.
+pub(crate) async fn device_caller(db: &SqlitePool, token: &str) -> Result<Option<(DeviceId, i64)>, sqlx::Error> {
+    let now = now_ms();
+    let row = sqlx::query(
+        "SELECT d.id, d.user_id, d.last_used_ms FROM devices d JOIN users u ON u.id = d.user_id
+         WHERE d.token_hash = ? AND d.last_used_ms > ? AND u.disabled = 0",
+    )
+    .bind(hash(token).to_vec())
+    .bind(now - DEVICE_IDLE_MS)
+    .fetch_optional(db)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let device: Vec<u8> = row.get("id");
+    if row.get::<i64, _>("last_used_ms") < now - DEVICE_USE_GRANULARITY_MS {
+        sqlx::query("UPDATE devices SET last_used_ms = ? WHERE id = ?")
+            .bind(now)
+            .bind(&device)
+            .execute(db)
+            .await?;
+    }
+    Ok(Some((DeviceId(id_from(&device)), row.get("user_id"))))
+}
+
+/// A signed-in device, as its owner sees it.
+pub(crate) struct DeviceInfo {
+    pub(crate) id: DeviceId,
+    pub(crate) name: String,
+    pub(crate) created_ms: i64,
+    pub(crate) last_used_ms: i64,
+}
+
+pub(crate) async fn devices_of(db: &SqlitePool, user: i64) -> Result<Vec<DeviceInfo>, sqlx::Error> {
+    let rows = sqlx::query("SELECT id, name, created_ms, last_used_ms FROM devices WHERE user_id = ? ORDER BY last_used_ms DESC")
+        .bind(user)
+        .fetch_all(db)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| DeviceInfo {
+            id: DeviceId(id_from(row.get("id"))),
+            name: row.get("name"),
+            created_ms: row.get("created_ms"),
+            last_used_ms: row.get("last_used_ms"),
+        })
+        .collect())
+}
+
+/// Signs out `device` if it belongs to `user`; returns whether it did.
+pub(crate) async fn revoke_device(db: &SqlitePool, user: i64, device: DeviceId) -> Result<bool, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    let revoked = sqlx::query("DELETE FROM devices WHERE id = ? AND user_id = ?")
+        .bind(id_bytes(device.0))
+        .bind(user)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+        == 1;
     sqlx::query("DELETE FROM leases WHERE device_id = ?")
         .bind(id_bytes(device.0))
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM devices WHERE id = ?")
-        .bind(id_bytes(device.0))
+    tx.commit().await?;
+    Ok(revoked)
+}
+
+/// Signs `user` out of every device and browser.
+pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: i64) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM devices WHERE user_id = ?")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM web_sessions WHERE user_id = ?")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM device_requests WHERE user_id = ?")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
+/// Signs `user` out of every browser except the one holding `keep`.
+pub(crate) async fn end_other_sessions(db: &SqlitePool, user: i64, keep: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM web_sessions WHERE user_id = ? AND token_hash != ?")
+        .bind(user)
+        .bind(hash(keep).to_vec())
         .execute(db)
         .await?;
     Ok(())
@@ -307,7 +402,7 @@ pub(crate) async fn session_user(db: &SqlitePool, token: &str) -> Result<Option<
         .fetch_optional(db)
         .await?;
     match row {
-        Some(row) => user_by_id(db, row.get("user_id")).await,
+        Some(row) => Ok(user_by_id(db, row.get("user_id")).await?.filter(|user| !user.disabled)),
         None => Ok(None),
     }
 }
@@ -392,6 +487,13 @@ pub(crate) async fn sweep_expired(db: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(statement).bind(now).execute(db).await?;
     }
+    sqlx::query("DELETE FROM devices WHERE last_used_ms <= ?")
+        .bind(now - DEVICE_IDLE_MS)
+        .execute(db)
+        .await?;
+    sqlx::query("DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)")
+        .execute(db)
+        .await?;
     Ok(())
 }
 
@@ -629,6 +731,28 @@ impl Admin {
             return Err(AccountError::NoUser(name.to_owned()));
         }
         Ok(())
+    }
+
+    /// Stops `name` signing in and signs them out everywhere, or lets them
+    /// sign in again.
+    pub async fn set_disabled(&self, name: &str, disabled: bool) -> Result<(), AccountError> {
+        let user = user_by_name(&self.db, name).await?.ok_or_else(|| AccountError::NoUser(name.to_owned()))?;
+        sqlx::query("UPDATE users SET disabled = ? WHERE id = ?")
+            .bind(i64::from(disabled))
+            .bind(user.id)
+            .execute(&self.db)
+            .await?;
+        if disabled {
+            sign_out_everywhere(&self.db, user.id).await?;
+        }
+        Ok(())
+    }
+
+    /// Signs `name` out of every device and browser, such as after a
+    /// device is lost.
+    pub async fn sign_out(&self, name: &str) -> Result<(), AccountError> {
+        let user = user_by_name(&self.db, name).await?.ok_or_else(|| AccountError::NoUser(name.to_owned()))?;
+        Ok(sign_out_everywhere(&self.db, user.id).await?)
     }
 
     /// An invite token for the sign-up page, optionally into `org`.

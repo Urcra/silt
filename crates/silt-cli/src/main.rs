@@ -490,6 +490,14 @@ enum UserCommand {
         #[arg(long)]
         revoke: bool,
     },
+    /// Stop a user signing in and sign them out everywhere, or `--enable` them again
+    Disable {
+        name: String,
+        #[arg(long)]
+        enable: bool,
+    },
+    /// Sign a user out of every device and browser, such as after a lost laptop
+    SignOut { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -662,6 +670,8 @@ fn main() -> Result<(), Exn<CliError>> {
                 UserCommand::List => admin::user_list(data),
                 UserCommand::Passwd { name, password_stdin } => admin::user_passwd(data, &name, password_stdin),
                 UserCommand::Admin { name, revoke } => admin::user_admin(data, &name, revoke),
+                UserCommand::Disable { name, enable } => admin::user_disable(data, &name, !enable),
+                UserCommand::SignOut { name } => admin::user_sign_out(data, &name),
             },
             ServerCommand::Invite { data, org, days } => admin::invite(data, org, days),
             ServerCommand::Backup { dest, data } => admin::backup(data, &dest),

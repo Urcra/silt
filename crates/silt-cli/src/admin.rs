@@ -184,6 +184,9 @@ pub fn user_list(data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
         if !user.has_password {
             notes.push("no password");
         }
+        if user.disabled {
+            notes.push("disabled");
+        }
         println!(
             "{:<20} {:<28} {}",
             user.name,
@@ -210,6 +213,28 @@ pub fn user_admin(data: Option<PathBuf>, name: &str, revoke: bool) -> Result<(),
         .block_on(admin.set_admin(name, !revoke))
         .or_raise(|| CliError(format!("cannot change {name}")))?;
     println!("{name} {} an admin", if revoke { "is no longer" } else { "is now" });
+    Ok(())
+}
+
+pub fn user_disable(data: Option<PathBuf>, name: &str, disabled: bool) -> Result<(), Exn<CliError>> {
+    let (runtime, admin) = admin(data)?;
+    runtime
+        .block_on(admin.set_disabled(name, disabled))
+        .or_raise(|| CliError(format!("cannot change {name}")))?;
+    if disabled {
+        println!("{name} is disabled and signed out everywhere");
+    } else {
+        println!("{name} can sign in again");
+    }
+    Ok(())
+}
+
+pub fn user_sign_out(data: Option<PathBuf>, name: &str) -> Result<(), Exn<CliError>> {
+    let (runtime, admin) = admin(data)?;
+    runtime
+        .block_on(admin.sign_out(name))
+        .or_raise(|| CliError(format!("cannot sign {name} out")))?;
+    println!("{name} is signed out of every device and browser");
     Ok(())
 }
 

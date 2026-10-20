@@ -118,6 +118,49 @@ async fn a_name_that_keeps_failing_has_to_wait() {
     );
 }
 
+#[tokio::test]
+async fn people_sign_devices_out_and_admins_disable_people() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let admin = Admin::open(data.path()).await.expect("opens");
+    admin.add_user("alice", Some("correct horse battery"), false).await.expect("adds");
+    let base = start(data.path(), |_| Config::default()).await;
+    let http = browser();
+    let status = |token: String| {
+        let (http, base) = (http.clone(), base.clone());
+        async move { api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(token).send().await.expect("sends").status() }
+    };
+    let home = |cookie: String| {
+        let (http, base) = (http.clone(), base.clone());
+        async move { http.get(format!("{base}/")).header(COOKIE, cookie).send().await.expect("sends") }
+    };
+    let (first, second) = (token(&base, "alice", "correct horse battery").await, token(&base, "alice", "correct horse battery").await);
+    let (here, elsewhere) = (sign_in_page(&base, "alice", "correct horse battery").await, sign_in_page(&base, "alice", "correct horse battery").await);
+
+    let html = home(here.clone()).await.text().await.expect("html");
+    let (_, rest) = html.split_once(r#"name="device" value=""#).expect("a device is listed");
+    let device = rest.split('"').next().expect("an id");
+    let revoked = http.post(format!("{base}/devices/revoke")).header(COOKIE, &here).form(&[("device", device)]).send().await.expect("sends");
+    assert_eq!(revoked.status(), StatusCode::SEE_OTHER);
+    let mut statuses = [status(first.clone()).await, status(second.clone()).await];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::UNAUTHORIZED], "one device is signed out");
+    let remaining = if status(first.clone()).await == StatusCode::OK { first } else { second };
+
+    let foreign = http.post(format!("{base}/logout")).header(COOKIE, &here).header("origin", "https://evil.example").send().await.expect("sends");
+    assert_eq!(foreign.status(), StatusCode::FORBIDDEN, "other sites can't sign people out");
+    let ended = http.post(format!("{base}/sessions/end-others")).header(COOKIE, &here).send().await.expect("sends");
+    assert_eq!(ended.status(), StatusCode::SEE_OTHER);
+    assert_eq!(home(here.clone()).await.status(), StatusCode::OK, "this browser stays signed in");
+    assert_eq!(home(elsewhere).await.headers()[LOCATION], "/login", "other browsers are signed out");
+
+    admin.set_disabled("alice", true).await.expect("disables");
+    assert_eq!(status(remaining).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(home(here).await.headers()[LOCATION], "/login");
+    assert_eq!(password_login(&base, "alice", "correct horse battery").await.status(), StatusCode::UNAUTHORIZED);
+    admin.set_disabled("alice", false).await.expect("enables");
+    assert_eq!(password_login(&base, "alice", "correct horse battery").await.status(), StatusCode::OK);
+}
+
 /// Signs in on the server's page and returns the session cookie.
 async fn sign_in_page(base: &str, user: &str, password: &str) -> String {
     let response = browser()

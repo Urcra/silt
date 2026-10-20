@@ -212,6 +212,8 @@ impl Server {
             .route("/", get(pages::home))
             .route("/login", get(pages::login_page).post(pages::login))
             .route("/logout", post(pages::logout))
+            .route("/devices/revoke", post(pages::revoke_device))
+            .route("/sessions/end-others", post(pages::end_other_sessions))
             .route("/device", get(pages::device_page).post(pages::device))
             .route("/signup", get(pages::signup_page).post(pages::signup))
             .route("/auth/{provider}/start", get(pages::provider_start))
@@ -391,24 +393,16 @@ async fn authenticate(State(server): State<Server>, mut request: Request, next: 
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_owned);
     let caller = match token {
-        Some(token) => sqlx::query("SELECT id, user_id FROM devices WHERE token_hash = ?")
-            .bind(hash(&token).to_vec())
-            .fetch_optional(&server.shared.db)
-            .await
-            .ok()
-            .flatten()
-            .map(|row| Caller {
-                device: DeviceId(id_from(row.get("id"))),
-                user: row.get("user_id"),
-            }),
-        None => None,
+        Some(token) => accounts::device_caller(server.db(), &token).await,
+        None => Ok(None),
     };
     match caller {
-        Some(caller) => {
-            request.extensions_mut().insert(caller);
+        Ok(Some((device, user))) => {
+            request.extensions_mut().insert(Caller { device, user });
             next.run(request).await
         }
-        None => ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized).into_response(),
+        Ok(None) => ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized).into_response(),
+        Err(error) => ApiError::from(error).into_response(),
     }
 }
 
@@ -462,7 +456,7 @@ async fn device_poll(State(server): State<Server>, Json(body): Json<DevicePollRe
 /// Signs the calling device out: its token stops working and its leases
 /// are released.
 async fn logout_device(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<StatusCode, ApiError> {
-    accounts::revoke_device(server.db(), caller.device).await?;
+    accounts::revoke_device(server.db(), caller.user, caller.device).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

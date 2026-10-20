@@ -9,8 +9,9 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Deserialize;
+use silt_types::DeviceId;
 
-use crate::Server;
+use crate::{Server, now_ms};
 use crate::accounts::{self, AccountError, NewUser, SignInState, User};
 use crate::config::SignupPolicy;
 use crate::sign_in;
@@ -96,6 +97,11 @@ fn same_origin(server: &Server, headers: &HeaderMap) -> bool {
 
 /// Starts a browser session for `user` and continues to `next`.
 async fn start_session(server: &Server, user: i64, next: &str) -> Response {
+    match accounts::user_by_id(server.db(), user).await {
+        Ok(Some(user)) if !user.disabled => {}
+        Ok(_) => return error_page(StatusCode::FORBIDDEN, "This account is disabled."),
+        Err(_) => return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
+    }
     let token = match accounts::create_session(server.db(), user).await {
         Ok(token) => token,
         Err(_) => return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
@@ -139,17 +145,78 @@ pub(crate) struct NextQuery {
 }
 
 pub(crate) async fn home(State(server): State<Server>, headers: HeaderMap) -> Response {
-    match signed_in(&server, &headers).await {
-        Some(user) => page(
-            "Silt",
-            &format!(
-                "<p>Signed in as <strong>{}</strong>.</p><p>Sign a machine in with <code>silt auth login --server {}</code>.</p><form method=\"post\" action=\"/logout\"><button class=\"secondary\">Sign out</button></form>",
-                escape(&user.name),
-                escape(&server.config().public_url())
-            ),
-        )
-        .into_response(),
-        None => Redirect::to("/login").into_response(),
+    let Some(user) = signed_in(&server, &headers).await else {
+        return Redirect::to("/login").into_response();
+    };
+    let Ok(devices) = accounts::devices_of(server.db(), user.id).await else {
+        return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not list your devices.");
+    };
+    let mut body = format!(
+        "<p>Signed in as <strong>{}</strong>.</p><p>Sign a machine in with <code>silt auth login --server {}</code>.</p>",
+        escape(&user.name),
+        escape(&server.config().public_url())
+    );
+    if !devices.is_empty() {
+        body.push_str("<h2>Signed-in devices</h2><ul>");
+        for device in &devices {
+            body.push_str(&format!(
+                r#"<li><strong>{name}</strong>, signed in {created}, last seen {used}
+<form method="post" action="/devices/revoke"><input type="hidden" name="device" value="{id}"><button class="secondary">Sign out</button></form></li>"#,
+                name = escape(&device.name),
+                created = days_ago(device.created_ms),
+                used = days_ago(device.last_used_ms),
+                id = device.id,
+            ));
+        }
+        body.push_str("</ul>");
+    }
+    body.push_str(
+        r#"<form method="post" action="/sessions/end-others"><button class="secondary">Sign out of other browsers</button></form>
+<form method="post" action="/logout"><button class="secondary">Sign out</button></form>"#,
+    );
+    page("Silt", &body).into_response()
+}
+
+fn days_ago(ms: i64) -> String {
+    match (now_ms() - ms) / (24 * 60 * 60 * 1000) {
+        0 => "today".into(),
+        1 => "yesterday".into(),
+        days => format!("{days} days ago"),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RevokeForm {
+    device: String,
+}
+
+pub(crate) async fn revoke_device(State(server): State<Server>, headers: HeaderMap, Form(form): Form<RevokeForm>) -> Response {
+    if !same_origin(&server, &headers) {
+        return error_page(StatusCode::FORBIDDEN, "This form was sent from another site.");
+    }
+    let Some(user) = signed_in(&server, &headers).await else {
+        return Redirect::to("/login").into_response();
+    };
+    let Ok(device) = form.device.parse::<DeviceId>() else {
+        return error_page(StatusCode::BAD_REQUEST, "That is not a device id.");
+    };
+    match accounts::revoke_device(server.db(), user.id, device).await {
+        Ok(true) => Redirect::to("/").into_response(),
+        Ok(false) => error_page(StatusCode::NOT_FOUND, "You have no such device."),
+        Err(_) => error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign the device out."),
+    }
+}
+
+pub(crate) async fn end_other_sessions(State(server): State<Server>, headers: HeaderMap) -> Response {
+    if !same_origin(&server, &headers) {
+        return error_page(StatusCode::FORBIDDEN, "This form was sent from another site.");
+    }
+    let (Some(user), Some(token)) = (signed_in(&server, &headers).await, cookie_value(&headers, SESSION_COOKIE)) else {
+        return Redirect::to("/login").into_response();
+    };
+    match accounts::end_other_sessions(server.db(), user.id, &token).await {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(_) => error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign the other browsers out."),
     }
 }
 
@@ -197,6 +264,9 @@ pub(crate) async fn login(State(server): State<Server>, headers: HeaderMap, Form
 }
 
 pub(crate) async fn logout(State(server): State<Server>, headers: HeaderMap) -> Response {
+    if !same_origin(&server, &headers) {
+        return error_page(StatusCode::FORBIDDEN, "This form was sent from another site.");
+    }
     if let Some(token) = cookie_value(&headers, SESSION_COOKIE) {
         let _ = accounts::end_session(server.db(), &token).await;
     }
