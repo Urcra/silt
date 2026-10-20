@@ -48,6 +48,30 @@ fn managed_checkout_borrows_objects_and_stays_out_of_the_source() {
 }
 
 #[test]
+fn a_made_checkout_is_kept_and_an_interrupted_one_made_again() {
+    let dir = source_repo();
+    let repo = Repo::discover(dir.path()).expect("discovers");
+    let base = repo.head_commit().expect("head").expect("commit");
+    let checkout = repo.create_managed_checkout("t6", base, None).expect("creates");
+    assert!(repo.managed_checkout_ready("t6"));
+    fs::write(checkout.path.join("work.txt"), "someone's work\n").expect("write");
+    assert_eq!(repo.create_managed_checkout("t6", base, None).expect("again"), checkout);
+    assert!(checkout.path.join("work.txt").exists(), "making it again keeps what is there");
+
+    let interrupted = repo.create_managed_checkout("t7", base, None).expect("creates");
+    git(&interrupted.git_dir, &["config", "--unset", "silt.ready"]);
+    for entry in fs::read_dir(&interrupted.path).expect("lists").flatten() {
+        if entry.file_name() != ".git" {
+            fs::remove_file(entry.path()).expect("remove");
+        }
+    }
+    assert!(!repo.managed_checkout_ready("t7"));
+    let remade = repo.create_managed_checkout("t7", base, None).expect("made again");
+    assert_eq!(fs::read_to_string(remade.path.join("a.txt")).expect("materialized"), "one\n");
+    assert!(repo.managed_checkout_ready("t7"));
+}
+
+#[test]
 fn checkout_survives_aggressive_gc_in_the_source() {
     let dir = source_repo();
     let root = dir.path();

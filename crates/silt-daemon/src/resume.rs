@@ -652,12 +652,7 @@ fn relative_cwd(cwd: &str, checkout_root: &str) -> PathBuf {
 
 fn managed_checkout_path(repo: &Repo, thread: ThreadId, base: Option<GitOid>) -> Result<PathBuf, CoreError> {
     let base = base.ok_or_else(|| CoreError::Invalid("the thread has no base commit".into()))?;
-    let path = repo.managed_checkout_path(&thread.to_string());
-    if path.exists() {
-        Ok(path)
-    } else {
-        Ok(repo.create_managed_checkout(&thread.to_string(), base, None)?.path)
-    }
+    Ok(repo.create_managed_checkout(&thread.to_string(), base, None)?.path)
 }
 
 /// A session restored for the CLI to start.

@@ -6,6 +6,9 @@ use silt_types::GitOid;
 
 use crate::{GitError, Repo, run_git};
 
+/// Set in a managed checkout's git config as the last step of making it.
+const READY_KEY: &str = "silt.ready";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedCheckout {
     pub path: PathBuf,
@@ -21,7 +24,8 @@ impl Repo {
     /// Creates a cheap checkout of `base` (ADR 0002): a separate git dir under
     /// the source's `.git/silt/clones` that borrows the source's objects
     /// through alternates, kept safe from `git gc` by `refs/silt/threads/<id>`
-    /// in the source.
+    /// in the source. A finished checkout of `id` is returned as it is; what
+    /// an interrupted attempt left is cleared and made again.
     pub fn create_managed_checkout(
         &self,
         id: &str,
@@ -30,7 +34,22 @@ impl Repo {
     ) -> Result<ManagedCheckout, GitError> {
         let common_dir = self.common_dir();
         let path = path.unwrap_or_else(|| self.managed_checkout_path(id));
-        let git_dir = common_dir.join("silt").join("clones").join(format!("{id}.git"));
+        let git_dir = self.managed_git_dir(id);
+        if self.managed_checkout_ready(id) {
+            return Ok(ManagedCheckout { path, git_dir });
+        }
+        // Files are written last, so a checkout with any has been made, and
+        // may hold someone's work: checkouts made before the ready mark
+        // existed get it rather than being cleared.
+        if git_dir.exists() && has_files(&path) {
+            run_git(&git_dir, &["config", READY_KEY, "true"], None)?;
+            return Ok(ManagedCheckout { path, git_dir });
+        }
+        for leftover in [&git_dir, &path] {
+            if leftover.exists() {
+                fs::remove_dir_all(leftover)?;
+            }
+        }
         self.exclude_silt_dir()?;
         self.protect(id, base)?;
 
@@ -62,7 +81,18 @@ impl Repo {
         let base = base.to_string();
         run_git(&path, &["update-ref", "--no-deref", "HEAD", &base], None)?;
         run_git(&path, &["-c", "checkout.workers=8", "reset", "-q", "--hard", &base], None)?;
+        config(READY_KEY, "true")?;
         Ok(ManagedCheckout { path, git_dir })
+    }
+
+    /// Whether the managed checkout `id` was made to the end.
+    pub fn managed_checkout_ready(&self, id: &str) -> bool {
+        let git_dir = self.managed_git_dir(id);
+        git_dir.exists() && run_git(&git_dir, &["config", "--get", READY_KEY], None).is_ok()
+    }
+
+    fn managed_git_dir(&self, id: &str) -> PathBuf {
+        self.common_dir().join("silt").join("clones").join(format!("{id}.git"))
     }
 
     /// Points `refs/silt/threads/<id>` at `commit`, so everything the thread
@@ -106,4 +136,9 @@ impl Repo {
 
 fn thread_ref(id: &str) -> String {
     format!("refs/silt/threads/{id}")
+}
+
+/// Whether `dir` holds anything but its `.git` link.
+fn has_files(dir: &std::path::Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|entries| entries.flatten().any(|entry| entry.file_name() != ".git"))
 }
