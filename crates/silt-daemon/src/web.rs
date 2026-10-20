@@ -118,11 +118,21 @@ async fn authenticate(State(web): State<Web>, request: HttpRequest, next: Next) 
         .uri()
         .query()
         .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("token=")));
-    if header_token.or(query_token) == Some(web.token.as_str()) {
+    if header_token.or(query_token).is_some_and(|given| same_token(given, &web.token)) {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, Json(json!({"error": "open the UI with `silt open`"}))).into_response()
     }
+}
+
+/// Compares without stopping at the first difference, so response timing
+/// doesn't reveal how much of a guess was right.
+fn same_token(given: &str, expected: &str) -> bool {
+    let difference = given
+        .bytes()
+        .zip(expected.bytes())
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b));
+    given.len() == expected.len() && std::hint::black_box(difference) == 0
 }
 
 async fn asset(request: HttpRequest) -> HttpResponse {
@@ -413,4 +423,18 @@ struct Decline {
 async fn decline(State(web): State<Web>, Path(mr): Path<String>, body: Option<Json<Decline>>) -> HttpResponse {
     let reason = body.map(|Json(body)| body).unwrap_or_default().reason;
     ask(&web, Request::MrDecline { mr, reason }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_match_only_exactly() {
+        assert!(same_token("abc123", "abc123"));
+        assert!(!same_token("abc124", "abc123"));
+        assert!(!same_token("abc12", "abc123"), "a prefix is not the token");
+        assert!(!same_token("abc1234", "abc123"));
+        assert!(!same_token("", "abc123"));
+    }
 }
