@@ -245,8 +245,8 @@ impl Core {
             }
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn } => {
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn)))
+            Request::Diff { thread, turn, base } => {
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref())))
             }
             Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {

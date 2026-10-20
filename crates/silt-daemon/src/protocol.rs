@@ -19,7 +19,15 @@ pub enum Request {
     EndSession { agent: String, session_id: String },
     Threads,
     Show { thread: String },
-    Diff { thread: String, turn: Option<usize> },
+    /// What the thread changed: one `turn`, or everything since `base`
+    /// (`merge-base`, `last-commit`, `last-turn`, `commit:<sha>`), by
+    /// default since it started.
+    Diff {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
+    },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
     Search {

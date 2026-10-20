@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use silt_agents::{Entry, claude};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, HistoryItem, HistorySource, Op, TurnMark};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_types::{FamilyId, Frontier, ThreadId};
 use similar::TextDiff;
 
@@ -171,27 +171,27 @@ impl Core {
         lines
     }
 
-    pub(crate) fn diff(&self, thread: ThreadId, turn: Option<usize>) -> Result<String, CoreError> {
+    pub(crate) fn diff(&self, thread: ThreadId, turn: Option<usize>, base: Option<&str>) -> Result<String, CoreError> {
         let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
             .get(&family_id)
             .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
-        let (from, to) = match turn {
-            None => (imported_version(family, thread), family.thread_head(thread)),
-            Some(turn) => {
+        let graph = family.graph();
+        let head = family.thread_head(thread);
+        let (from, to) = match (turn, base) {
+            (Some(turn), _) => {
                 let marks = prompt_marks(family, thread);
                 let start = turn
                     .checked_sub(1)
                     .and_then(|index| marks.get(index))
                     .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))?;
-                let end = marks.get(turn).cloned().unwrap_or_else(|| family.thread_head(thread));
-                (start.clone(), end)
+                let end = marks.get(turn).cloned().unwrap_or_else(|| head.clone());
+                (graph.version_vector(start), graph.version_vector(&end))
             }
+            (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
         };
-        let graph = family.graph();
-        let changes = self.changes(family_id, &graph.version_vector(&from), &graph.version_vector(&to));
-        Ok(render_diff(&changes))
+        Ok(render_diff(&self.changes(family_id, &from, &to)))
     }
 
     /// How the family's files differ between two versions.
@@ -390,6 +390,56 @@ pub(crate) fn render_diff(changes: &[FileChange]) -> String {
         }
     }
     out
+}
+
+/// The version a diff of `thread` starts from (ADR 0011's diff bases).
+fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<VersionVector, CoreError> {
+    let graph = family.graph();
+    let head = family.thread_head(thread);
+    let in_thread = graph.version_vector(&head);
+    // The version at each commit; the files are imported after genesis.
+    let commits = || {
+        family.log().iter().filter(|delta| in_thread.contains(delta.span.first())).filter_map(|delta| match &delta.op {
+            Op::Git(GitOp::Genesis { commit, .. }) => Some((imported_version(family, delta.thread), *commit)),
+            Op::Git(GitOp::Committed { commit, .. }) => Some((Frontier::single(delta.span.last()), *commit)),
+            _ => None,
+        })
+    };
+    let version = match base {
+        None | Some("start") => start_version(family, thread),
+        Some("merge-base") => match family.thread(thread).and_then(|state| state.forked_from) {
+            Some(source) => return Ok(in_thread.intersection(&graph.version_vector(&family.thread_head(source)))),
+            None => start_version(family, thread),
+        },
+        Some("last-commit") => commits()
+            .next_back()
+            .map(|(version, _)| version)
+            .ok_or_else(|| CoreError::Invalid("the thread has no commits".into()))?,
+        Some("last-turn") => prompt_marks(family, thread)
+            .pop()
+            .ok_or_else(|| CoreError::Invalid("the thread has no turns".into()))?,
+        Some(other) => {
+            let sha = other.strip_prefix("commit:").ok_or_else(|| {
+                CoreError::Invalid(format!(
+                    "unknown diff base {other:?}; use merge-base, last-commit, last-turn or commit:<sha>"
+                ))
+            })?;
+            commits()
+                .rfind(|(_, commit)| commit.to_string().starts_with(sha))
+                .map(|(version, _)| version)
+                .ok_or_else(|| CoreError::Invalid(format!("the thread never was at a commit {sha}")))?
+        }
+    };
+    Ok(graph.version_vector(&version))
+}
+
+/// Where the thread's own work starts: its fork point, or the import of
+/// its files.
+fn start_version(family: &Family, thread: ThreadId) -> Frontier {
+    family
+        .thread(thread)
+        .and_then(|state| state.fork_point.clone())
+        .unwrap_or_else(|| imported_version(family, thread))
 }
 
 /// The version right after the thread's files were imported.

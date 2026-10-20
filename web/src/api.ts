@@ -129,8 +129,12 @@ export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   history: (id: string) => request<HistoryPage>('GET', `${thread(id)}/history`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
-  diff: (id: string, turn?: number) =>
-    request<string>('GET', `${thread(id)}/diff${turn === undefined ? '' : `?turn=${turn}`}`),
+  diff: (id: string, options: { turn?: number; base?: string } = {}) => {
+    const params = new URLSearchParams()
+    if (options.turn !== undefined) params.set('turn', String(options.turn))
+    if (options.base) params.set('base', options.base)
+    return request<string>('GET', `${thread(id)}/diff?${params}`)
+  },
   comments: (id: string) => request<CommentView[]>('GET', `${thread(id)}/comments`),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),

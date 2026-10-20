@@ -138,6 +138,10 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
         == "// alice was here\nfn main() {}\nfn farewell() {}\nfn bob() {}\n"));
     let show = bob.stdout(&["show", &fork]);
     assert!(show.contains("upstream progress") && show.contains("alice: continuing upstream"), "{show}");
+    let own = bob.stdout(&["diff", &fork, "--base", "merge-base"]);
+    assert!(own.contains("+fn bob() {}") && !own.contains("+// alice was here"), "only the fork's own work: {own}");
+    let whole = bob.stdout(&["diff", &fork]);
+    assert!(whole.contains("+fn bob() {}") && whole.contains("+// alice was here"), "since the fork point: {whole}");
     let context = prompt_hook(bob, &last_session(bob));
     assert!(context.contains("additionalContext") && context.contains("pulled newer work"), "{context}");
     assert!(!prompt_hook(bob, &last_session(bob)).contains("pulled"), "a notice is handed over once");

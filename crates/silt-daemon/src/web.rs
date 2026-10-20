@@ -167,10 +167,16 @@ async fn turns(State(web): State<Web>, Path(thread): Path<String>) -> HttpRespon
 #[derive(Deserialize)]
 struct DiffQuery {
     turn: Option<usize>,
+    base: Option<String>,
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    ask(&web, Request::Diff { thread, turn: query.turn }).await
+    let request = Request::Diff {
+        thread,
+        turn: query.turn,
+        base: query.base.filter(|base| !base.is_empty()),
+    };
+    ask(&web, request).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.

@@ -80,8 +80,12 @@ enum Command {
     Diff {
         thread: String,
         /// Only the changes made in this turn (1-based)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "base")]
         turn: Option<usize>,
+        /// Diff from merge-base (with the fork's source), last-commit,
+        /// last-turn or commit:<sha>; by default from the thread's start
+        #[arg(long)]
+        base: Option<String>,
     },
     /// Search conversations: your team's through the server when connected
     Search {
@@ -297,7 +301,7 @@ fn main() -> Result<(), Exn<CliError>> {
         },
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
-        Command::Diff { thread, turn } => commands::diff(&thread, turn),
+        Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
         Command::Search {
             query,
             repo,

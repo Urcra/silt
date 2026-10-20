@@ -32,7 +32,7 @@ function Copy({ command }: { command: string }) {
 
 function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
   const [open, setOpen] = useState(false)
-  const diff = useLoad(() => (open ? api.diff(thread, turn.number) : Promise.resolve('')), `${thread}:${turn.number}:${open}`)
+  const diff = useLoad(() => (open ? api.diff(thread, { turn: turn.number }) : Promise.resolve('')), `${thread}:${turn.number}:${open}`)
   return (
     <div className="my-1">
       <button className="text-xs text-sky-700" onClick={() => setOpen(!open)}>
@@ -152,7 +152,13 @@ export function ThreadView({ id }: { id: string }) {
   const turns = useLoad(() => api.turns(id), `turns:${id}`)
   const comments = useLoad(() => api.comments(id), `comments:${id}`)
   const [showDiff, setShowDiff] = useState(false)
-  const diff = useLoad(() => (showDiff ? api.diff(id) : Promise.resolve('')), `diff:${id}:${showDiff}`)
+  const [base, setBase] = useState('')
+  const [commit, setCommit] = useState('')
+  const diffBase = base === 'commit' ? (commit ? `commit:${commit}` : '') : base
+  const diff = useLoad(
+    () => (showDiff ? api.diff(id, { base: diffBase }) : Promise.resolve('')),
+    `diff:${id}:${showDiff}:${diffBase}`,
+  )
   const threads = useLoad(api.threads, 'threads')
   const summary = threads.data?.find((thread) => thread.id === history.data?.thread)
   const fullId = history.data?.thread ?? id
@@ -182,6 +188,34 @@ export function ThreadView({ id }: { id: string }) {
             {showDiff ? 'Hide' : 'Show'} all changes
           </button>
         </div>
+        {showDiff && (
+          <div className="mb-2 flex items-center gap-2 text-sm">
+            <label htmlFor="diff-base">Changes since</label>
+            <select
+              id="diff-base"
+              aria-label="diff base"
+              value={base}
+              onChange={(event) => setBase(event.target.value)}
+              className="rounded border border-neutral-300 px-2 py-1"
+            >
+              <option value="">the thread started</option>
+              <option value="merge-base">the merge base with its source</option>
+              <option value="last-commit">the last commit</option>
+              <option value="last-turn">the last turn started</option>
+              <option value="commit">a commit…</option>
+            </select>
+            {base === 'commit' && (
+              <input
+                aria-label="commit"
+                placeholder="sha"
+                value={commit}
+                onChange={(event) => setCommit(event.target.value)}
+                className="w-28 rounded border border-neutral-300 px-2 py-1 font-mono"
+              />
+            )}
+          </div>
+        )}
+        {showDiff && diff.error && <p className="text-sm text-rose-700">{diff.error}</p>}
         {showDiff && diff.data !== undefined && <Diff text={diff.data} />}
         {history.error && <p className="text-rose-700">{history.error}</p>}
         <div className="mt-4 space-y-1">

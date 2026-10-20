@@ -23,6 +23,9 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()
   await expect(page.getByTestId('diff')).toContainText('+fn farewell() {}')
+  await page.getByRole('button', { name: 'Show all changes' }).click()
+  await page.getByLabel('diff base').selectOption('last-commit')
+  await expect(page.getByTestId('diff').first()).toContainText('+fn farewell() {}')
 
   await page.getByText('Please add a farewell line to main').hover()
   await page.getByRole('button', { name: 'comment on entry 0' }).click()

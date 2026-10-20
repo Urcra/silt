@@ -73,7 +73,17 @@ impl Env {
     }
 
     fn silt(&self, args: &[&str]) -> Output {
-        let output = Command::new(env!("CARGO_BIN_EXE_silt"))
+        let output = self.run(args);
+        assert!(
+            output.status.success(),
+            "silt {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_silt"))
             .args(args)
             .current_dir(&self.repo)
             .env("SILT_HOME", &self.silt_home)
@@ -81,13 +91,7 @@ impl Env {
             .env("SILT_CLAUDE_BIN", &self.fake)
             .env("SILT_HOOK", format!("{} hook", env!("CARGO_BIN_EXE_silt")))
             .output()
-            .expect("silt runs");
-        assert!(
-            output.status.success(),
-            "silt {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
+            .expect("silt runs")
     }
 
     fn stdout(&self, args: &[&str]) -> String {
@@ -341,4 +345,36 @@ fn an_agent_reads_what_was_decided_before_compaction() {
     .expect("hook input");
     let output = String::from_utf8_lossy(&hook.wait_with_output().expect("hook ends").stdout).into_owned();
     assert!(output.contains("silt_history_search") && output.contains("additionalContext"), "{output}");
+}
+
+#[test]
+fn diffs_start_from_the_base_asked_for() {
+    let env = Env::new();
+    let first = String::from_utf8_lossy(
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&env.repo)
+            .output()
+            .expect("git runs")
+            .stdout,
+    )
+    .trim()
+    .to_owned();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    git(&env.repo, &["commit", "-qam", "farewell"]);
+    assert!(eventually(|| !env.stdout(&["diff", &thread, "--base", "last-commit"]).contains("farewell")));
+    let main = env.repo.join("src/main.rs");
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn later() {}\n").expect("write");
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")));
+
+    let since_commit = env.stdout(&["diff", &thread, "--base", "last-commit"]);
+    assert!(since_commit.contains("+fn later() {}") && !since_commit.contains("+fn farewell"), "{since_commit}");
+    let since_first = env.stdout(&["diff", &thread, "--base", &format!("commit:{}", &first[..8])]);
+    assert!(since_first.contains("+fn later() {}") && since_first.contains("+fn farewell() {}"), "{since_first}");
+    let last_turn = env.stdout(&["diff", &thread, "--base", "last-turn"]);
+    assert!(last_turn.contains("+fn farewell() {}"), "{last_turn}");
+    let refused = env.run(&["diff", &thread, "--base", "commit:0000000"]);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("never was at a commit"));
 }
