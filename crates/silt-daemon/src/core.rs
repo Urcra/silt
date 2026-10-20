@@ -994,11 +994,23 @@ impl Core {
         let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
             return Ok(());
         };
-        for delta in deltas {
-            if let Op::Lease { device: holder, .. } = delta.op
-                && holder != device
-            {
-                self.thread_moved(delta.thread, before.get(&delta.thread).cloned()).await?;
+        let leased: HashSet<ThreadId> = deltas
+            .iter()
+            .filter(|delta| matches!(delta.op, Op::Lease { .. }))
+            .map(|delta| delta.thread)
+            .collect();
+        for thread in leased {
+            // The lease with the highest epoch holds; an older one arriving
+            // late moves nothing.
+            let holder = self
+                .threads
+                .get(&thread)
+                .and_then(|record| self.families.get(&record.family))
+                .and_then(|family| family.thread(thread))
+                .and_then(|state| state.lease)
+                .map(|(holder, _)| holder);
+            if holder.is_some_and(|holder| holder != device) {
+                self.thread_moved(thread, before.get(&thread).cloned()).await?;
             }
         }
         Ok(())
@@ -1014,8 +1026,11 @@ impl Core {
             .filter(|(_, checkout)| checkout.record.thread == thread)
             .map(|(id, _)| *id)
             .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let fork = self.fork_thread_at(thread, at).await?;
         for id in ids {
-            let fork = self.fork_thread_at(thread, at.clone()).await?;
             self.store.move_checkout(id, fork).await?;
             let checkout = self.checkouts.get_mut(&id).expect("listed above");
             checkout.record.thread = fork;
