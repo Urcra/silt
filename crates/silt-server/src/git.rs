@@ -9,12 +9,14 @@ use std::str::FromStr;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Path as UrlPath, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use silt_types::{FamilyId, ThreadId};
 use sqlx::Row;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::{ChildStdin, Command};
+use tokio_util::io::ReaderStream;
 
 use crate::{ApiError, Caller, FamilyAccess, Server, bad_request, claim_family, family_access, not_found};
 
@@ -25,7 +27,7 @@ pub(crate) async fn serve(
     method: Method,
     uri: Uri,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Result<Response, ApiError> {
     let family = repo
         .strip_suffix(".git")
@@ -169,59 +171,121 @@ async fn init_bare(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Runs `git http-backend` for one request and turns its CGI output into
-/// a response.
+/// The most CGI header `http-backend` may send before its body.
+const MAX_CGI_HEAD: usize = 64 * 1024;
+
+/// Runs `git http-backend` for one request, streaming the request body in
+/// and the response body out, so neither a pack pushed nor one fetched is
+/// held in memory.
 async fn run_backend(
     root: &Path,
     path_info: &str,
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
-    body: Bytes,
+    body: Body,
     access: &[(String, String)],
 ) -> std::io::Result<Response> {
-    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default();
-    let mut child = Command::new("git")
+    let text_of = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default();
+    let mut command = Command::new("git");
+    command
         .arg("http-backend")
         .env("GIT_PROJECT_ROOT", root)
         .env("GIT_HTTP_EXPORT_ALL", "1")
         .env("PATH_INFO", path_info)
         .env("REQUEST_METHOD", method.as_str())
         .env("QUERY_STRING", uri.query().unwrap_or_default())
-        .env("CONTENT_TYPE", header("content-type"))
-        .env("CONTENT_LENGTH", body.len().to_string())
-        .env("HTTP_CONTENT_ENCODING", header("content-encoding"))
-        .env("GIT_PROTOCOL", header("git-protocol"))
+        .env("CONTENT_TYPE", text_of("content-type"))
+        .env("HTTP_CONTENT_ENCODING", text_of("content-encoding"))
+        .env("GIT_PROTOCOL", text_of("git-protocol"))
         .env("REMOTE_ADDR", "127.0.0.1")
         .envs(access.iter().map(|(key, value)| (key, value)))
         .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let writer = tokio::spawn(async move {
-        let written = stdin.write_all(&body).await;
-        drop(stdin);
-        written
-    });
-    let output = child.wait_with_output().await?;
-    writer.await.map_err(std::io::Error::other)??;
-    if !output.status.success() && output.stdout.is_empty() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).into_owned()));
+        .stderr(Stdio::piped());
+    // Without a length, as for a chunked push, http-backend reads to the end.
+    if let Some(length) = headers.get(header::CONTENT_LENGTH).and_then(|value| value.to_str().ok()) {
+        command.env("CONTENT_LENGTH", length);
     }
-    Ok(cgi_response(&output.stdout))
+    let mut child = command.spawn()?;
+    let stdin = child.stdin.take().expect("stdin is piped");
+    tokio::spawn(async move {
+        if let Err(error) = feed(stdin, body).await {
+            tracing::debug!(%error, "stopped sending a request to git http-backend");
+        }
+    });
+    let errors = tokio::spawn(read_capped(child.stderr.take().expect("stderr is piped")));
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+
+    let mut head = Vec::new();
+    let split = loop {
+        if let Some(split) = cgi_split(&head) {
+            break split;
+        }
+        if head.len() > MAX_CGI_HEAD {
+            return Err(std::io::Error::other("git http-backend sent too long a header"));
+        }
+        let mut buffer = [0u8; 8192];
+        let read = stdout.read(&mut buffer).await?;
+        if read == 0 {
+            if head.is_empty() {
+                let status = child.wait().await?;
+                let errors = errors.await.unwrap_or_default();
+                return Err(std::io::Error::other(format!("git http-backend {status}: {}", String::from_utf8_lossy(&errors))));
+            }
+            break (0, 0);
+        }
+        head.extend_from_slice(&buffer[..read]);
+    };
+    tokio::spawn(async move {
+        match child.wait().await {
+            Ok(status) if status.success() => {}
+            outcome => {
+                let errors = errors.await.unwrap_or_default();
+                tracing::warn!(?outcome, errors = %String::from_utf8_lossy(&errors), "git http-backend failed");
+            }
+        }
+    });
+    let (status, response_headers) = cgi_head(&head[..split.0]);
+    let rest = Bytes::copy_from_slice(&head[split.1..]);
+    let body = futures_util::stream::once(async move { Ok(rest) }).chain(ReaderStream::new(stdout));
+    Ok((status, response_headers, Body::from_stream(body)).into_response())
 }
 
-/// Splits CGI output into status, headers and body.
-fn cgi_response(output: &[u8]) -> Response {
-    let (head, body) = match output.windows(4).position(|window| window == b"\r\n\r\n") {
-        Some(end) => (&output[..end], &output[end + 4..]),
-        None => match output.windows(2).position(|window| window == b"\n\n") {
-            Some(end) => (&output[..end], &output[end + 2..]),
-            None => (&output[..0], output),
-        },
-    };
+/// Copies the request body to http-backend, stopping at the size of the
+/// largest pack a push may send.
+async fn feed(mut stdin: ChildStdin, body: Body) -> std::io::Result<()> {
+    let mut chunks = body.into_data_stream();
+    let mut sent = 0u64;
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(std::io::Error::other)?;
+        sent += chunk.len() as u64;
+        if sent > MAX_PACK {
+            return Err(std::io::Error::other("the request is larger than a push may be"));
+        }
+        stdin.write_all(&chunk).await?;
+    }
+    Ok(())
+}
+
+/// The first part of a stream, for error messages.
+async fn read_capped(stream: impl AsyncRead + Unpin) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let _ = stream.take(MAX_CGI_HEAD as u64).read_to_end(&mut kept).await;
+    kept
+}
+
+/// Where CGI output's header ends and its body starts, once it holds both.
+fn cgi_split(output: &[u8]) -> Option<(usize, usize)> {
+    if let Some(end) = output.windows(4).position(|window| window == b"\r\n\r\n") {
+        return Some((end, end + 4));
+    }
+    output.windows(2).position(|window| window == b"\n\n").map(|end| (end, end + 2))
+}
+
+/// The status and headers in a CGI header.
+fn cgi_head(head: &[u8]) -> (StatusCode, HeaderMap) {
     let mut status = StatusCode::OK;
     let mut response_headers = HeaderMap::new();
     for line in String::from_utf8_lossy(head).lines() {
@@ -240,7 +304,7 @@ fn cgi_response(output: &[u8]) -> Response {
             response_headers.append(name, value);
         }
     }
-    (status, response_headers, Body::from(body.to_vec())).into_response()
+    (status, response_headers)
 }
 
 impl Server {
@@ -254,10 +318,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cgi_output_becomes_a_response() {
-        let response = cgi_response(b"Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nnope");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.headers()["content-type"], "text/plain");
-        assert_eq!(cgi_response(b"Content-Type: x\n\nbody").status(), StatusCode::OK);
+    fn cgi_output_splits_into_status_headers_and_body() {
+        let output = b"Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nnope";
+        let (end, body) = cgi_split(output).expect("a whole header");
+        assert_eq!(&output[body..], b"nope");
+        let (status, headers) = cgi_head(&output[..end]);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(headers["content-type"], "text/plain");
+        assert_eq!(cgi_split(b"Content-Type: x\n\nbody"), Some((15, 17)));
+        assert_eq!(cgi_split(b"Content-Type: x\r\n"), None, "the header isn't over yet");
     }
 }
