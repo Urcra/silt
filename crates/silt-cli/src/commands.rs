@@ -716,15 +716,18 @@ fn shell_quote(path: &Path) -> String {
 
 
 /// Runs `command` in the sandbox in place of this process.
-pub fn sandbox(writable: Vec<PathBuf>, network: bool, command: &[String]) -> Result<(), Exn<CliError>> {
-    use std::os::unix::process::CommandExt;
-
-    let (program, args) = command.split_first().ok_or_else(|| CliError("give a command to run".into()))?;
-    silt_sandbox::Sandbox { writable, network }
-        .enter()
-        .or_raise(|| CliError("cannot set up the sandbox".into()))?;
-    let error = Command::new(program).args(args).exec();
-    Err(Exn::new(CliError(format!("cannot run {program}: {error}"))))
+/// Runs `command` in the sandbox, exiting with its status. Silt's own data
+/// is hidden too: its socket controls the daemon.
+pub fn sandbox(mut sandbox: silt_sandbox::Sandbox, command: &[String]) -> Result<(), Exn<CliError>> {
+    if command.is_empty() {
+        return Err(fail("give a command to run"));
+    }
+    sandbox.hidden.push(paths::data_dir());
+    sandbox.hidden.push(paths::socket_path());
+    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt binary".into()))?;
+    let init = [exe.into_os_string(), "sandbox-init".into()];
+    let code = sandbox.run(&init, command).or_raise(|| CliError("cannot set up the sandbox".into()))?;
+    std::process::exit(code)
 }
 
 /// Serves the harness to the ACP client on stdin and stdout.

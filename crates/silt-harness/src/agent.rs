@@ -310,7 +310,9 @@ impl Harness {
 
     async fn run(&self, root: &Path, command: &str) -> Outcome {
         let mut process = if self.config.unsandboxed {
-            tokio::process::Command::new("sh")
+            let mut unconfined = tokio::process::Command::new("sh");
+            unconfined.env_clear().envs(silt_sandbox::safe_environment());
+            unconfined
         } else {
             let mut sandboxed = tokio::process::Command::new(&self.config.silt);
             sandboxed.arg("sandbox").arg("--write").arg(root).args(["--", "sh"]);

@@ -209,14 +209,28 @@ enum Command {
     /// OPENAI_BASE_URL, SILT_HARNESS_MODEL)
     Harness,
     /// Run a command that can read the system but write only the given
-    /// directories and a private /tmp, without network unless --net
+    /// directories and a private /tmp, without network unless --net. Sockets
+    /// and credentials (/run, ~/.ssh, …) and Silt's data are hidden, and the
+    /// environment is reduced to what tools need unless --keep-env
     Sandbox {
         /// A directory the command may write to; repeatable
         #[arg(long = "write", value_name = "DIR")]
         writable: Vec<PathBuf>,
+        /// A further directory or file to hide; repeatable
+        #[arg(long = "hide", value_name = "PATH")]
+        hidden: Vec<PathBuf>,
         /// Keep the network
         #[arg(long)]
         net: bool,
+        /// Pass the whole environment
+        #[arg(long)]
+        keep_env: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+    /// The first process inside a sandbox
+    #[command(hide = true)]
+    SandboxInit {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
@@ -660,7 +674,22 @@ fn main() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
-        Command::Sandbox { writable, net, command } => commands::sandbox(writable, net, &command),
+        Command::Sandbox {
+            writable,
+            hidden,
+            net,
+            keep_env,
+            command,
+        } => commands::sandbox(
+            silt_sandbox::Sandbox {
+                writable,
+                hidden,
+                network: net,
+                keep_env,
+            },
+            &command,
+        ),
+        Command::SandboxInit { command } => Err(Exn::new(CliError(silt_sandbox::init(&command).to_string()))),
         Command::Harness => commands::harness(),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);

@@ -193,20 +193,41 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result
     run_git_with(dir, args, stdin, &[])
 }
 
+/// Settings for every git command Silt runs. A checkout holds other
+/// people's and agents' work, and git would run hooks and an fsmonitor
+/// named in its config; Silt's own git commands run neither (ADR 0016).
+const HARDENED: [&str; 4] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
 fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String, String)]) -> Result<Vec<u8>, GitError> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    command
+        .args(HARDENED)
         .arg("-C")
         .arg(dir)
         .args(args)
         .envs(envs.iter().map(|(key, value)| (key, value)))
+        // The daemon has no terminal: a prompt would wait forever.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Messages Silt reads must not be translated.
+        .env("LC_ALL", "C")
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    if let Some(input) = stdin {
-        child.stdin.take().expect("stdin is piped").write_all(input)?;
+        .stderr(Stdio::piped());
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
+    let mut child = command.spawn()?;
+    // Fed from another thread: git writes output while it still reads
+    // input, and both pipes would fill up.
+    let feeding = stdin.map(|input| {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let input = input.to_vec();
+        std::thread::spawn(move || pipe.write_all(&input))
+    });
     let output = child.wait_with_output()?;
+    if let Some(feeding) = feeding {
+        feeding.join().map_err(|_| std::io::Error::other("feeding git panicked"))??;
+    }
     if !output.status.success() {
         return Err(GitError::Command {
             args: args.join(" "),

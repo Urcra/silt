@@ -111,3 +111,20 @@ fn ident_attribute_falls_back_to_git() {
     assert!(smudged.starts_with("/* $Id: ") && smudged.ends_with(" $ */\n"), "{smudged}");
     assert_eq!(filters.to_git("a.c", smudged.as_bytes()).expect("clean"), b"/* $Id$ */\n");
 }
+
+#[test]
+fn checks_more_ignored_paths_than_a_pipe_holds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let status = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().expect("git");
+    assert!(status.success());
+    std::fs::write(dir.path().join(".gitignore"), "*.log\n").expect("write");
+    let root = dir.path().to_owned();
+    let paths: Vec<String> = (0..20_000).map(|n| format!("target/build/output-{n}.log")).collect();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let repo = Repo::discover(&root).expect("repo");
+        let _ = sender.send(repo.ignored(&paths).map(|ignored| ignored.len()));
+    });
+    let ignored = receiver.recv_timeout(std::time::Duration::from_secs(30)).expect("git answered");
+    assert_eq!(ignored.expect("checked"), 20_000);
+}

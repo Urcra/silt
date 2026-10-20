@@ -56,3 +56,43 @@ fn has_no_network_unless_asked() {
     let output = sandboxed(&["--net"], &connect);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
+
+#[test]
+fn hides_sockets_and_credentials_and_keeps_git_data_read_only() {
+    if !available() {
+        return;
+    }
+    let checkout = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(checkout.path().join(".git/hooks")).expect("git dir");
+    let silt_home = tempfile::tempdir().expect("tempdir");
+    std::fs::write(silt_home.path().join("daemon.sock"), "").expect("stand-in socket");
+    let script = format!(
+        "test \"$(ls /run | wc -l)\" = 0 && ! test -e {home}/daemon.sock && test -z \"$SECRET_TOKEN\" \
+         && test \"$$\" = 1 && ! touch {checkout}/.git/hooks/pre-commit 2>/dev/null && touch {checkout}/ok",
+        home = silt_home.path().display(),
+        checkout = checkout.path().display(),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["sandbox", "--write", &checkout.path().to_string_lossy(), "--", "sh", "-c", &script])
+        .env("SILT_HOME", silt_home.path())
+        .env("SECRET_TOKEN", "should-not-be-seen")
+        .output()
+        .expect("silt runs");
+    assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(checkout.path().join("ok").exists());
+    assert!(!checkout.path().join(".git/hooks/pre-commit").exists());
+}
+
+#[test]
+fn what_the_command_starts_ends_with_it() {
+    if !available() {
+        return;
+    }
+    let marker = format!("silt-sandbox-test-{}", std::process::id());
+    let output = sandboxed(&[], &format!("(exec -a {marker} sleep 300 &); exit 3"));
+    assert_eq!(output.status.code(), Some(3), "the command's exit status comes through");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let running = Command::new("ps").args(["-eo", "args"]).output().expect("ps");
+    assert!(!String::from_utf8_lossy(&running.stdout).contains(&marker), "background work outlives the sandbox");
+}
+
