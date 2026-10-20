@@ -291,11 +291,20 @@ impl Core {
             .collect();
         for id in ids {
             let checkout = &self.checkouts[&id];
-            let inodes: Vec<InodeId> = deltas
+            // A merge into this checkout's thread brings in the other
+            // thread's changes without touching any file itself.
+            let merged = deltas
                 .iter()
-                .filter(|delta| !checkout.bridge.is_own(delta))
-                .filter_map(touched_inode)
-                .collect();
+                .any(|delta| delta.thread == checkout.record.thread && matches!(delta.op, Op::Merge { .. }) && !checkout.bridge.is_own(delta));
+            let inodes: Vec<InodeId> = if merged {
+                self.families[&family_id].tree().inodes()
+            } else {
+                deltas
+                    .iter()
+                    .filter(|delta| !checkout.bridge.is_own(delta))
+                    .filter_map(touched_inode)
+                    .collect()
+            };
             let actions = checkout
                 .bridge
                 .reconcile(&self.families[&family_id], &mut RepoBases(&checkout.repo), inodes);
