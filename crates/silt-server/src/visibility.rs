@@ -165,6 +165,10 @@ impl Viewer {
         self.threads.contains(&thread)
     }
 
+    pub(crate) fn visible_threads(&self) -> impl Iterator<Item = ThreadId> + '_ {
+        self.threads.iter().copied()
+    }
+
     pub(crate) fn sees_family(&self, family: u128) -> bool {
         self.families.contains(&family) || self.owned.contains(&family)
     }

@@ -768,6 +768,15 @@ async fn search(
     if terms.is_empty() {
         return Ok(Json(SearchReply { hits: Vec::new() }));
     }
+    // Only the caller's threads are matched at all, and only a page of them,
+    // so a common word doesn't fetch the whole index.
+    let viewer = server.viewer(caller.user).await?;
+    let visible: Vec<String> = viewer
+        .visible_threads()
+        .map(|thread| hex_upper(&id_bytes(thread.0)))
+        .collect();
+    let visible = serde_json::to_string(&visible).map_err(|error| ServerError::Io(std::io::Error::other(error)))?;
+    let limit = i64::from(query.limit.unwrap_or(SEARCH_LIMIT).min(500));
     let rows = sqlx::query(
         "SELECT s.thread_id, s.kind, snippet(search, 0, '[', ']', '…', 12) AS snippet, CAST(s.time_ms AS INTEGER) AS time_ms,
                 t.repo, u.name AS owner, a.branch,
@@ -787,7 +796,9 @@ async fn search(
            AND (?8 IS NULL OR EXISTS (SELECT 1 FROM touches th
                                       WHERE th.thread_id = t.id AND (th.path = ?8 OR th.path LIKE ?8 || '/%')))
            AND (?9 IS NULL OR status = ?9)
-         ORDER BY rank",
+           AND hex(s.thread_id) IN (SELECT value FROM json_each(?10))
+         ORDER BY rank
+         LIMIT ?11",
     )
     .bind(now_ms() - ACTIVE_MS)
     .bind(terms)
@@ -798,14 +809,12 @@ async fn search(
     .bind(query.until)
     .bind(query.file.as_deref().map(|file| file.trim_end_matches('/')))
     .bind(&query.status)
+    .bind(visible)
+    .bind(limit)
     .fetch_all(&server.shared.db)
     .await?;
-    let viewer = server.viewer(caller.user).await?;
-    let limit = usize::try_from(query.limit.unwrap_or(SEARCH_LIMIT).min(500)).unwrap_or(50);
     let hits = rows
         .iter()
-        .filter(|row| viewer.sees_thread(ThreadId(id_from(row.get("thread_id")))))
-        .take(limit)
         .map(|row| SearchHit {
             thread: ThreadId(id_from(row.get("thread_id"))),
             repo: row.get("repo"),
@@ -956,6 +965,11 @@ pub(crate) fn hash(text: &str) -> [u8; 32] {
 
 pub(crate) fn id_bytes(id: u128) -> Vec<u8> {
     id.to_be_bytes().to_vec()
+}
+
+/// Bytes as SQLite's `hex()` writes them.
+fn hex_upper(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02X}")).collect()
 }
 
 /// An id stored by `id_bytes`. Ids are always 16 bytes; anything shorter
