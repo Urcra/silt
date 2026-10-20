@@ -253,6 +253,10 @@ impl Core {
 
     pub(crate) async fn acp_event(&mut self, thread: ThreadId, run: u64, event: AcpEvent) {
         if self.acp.get(&thread).is_none_or(|current| current.run != run) {
+            // Its run was replaced or its thread purged while it started.
+            if let AcpEvent::Started(Ok(handle)) = event {
+                handle.send(Command::Stop);
+            }
             return;
         }
         if let Err(error) = self.handle_acp(thread, event).await {
@@ -392,6 +396,16 @@ impl Core {
             return Ok(());
         };
         self.record_line(&session, "main", line.to_owned(), None).await
+    }
+}
+
+impl AcpRun {
+    /// Stops the agent. One still starting stops when it comes up and finds
+    /// its run gone.
+    pub(crate) fn stop(self) {
+        if let Some(handle) = &self.handle {
+            handle.send(Command::Stop);
+        }
     }
 }
 

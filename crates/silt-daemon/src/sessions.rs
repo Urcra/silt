@@ -784,7 +784,11 @@ impl Core {
     /// its file has been read with this line; it is saved with the record,
     /// so nothing that fails afterwards records the line again.
     pub(crate) async fn record_line(&mut self, session_id: &str, key: &str, line: String, read: Option<SessionFileOffset>) -> Result<(), CoreError> {
-        let session = self.session_mut(session_id).expect("caller checked");
+        // An agent still running may send a line after its thread was
+        // purged here.
+        let session = self
+            .session_mut(session_id)
+            .ok_or_else(|| CoreError::Invalid(format!("session {session_id} is no longer recorded here")))?;
         let agent = session.agent;
         let parsed = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);
         let (family, thread, reference, agent_name) = (session.family, session.record.thread, session.reference(), session.record.agent.clone());

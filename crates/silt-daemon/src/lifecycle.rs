@@ -132,6 +132,11 @@ impl Core {
         self.sessions.retain(|session| !threads.contains(&session.record.thread));
         self.pending.retain(|pending| !threads.contains(&pending.thread));
         for thread in threads {
+            if let Some(run) = self.acp.remove(thread) {
+                run.stop();
+            }
+        }
+        for thread in threads {
             self.notices.remove(thread);
             self.deleted.remove(thread);
             self.threads.remove(thread);
