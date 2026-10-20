@@ -78,6 +78,14 @@ enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// What you should hear about: merge requests, comments and mentions
+    Inbox {
+        /// Include notifications already read
+        #[arg(long)]
+        all: bool,
+        #[command(subcommand)]
+        command: Option<InboxCommand>,
+    },
     /// Orgs on the server: who is in them and what they default to
     Org {
         #[command(subcommand)]
@@ -273,6 +281,17 @@ enum AuthCommand {
     Logout,
     /// Show which server this machine syncs with
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum InboxCommand {
+    /// Mark notifications read
+    Read {
+        ids: Vec<i64>,
+        /// Every unread notification
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -483,6 +502,10 @@ fn main() -> Result<(), Exn<CliError>> {
             }),
             AuthCommand::Logout => admin::auth_logout(),
             AuthCommand::Status => commands::auth_status(),
+        },
+        Command::Inbox { all, command } => match command {
+            None => commands::inbox(all),
+            Some(InboxCommand::Read { ids, all }) => commands::inbox_read(ids, all),
         },
         Command::Org { command } => match command {
             OrgCommand::List => admin::orgs(),

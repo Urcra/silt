@@ -136,6 +136,11 @@ impl Index {
         rows
     }
 
+    /// The fork a merge request came from.
+    pub(crate) fn request_fork(&self, mr: DeltaId) -> Option<ThreadId> {
+        self.requests.get(&mr).copied()
+    }
+
     pub(crate) fn forks(&self) -> &HashMap<ThreadId, ThreadId> {
         &self.forks
     }

@@ -1,3 +1,4 @@
+import { Inbox } from './components/Inbox'
 import { MergeRequest, MergeRequests } from './components/MergeRequests'
 import { ThreadList } from './components/ThreadList'
 import { ThreadView } from './components/ThreadView'
@@ -16,12 +17,16 @@ function App() {
           <a href={href({ page: 'mrs' })} className="text-sky-700">
             Merge requests
           </a>
+          <a href={href({ page: 'inbox' })} className="text-sky-700">
+            Inbox
+          </a>
         </nav>
       </header>
       {route.page === 'threads' && <ThreadList />}
       {route.page === 'thread' && <ThreadView id={route.id} />}
       {route.page === 'mrs' && <MergeRequests />}
       {route.page === 'mr' && <MergeRequest id={route.id} />}
+      {route.page === 'inbox' && <Inbox />}
     </main>
   )
 }

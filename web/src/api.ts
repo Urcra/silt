@@ -127,6 +127,16 @@ export type CommentOn =
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 
+export interface Notification {
+  id: number
+  kind: 'mr_opened' | 'mr_approved' | 'mr_declined' | 'comment' | 'mention'
+  thread: string
+  actor: string
+  text: string
+  created_ms: number
+  read: boolean
+}
+
 export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   history: (id: string) => request<HistoryPage>('GET', `${thread(id)}/history`),
@@ -150,6 +160,9 @@ export const api = {
     }
     return request<SearchResult[]>('GET', `/api/search?${params}`)
   },
+  inbox: (all: boolean) =>
+    request<Notification[]>('GET', `/api/inbox${all ? '?all=true' : ''}`),
+  readNotifications: (read: { ids?: number[]; all?: boolean }) => request<string>('POST', '/api/inbox/read', read),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
   mergeRequest: (id: string) => request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}`),
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),

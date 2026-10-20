@@ -65,6 +65,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/search", get(search))
+        .route("/api/inbox", get(inbox))
+        .route("/api/inbox/read", post(inbox_read))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
@@ -230,6 +232,20 @@ async fn search(State(web): State<Web>, Query(query): Query<HashMap<String, Stri
         },
     };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct InboxQuery {
+    #[serde(default)]
+    all: bool,
+}
+
+async fn inbox(State(web): State<Web>, Query(query): Query<InboxQuery>) -> HttpResponse {
+    ask(&web, Request::Inbox { all: query.all }).await
+}
+
+async fn inbox_read(State(web): State<Web>, Json(read): Json<silt_proto::InboxRead>) -> HttpResponse {
+    ask(&web, Request::InboxRead { read }).await
 }
 
 async fn merge_requests(State(web): State<Web>) -> HttpResponse {

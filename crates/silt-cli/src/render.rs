@@ -76,6 +76,19 @@ pub fn show(lines: &[ShowLine]) -> String {
     out
 }
 
+pub fn inbox(notifications: &[silt_daemon::protocol::InboxEntry]) -> String {
+    if notifications.is_empty() {
+        return "nothing new\n".into();
+    }
+    let mut out = String::new();
+    for notification in notifications {
+        let mark = if notification.read { " " } else { "•" };
+        let _ = writeln!(out, "{mark} {:>4}  {}", notification.id, notification.text);
+    }
+    out.push_str("mark them read with `silt inbox read <id>…` or `silt inbox read --all`\n");
+    out
+}
+
 pub fn search(hits: &[SearchResult]) -> String {
     let mut out = String::new();
     if hits.is_empty() {

@@ -103,6 +103,12 @@ pub enum Request {
         thread: Option<String>,
         visibility: silt_proto::Visibility,
     },
+    /// The server's notifications for this user (ADR 0013).
+    Inbox {
+        #[serde(default)]
+        all: bool,
+    },
+    InboxRead { read: silt_proto::InboxRead },
     Shutdown,
 }
 
@@ -381,4 +387,16 @@ pub struct TurnInfo {
     /// The history entry of the turn's prompt.
     pub entry: Option<usize>,
     pub prompt: String,
+}
+
+/// A notification, with the thread id as text like everywhere in this API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxEntry {
+    pub id: i64,
+    pub kind: String,
+    pub thread: String,
+    pub actor: String,
+    pub text: String,
+    pub created_ms: i64,
+    pub read: bool,
 }

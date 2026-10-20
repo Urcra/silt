@@ -300,3 +300,43 @@ fn a_private_fork_is_shared_only_through_its_merge_request() {
     assert!(eventually(|| read(&alice.repo.join("src/main.rs")).contains("fn quieter() {}")));
     assert!(alice.log_line(&fork).is_none(), "the fork itself stays private");
 }
+
+#[test]
+fn the_inbox_hears_about_merge_requests_comments_and_mentions() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    assert!(eventually(|| bob.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
+    bob.silt_with(&["fork", &thread], &[("FAKE_EXPECT", "Please-add-a-farewell"), ("FAKE_LINE", "fn bob() {}")]);
+    let fork = bob
+        .stdout(&["log"])
+        .lines()
+        .find(|line| line.contains(&format!("fork of {thread}")))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("the fork is listed")
+        .to_owned();
+    let opened = bob.silt(&["mr", "create", "--thread", &fork, "--title", "Add bob, @alice please look"]);
+    let mr = mr_id(&opened.stdout);
+
+    assert!(
+        eventually(|| alice.stdout(&["inbox"]).contains("bob asks to merge \"Add bob, @alice please look\"")),
+        "{}",
+        alice.stdout(&["inbox"])
+    );
+    let inbox = alice.stdout(&["inbox"]);
+    assert!(inbox.contains("bob mentioned you"), "{inbox}");
+    let context = prompt_hook(alice, &first_session(alice));
+    assert!(context.contains("merge request") && context.contains("Add bob"), "Alice's agent hears about it: {context}");
+    assert!(bob.stdout(&["inbox"]).contains("nothing new"), "nobody hears about their own work");
+
+    alice.silt(&["mr", "approve", &mr]);
+    assert!(eventually(|| bob.stdout(&["inbox"]).contains("alice approved and merged your merge request")));
+    alice.silt(&["comment", &thread, "--entry", "0", "nice work @bob"]);
+    assert!(eventually(|| bob.stdout(&["inbox"]).contains("alice mentioned you")));
+    bob.silt(&["comment", &thread, "--entry", "0", "thanks"]);
+    assert!(eventually(|| alice.stdout(&["inbox"]).contains("bob commented on thread")));
+
+    alice.silt(&["inbox", "read", "--all"]);
+    assert!(alice.stdout(&["inbox"]).contains("nothing new"));
+    assert!(alice.stdout(&["inbox", "--all"]).contains("bob asks to merge"));
+}

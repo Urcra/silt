@@ -346,3 +346,31 @@ pub enum OrgChange {
     /// Moves the project (a normalized remote) into `org`.
     MoveProject { repo: String, org: String },
 }
+
+/// Something a user should hear about (ADR 0013).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: i64,
+    /// `mr_opened`, `mr_approved`, `mr_declined`, `comment` or `mention`.
+    pub kind: String,
+    pub thread: ThreadId,
+    /// Who caused it.
+    pub actor: String,
+    pub text: String,
+    pub created_ms: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxReply {
+    pub notifications: Vec<Notification>,
+}
+
+/// Marks notifications read: `ids`, or every one with `all`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxRead {
+    #[serde(default)]
+    pub ids: Vec<i64>,
+    #[serde(default)]
+    pub all: bool,
+}

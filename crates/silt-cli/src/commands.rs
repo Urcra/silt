@@ -476,6 +476,25 @@ pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) ->
     Ok(())
 }
 
+pub fn inbox(all: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let entries: Vec<silt_daemon::protocol::InboxEntry> = call(&Request::Inbox { all })?;
+    print!("{}", render::inbox(&entries));
+    Ok(())
+}
+
+pub fn inbox_read(ids: Vec<i64>, all: bool) -> Result<(), Exn<CliError>> {
+    if ids.is_empty() && !all {
+        return Err(fail("name the notifications to mark read, or pass --all"));
+    }
+    ensure_daemon()?;
+    call::<String>(&Request::InboxRead {
+        read: silt_proto::InboxRead { ids, all },
+    })?;
+    println!("marked read");
+    Ok(())
+}
+
 pub fn log() -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let threads: Vec<ThreadSummary> = call(&Request::Threads)?;

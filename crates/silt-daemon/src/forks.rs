@@ -382,7 +382,7 @@ impl Core {
 
     /// Queues a message for the agent working in `thread`, handed over on
     /// its next prompt.
-    fn notify(&mut self, thread: ThreadId, message: String) {
+    pub(crate) fn notify(&mut self, thread: ThreadId, message: String) {
         self.notices.entry(thread).or_default().push(message);
     }
 

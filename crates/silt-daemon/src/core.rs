@@ -296,6 +296,8 @@ impl Core {
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }
+            Request::Inbox { all } => to_response(self.inbox(all).await),
+            Request::InboxRead { read } => to_response(self.inbox_read(&read).await.map(|()| "read")),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -831,6 +833,29 @@ impl Core {
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
     /// family grow concurrently, and an actor's deltas must form one chain.
+    async fn inbox(&self, all: bool) -> Result<Vec<crate::protocol::InboxEntry>, CoreError> {
+        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
+        let reply = remote.inbox(all).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+        Ok(reply
+            .notifications
+            .into_iter()
+            .map(|notification| crate::protocol::InboxEntry {
+                id: notification.id,
+                kind: notification.kind,
+                thread: notification.thread.to_string(),
+                actor: notification.actor,
+                text: notification.text,
+                created_ms: notification.created_ms,
+                read: notification.read,
+            })
+            .collect())
+    }
+
+    async fn inbox_read(&self, read: &silt_proto::InboxRead) -> Result<(), CoreError> {
+        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
+        remote.inbox_read(read).await.map_err(|error| CoreError::Invalid(error.to_string()))
+    }
+
     pub(crate) fn mount(&self, source: &Repo) -> Mount {
         let project = match source.remote_url("origin").ok().flatten() {
             Some(url) => silt_git::normalize_remote(&url),

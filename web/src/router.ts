@@ -5,11 +5,13 @@ export type Route =
   | { page: 'thread'; id: string }
   | { page: 'mrs' }
   | { page: 'mr'; id: string }
+  | { page: 'inbox' }
 
 export function parseRoute(hash: string): Route {
   const [, page, id] = hash.replace(/^#/, '').split('/')
   if (page === 't' && id) return { page: 'thread', id: decodeURIComponent(id) }
   if (page === 'mrs') return { page: 'mrs' }
+  if (page === 'inbox') return { page: 'inbox' }
   if (page === 'mr' && id) return { page: 'mr', id: decodeURIComponent(id) }
   return { page: 'threads' }
 }
@@ -22,6 +24,8 @@ export function href(route: Route): string {
       return `#/mr/${encodeURIComponent(route.id)}`
     case 'mrs':
       return '#/mrs'
+    case 'inbox':
+      return '#/inbox'
     default:
       return '#/'
   }

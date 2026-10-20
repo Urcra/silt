@@ -33,6 +33,7 @@ use tokio::sync::{Mutex, Notify};
 pub mod accounts;
 pub mod config;
 mod git;
+mod inbox;
 mod index;
 mod orgs;
 mod pages;
@@ -160,6 +161,8 @@ impl Server {
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))
+            .route("/v1/inbox", get(inbox::list))
+            .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve))
@@ -563,6 +566,10 @@ async fn push(
     drop(rooms);
     if !stored.is_empty() {
         server.waiter(family).await.notify_waiters();
+        let deltas: Vec<Delta> = stored.into_iter().map(|(_, delta)| delta).collect();
+        if let Err(error) = server.notify(&deltas, caller).await {
+            tracing::warn!(%error, "could not write notifications");
+        }
     }
     Ok(Json(PushReply {
         accepted: outcome.accepted,

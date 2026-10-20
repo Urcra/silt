@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
-    LoginReply, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
+    InboxRead, InboxReply, LoginReply, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
     VisibilityRequest,
 };
@@ -168,6 +168,16 @@ impl Remote {
     /// Signs this device out on the server.
     pub async fn logout(&self) -> Result<(), RemoteError> {
         checked(self.request(reqwest::Method::DELETE, "/v1/device").send().await?).await?;
+        Ok(())
+    }
+
+    pub async fn inbox(&self, all: bool) -> Result<InboxReply, RemoteError> {
+        let path = if all { "/v1/inbox?all=true" } else { "/v1/inbox" };
+        Ok(checked(self.request(reqwest::Method::GET, path).send().await?).await?.json().await?)
+    }
+
+    pub async fn inbox_read(&self, read: &InboxRead) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::POST, "/v1/inbox/read").json(read).send().await?).await?;
         Ok(())
     }
 
