@@ -420,6 +420,28 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let url: String = call(&Request::OpenWeb)?;
+    println!("{url}");
+    if !no_browser {
+        // `wslview` opens the Windows browser from WSL; the others are the
+        // usual desktop openers.
+        let opened = ["xdg-open", "wslview", "open"].iter().any(|opener| {
+            Command::new(opener)
+                .arg(&url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        });
+        if !opened {
+            eprintln!("silt: could not open a browser; open the address above");
+        }
+    }
+    Ok(())
+}
+
 pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let page: HistoryPage = call(&Request::HistoryRead {

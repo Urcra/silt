@@ -10,7 +10,7 @@ use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{Core, CoreError, touched_inode};
-use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight};
+use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
 
 /// Longest text of one entry in a history page.
 const ENTRY_CHARS: usize = 4000;
@@ -40,7 +40,7 @@ impl Core {
                 HistorySource::Inherited => "inherited",
                 HistorySource::Upstream => "upstream",
             };
-            let mut push = |kind: &str, text: String| {
+            for (kind, text) in entry_texts(delta) {
                 let index = entries.len();
                 entries.push((
                     delta.span.first(),
@@ -48,31 +48,11 @@ impl Core {
                         index,
                         thread: delta.thread.to_string(),
                         origin: origin.to_owned(),
-                        kind: kind.to_owned(),
+                        kind,
                         text,
                         time_ms: delta.time_ms,
                     },
                 ));
-            };
-            match &delta.op {
-                Op::Conv(ConvOp::Native { line, .. }) => {
-                    for entry in claude::normalize(line) {
-                        match entry {
-                            Entry::Other { .. } => {}
-                            Entry::ToolCall { name, input, .. } => push("tool_call", format!("{name} {input}")),
-                            Entry::Compaction { summary } => push(
-                                "compaction",
-                                summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
-                            ),
-                            other => push(other.kind(), other.searchable_text().unwrap_or_default()),
-                        }
-                    }
-                }
-                Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
-                    push("merge", format!("merged \"{title}\" from fork {from}: {summary}"));
-                }
-                Op::Merge { from, mr: None } => push("pull", format!("pulled newer work from thread {from}")),
-                _ => {}
             }
         }
         entries
@@ -240,6 +220,63 @@ impl Core {
         }
         found.sort_by_key(|item| std::cmp::Reverse(item.last_ms));
         found
+    }
+}
+
+impl Core {
+    /// The thread's own turns, each with the history entry of its prompt.
+    pub(crate) fn turns(&self, thread: ThreadId) -> Vec<TurnInfo> {
+        let Some(family) = self.families.get(&self.threads[&thread].family) else {
+            return Vec::new();
+        };
+        let mut turns = Vec::new();
+        let mut entries = 0;
+        let mut last_prompt: Option<(usize, String)> = None;
+        for item in family.history(thread) {
+            for (kind, text) in entry_texts(item.delta) {
+                if kind == "user" {
+                    last_prompt = Some((entries, text));
+                }
+                entries += 1;
+            }
+            if item.source == HistorySource::Own
+                && let Op::Conv(ConvOp::Turn {
+                    mark: TurnMark::PromptSubmitted,
+                    ..
+                }) = item.delta.op
+            {
+                let (entry, prompt) = last_prompt.take().map_or((None, String::new()), |(index, text)| (Some(index), text));
+                turns.push(TurnInfo {
+                    number: turns.len() + 1,
+                    entry,
+                    prompt,
+                });
+            }
+        }
+        turns
+    }
+}
+
+/// The history entries one delta contributes, as kind and text.
+fn entry_texts(delta: &Delta) -> Vec<(String, String)> {
+    match &delta.op {
+        Op::Conv(ConvOp::Native { line, .. }) => claude::normalize(line)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Other { .. } => None,
+                Entry::ToolCall { name, input, .. } => Some(("tool_call".to_owned(), format!("{name} {input}"))),
+                Entry::Compaction { summary } => Some((
+                    "compaction".to_owned(),
+                    summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
+                )),
+                other => Some((other.kind().to_owned(), other.searchable_text().unwrap_or_default())),
+            })
+            .collect(),
+        Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
+            vec![("merge".to_owned(), format!("merged \"{title}\" from fork {from}: {summary}"))]
+        }
+        Op::Merge { from, mr: None } => vec![("pull".to_owned(), format!("pulled newer work from thread {from}"))],
+        _ => Vec::new(),
     }
 }
 

@@ -401,6 +401,7 @@ fn entries(delta: &Delta) -> Vec<Entry> {
 fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> String {
     let mut summary = match files {
         [] => "No file changes.".to_owned(),
+        [file] => format!("Changes {file}."),
         files => format!("Changes {} files: {}.", files.len(), files.join(", ")),
     };
     let last_message = family

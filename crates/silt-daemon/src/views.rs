@@ -48,7 +48,11 @@ impl Core {
                     } else {
                         record.repo.clone()
                     },
-                    title: title(&conversation),
+                    title: title(&conversation).or_else(|| {
+                        let family = self.families.get(&record.family)?;
+                        let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
+                        title(&inherited)
+                    }),
                     created_ms: record.created_ms,
                     messages: conversation
                         .iter()

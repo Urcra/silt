@@ -52,6 +52,10 @@ pub enum Request {
     HistoryRead { thread: String, offset: usize, limit: usize },
     /// Search within a thread's history and the threads it came from.
     HistorySearch { thread: String, query: String, limit: u32 },
+    /// The thread's turns, for showing each turn's diff next to its prompt.
+    Turns { thread: String },
+    /// Starts the web UI if needed; answers with its URL.
+    OpenWeb,
     /// The turns that changed a file of the thread.
     FileHistory { thread: String, path: String },
     /// Other threads of the repository at `cwd` that changed `path`.
@@ -308,4 +312,13 @@ pub struct CommentView {
     pub text: String,
     pub resolved: bool,
     pub location: CommentLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnInfo {
+    /// 1-based, as `silt diff --turn` counts them.
+    pub number: usize,
+    /// The history entry of the turn's prompt.
+    pub entry: Option<usize>,
+    pub prompt: String,
 }

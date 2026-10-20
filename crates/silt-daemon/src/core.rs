@@ -93,6 +93,7 @@ pub struct Core {
     pub(crate) heads: HashMap<i64, GitOid>,
     /// Messages for each thread's agent, handed over on its next prompt.
     pub(crate) notices: HashMap<ThreadId, Vec<String>>,
+    pub(crate) web: Option<crate::web::WebInfo>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -135,6 +136,7 @@ impl Core {
             sync_error: None,
             heads: HashMap::new(),
             notices: HashMap::new(),
+            web: None,
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -285,6 +287,8 @@ impl Core {
             Request::MrShow { mr } => to_response(self.mr_show(&mr)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
+            Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::OpenWeb => to_response(self.open_web().await),
             Request::HistoryRead { thread, offset, limit } => {
                 to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
             }
@@ -1197,6 +1201,14 @@ impl Core {
             warn!(%thread, %fork, "the thread moved to another device; continuing here in a fork");
         }
         Ok(())
+    }
+
+    /// The web UI's URL, starting it first if needed.
+    async fn open_web(&mut self) -> Result<String, CoreError> {
+        if self.web.is_none() {
+            self.web = Some(crate::web::start(self.events.clone()).await?);
+        }
+        Ok(self.web.as_ref().expect("started above").url())
     }
 
     /// The actor for this daemon's own deltas in one thread. Threads of a

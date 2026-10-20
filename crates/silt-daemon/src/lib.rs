@@ -12,5 +12,6 @@ mod server;
 mod sync;
 mod views;
 mod watch;
+mod web;
 
 pub use server::{RunError, run};

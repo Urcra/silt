@@ -108,6 +108,12 @@ enum Command {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Open the web UI: threads, search, history, merge requests and comments
+    Open {
+        /// Print the address instead of opening a browser
+        #[arg(long)]
+        no_browser: bool,
+    },
     /// A thread's full history as numbered entries, across compactions and forks
     History {
         thread: String,
@@ -315,6 +321,7 @@ fn main() -> Result<(), Exn<CliError>> {
         ),
         Command::InFlight { path } => commands::in_flight(&path),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
+        Command::Open { no_browser } => commands::open(no_browser),
         Command::Comment {
             thread,
             file,
