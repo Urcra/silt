@@ -5,8 +5,8 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use silt_proto::{ErrorReply, OrgChange, OrgInfo, OrgMember, OrgsReply, TeamInfo, Visibility};
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
+use sqlx::{Row, SqliteConnection, SqliteExecutor};
 
 use crate::accounts::{self, valid_name};
 use crate::{ApiError, Caller, Server, bad_request, forbidden, now_ms};
@@ -15,7 +15,7 @@ use crate::{ApiError, Caller, Server, bad_request, forbidden, now_ms};
 /// existed before orgs.
 pub(crate) const DEFAULT_ORG: &str = "default";
 
-pub(crate) async fn join_default_org(db: &SqlitePool, user: i64) -> Result<(), sqlx::Error> {
+pub(crate) async fn join_default_org(db: impl SqliteExecutor<'_>, user: i64) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT OR IGNORE INTO org_members (org_id, user_id, role) SELECT id, ?, 'member' FROM orgs WHERE name = ?")
         .bind(user)
         .bind(DEFAULT_ORG)
@@ -24,7 +24,7 @@ pub(crate) async fn join_default_org(db: &SqlitePool, user: i64) -> Result<(), s
     Ok(())
 }
 
-pub(crate) async fn add_member(db: &SqlitePool, org: &str, user: i64, owner: bool) -> Result<bool, sqlx::Error> {
+pub(crate) async fn add_member(db: impl SqliteExecutor<'_>, org: &str, user: i64, owner: bool) -> Result<bool, sqlx::Error> {
     let role = if owner { "owner" } else { "member" };
     let added = sqlx::query(
         "INSERT INTO org_members (org_id, user_id, role) SELECT id, ?, ? FROM orgs WHERE name = ?
@@ -196,46 +196,46 @@ pub(crate) async fn change(
             if !valid_name(&org) {
                 return Err(bad_request("org names follow the rules for user names"));
             }
+            let mut tx = db.begin().await?;
             let created = sqlx::query("INSERT INTO orgs (name, created_ms) VALUES (?, ?) ON CONFLICT (name) DO NOTHING RETURNING id")
                 .bind(&org)
                 .bind(now_ms())
-                .fetch_optional(db)
+                .fetch_optional(&mut *tx)
                 .await?;
             let id: i64 = created.ok_or_else(|| bad_request(format!("an org named {org} exists")))?.get("id");
             sqlx::query("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')")
                 .bind(id)
                 .bind(caller.user)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
         }
         OrgChange::AddMember { org, user, owner } => {
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
-            add_member(db, &org, named_user(&server, caller.user, &user).await?, owner).await?;
+            let user = named_user(&server, caller.user, &user).await?;
+            let mut tx = db.begin().await?;
+            add_member(&mut *tx, &org, user, owner).await?;
+            keep_an_owner(&mut tx, org_id).await?;
+            tx.commit().await?;
         }
         OrgChange::RemoveMember { org, user } => {
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
             let user = named_user(&server, caller.user, &user).await?;
-            let owners: i64 = sqlx::query("SELECT COUNT(*) AS owners FROM org_members WHERE org_id = ? AND role = 'owner' AND user_id != ?")
-                .bind(org_id)
-                .bind(user)
-                .fetch_one(db)
-                .await?
-                .get("owners");
-            if owners == 0 {
-                return Err(bad_request("an org keeps at least one owner"));
-            }
+            let mut tx = db.begin().await?;
             sqlx::query("DELETE FROM team_members WHERE user_id = ? AND team_id IN (SELECT id FROM teams WHERE org_id = ?)")
                 .bind(user)
                 .bind(org_id)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
             sqlx::query("DELETE FROM org_members WHERE org_id = ? AND user_id = ?")
                 .bind(org_id)
                 .bind(user)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
+            keep_an_owner(&mut tx, org_id).await?;
+            tx.commit().await?;
         }
         OrgChange::CreateTeam { org, team } => {
             let org_id = org_id(db, &org).await?;
@@ -252,10 +252,11 @@ pub(crate) async fn change(
         OrgChange::RemoveTeam { org, team } => {
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
-            sqlx::query("DELETE FROM teams WHERE id = ?")
-                .bind(team_id(db, org_id, &team).await?)
-                .execute(db)
-                .await?;
+            let id = team_id(db, org_id, &team).await?;
+            let mut tx = db.begin().await?;
+            sqlx::query("DELETE FROM teams WHERE id = ?").bind(id).execute(&mut *tx).await?;
+            forget_team_visibility(&mut tx, org_id, &Visibility::Team(team).to_string()).await?;
+            tx.commit().await?;
         }
         OrgChange::AddToTeam { org, team, user } => {
             let org_id = org_id(db, &org).await?;
@@ -303,16 +304,66 @@ pub(crate) async fn change(
             if let Some(current) = current.filter(|current| *current != target) {
                 require_owner(db, current, caller.user).await?;
             }
+            let mut tx = db.begin().await?;
             sqlx::query(
                 "INSERT INTO projects (repo, org_id) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET org_id = excluded.org_id",
             )
             .bind(&repo)
             .bind(target)
-            .execute(db)
+            .execute(&mut *tx)
             .await?;
+            if current != Some(target) {
+                // Team names belong to an org; the new org's team of the same
+                // name are different people.
+                sqlx::query("UPDATE projects SET visibility = 'private' WHERE repo = ? AND visibility LIKE 'team:%'")
+                    .bind(&repo)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("UPDATE threads SET visibility = 'private' WHERE repo = ? AND visibility LIKE 'team:%'")
+                    .bind(&repo)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Fails unless `org` still has an owner. It runs after the change in the
+/// same transaction, which then holds the write lock, so two concurrent
+/// changes can't both remove an owner.
+async fn keep_an_owner(tx: &mut SqliteConnection, org: i64) -> Result<(), ApiError> {
+    let owners: i64 = sqlx::query("SELECT COUNT(*) AS owners FROM org_members WHERE org_id = ? AND role = 'owner'")
+        .bind(org)
+        .fetch_one(&mut *tx)
+        .await?
+        .get("owners");
+    if owners == 0 {
+        return Err(bad_request("an org keeps at least one owner"));
+    }
+    Ok(())
+}
+
+/// Makes what a removed team could see private, so a later team of the same
+/// name doesn't inherit it.
+async fn forget_team_visibility(tx: &mut SqliteConnection, org: i64, team: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE orgs SET default_visibility = 'private' WHERE id = ? AND default_visibility = ?")
+        .bind(org)
+        .bind(team)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE projects SET visibility = 'private' WHERE org_id = ? AND visibility = ?")
+        .bind(org)
+        .bind(team)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE threads SET visibility = 'private' WHERE visibility = ? AND repo IN (SELECT repo FROM projects WHERE org_id = ?)")
+        .bind(team)
+        .bind(org)
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn is_placed(db: &SqlitePool, repo: &str) -> Result<bool, sqlx::Error> {

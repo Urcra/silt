@@ -571,4 +571,23 @@ async fn orgs_and_teams_decide_who_sees_a_project() {
     assert_eq!(acme_org.teams[0].members, vec!["alice".to_owned()]);
     let carol_orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs")).bearer_auth(&carol).send().await.expect("sends").json().await.expect("orgs");
     assert!(carol_orgs.orgs.iter().all(|org| org.name != "acme"));
+
+    let core_project = VisibilityRequest {
+        repo: Some(thread.repo.clone()),
+        thread: None,
+        visibility: Visibility::Team("core".into()),
+    };
+    let set = api(&http, reqwest::Method::PUT, format!("{base}/v1/visibility")).bearer_auth(&alice).json(&core_project);
+    assert_eq!(set.send().await.expect("sends").status(), StatusCode::NO_CONTENT);
+    assert_eq!(change(&base, &alice, OrgChange::RemoveTeam { org: acme(), team: "core".into() }).await, StatusCode::NO_CONTENT);
+    assert_eq!(change(&base, &alice, OrgChange::CreateTeam { org: acme(), team: "core".into() }).await, StatusCode::NO_CONTENT);
+    let bob_into_core = OrgChange::AddToTeam { org: acme(), team: "core".into(), user: "bob".into() };
+    assert_eq!(change(&base, &alice, bob_into_core).await, StatusCode::NO_CONTENT);
+    assert!(listing(&base, &bob).await.threads.is_empty(), "a new team of the same name doesn't inherit the old one's projects");
+
+    let demote = |user: &str| OrgChange::AddMember { org: acme(), user: user.into(), owner: false };
+    assert_eq!(change(&base, &root, demote("alice")).await, StatusCode::NO_CONTENT);
+    assert_eq!(change(&base, &root, demote("root")).await, StatusCode::BAD_REQUEST, "the last owner stays an owner");
+    let leave = OrgChange::RemoveMember { org: acme(), user: "root".into() };
+    assert_eq!(change(&base, &root, leave).await, StatusCode::BAD_REQUEST, "the last owner can't leave");
 }

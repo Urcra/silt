@@ -150,6 +150,8 @@ pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<i6
     if new.password.is_some_and(|password| password.chars().count() < 10) {
         return Err(AccountError::WeakPassword);
     }
+    let password_hash = new.password.map(hash_password);
+    let mut tx = db.begin().await?;
     let inserted = sqlx::query(
         "INSERT INTO users (name, display_name, email, password_hash, admin, created_ms) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (name) DO NOTHING RETURNING id",
@@ -157,13 +159,14 @@ pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<i6
     .bind(new.name)
     .bind(new.display_name)
     .bind(new.email)
-    .bind(new.password.map(hash_password))
+    .bind(password_hash)
     .bind(i64::from(new.admin))
     .bind(now_ms())
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?;
     let id: i64 = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?.get("id");
-    crate::orgs::join_default_org(db, id).await?;
+    crate::orgs::join_default_org(&mut *tx, id).await?;
+    tx.commit().await?;
     Ok(id)
 }
 
