@@ -1165,6 +1165,10 @@ dependencies = [
 [[package]]
 name = "silt-crdt"
 version = "0.0.1"
+dependencies = [
+ "silt-types",
+ "thiserror",
+]
 
 [[package]]
 name = "silt-daemon"

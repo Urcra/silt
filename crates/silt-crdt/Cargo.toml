@@ -11,3 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+silt-types = { path = "../silt-types" }
+thiserror = "2.0.21"
