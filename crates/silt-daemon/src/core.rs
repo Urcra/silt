@@ -7,7 +7,7 @@ use silt_crdt::InodeId;
 use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
 use silt_store::{CheckoutRecord, SessionFileOffset, Store, StoreError, ThreadRecord};
-use silt_types::{ActorId, FamilyId, Frontier, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
 use silt_redact::{Overlay, Redactor};
 use silt_sync::{ClientSync, Outcome};
@@ -116,6 +116,9 @@ pub struct Core {
     pub(crate) web: Option<crate::web::WebInfo>,
     /// What recovery forks this daemon made, for `silt auth status`.
     pub(crate) recoveries: Vec<String>,
+    /// Blobs this daemon already sent the server, so a retried push doesn't
+    /// send them again.
+    pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -172,6 +175,7 @@ impl Core {
             notices: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
+            uploaded: std::sync::Arc::default(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);

@@ -1,15 +1,17 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use silt_crdt::InodeId;
 use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
-use silt_store::{SyncState, ThreadRecord};
+use silt_store::{Store, SyncState, ThreadRecord};
 use silt_sync::{Effect, Outcome};
 use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event, RepoBases, touched_inode};
+use crate::remote::{Remote, RemoteError};
 
 const LISTING_INTERVAL: Duration = Duration::from_secs(3);
 const PULL_WAIT: Duration = Duration::from_secs(20);
@@ -63,12 +65,18 @@ impl Core {
                     .collect();
                 self.learn_secrets(found);
                 let blobs = referenced_blobs(&batch);
-                let (events, remote, store) = (self.events.clone(), remote.clone(), self.store.clone());
+                let (events, remote, store, uploaded) = (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
                 tokio::spawn(async move {
-                    for hash in blobs {
-                        if let Ok(bytes) = store.blobs().get(hash).await {
-                            let _ = remote.put_blob(hash, bytes).await;
-                        }
+                    // Deltas go only after their blobs, or others would get
+                    // deltas whose content they can't fetch.
+                    if let Err(error) = upload_blobs(&remote, &store, &uploaded, blobs).await {
+                        let _ = events.send(Event::Pushed {
+                            family,
+                            generation: None,
+                            outcome: Outcome::Failed,
+                            error: Some(format!("could not upload a file to the server: {error}")),
+                        });
+                        return;
                     }
                     let (generation, outcome, error) = remote.push(family, batch).await;
                     let _ = events.send(Event::Pushed {
@@ -426,4 +434,25 @@ fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
 
 fn referenced_blobs(deltas: &[Delta]) -> Vec<BlobHash> {
     deltas.iter().filter_map(Delta::blob).collect()
+}
+
+/// Sends the server the blobs it hasn't had from here yet. A blob missing
+/// here came from elsewhere, so the server has it already.
+async fn upload_blobs(
+    remote: &Remote,
+    store: &Store,
+    uploaded: &Mutex<HashSet<BlobHash>>,
+    blobs: Vec<BlobHash>,
+) -> Result<(), RemoteError> {
+    for hash in blobs {
+        if uploaded.lock().expect("lock").contains(&hash) {
+            continue;
+        }
+        let Ok(bytes) = store.blobs().get(hash).await else {
+            continue;
+        };
+        remote.put_blob(hash, bytes).await?;
+        uploaded.lock().expect("lock").insert(hash);
+    }
+    Ok(())
 }
