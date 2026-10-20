@@ -677,7 +677,25 @@ async fn set_visibility(
     let visibility = body.visibility.to_string();
     match (body.repo, body.thread) {
         (Some(repo), None) => {
-            orgs::place_project(db, &repo, caller.user).await?;
+            // A repository nobody placed yet joins the caller's org only if
+            // they administer the server, or work in it and may then decide
+            // its visibility; a refused request must not leave it placed
+            // (ADR 0016).
+            if !orgs::is_placed(db, &repo).await? {
+                let works_in_it = sqlx::query("SELECT 1 FROM threads WHERE repo = ? AND owner_id = ? LIMIT 1")
+                    .bind(&repo)
+                    .bind(caller.user)
+                    .fetch_optional(db)
+                    .await?
+                    .is_some();
+                if !works_in_it && !orgs::is_admin(db, caller.user).await? {
+                    return Err(forbidden("this repository has no threads of yours on the server yet"));
+                }
+                if !orgs::may_place_project(db, caller.user).await? {
+                    return Err(forbidden("only the project's org owners and server admins can change its visibility"));
+                }
+                orgs::place_project(db, &repo, caller.user).await?;
+            }
             if !orgs::may_set_project(db, &repo, caller.user).await? {
                 return Err(forbidden("only the project's org owners and server admins can change its visibility"));
             }

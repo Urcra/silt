@@ -69,7 +69,7 @@ async fn user_id(db: &SqlitePool, name: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| bad_request(format!("no user named {name}")))
 }
 
-async fn is_admin(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
+pub(crate) async fn is_admin(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
     Ok(accounts::user_by_id(db, user).await?.is_some_and(|user| user.admin))
 }
 
@@ -300,6 +300,28 @@ pub(crate) async fn change(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn is_placed(db: &SqlitePool, repo: &str) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("SELECT 1 FROM projects WHERE repo = ? AND org_id IS NOT NULL")
+        .bind(repo)
+        .fetch_optional(db)
+        .await?
+        .is_some())
+}
+
+/// Whether placing a project in `user`'s first org would let them decide
+/// its visibility: they own that org, or administer the server.
+pub(crate) async fn may_place_project(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
+    let first: Option<i64> = sqlx::query("SELECT org_id FROM org_members WHERE user_id = ? ORDER BY rowid LIMIT 1")
+        .bind(user)
+        .fetch_optional(db)
+        .await?
+        .map(|row| row.get("org_id"));
+    match first {
+        Some(org) => Ok(role(db, org, user).await?.as_deref() == Some("owner") || is_admin(db, user).await?),
+        None => is_admin(db, user).await,
+    }
 }
 
 /// Whether `user` may set the visibility of every thread of `repo`: an

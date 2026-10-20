@@ -195,6 +195,23 @@ async fn nobody_writes_as_another_persons_device() {
 }
 
 #[tokio::test]
+async fn a_repository_is_not_claimed_by_someone_without_threads_in_it() {
+    let (_data, alice, bob) = two_people().await;
+    let squat = silt_proto::VisibilityRequest {
+        repo: Some("github.com/acme/app".into()),
+        thread: None,
+        visibility: silt_proto::Visibility::Private,
+    };
+    let refused = bob.request(reqwest::Method::PUT, "/v1/visibility").json(&squat).send().await.expect("sends");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+    let mut family = Family::new();
+    alice.register(MAIN).await;
+    alice.push(&[delta(&mut family, MAIN, file("a"))]).await;
+    assert_eq!(bob.listing().await.threads.len(), 1, "the refused request changed nothing");
+}
+
+#[tokio::test]
 async fn purged_threads_leave_what_forks_need_and_never_come_back() {
     let (_data, alice, bob) = two_people().await;
 
