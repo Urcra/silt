@@ -123,6 +123,31 @@ impl FileTree {
         false
     }
 
+    /// Checks that `event` would apply, without applying it.
+    pub fn check(&self, event: &TreeEvent) -> Result<(), TreeError> {
+        match &event.op {
+            TreeOp::Create { name, .. } => {
+                if !is_valid_name(name) {
+                    return Err(TreeError::InvalidName(name.clone()));
+                }
+            }
+            TreeOp::Move { inode, parent, name } => {
+                if !self.kinds.contains_key(inode) {
+                    return Err(TreeError::UnknownInode(*inode));
+                }
+                if *parent != Parent::Trash && !is_valid_name(name) {
+                    return Err(TreeError::InvalidName(name.clone()));
+                }
+            }
+            TreeOp::Delete { inode } => {
+                if !self.kinds.contains_key(inode) {
+                    return Err(TreeError::UnknownInode(*inode));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn apply(&mut self, event: &TreeEvent) -> Result<(), TreeError> {
         let stamp = Stamp::from(event.id);
         if self.log.iter().any(|entry| entry.stamp == stamp) {

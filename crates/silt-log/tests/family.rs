@@ -1,0 +1,231 @@
+use std::collections::HashMap;
+
+use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
+use silt_log::{
+    Applied, Author, Content, ConvOp, Delta, Family, FileView, LogError, Op, SessionFile, SessionRef,
+};
+use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
+
+const DAEMON: ActorId = ActorId(1);
+const CHECKOUT_A: ActorId = ActorId(2);
+const CHECKOUT_B: ActorId = ActorId(3);
+const THREAD: ThreadId = ThreadId(7);
+
+fn oid(byte: u8) -> GitOid {
+    GitOid([byte; 20])
+}
+
+fn bases() -> HashMap<GitOid, String> {
+    HashMap::from([(oid(1), "fn main() {}\n".to_owned())])
+}
+
+/// Applies `op` by `actor` on top of `parents` and returns the new delta.
+fn write(family: &mut Family, actor: ActorId, parents: Frontier, op: Op) -> Delta {
+    let delta = family.delta(actor, THREAD, Author::User, 0, parents, op);
+    assert_eq!(family.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    delta
+}
+
+fn write_on_head(family: &mut Family, actor: ActorId, op: Op) -> Delta {
+    let head = family.thread_head(THREAD);
+    write(family, actor, head, op)
+}
+
+fn create_main(family: &mut Family) -> InodeId {
+    let src = write_on_head(
+        family,
+        DAEMON,
+        Op::Create {
+            kind: InodeKind::Dir,
+            parent: Parent::Root,
+            name: "src".into(),
+            content: Content::Empty,
+            executable: false,
+        },
+    );
+    let main = write_on_head(
+        family,
+        DAEMON,
+        Op::Create {
+            kind: InodeKind::File,
+            parent: Parent::Dir(InodeId(src.span.first())),
+            name: "main.rs".into(),
+            content: Content::GitText(oid(1)),
+            executable: false,
+        },
+    );
+    InodeId(main.span.first())
+}
+
+fn text(family: &Family, inode: InodeId) -> String {
+    match family.file(inode) {
+        Some(FileView::Text(text)) => text,
+        other => panic!("not text: {other:?}"),
+    }
+}
+
+#[test]
+fn git_files_stay_lazy_until_edited() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    assert_eq!(family.file(main), Some(FileView::GitText(oid(1))));
+    assert_eq!(family.tree().path_of(main).as_deref(), Some("src/main.rs"));
+
+    write_on_head(
+        &mut family,
+        CHECKOUT_A,
+        Op::Text {
+            inode: main,
+            op: TextOp::Insert {
+                pos: 0,
+                content: "// hi\n".into(),
+            },
+        },
+    );
+    assert_eq!(text(&family, main), "// hi\nfn main() {}\n");
+}
+
+#[test]
+fn edits_from_two_checkouts_based_on_the_same_disk_version_merge() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let disk_version = family.thread_head(THREAD);
+    write(
+        &mut family,
+        CHECKOUT_A,
+        disk_version.clone(),
+        Op::Text {
+            inode: main,
+            op: TextOp::Insert {
+                pos: 0,
+                content: "use a;\n".into(),
+            },
+        },
+    );
+    write(
+        &mut family,
+        CHECKOUT_B,
+        disk_version,
+        Op::Text {
+            inode: main,
+            op: TextOp::Insert {
+                pos: 13,
+                content: "// b\n".into(),
+            },
+        },
+    );
+    assert_eq!(text(&family, main), "use a;\nfn main() {}\n// b\n");
+    assert_eq!(family.thread(THREAD).expect("thread").head.len(), 2);
+}
+
+#[test]
+fn replacing_content_wins_over_concurrent_edits_in_any_order() {
+    let mut original = Family::new();
+    let main = create_main(&mut original);
+    let base = original.thread_head(THREAD);
+
+    let mut a = original.clone();
+    let edit = write(
+        &mut a,
+        CHECKOUT_A,
+        base.clone(),
+        Op::Text {
+            inode: main,
+            op: TextOp::Insert {
+                pos: 0,
+                content: "x".into(),
+            },
+        },
+    );
+    let mut b = original.clone();
+    let replace = write(
+        &mut b,
+        CHECKOUT_B,
+        base,
+        Op::SetContent {
+            inode: main,
+            content: Content::Blob(BlobHash([9; 32])),
+        },
+    );
+
+    a.apply(replace, &mut bases()).expect("applies");
+    b.apply(edit, &mut bases()).expect("applies");
+    assert_eq!(a.file(main), b.file(main));
+    assert_eq!(a.file(main), Some(FileView::Blob(BlobHash([9; 32]))));
+}
+
+#[test]
+fn conversation_is_recorded_per_thread() {
+    let mut family = Family::new();
+    let session = SessionRef {
+        agent: "claude-code".into(),
+        id: "s1".into(),
+    };
+    for line in ["{\"type\":\"user\"}", "{\"type\":\"assistant\"}"] {
+        write_on_head(
+            &mut family,
+            DAEMON,
+            Op::Conv(ConvOp::Native {
+                session: session.clone(),
+                file: SessionFile::Main,
+                line: line.into(),
+            }),
+        );
+    }
+    write_on_head(&mut family, DAEMON, Op::Conv(ConvOp::Title("Fix the parser".into())));
+    let lines: Vec<&Op> = family.conversation(THREAD).map(|delta| &delta.op).collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(family.thread(THREAD).and_then(|t| t.title.clone()).as_deref(), Some("Fix the parser"));
+    assert_eq!(family.thread(THREAD).expect("thread").head.len(), 1);
+}
+
+#[test]
+fn missing_base_text_rejects_without_changes() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let before = family.log().len();
+    let delta = family.delta(
+        CHECKOUT_A,
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        Op::Text {
+            inode: main,
+            op: TextOp::Insert {
+                pos: 0,
+                content: "x".into(),
+            },
+        },
+    );
+    assert_eq!(
+        family.apply(delta.clone(), &mut HashMap::new()),
+        Err(LogError::MissingBase(oid(1)))
+    );
+    assert_eq!(family.log().len(), before);
+    assert!(!family.graph().contains(delta.span.first()));
+    assert_eq!(family.apply(delta, &mut bases()), Ok(Applied::New));
+}
+
+#[test]
+fn replaying_the_log_reproduces_the_family() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    write_on_head(
+        &mut family,
+        CHECKOUT_A,
+        Op::Text {
+            inode: main,
+            op: TextOp::Delete { pos: 0, len: 3 },
+        },
+    );
+    let mut replica = Family::new();
+    for delta in family.log() {
+        replica.apply(delta.clone(), &mut bases()).expect("replays");
+        assert_eq!(replica.apply(delta.clone(), &mut bases()), Ok(Applied::AlreadyKnown));
+    }
+    assert_eq!(text(&replica, main), "main() {}\n");
+    let bytes = postcard::to_allocvec(family.log()).expect("serializes");
+    let decoded: Vec<Delta> = postcard::from_bytes(&bytes).expect("deserializes");
+    assert_eq!(decoded, family.log());
+}

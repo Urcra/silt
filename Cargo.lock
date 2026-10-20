@@ -1895,6 +1895,13 @@ version = "0.0.1"
 [[package]]
 name = "silt-log"
 version = "0.0.1"
+dependencies = [
+ "postcard",
+ "serde",
+ "silt-crdt",
+ "silt-types",
+ "thiserror",
+]
 
 [[package]]
 name = "silt-proto"

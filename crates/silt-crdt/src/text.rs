@@ -354,13 +354,13 @@ impl TextDoc {
                 splits,
             },
         );
-        doc.applied.push(Applied {
-            id: source,
-            kind: AppliedKind::Insert {
-                start: key,
-                len: run_len(content.chars().count()),
-            },
-        });
+        let len = run_len(content.chars().count());
+        if len > 0 {
+            doc.applied.push(Applied {
+                id: source,
+                kind: AppliedKind::Insert { start: key, len },
+            });
+        }
         doc.prepare = Frontier::single(source);
         doc
     }
