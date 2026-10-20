@@ -56,6 +56,24 @@ fn assert_refused(family: &mut Family, delta: Delta) {
 }
 
 #[test]
+fn a_refused_edit_leaves_a_file_from_git_as_it_was() {
+    let mut family = Family::new();
+    let oid = silt_types::GitOid([3; 20]);
+    let created = Op::Create {
+        kind: InodeKind::File,
+        parent: Parent::Root,
+        name: "main.rs".into(),
+        content: Content::GitText(oid),
+        executable: false,
+    };
+    let file = InodeId(write(&mut family, ALICE, MAIN, created).span.first());
+    let past_the_end = from_mallory(&family, MAIN, Op::Text { inode: file, op: TextOp::Delete { pos: 100, len: 1 } });
+    let mut bases = HashMap::from([(oid, "fn main() {}\n".to_owned())]);
+    assert!(family.apply(past_the_end, &mut bases).is_err());
+    assert_eq!(family.file(file), Some(silt_log::FileView::GitText(oid)), "still read from git, as on replicas that never saw it");
+}
+
+#[test]
 fn files_in_a_git_directory_are_refused() {
     let (mut family, src, _) = family();
     for name in [".git", ".GIT", ".git.", "git~1"] {

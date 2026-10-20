@@ -499,11 +499,15 @@ impl Family {
             return Err(CausalError::UnknownParent(*parent).into());
         }
         let applies_text = self.check(&delta, bases)?;
-        match self.graph.add(delta.span, &delta.parents)? {
-            Added::New(_) => {}
-            Added::AlreadyKnown => return Ok(Applied::AlreadyKnown),
+        // Kept as a guard: the first id was new, so the span can't be known.
+        if let Added::AlreadyKnown = self.graph.add(delta.span, &delta.parents)? {
+            return Ok(Applied::AlreadyKnown);
         }
-        self.project(&delta, applies_text)?;
+        // `check` covered what projecting needs, so this doesn't fail. If it
+        // did, the graph already has the delta, so it is recorded all the
+        // same; every replica runs the same code and fails alike.
+        let projected = self.project(&delta, applies_text);
+        debug_assert!(projected.is_ok(), "a checked delta failed to project: {projected:?}");
         self.record(delta);
         Ok(Applied::New)
     }
@@ -549,15 +553,24 @@ impl Family {
                 if !self.based_on_current_content(*inode, &delta.parents)? {
                     return Ok(false);
                 }
+                let from_git = match self.files.get(inode).map(|state| &state.content) {
+                    Some(FileContent::GitText(oid)) => Some(*oid),
+                    _ => None,
+                };
                 let doc = materialize(&mut self.files, *inode, bases)?;
-                doc.check(
+                let checked = doc.check(
                     &self.graph,
                     &TextEvent {
                         span: delta.span,
                         parents: delta.parents.clone(),
                         op: op.clone(),
                     },
-                )?;
+                );
+                if let (Err(_), Some(oid)) = (&checked, from_git) {
+                    // A refused delta leaves the file as it found it.
+                    self.files.get_mut(inode).expect("materialized above").content = FileContent::GitText(oid);
+                }
+                checked?;
                 return Ok(true);
             }
             Op::SetContent { inode, .. } | Op::SetExecutable { inode, .. } => {
