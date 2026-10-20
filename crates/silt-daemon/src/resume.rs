@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use silt_agents::{Agent, Entry, RecordedSession, Rewrites, SessionIds, Transcripts, render_transcript};
 use silt_crdt::InodeKind;
 use silt_git::Repo;
-use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, Op, SessionFile, SessionRef};
+use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, LogError, Op, SessionFile, SessionRef};
 use silt_store::ThreadRecord;
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
@@ -259,14 +259,22 @@ impl Core {
 
     /// Turns a family known only from the server into a projection, reading
     /// git blobs from `repo`.
+    /// The raw deltas stay until the projection succeeds, so a clone that
+    /// lacks a git blob can try again later. A delta that can't apply is
+    /// skipped, as at startup.
     pub(crate) fn project_family(&mut self, family_id: FamilyId, repo: &Repo) -> Result<(), CoreError> {
-        let Some(deltas) = self.raw.remove(&family_id) else {
+        let Some(deltas) = self.raw.get(&family_id) else {
             return Ok(());
         };
         let mut family = Family::new();
         for delta in deltas {
-            family.apply(delta, &mut RepoBases(repo))?;
+            match family.apply(delta.clone(), &mut RepoBases(repo)) {
+                Ok(_) => {}
+                Err(error @ LogError::MissingBase(_)) => return Err(error.into()),
+                Err(error) => warn!(%error, id = %delta.span.first(), "skipping a delta that can't apply here"),
+            }
         }
+        self.raw.remove(&family_id);
         self.families.insert(family_id, family);
         Ok(())
     }
