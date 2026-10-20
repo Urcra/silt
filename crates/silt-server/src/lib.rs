@@ -88,7 +88,7 @@ struct Shared {
     blobs: BlobStore,
     generation: u64,
     rooms: Mutex<HashMap<FamilyId, Room>>,
-    waiters: Mutex<HashMap<FamilyId, Arc<Notify>>>,
+    waiters: Waiters,
     /// Locked after `rooms` when both are needed.
     index: Mutex<Index>,
     data_dir: std::path::PathBuf,
@@ -145,7 +145,7 @@ impl Server {
                 blobs: BlobStore::new(data_dir.join("blobs")),
                 generation,
                 rooms: Mutex::new(rooms),
-                waiters: Mutex::new(HashMap::new()),
+                waiters: Waiters::default(),
                 index: Mutex::new(index),
                 data_dir: data_dir.to_owned(),
                 purged: Mutex::new(purged),
@@ -624,7 +624,7 @@ async fn push(
     tx.commit().await?;
     drop(rooms);
     if !stored.is_empty() {
-        server.waiter(family).await.notify_waiters();
+        server.wake_pulls(family);
         let deltas: Vec<Delta> = stored.into_iter().map(|(_, delta)| delta).collect();
         if let Err(error) = server.notify(&deltas, caller).await {
             tracing::warn!(%error, "could not write notifications");
@@ -661,7 +661,7 @@ async fn pull(
         None => None,
     };
     let wait = Duration::from_secs(query.wait).min(MAX_WAIT);
-    let notified = server.waiter(family).await;
+    let notified = server.waiter(family);
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         let waiting = notified.notified();
@@ -931,14 +931,65 @@ impl Server {
         Viewer::load(&self.shared.db, user, &forks).await
     }
 
-    async fn waiter(&self, family: FamilyId) -> Arc<Notify> {
-        self.shared
-            .waiters
-            .lock()
-            .await
-            .entry(family)
-            .or_insert_with(|| Arc::new(Notify::new()))
-            .clone()
+    fn waiter(&self, family: FamilyId) -> Waiter<'_> {
+        self.shared.waiters.subscribe(family)
+    }
+
+    fn wake_pulls(&self, family: FamilyId) {
+        self.shared.waiters.wake(family);
+    }
+}
+
+/// Pulls waiting for pushes, by family. Holds only families someone is
+/// waiting on.
+#[derive(Default)]
+struct Waiters(std::sync::Mutex<HashMap<FamilyId, Arc<Notify>>>);
+
+impl Waiters {
+    fn subscribe(&self, family: FamilyId) -> Waiter<'_> {
+        let notify = self.0.lock().expect("lock").entry(family).or_insert_with(|| Arc::new(Notify::new())).clone();
+        Waiter {
+            waiters: &self.0,
+            family,
+            notify,
+        }
+    }
+
+    fn wake(&self, family: FamilyId) {
+        if let Some(notify) = self.0.lock().expect("lock").get(&family) {
+            notify.notify_waiters();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.lock().expect("lock").len()
+    }
+}
+
+/// A pull waiting for pushes to its family. The last one to leave removes
+/// the family's entry.
+struct Waiter<'a> {
+    waiters: &'a std::sync::Mutex<HashMap<FamilyId, Arc<Notify>>>,
+    family: FamilyId,
+    notify: Arc<Notify>,
+}
+
+impl std::ops::Deref for Waiter<'_> {
+    type Target = Notify;
+
+    fn deref(&self) -> &Notify {
+        &self.notify
+    }
+}
+
+impl Drop for Waiter<'_> {
+    fn drop(&mut self) {
+        let mut waiters = self.waiters.lock().expect("lock");
+        // The map's copy and this one: nobody else is waiting.
+        if Arc::strong_count(&self.notify) == 2 {
+            waiters.remove(&self.family);
+        }
     }
 }
 
@@ -979,4 +1030,22 @@ pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn families_are_forgotten_once_nobody_waits() {
+        let waiters = Waiters::default();
+        let first = waiters.subscribe(FamilyId(1));
+        let second = waiters.subscribe(FamilyId(1));
+        waiters.wake(FamilyId(2));
+        assert_eq!(waiters.len(), 1, "waking a family nobody waits on remembers nothing");
+        drop(first);
+        assert_eq!(waiters.len(), 1, "someone still waits");
+        drop(second);
+        assert_eq!(waiters.len(), 0);
+    }
 }

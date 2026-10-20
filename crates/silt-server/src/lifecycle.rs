@@ -244,7 +244,7 @@ impl Server {
         drop(purged);
         drop(rooms);
         for family in threads.iter().map(|(_, family)| *family).collect::<HashSet<_>>() {
-            self.waiter(family).await.notify_waiters();
+            self.wake_pulls(family);
         }
         let now = SystemTime::now();
         for (blob, written) in self.shared.blobs.list().await? {
