@@ -80,7 +80,11 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
     if !metadata.is_file() {
         return Ok(None);
     }
-    let bytes = fs::read(&full)?;
+    let bytes = match fs::read(&full) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     Ok(Some(RawFile {
         hash: *blake3::hash(&bytes).as_bytes(),
         mtime_ns: mtime_ns(&metadata),

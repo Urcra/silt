@@ -228,7 +228,9 @@ impl Core {
         core.load_sessions().await?;
         let ids: Vec<i64> = core.checkouts.keys().copied().collect();
         for id in ids {
-            core.rescan(id).await?;
+            if let Err(error) = core.rescan(id).await {
+                warn!(%error, checkout = id, "could not look over the checkout at startup; changes are picked up as they happen");
+            }
         }
         Ok(core)
     }
@@ -462,7 +464,12 @@ impl Core {
             rounds += 1;
             let mut retry = Vec::new();
             for path in std::mem::take(&mut worklist) {
-                retry.extend(self.ingest_file(checkout_id, &path).await?);
+                // One file that can't be recorded must not keep the rest
+                // of the batch from being recorded.
+                match self.ingest_file(checkout_id, &path).await {
+                    Ok(again) => retry.extend(again),
+                    Err(error) => warn!(%error, path, "could not record a change to a file"),
+                }
             }
             worklist = self.trackable(checkout_id, retry)?;
         }
@@ -477,9 +484,10 @@ impl Core {
         let mut vanished: BTreeMap<[u8; 32], Vec<&String>> = BTreeMap::new();
         let mut appeared = Vec::new();
         for path in paths {
-            match (entries.get(path), disk::read(&root, path)?) {
-                (Some(entry), None) => vanished.entry(entry.hash).or_default().push(path),
-                (None, Some(raw)) => appeared.push((path, raw)),
+            // An unreadable file is left to `ingest_file`, which reports it.
+            match (entries.get(path), disk::read(&root, path)) {
+                (Some(entry), Ok(None)) => vanished.entry(entry.hash).or_default().push(path),
+                (None, Ok(Some(raw))) => appeared.push((path, raw)),
                 _ => {}
             }
         }
@@ -493,17 +501,18 @@ impl Core {
             let family_id = self.checkout(checkout_id)?.family;
             let checkout = self.checkouts.get_mut(&checkout_id).expect("checked above");
             let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
-            let Some(ingested) = checkout.bridge.rename(
-                family,
-                &mut RepoBases(&checkout.repo),
-                from,
-                to,
-                &disk_file,
-                &author,
-                now_ms(),
-            )?
-            else {
-                continue;
+            // A move that can't be recorded is recorded as a delete and a
+            // new file instead, by `ingest_file`.
+            let renamed = checkout
+                .bridge
+                .rename(family, &mut RepoBases(&checkout.repo), from, to, &disk_file, &author, now_ms());
+            let ingested = match renamed {
+                Ok(Some(ingested)) => ingested,
+                Ok(None) => continue,
+                Err(error) => {
+                    warn!(%error, from, to, "could not record a move");
+                    continue;
+                }
             };
             self.persist(family_id, &ingested.deltas).await?;
             self.persist_entry(checkout_id, from).await?;
@@ -747,8 +756,19 @@ impl Core {
         if paths.is_empty() {
             return Ok(paths);
         }
-        let ignored = self.checkout(checkout_id)?.repo.ignored(&paths)?;
-        paths.retain(|path| !ignored.contains(path));
+        let repo = &self.checkout(checkout_id)?.repo;
+        match repo.ignored(&paths) {
+            Ok(ignored) => paths.retain(|path| !ignored.contains(path)),
+            // git refuses some paths, such as those inside a submodule;
+            // asking one at a time leaves out only those.
+            Err(_) => paths.retain(|path| match repo.ignored(std::slice::from_ref(path)) {
+                Ok(ignored) => ignored.is_empty(),
+                Err(error) => {
+                    warn!(%error, path, "leaving out a path git won't check");
+                    false
+                }
+            }),
+        }
         Ok(paths)
     }
 

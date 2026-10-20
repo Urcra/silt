@@ -270,7 +270,7 @@ impl Bridge {
         if paths.contains_key(to) || family.tree().kind(inode) != Some(InodeKind::File) {
             return Ok(None);
         }
-        let Some(entry) = self.entries.remove(from) else {
+        let Some(entry) = self.entries.get(from).cloned() else {
             return Ok(None);
         };
         let mut writer = Writer {
@@ -283,6 +283,7 @@ impl Bridge {
         };
         let (parent, name) = writer.parent_for(self.actor, &paths, to)?;
         writer.tree_op(self.actor, Op::Move { inode, parent, name })?;
+        self.entries.remove(from);
         self.entries.insert(
             to.to_owned(),
             DiskEntry {
@@ -419,12 +420,19 @@ impl Writer<'_> {
     }
 
     fn update(&mut self, actor: ActorId, inode: InodeId, disk: &DiskFile, version: Frontier) -> Result<(), BridgeError> {
-        match (&disk.content, self.family.file(inode)) {
-            (DiskContent::Text(text), Some(FileView::Text(_) | FileView::GitText(_))) => {
+        let editable = match self.family.file(inode) {
+            Some(FileView::Text(_)) => true,
+            // A git blob that isn't text (it was binary until now) can't be
+            // edited as text; the new text replaces it.
+            Some(FileView::GitText(oid)) => self.bases.text(oid).is_some(),
+            _ => false,
+        };
+        match &disk.content {
+            DiskContent::Text(text) if editable => {
                 let base = self.text_at(inode, &version)?;
                 self.edit_text(actor, inode, &base, text, version)?;
             }
-            (DiskContent::Text(text), _) => {
+            DiskContent::Text(text) => {
                 let replaced = self.tree_op(
                     actor,
                     Op::SetContent {
@@ -434,8 +442,8 @@ impl Writer<'_> {
                 )?;
                 self.edit_text(actor, inode, "", text, replaced)?;
             }
-            (DiskContent::Blob(hash), Some(FileView::Blob(current))) if *hash == current => {}
-            (DiskContent::Blob(hash), _) => {
+            DiskContent::Blob(hash) if self.family.file(inode) == Some(FileView::Blob(*hash)) => {}
+            DiskContent::Blob(hash) => {
                 self.tree_op(
                     actor,
                     Op::SetContent {
@@ -444,8 +452,8 @@ impl Writer<'_> {
                     },
                 )?;
             }
-            (DiskContent::GitBlob(oid), Some(FileView::GitText(current))) if *oid == current => {}
-            (DiskContent::GitBlob(oid), _) => {
+            DiskContent::GitBlob(oid) if self.family.file(inode) == Some(FileView::GitText(*oid)) => {}
+            DiskContent::GitBlob(oid) => {
                 self.tree_op(
                     actor,
                     Op::SetContent {

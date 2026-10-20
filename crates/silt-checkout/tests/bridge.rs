@@ -345,6 +345,22 @@ fn a_file_replaced_by_a_directory_keeps_the_directorys_files() {
 }
 
 #[test]
+fn a_binary_git_file_that_becomes_text_is_replaced() {
+    let mut family = Family::new();
+    let logo = ImportFile {
+        path: "logo.png".into(),
+        oid: oid(3),
+        executable: false,
+    };
+    import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[logo], 0).expect("imports");
+    let mut bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::new());
+    bridge
+        .ingest(&mut family, &mut bases(), "logo.png", Some(Checkout::file("now text\n")), &Author::User, 0)
+        .expect("records the new text instead of failing on the binary base");
+    assert_eq!(family_text(&family, "logo.png"), "now text\n");
+}
+
+#[test]
 fn a_file_never_written_here_is_missing_not_deleted() {
     let mut family = imported_family();
     let mut checkout = Checkout::new(1, &family);
