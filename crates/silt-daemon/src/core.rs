@@ -614,9 +614,20 @@ impl Core {
             };
             DiskContent::Blob(self.store.blobs().put(&bytes).await?)
         };
+        let checkout = self.checkout(checkout)?;
+        let executable = if checkout.repo.tracks_file_mode() {
+            raw.executable
+        } else {
+            // The filesystem can't keep the bit, so what the thread says
+            // stands.
+            self.families.get(&checkout.family).is_some_and(|family| {
+                let view = family.thread_view(checkout.record.thread);
+                view.paths().get(path).is_some_and(|inode| view.is_executable(*inode))
+            })
+        };
         Ok(DiskFile {
             content,
-            executable: raw.executable,
+            executable,
             hash: raw.hash,
             size: raw.size(),
             mtime_ns: raw.mtime_ns,
@@ -653,6 +664,34 @@ impl Core {
         self.perform_with(checkout_id, actions, false).await
     }
 
+    /// Where the filesystem folds case, paths of the thread that differ only
+    /// in case would be one file, each write replacing the other. Only the
+    /// first of them, in path order, is written.
+    fn without_case_clashes(&self, checkout_id: i64, mut actions: Vec<DiskAction>) -> Result<Vec<DiskAction>, CoreError> {
+        let checkout = self.checkout(checkout_id)?;
+        if !checkout.repo.ignores_case() {
+            return Ok(actions);
+        }
+        let Some(family) = self.families.get(&checkout.family) else {
+            return Ok(actions);
+        };
+        let mut first: HashMap<String, String> = HashMap::new();
+        for path in family.thread_view(checkout.record.thread).paths().into_keys() {
+            first.entry(path.to_lowercase()).or_insert(path);
+        }
+        actions.retain(|action| match action {
+            DiskAction::Write { path, .. } => {
+                let kept = first.get(&path.to_lowercase()).is_none_or(|winner| winner == path);
+                if !kept {
+                    warn!(path, "not writing a file whose name differs only in case from another's; this filesystem would merge them");
+                }
+                kept
+            }
+            DiskAction::Remove { .. } => true,
+        });
+        Ok(actions)
+    }
+
     /// Like [`Core::perform`]; with `force`, files on disk are overwritten
     /// even when the checkout never recorded them (materializing a thread).
     pub(crate) async fn perform_with(
@@ -661,6 +700,7 @@ impl Core {
         actions: Vec<DiskAction>,
         force: bool,
     ) -> Result<Vec<String>, CoreError> {
+        let actions = self.without_case_clashes(checkout_id, actions)?;
         let mut changed_meanwhile = Vec::new();
         for action in actions {
             match self.perform_action(checkout_id, action, force).await {
@@ -703,8 +743,9 @@ impl Core {
                 if !unchanged(current.as_ref().map(|current| current.hash)) {
                     return Ok(Some(path));
                 }
+                let modes_count = self.checkout(checkout_id)?.repo.tracks_file_mode();
                 let written = match current {
-                    Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
+                    Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && (current.executable == executable || !modes_count) => current,
                     _ => match disk::replace(&root, &path, &bytes, executable, unchanged)? {
                         Some(written) => written,
                         None => return Ok(Some(path)),

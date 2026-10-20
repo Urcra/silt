@@ -74,6 +74,18 @@ fn files_whose_names_are_not_utf8_are_left_out() {
 }
 
 #[test]
+fn file_mode_and_case_follow_git_config() {
+    let dir = repo_with_commit();
+    let repo = Repo::discover(dir.path()).expect("discovers");
+    assert!(repo.tracks_file_mode());
+    git(dir.path(), &["config", "core.fileMode", "false"]);
+    git(dir.path(), &["config", "core.ignoreCase", "true"]);
+    let repo = Repo::discover(dir.path()).expect("discovers");
+    assert!(!repo.tracks_file_mode());
+    assert!(repo.ignores_case());
+}
+
+#[test]
 fn unborn_repository_has_no_head_commit() {
     let dir = tempfile::tempdir().expect("temp dir");
     git(dir.path(), &["init", "-q"]);

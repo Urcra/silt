@@ -88,6 +88,18 @@ impl Repo {
         Ok(name.map(|name| name.shorten().to_str_lossy().into_owned()))
     }
 
+    /// Whether executable bits on disk mean anything here; git turns this
+    /// off where the filesystem can't keep them (WSL's `/mnt/c`).
+    pub fn tracks_file_mode(&self) -> bool {
+        self.repo.config_snapshot().boolean("core.fileMode").unwrap_or(true)
+    }
+
+    /// Whether the filesystem folds case, so `a` and `A` are one file; git
+    /// finds out when it makes the repository.
+    pub fn ignores_case(&self) -> bool {
+        self.repo.config_snapshot().boolean("core.ignoreCase").unwrap_or(false)
+    }
+
     pub fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
         let Ok(remote) = self.repo.find_remote(name) else {
             return Ok(None);
