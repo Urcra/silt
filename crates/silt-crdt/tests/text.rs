@@ -1,7 +1,7 @@
 //! Expected results come from diamond-types (M0-10 probe), with actor ids
 //! ordered like its agent names.
 
-use silt_crdt::{CausalError, ReplicaError, TextError, TextOp, TextReplica};
+use silt_crdt::{CausalError, CharId, ReplicaError, TextError, TextOp, TextReplica};
 use silt_types::{ActorId, Frontier};
 
 const BASE: ActorId = ActorId(9);
@@ -186,7 +186,10 @@ fn attribution_names_the_inserting_actor() {
         .doc()
         .attribution()
         .into_iter()
-        .map(|(ch, id)| (ch, id.actor))
+        .map(|(ch, id)| match id {
+            CharId::Delta(id) => (ch, id.actor),
+            CharId::Base { .. } => panic!("no base content in this test"),
+        })
         .collect();
     assert_eq!(actors, vec![('a', BASE), ('X', A), ('b', BASE)]);
 }

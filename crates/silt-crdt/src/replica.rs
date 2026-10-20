@@ -1,4 +1,4 @@
-use silt_types::{ActorId, DeltaSpan, Frontier};
+use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier};
 
 use crate::causal::{Added, CausalError, CausalGraph};
 use crate::text::{TextDoc, TextError, TextEvent, TextOp};
@@ -29,6 +29,21 @@ impl TextReplica {
             doc: TextDoc::new(),
             events: Vec::new(),
         }
+    }
+
+    /// A replica whose document starts as the git blob `content`, introduced
+    /// by the delta `source` (for example the import of a commit). Every
+    /// replica built from the same `source` and `content` agrees on the ids of
+    /// the base characters.
+    pub fn from_base(actor: ActorId, source: DeltaId, content: &str) -> Result<Self, ReplicaError> {
+        let mut graph = CausalGraph::new();
+        graph.add(DeltaSpan::new(source.actor, source.lamport, 1), &Frontier::root())?;
+        Ok(Self {
+            actor,
+            graph,
+            doc: TextDoc::from_base(source, content),
+            events: Vec::new(),
+        })
     }
 
     pub fn actor(&self) -> ActorId {

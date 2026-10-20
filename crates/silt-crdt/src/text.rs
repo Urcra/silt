@@ -26,6 +26,27 @@ pub struct TextEvent {
     pub op: TextOp,
 }
 
+/// Identity of one character.
+///
+/// Characters typed into the document carry the id of the delta that
+/// inserted them. Characters that came from a git blob are named by the delta
+/// that introduced the blob plus their offset in it, so every replica derives
+/// the same ids without spending lamports on unedited content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CharId {
+    Base { source: DeltaId, offset: u32 },
+    Delta(DeltaId),
+}
+
+impl CharId {
+    fn exists_at(self, vv: &VersionVector) -> bool {
+        match self {
+            Self::Base { source, .. } => vv.contains(source),
+            Self::Delta(id) => vv.contains(id),
+        }
+    }
+}
+
 /// Which side of a position an anchor sticks to when text is inserted there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bias {
@@ -39,7 +60,7 @@ pub enum Bias {
 /// to, or the start or end of the document when there is none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Anchor {
-    pub char_id: Option<DeltaId>,
+    pub char_id: Option<CharId>,
     pub bias: Bias,
 }
 
@@ -60,22 +81,22 @@ pub enum TextError {
     Empty,
     #[error("anchor position {pos} is outside a document of length {len}")]
     AnchorOutOfBounds { pos: usize, len: usize },
-    #[error("anchor refers to character {0} that is not in this document")]
-    UnknownAnchor(DeltaId),
+    #[error("anchor refers to character {0:?} that is not in this document")]
+    UnknownAnchor(CharId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Item {
-    id: DeltaId,
-    origin_left: Option<DeltaId>,
-    origin_right: Option<DeltaId>,
+    id: CharId,
+    origin_left: Option<CharId>,
+    origin_right: Option<CharId>,
     deleted_by: Vec<DeltaId>,
     ch: char,
 }
 
 impl Item {
     fn exists_at(&self, vv: &VersionVector) -> bool {
-        vv.contains(self.id)
+        self.id.exists_at(vv)
     }
 
     fn visible_at(&self, vv: &VersionVector) -> bool {
@@ -105,6 +126,32 @@ pub struct TextDoc {
 impl TextDoc {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A document whose initial content is a git blob introduced by `source`.
+    /// The content is visible at every version that includes `source`.
+    pub fn from_base(source: DeltaId, content: &str) -> Self {
+        let mut previous = None;
+        let items = content
+            .chars()
+            .enumerate()
+            .map(|(offset, ch)| {
+                let id = CharId::Base {
+                    source,
+                    offset: u32::try_from(offset).expect("base blobs are smaller than 4 GiB of chars"),
+                };
+                let item = Item {
+                    id,
+                    origin_left: previous,
+                    origin_right: None,
+                    deleted_by: Vec::new(),
+                    ch,
+                };
+                previous = Some(id);
+                item
+            })
+            .collect();
+        Self { items }
     }
 
     pub fn text(&self) -> String {
@@ -190,7 +237,7 @@ impl TextDoc {
     }
 
     /// The delta that inserted each visible character.
-    pub fn attribution(&self) -> Vec<(char, DeltaId)> {
+    pub fn attribution(&self) -> Vec<(char, CharId)> {
         self.items
             .iter()
             .filter(|item| !item.is_deleted())
@@ -248,7 +295,7 @@ impl TextDoc {
     fn already_applied(&self, event: &TextEvent) -> bool {
         let first = event.span.first();
         match event.op {
-            TextOp::Insert { .. } => self.items.iter().any(|item| item.id == first),
+            TextOp::Insert { .. } => self.items.iter().any(|item| item.id == CharId::Delta(first)),
             TextOp::Delete { .. } => self.items.iter().any(|item| item.deleted_by.contains(&first)),
         }
     }
@@ -263,7 +310,7 @@ impl TextDoc {
         let origin_right = right_index.map(|index| self.items[index].id);
 
         let first = Item {
-            id: event.span.first(),
+            id: CharId::Delta(event.span.first()),
             origin_left,
             origin_right,
             deleted_by: Vec::new(),
@@ -274,7 +321,7 @@ impl TextDoc {
         self.items.insert(dest, first);
         for (offset, ch) in content.chars().enumerate().skip(1) {
             dest += 1;
-            let id = event.span.id_at(offset as u64);
+            let id = CharId::Delta(event.span.id_at(offset as u64));
             self.items.insert(
                 dest,
                 Item {
@@ -352,15 +399,15 @@ impl TextDoc {
         self.items.iter().filter(|item| item.visible_at(vv)).count()
     }
 
-    fn index_of(&self, id: DeltaId) -> Option<usize> {
+    fn index_of(&self, id: CharId) -> Option<usize> {
         self.items.iter().position(|item| item.id == id)
     }
 
-    fn position_after(&self, id: Option<DeltaId>) -> usize {
+    fn position_after(&self, id: Option<CharId>) -> usize {
         id.and_then(|id| self.index_of(id)).map_or(0, |index| index + 1)
     }
 
-    fn position_before(&self, id: Option<DeltaId>) -> usize {
+    fn position_before(&self, id: Option<CharId>) -> usize {
         id.and_then(|id| self.index_of(id)).unwrap_or(self.items.len())
     }
 }
