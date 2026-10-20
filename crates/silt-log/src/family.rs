@@ -88,6 +88,7 @@ pub struct ThreadState {
     /// Indices into the family log of the thread's conversation deltas.
     pub conversation: Vec<usize>,
     pub title: Option<String>,
+    title_stamp: Option<Stamp>,
     /// The device that may write to the thread, with the lease's epoch.
     pub lease: Option<(DeviceId, u64)>,
     /// The thread this one was forked from.
@@ -290,27 +291,38 @@ impl Family {
         items
     }
 
-    /// The comments on `thread`, oldest first.
+    /// The comments on `thread`, oldest first by causal order, so every
+    /// replica lists them alike whatever order the deltas arrived in.
     pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
-        let mut comments: Vec<Comment> = Vec::new();
-        for delta in self.log.iter().filter(|delta| delta.thread == thread) {
-            match &delta.op {
-                Op::Comment(CommentOp::Added { target, text, by }) => comments.push(Comment {
+        let ops = || {
+            self.log
+                .iter()
+                .filter(move |delta| delta.thread == thread)
+                .filter_map(|delta| match &delta.op {
+                    Op::Comment(op) => Some((delta, op)),
+                    _ => None,
+                })
+        };
+        let resolved: HashSet<DeltaId> = ops()
+            .filter_map(|(_, op)| match op {
+                CommentOp::Resolved { comment } => Some(*comment),
+                CommentOp::Added { .. } => None,
+            })
+            .collect();
+        let mut comments: Vec<Comment> = ops()
+            .filter_map(|(delta, op)| match op {
+                CommentOp::Added { target, text, by } => Some(Comment {
                     id: delta.span.first(),
                     target: *target,
                     text: text.clone(),
                     by: by.clone(),
                     time_ms: delta.time_ms,
-                    resolved: false,
+                    resolved: resolved.contains(&delta.span.first()),
                 }),
-                Op::Comment(CommentOp::Resolved { comment }) => {
-                    if let Some(found) = comments.iter_mut().find(|found| found.id == *comment) {
-                        found.resolved = true;
-                    }
-                }
-                _ => {}
-            }
-        }
+                CommentOp::Resolved { .. } => None,
+            })
+            .collect();
+        comments.sort_by_key(|comment| Stamp::from(comment.id));
         comments
     }
 
@@ -320,13 +332,21 @@ impl Family {
         Ok(materialize(&mut self.files, inode, bases)?)
     }
 
-    /// Every merge request in the family, oldest first.
+    /// Every merge request in the family, oldest first. Requests and
+    /// decisions are taken in causal order, so the first decision wins on
+    /// every replica whatever order the deltas arrived in.
     pub fn merge_requests(&self) -> Vec<MergeRequest> {
+        let mut ops: Vec<(&Delta, &MrOp)> = self
+            .log
+            .iter()
+            .filter_map(|delta| match &delta.op {
+                Op::Mr(op) => Some((delta, op)),
+                _ => None,
+            })
+            .collect();
+        ops.sort_by_key(|(delta, _)| Stamp::from(delta.span.first()));
         let mut requests: Vec<MergeRequest> = Vec::new();
-        for delta in &self.log {
-            let Op::Mr(op) = &delta.op else {
-                continue;
-            };
+        for (delta, op) in ops {
             match op {
                 MrOp::Opened { target, title, summary } => requests.push(MergeRequest {
                     id: delta.span.first(),
@@ -626,8 +646,12 @@ impl Family {
         }
         if let Op::Conv(conv) = &delta.op {
             thread.conversation.push(index);
-            if let crate::delta::ConvOp::Title(title) = conv {
+            let stamp = Some(Stamp::from(delta.span.first()));
+            if let crate::delta::ConvOp::Title(title) = conv
+                && stamp > thread.title_stamp
+            {
                 thread.title = Some(title.clone());
+                thread.title_stamp = stamp;
             }
         }
         self.log.push(delta);

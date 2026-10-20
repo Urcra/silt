@@ -377,6 +377,47 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
 }
 
 #[test]
+fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
+    use silt_log::{CommentOp, CommentTarget, MrOp};
+    let mut family = Family::new();
+    create_main(&mut family);
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = family.thread_head(FORK);
+    let opened = on_thread(
+        &mut family,
+        ActorId(9),
+        FORK,
+        head,
+        Op::Mr(MrOp::Opened {
+            target: THREAD,
+            title: "Add a comment".into(),
+            summary: String::new(),
+        }),
+    );
+    let mr = opened.span.first();
+    let head: Frontier = family.thread_head(THREAD).ids().iter().copied().chain([mr]).collect();
+    let concurrent = |actor: u128, op: Op| family.delta(ActorId(actor), THREAD, Author::User, 0, head.clone(), op);
+    let deltas = [
+        concurrent(20, Op::Mr(MrOp::Approved { mr })),
+        concurrent(21, Op::Mr(MrOp::Declined { mr, reason: "no".into() })),
+        concurrent(22, Op::Conv(ConvOp::Title("one".into()))),
+        concurrent(23, Op::Conv(ConvOp::Title("two".into()))),
+        concurrent(24, Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "first".into(), by: "a".into() })),
+        concurrent(25, Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "second".into(), by: "b".into() })),
+    ];
+    let read = |order: &mut dyn Iterator<Item = &Delta>| {
+        let mut replica = family.clone();
+        for delta in order {
+            assert_eq!(replica.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+        }
+        let comments: Vec<String> = replica.comments(THREAD).into_iter().map(|comment| comment.text).collect();
+        (replica.merge_requests()[0].status.clone(), replica.thread(THREAD).and_then(|state| state.title.clone()), comments)
+    };
+    assert_eq!(read(&mut deltas.iter()), read(&mut deltas.iter().rev()));
+}
+
+#[test]
 fn merge_requests_open_and_resolve_once() {
     use silt_log::{MrOp, MrStatus};
     let mut family = Family::new();
