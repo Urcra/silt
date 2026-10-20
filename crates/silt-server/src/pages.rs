@@ -344,14 +344,26 @@ pub(crate) async fn signup(State(server): State<Server>, headers: HeaderMap, For
         password: Some(&form.password),
         admin: false,
     };
+    let claimed = match &invite {
+        Some(token) => match accounts::claim_invite(server.db(), token).await {
+            Ok(Some(claimed)) => Some(claimed),
+            _ => return error_page(StatusCode::FORBIDDEN, "You need a current invite to sign up here."),
+        },
+        None => None,
+    };
     match accounts::create_user(server.db(), &new).await {
         Ok(user) => {
-            if let Some(invite) = &invite {
-                let _ = accounts::use_invite(server.db(), invite, user).await;
+            if let Some(claimed) = claimed
+                && claimed.complete(server.db(), user).await.is_err()
+            {
+                return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Your account exists, but joining the invite's org failed.");
             }
             start_session(&server, user, &next).await
         }
         Err(error) => {
+            if let Some(claimed) = claimed {
+                let _ = claimed.release(server.db()).await;
+            }
             let mut back = format!("/signup?next={}&error={}", sign_in::encode(&next), sign_in::encode(&error.to_string()));
             if let Some(invite) = &invite {
                 back.push_str(&format!("&invite={}", sign_in::encode(invite)));
@@ -453,12 +465,12 @@ async fn account_for(server: &Server, identity: &sign_in::Identity, invite: Opti
         accounts::link_identity(db, &identity.provider, &identity.subject, user.id).await?;
         return Ok(Some(user.id));
     }
-    let invited = match invite {
-        Some(invite) => accounts::invite(db, invite).await?.is_some(),
-        None => false,
+    let claimed = match invite {
+        Some(invite) => accounts::claim_invite(db, invite).await?,
+        None => None,
     };
     let signup = &server.config().signup;
-    let allowed = invited
+    let allowed = claimed.is_some()
         || signup.policy == SignupPolicy::Open
         || (signup.policy == SignupPolicy::Domains
             && identity.email.as_deref().and_then(|email| email.rsplit_once('@')).is_some_and(|(_, domain)| {
@@ -468,7 +480,7 @@ async fn account_for(server: &Server, identity: &sign_in::Identity, invite: Opti
         return Ok(None);
     }
     let name = accounts::free_name(db, &identity.login).await?;
-    let user = accounts::create_user(
+    let created = accounts::create_user(
         db,
         &NewUser {
             name: &name,
@@ -478,10 +490,19 @@ async fn account_for(server: &Server, identity: &sign_in::Identity, invite: Opti
             admin: false,
         },
     )
-    .await?;
+    .await;
+    let user = match created {
+        Ok(user) => user,
+        Err(error) => {
+            if let Some(claimed) = claimed {
+                claimed.release(db).await?;
+            }
+            return Err(error);
+        }
+    };
     accounts::link_identity(db, &identity.provider, &identity.subject, user).await?;
-    if let Some(invite) = invite {
-        accounts::use_invite(db, invite, user).await?;
+    if let Some(claimed) = claimed {
+        claimed.complete(db, user).await?;
     }
     Ok(Some(user))
 }

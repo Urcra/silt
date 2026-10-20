@@ -450,20 +450,61 @@ pub(crate) async fn invite(db: &SqlitePool, token: &str) -> Result<Option<Option
         .map(|row| row.get("org")))
 }
 
-/// Marks the invite used by `user` and puts them in its org.
-pub(crate) async fn use_invite(db: &SqlitePool, token: &str, user: i64) -> Result<bool, sqlx::Error> {
-    let Some(org) = invite(db, token).await? else {
-        return Ok(false);
-    };
-    sqlx::query("UPDATE invites SET used_by = ? WHERE token_hash = ?")
-        .bind(user)
+/// An invite taken for one sign-up, until the account exists.
+pub(crate) struct ClaimedInvite {
+    token: String,
+    org: Option<String>,
+    expires_ms: i64,
+}
+
+/// Takes the invite for one sign-up: only one of two sign-ups racing for
+/// it gets it. Complete it once the account exists, or release it.
+pub(crate) async fn claim_invite(db: &SqlitePool, token: &str) -> Result<Option<ClaimedInvite>, sqlx::Error> {
+    let Some(row) = sqlx::query("SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
         .bind(hash(token).to_vec())
+        .bind(now_ms())
+        .fetch_optional(db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let expires_ms: i64 = row.get("expires_ms");
+    let taken = sqlx::query("UPDATE invites SET expires_ms = 0 WHERE token_hash = ? AND expires_ms = ? AND used_by IS NULL")
+        .bind(hash(token).to_vec())
+        .bind(expires_ms)
         .execute(db)
-        .await?;
-    if let Some(org) = org {
-        crate::orgs::add_member(db, &org, user, false).await?;
+        .await?
+        .rows_affected();
+    Ok((taken == 1).then(|| ClaimedInvite {
+        token: token.to_owned(),
+        org: row.get("org"),
+        expires_ms,
+    }))
+}
+
+impl ClaimedInvite {
+    /// Marks the invite used by `user` and puts them in its org.
+    pub(crate) async fn complete(self, db: &SqlitePool, user: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE invites SET used_by = ? WHERE token_hash = ?")
+            .bind(user)
+            .bind(hash(&self.token).to_vec())
+            .execute(db)
+            .await?;
+        if let Some(org) = &self.org {
+            crate::orgs::add_member(db, org, user, false).await?;
+        }
+        Ok(())
     }
-    Ok(true)
+
+    /// Gives the invite back after a sign-up that failed.
+    pub(crate) async fn release(self, db: &SqlitePool) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE invites SET expires_ms = ? WHERE token_hash = ? AND used_by IS NULL")
+            .bind(self.expires_ms)
+            .bind(hash(&self.token).to_vec())
+            .execute(db)
+            .await?;
+        Ok(())
+    }
 }
 
 pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str) -> Result<Option<i64>, sqlx::Error> {

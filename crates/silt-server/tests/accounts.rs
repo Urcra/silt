@@ -226,6 +226,25 @@ async fn invites_let_people_sign_up() {
     let again = http.post(format!("{base}/signup")).form(&[("user", "eve"), ("password", "correct horse battery"), ("invite", invite.as_str())]).send().await.expect("sends");
     assert_eq!(again.status(), StatusCode::FORBIDDEN, "an invite works once");
     assert_eq!(token(&base, "dave", "correct horse battery").await.len(), 64);
+
+    let racing = admin.invite(None, 7).await.expect("invites");
+    let mut racers = tokio::task::JoinSet::new();
+    for n in 0..8 {
+        let (http, base, racing) = (browser(), base.clone(), racing.clone());
+        racers.spawn(async move {
+            let form = [("user", format!("racer{n}")), ("password", "correct horse battery".into()), ("invite", racing)];
+            let response = http.post(format!("{base}/signup")).form(&form).send().await.expect("sends");
+            session_cookie(&response).is_some()
+        });
+    }
+    let signed_up = racers.join_all().await.into_iter().filter(|signed_up| *signed_up).count();
+    assert_eq!(signed_up, 1, "one invite makes one account");
+
+    let failing = admin.invite(None, 7).await.expect("invites");
+    let taken = http.post(format!("{base}/signup")).form(&[("user", "dave"), ("password", "correct horse battery"), ("invite", failing.as_str())]).send().await.expect("sends");
+    assert_eq!(taken.status(), StatusCode::SEE_OTHER, "back to the form with an error");
+    let retried = http.post(format!("{base}/signup")).form(&[("user", "frank"), ("password", "correct horse battery"), ("invite", failing.as_str())]).send().await.expect("sends");
+    assert!(session_cookie(&retried).is_some(), "a failed sign-up gives the invite back");
 }
 
 /// What the stand-in provider remembers between requests.
