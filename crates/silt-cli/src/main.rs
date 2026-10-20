@@ -18,36 +18,39 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run Claude Code with Silt recording the session and every file edit
-    Claude {
-        /// Work in a managed checkout instead of the current one
-        #[arg(long)]
-        isolated: bool,
-        /// Arguments passed on to `claude`
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+    /// Run an agent CLI (claude, codex, gemini, opencode, copilot) with Silt
+    /// recording the session and every file edit
+    Run {
+        agent: String,
+        #[command(flatten)]
+        run: AgentRun,
     },
-    /// Start recording the most recent Claude Code session in this directory
-    Track,
+    /// Run Claude Code with Silt recording the session and every file edit
+    Claude(AgentRun),
+    /// Run Codex with Silt recording the session and every file edit
+    Codex(AgentRun),
+    /// Run Gemini CLI with Silt recording the session and every file edit
+    Gemini(AgentRun),
+    /// Run OpenCode with Silt recording the session and every file edit
+    Opencode(AgentRun),
+    /// Run GitHub Copilot CLI with Silt recording the session and every file edit
+    Copilot(AgentRun),
+    /// Start recording the most recent session of an agent in this directory
+    Track {
+        #[arg(long, default_value = "claude")]
+        agent: String,
+    },
     /// Continue a thread here: its code, its conversation and its agent session
     Resume {
         thread: String,
-        /// Use this clone instead of a managed checkout (needs a clean tree)
-        #[arg(long)]
-        here: bool,
-        /// Arguments passed on to `claude`
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        #[command(flatten)]
+        continued: Continue,
     },
     /// Fork a thread, yours or a teammate's, with its code and conversation
     Fork {
         thread: String,
-        /// Use this clone instead of a managed checkout (needs a clean tree)
-        #[arg(long)]
-        here: bool,
-        /// Arguments passed on to `claude`
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        #[command(flatten)]
+        continued: Continue,
     },
     /// Bring a fork's source's newer code and conversation into the fork
     Pull {
@@ -164,12 +167,20 @@ enum Command {
     },
     /// Called by agent hooks; reads the hook input on stdin
     #[command(hide = true)]
-    Hook { event: String },
+    Hook {
+        /// The agent whose hook format the input and output use
+        #[arg(long)]
+        agent: Option<String>,
+        event: String,
+    },
     /// Serve Silt's history tools to an agent over MCP on stdio
     #[command(hide = true)]
     Mcp {
         #[arg(long)]
         thread: String,
+        /// The checkout whose skills to offer; defaults to the current directory
+        #[arg(long)]
+        checkout: Option<PathBuf>,
     },
     /// Commands for working on Silt itself
     Dev {
@@ -270,16 +281,49 @@ enum DevCommand {
     },
 }
 
+#[derive(Debug, clap::Args)]
+struct AgentRun {
+    /// Work in a managed checkout instead of the current one
+    #[arg(long)]
+    isolated: bool,
+    /// Arguments passed on to the agent
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, clap::Args)]
+struct Continue {
+    /// Use this clone instead of a managed checkout (needs a clean tree)
+    #[arg(long)]
+    here: bool,
+    /// Continue with another agent: its own session translated from the
+    /// conversation, or a new one primed with it
+    #[arg(long)]
+    agent: Option<String>,
+    /// Arguments passed on to the agent
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct CliError(pub String);
 
 fn main() -> Result<(), Exn<CliError>> {
     match Cli::parse().command {
-        Command::Claude { isolated, args } => commands::claude(isolated, &args),
-        Command::Track => commands::track(),
-        Command::Resume { thread, here, args } => commands::resume(&thread, here, &args),
-        Command::Fork { thread, here, args } => commands::fork(&thread, here, &args),
+        Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
+        Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
+        Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
+        Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
+        Command::Opencode(run) => commands::run_agent("opencode", run.isolated, &run.args),
+        Command::Copilot(run) => commands::run_agent("copilot", run.isolated, &run.args),
+        Command::Track { agent } => commands::track(&agent),
+        Command::Resume { thread, continued } => {
+            commands::resume(&thread, continued.here, continued.agent.as_deref(), &continued.args)
+        }
+        Command::Fork { thread, continued } => {
+            commands::fork(&thread, continued.here, continued.agent.as_deref(), &continued.args)
+        }
         Command::Pull { thread } => commands::pull(thread),
         Command::Mr { command } => match command {
             MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
@@ -344,9 +388,9 @@ fn main() -> Result<(), Exn<CliError>> {
             DaemonCommand::Stop => commands::daemon_stop(),
             DaemonCommand::Status => commands::daemon_status(),
         },
-        Command::Mcp { thread } => mcp::serve(&thread),
-        Command::Hook { event } => {
-            commands::hook(&event);
+        Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
+        Command::Hook { agent, event } => {
+            commands::hook(agent.as_deref(), &event);
             Ok(())
         }
         Command::Dev {

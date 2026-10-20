@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 
 use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
-use silt_agents::claude;
-use silt_git::conventions::{self, LinkOutcome, PrepareOutcome};
+use silt_agents::conventions as agent_conventions;
+use silt_agents::{Agent, LaunchPlan, McpServer, SessionIds, Start};
+use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
+    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
     SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 
@@ -109,13 +110,23 @@ pub fn daemon_status() -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+fn find_agent(name: &str) -> Result<&'static dyn Agent, Exn<CliError>> {
+    silt_agents::agent(name).ok_or_else(|| {
+        let known: Vec<&str> = silt_agents::AGENTS.iter().map(|agent| agent.command()).collect();
+        fail(format!("unknown agent {name}; Silt knows {}", known.join(", ")))
+    })
+}
+
+/// Runs an agent CLI in a new thread, with Silt recording its session and
+/// every file edit.
+pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+    let agent = find_agent(name)?;
     ensure_daemon()?;
-    let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let cwd = current_dir()?;
+    let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
     let started: SessionStarted = call(&Request::StartSession {
         cwd,
-        agent: claude::AGENT.into(),
+        agent: agent.id().into(),
         session_id: session_id.clone(),
         isolated,
     })?;
@@ -123,59 +134,103 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     if let Some(mount) = &started.mount {
         mount_checkout(mount, &started.checkout, &started.thread);
     }
-
-    let status = run_claude(&["--session-id", &session_id], args, &started.agent_cwd, &started.thread)?;
+    let run = Run {
+        agent,
+        thread: &started.thread,
+        checkout: &started.checkout,
+        cwd: &started.agent_cwd,
+    };
+    let status = run.launch(Start::New { id: session_id }, args)?;
     call::<String>(&Request::EndSession {
-        agent: claude::AGENT.into(),
-        session_id,
+        thread: started.thread.clone(),
     })?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
+    exit_like(status)
+}
+
+fn exit_like(status: std::process::ExitStatus) -> Result<(), Exn<CliError>> {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())
 }
 
-/// Runs Claude Code with Silt's hooks and history tools installed.
-fn run_claude(
-    session_args: &[&str],
-    args: &[String],
-    cwd: &Path,
-    thread: &str,
-) -> Result<std::process::ExitStatus, Exn<CliError>> {
-    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
-    let hook_command = format!("{} hook", shell_quote(&exe));
-    let mcp_config = serde_json::json!({
-        "mcpServers": { "silt": { "command": exe, "args": ["mcp", "--thread", thread] } }
-    });
-    let claude_bin = env::var_os("SILT_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
-    Command::new(&claude_bin)
-        .args(session_args)
-        .args(["--mcp-config", &mcp_config.to_string()])
-        .args(["--settings", &claude::hook_settings(&hook_command)])
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .or_raise(|| CliError(format!("cannot run {}", claude_bin.to_string_lossy())))
+/// One run of an agent in a thread's checkout.
+struct Run<'a> {
+    agent: &'static dyn Agent,
+    thread: &'a str,
+    checkout: &'a Path,
+    cwd: &'a Path,
 }
 
-pub fn resume(thread: &str, here: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+impl Run<'_> {
+    /// Runs the agent with Silt's MCP server, hooks, and the repository's
+    /// rules and skills it doesn't read by itself.
+    fn launch(&self, start: Start, args: &[String]) -> Result<std::process::ExitStatus, Exn<CliError>> {
+        let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
+        let scratch = paths::data_dir()
+            .join("runs")
+            .join(format!("{}-{}", short(self.thread), std::process::id()));
+        fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let native = self.agent.native();
+        let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
+        let rules = agent_conventions::discover_rules(self.checkout, self.cwd, home.as_deref());
+        let plan = LaunchPlan {
+            start,
+            mcp: McpServer {
+                command: exe.clone(),
+                args: vec![
+                    "mcp".into(),
+                    "--thread".into(),
+                    self.thread.to_owned(),
+                    "--checkout".into(),
+                    self.checkout.to_string_lossy().into_owned(),
+                ],
+            },
+            hook_command: format!("{} hook", shell_quote(&exe)),
+            instructions: agent_conventions::session_instructions(&rules, &skills, native, self.checkout),
+            skills: agent_conventions::skills_to_give(&skills, native, self.checkout)
+                .into_iter()
+                .map(|skill| skill.dir.clone())
+                .collect(),
+            scratch: scratch.clone(),
+            args: args.to_vec(),
+        };
+        let launch = self
+            .agent
+            .launch(&plan)
+            .or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
+        let status = Command::new(&launch.program)
+            .args(&launch.args)
+            .envs(launch.envs.iter().map(|(key, value)| (key, value)))
+            .current_dir(self.cwd)
+            .status()
+            .or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())));
+        let _ = fs::remove_dir_all(&scratch);
+        status
+    }
+}
+
+pub fn resume(thread: &str, here: bool, agent: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let resumed: Resumed = call(&Request::Resume {
         thread: thread.into(),
         cwd: current_dir()?,
         here,
+        agent: agent.map(|name| find_agent(name).map(|agent| agent.id().to_owned())).transpose()?,
     })?;
     eprintln!("silt: thread {} is now here, in {}", short(&resumed.thread), resumed.checkout.display());
     continue_session(resumed, args)
 }
 
-pub fn fork(thread: &str, here: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+pub fn fork(thread: &str, here: bool, agent: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let forked: Resumed = call(&Request::Fork {
         thread: thread.into(),
         cwd: current_dir()?,
         here,
+        agent: agent.map(|name| find_agent(name).map(|agent| agent.id().to_owned())).transpose()?,
     })?;
     eprintln!(
         "silt: forked {} as thread {}, in {}",
@@ -195,7 +250,7 @@ fn current_dir() -> Result<PathBuf, Exn<CliError>> {
 /// the agent can still work, and the user sees what went wrong.
 fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
     match silt_git::Repo::discover(checkout)
-        .and_then(|repo| conventions::link_shared_paths(&repo, &mount.source, &mount.shared))
+        .and_then(|repo| project::link_shared_paths(&repo, &mount.source, &mount.shared))
     {
         Ok(outcomes) => {
             for outcome in outcomes {
@@ -219,7 +274,7 @@ fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
     let source = mount.source.to_string_lossy();
     let checkout_dir = checkout.to_string_lossy();
     let envs = [("SILT_THREAD", thread), ("SILT_CHECKOUT", &*checkout_dir), ("SILT_SOURCE", &*source)];
-    match conventions::run_prepare(checkout, &envs) {
+    match project::run_prepare(checkout, &envs) {
         Ok(None) => {}
         Ok(Some(PrepareOutcome::Ran { script, status })) if !status.success() => {
             eprintln!("silt: {} failed ({status}); continuing", script.display());
@@ -237,19 +292,29 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     if let Some(mount) = &resumed.mount {
         mount_checkout(mount, &resumed.checkout, &resumed.thread);
     }
-    let Some(session_id) = resumed.session_id else {
+    let Some(start) = resumed.start else {
         eprintln!("silt: the thread has no agent session to continue");
         return Ok(());
     };
-    let status = run_claude(&["--resume", &session_id], args, &resumed.agent_cwd, &resumed.thread)?;
+    let agent = find_agent(&resumed.agent)?;
+    let start = match start {
+        AgentStart::Resume { id } => Start::Resume { id },
+        AgentStart::Primed { id, prompt } => {
+            eprintln!("silt: starting {} with the conversation so far", agent.display_name());
+            Start::Primed { id, prompt }
+        }
+    };
+    let run = Run {
+        agent,
+        thread: &resumed.thread,
+        checkout: &resumed.checkout,
+        cwd: &resumed.agent_cwd,
+    };
+    let status = run.launch(start, args)?;
     call::<String>(&Request::EndSession {
-        agent: claude::AGENT.into(),
-        session_id,
+        thread: resumed.thread.clone(),
     })?;
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-    Ok(())
+    exit_like(status)
 }
 
 pub fn auth_login(server: &str, code: &str, name: Option<String>) -> Result<(), Exn<CliError>> {
@@ -296,45 +361,41 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn track() -> Result<(), Exn<CliError>> {
+pub fn track(agent: &str) -> Result<(), Exn<CliError>> {
+    let agent = find_agent(agent)?;
     ensure_daemon()?;
-    let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
+    let cwd = current_dir()?;
     let cwd = cwd.canonicalize().unwrap_or(cwd);
-    let config = claude::config_dir().ok_or_else(|| fail("HOME is not set"))?;
-    let project = config.join("projects").join(claude::project_slug(&cwd));
-    let session_id = newest_transcript(&project)
-        .and_then(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
-        .ok_or_else(|| fail(format!("no Claude Code session found for {}", cwd.display())))?;
+    let found = agent
+        .discover(&cwd, 0, &[])
+        .ok_or_else(|| fail(format!("no {} session found for {}", agent.display_name(), cwd.display())))?;
     let started: SessionStarted = call(&Request::StartSession {
         cwd,
-        agent: claude::AGENT.into(),
-        session_id,
+        agent: agent.id().into(),
+        session_id: Some(found.id),
         isolated: false,
     })?;
     println!("tracking session in thread {}", short(&started.thread));
     Ok(())
 }
 
-fn newest_transcript(project: &Path) -> Option<PathBuf> {
-    fs::read_dir(project)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
-        .max_by_key(|entry| entry.metadata().and_then(|metadata| metadata.modified()).ok())
-        .map(|entry| entry.path())
-}
-
 /// Forwards an agent hook to the daemon, and prints any context the daemon
 /// has for the agent in Claude Code's hook output format. Never fails, so a
 /// missing daemon can't break the agent session.
-pub fn hook(event: &str) {
+pub fn hook(agent: Option<&str>, event: &str) {
     let mut input = String::new();
     if io::stdin().read_to_string(&mut input).is_err() {
         return;
     }
-    let Ok(input) = serde_json::from_str(&input) else {
+    let Ok(mut input) = serde_json::from_str::<serde_json::Value>(&input) else {
         return;
     };
+    let copilot = agent == Some("copilot");
+    if copilot {
+        // Copilot names its fields in camelCase.
+        let session = input.get("sessionId").cloned().unwrap_or_default();
+        input = serde_json::json!({ "session_id": session, "hook_event_name": event });
+    }
     let request = Request::Hook {
         event: event.to_owned(),
         input,
@@ -346,9 +407,13 @@ pub fn hook(event: &str) {
         additional_context: Some(context),
     }) = serde_json::from_value(data)
     {
-        let output = serde_json::json!({
-            "hookSpecificOutput": { "hookEventName": event, "additionalContext": context }
-        });
+        let output = if copilot {
+            serde_json::json!({ "additionalContext": context })
+        } else {
+            serde_json::json!({
+                "hookSpecificOutput": { "hookEventName": event, "additionalContext": context }
+            })
+        };
         println!("{output}");
     }
 }

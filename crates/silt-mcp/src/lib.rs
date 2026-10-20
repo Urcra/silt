@@ -13,13 +13,29 @@ const DEFAULT_PROTOCOL: &str = "2025-06-18";
 pub trait Backend {
     /// The tool's text output, or an error message for the agent.
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String>;
+
+    /// Prompts the agent offers its user, such as slash commands.
+    fn prompts(&mut self) -> Vec<Prompt> {
+        Vec::new()
+    }
+
+    /// The text of prompt `name`.
+    fn prompt(&mut self, name: &str) -> Result<String, String> {
+        Err(format!("unknown prompt {name}"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub name: String,
+    pub description: String,
 }
 
 /// Tells the agent what the tools are for.
 pub const INSTRUCTIONS: &str = "Silt records this session's full history, including everything from before \
 context compaction, and the history of the threads it was forked from. Use silt_history_search and \
 silt_history_read to look back, silt_file_history to see which prompts changed a file, and silt_in_flight \
-to see who else is changing a path.";
+to see who else is changing a path. silt_skills lists the repository's skills and silt_use_skill loads one.";
 
 /// The tools' names, descriptions and input schemas.
 pub fn tools() -> Value {
@@ -76,6 +92,20 @@ pub fn tools() -> Value {
             "inputSchema": page(&["thread"])
         },
         {
+            "name": "silt_skills",
+            "description": "List the skills this repository and the user provide (from .silt/skills, .agents/skills and ~/.agents/skills), with what each is for.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "silt_use_skill",
+            "description": "Load a skill's instructions, and where its files are, to follow it for the current task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "The skill's name, as silt_skills lists it"}},
+                "required": ["name"]
+            }
+        },
+        {
             "name": "silt_in_flight",
             "description": "Other threads in this repository that are changing a file or directory, with their owners and when they last touched it.",
             "inputSchema": {
@@ -115,12 +145,27 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
     let result = match method {
         "initialize" => json!({
             "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(DEFAULT_PROTOCOL),
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "silt", "version": env!("CARGO_PKG_VERSION")},
             "instructions": INSTRUCTIONS
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
+        "prompts/list" => {
+            let prompts: Vec<Value> = backend
+                .prompts()
+                .into_iter()
+                .map(|prompt| json!({"name": prompt.name, "description": prompt.description, "arguments": []}))
+                .collect();
+            json!({ "prompts": prompts })
+        }
+        "prompts/get" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+            match backend.prompt(name) {
+                Ok(text) => json!({"messages": [{"role": "user", "content": {"type": "text", "text": text}}]}),
+                Err(message) => return Some(error_response(&id, -32602, &message)),
+            }
+        }
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -151,6 +196,17 @@ mod tests {
                 other => Err(format!("no {other}")),
             }
         }
+
+        fn prompts(&mut self) -> Vec<Prompt> {
+            vec![Prompt {
+                name: "land".into(),
+                description: "Land the branch".into(),
+            }]
+        }
+
+        fn prompt(&mut self, name: &str) -> Result<String, String> {
+            (name == "land").then(|| "Land it.".to_owned()).ok_or_else(|| "no such prompt".to_owned())
+        }
     }
 
     fn exchange(lines: &[&str]) -> Vec<Value> {
@@ -175,9 +231,21 @@ mod tests {
         ]);
         assert_eq!(replies.len(), 5, "notifications get no reply");
         assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(replies[1]["result"]["tools"].as_array().map(Vec::len), Some(6));
+        assert_eq!(replies[1]["result"]["tools"].as_array().map(Vec::len), Some(8));
         assert_eq!(replies[2]["result"]["content"][0]["text"], "searched \"lexer\"");
         assert_eq!(replies[3]["result"]["isError"], true);
         assert_eq!(replies[4]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn offers_prompts() {
+        let replies = exchange(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"prompts/list"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"land"}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"nope"}}"#,
+        ]);
+        assert_eq!(replies[0]["result"]["prompts"][0]["name"], "land");
+        assert_eq!(replies[1]["result"]["messages"][0]["content"]["text"], "Land it.");
+        assert_eq!(replies[2]["error"]["code"], -32602);
     }
 }

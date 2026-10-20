@@ -1,15 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use silt_agents::{claude, complete_lines};
-use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile, ImportFile, import};
+use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
-use silt_git::{FileMode, Repo};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, SessionFile, SessionRef, TurnMark};
-use silt_store::{CheckoutRecord, SessionFileOffset, SessionRecord, Store, ThreadRecord};
+use silt_git::Repo;
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
+use silt_store::{CheckoutRecord, Store, ThreadRecord};
 use silt_types::{ActorId, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
 use silt_redact::Redactor;
@@ -18,13 +15,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
-use crate::protocol::{HookReply, Mount, Request, Response, SessionStarted};
+use crate::protocol::{Mount, Request, Response};
+use crate::sessions::{PendingSession, Session};
 use crate::remote::{self, Remote};
 use crate::watch::{self, Watcher};
-
-/// How long after a tool finishes its file changes still count as its own;
-/// covers the watcher's debounce.
-const TOOL_SETTLE: Duration = Duration::from_millis(250);
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
@@ -34,6 +28,8 @@ pub enum Event {
     Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
     Pulled { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
     Listed(Result<Listing, String>),
+    Discovered { token: u64, found: Option<silt_agents::Found> },
+    Snapshotted { session_id: String, result: Result<Vec<String>, String> },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,16 +58,6 @@ pub(crate) struct Checkout {
     pub(crate) _watcher: Option<Watcher>,
 }
 
-pub(crate) struct Session {
-    pub(crate) record: SessionRecord,
-    pub(crate) family: FamilyId,
-    pub(crate) transcript: PathBuf,
-    pub(crate) offsets: HashMap<String, SessionFileOffset>,
-    pub(crate) open_tool: Option<String>,
-    /// Size and mtime of each side file when it was last attached.
-    pub(crate) attached: HashMap<String, (u64, SystemTime)>,
-}
-
 pub struct Core {
     pub(crate) store: Store,
     pub(crate) actor: ActorId,
@@ -82,6 +68,10 @@ pub struct Core {
     pub(crate) threads: HashMap<ThreadId, ThreadRecord>,
     pub(crate) checkouts: BTreeMap<i64, Checkout>,
     pub(crate) sessions: Vec<Session>,
+    pub(crate) pending: Vec<PendingSession>,
+    /// Readers for indexing what other machines record.
+    pub(crate) index_transcripts: silt_agents::Transcripts,
+    pub(crate) next_token: u64,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -129,6 +119,9 @@ impl Core {
             threads: HashMap::new(),
             checkouts: BTreeMap::new(),
             sessions: Vec::new(),
+            pending: Vec::new(),
+            index_transcripts: silt_agents::Transcripts::default(),
+            next_token: 0,
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -196,29 +189,7 @@ impl Core {
                 .collect();
             core.start_checkout(record, entries)?;
         }
-        for record in core.store.sessions().await? {
-            let Some(family) = core.threads.get(&record.thread).map(|thread| thread.family) else {
-                continue;
-            };
-            let offsets: HashMap<String, SessionFileOffset> = core
-                .store
-                .session_offsets(&record.agent, &record.session_id)
-                .await?
-                .into_iter()
-                .map(|offset| (offset.file.clone(), offset))
-                .collect();
-            let Some(transcript) = offsets.get("main").map(|offset| offset.path.clone()) else {
-                continue;
-            };
-            core.sessions.push(Session {
-                record,
-                family,
-                transcript,
-                offsets,
-                open_tool: None,
-                attached: HashMap::new(),
-            });
-        }
+        core.load_sessions().await?;
         let ids: Vec<i64> = core.checkouts.keys().copied().collect();
         for id in ids {
             core.rescan(id).await?;
@@ -235,7 +206,7 @@ impl Core {
                 agent,
                 session_id,
                 isolated,
-            } => to_response(self.start_session(&cwd, &agent, &session_id, isolated).await),
+            } => to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated).await),
             Request::Hook { event, input } => match self.hook(&event, input, reply).await {
                 Some((response, reply)) => {
                     let _ = reply.send(response);
@@ -243,9 +214,10 @@ impl Core {
                 }
                 None => return,
             },
-            Request::EndSession { session_id, .. } => {
-                to_response(self.tail_session(&session_id).await.map(|()| "ended"))
-            }
+            Request::EndSession { thread } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.end_session(thread).await),
+                Err(error) => Response::error(error),
+            },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
             Request::Diff { thread, turn, base } => {
@@ -278,8 +250,8 @@ impl Core {
                     .collect(),
                 recovered: self.recoveries.clone(),
             }),
-            Request::Resume { thread, cwd, here } => to_response(self.resume(&thread, &cwd, here).await),
-            Request::Fork { thread, cwd, here } => to_response(self.fork(&thread, &cwd, here).await),
+            Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
+            Request::Fork { thread, cwd, here, agent } => to_response(self.fork(&thread, &cwd, here, agent.as_deref()).await),
             Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
             Request::MrCreate {
                 thread,
@@ -318,6 +290,7 @@ impl Core {
     }
 
     pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>) {
+        self.tail_marked_sessions(checkout).await;
         if let Err(error) = self.ingest_paths(checkout, paths).await {
             warn!(%error, checkout, "could not record changes");
         }
@@ -328,147 +301,13 @@ impl Core {
         if let Err(error) = self.check_commits().await {
             warn!(%error, "could not record new commits");
         }
+        self.poll_sessions();
         let ids: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
         for id in ids {
             if let Err(error) = self.tail_session(&id).await {
                 warn!(%error, session = id, "could not read the session transcript");
             }
         }
-    }
-
-    pub async fn close_tool(&mut self, session_id: &str, reply: oneshot::Sender<Response>) {
-        let tool = self.session_mut(session_id).and_then(|session| session.open_tool.take());
-        if let Some(tool_use_id) = tool {
-            let _ = self
-                .record_turn(session_id, TurnMark::ToolFinished { tool_use_id })
-                .await;
-        }
-        let _ = reply.send(Response::ok("ok"));
-    }
-
-    async fn start_session(
-        &mut self,
-        cwd: &Path,
-        agent: &str,
-        session_id: &str,
-        isolated: bool,
-    ) -> Result<SessionStarted, CoreError> {
-        let cwd = cwd.canonicalize()?;
-        let repo = Repo::discover(&cwd)?;
-        let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
-        let head = repo.head_commit()?;
-        let files: Vec<ImportFile> = match head {
-            Some(commit) => repo
-                .files_at(commit)?
-                .into_iter()
-                .filter(|file| file.mode != FileMode::Symlink)
-                .map(|file| ImportFile {
-                    path: file.path,
-                    oid: file.oid,
-                    executable: file.mode == FileMode::Executable,
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        let thread = ThreadId(uuid::Uuid::now_v7().as_u128());
-        let family_id = FamilyId(uuid::Uuid::now_v7().as_u128());
-        let record = ThreadRecord {
-            id: thread,
-            family: family_id,
-            repo_root: repo.root().to_owned(),
-            repo: repo
-                .remote_url("origin")?
-                .map(|url| silt_git::normalize_remote(&url))
-                .unwrap_or_default(),
-            created_ms: now_ms(),
-            owner: self.own_user(),
-        };
-        self.store.create_thread(&record).await?;
-        self.register_thread(&record);
-        self.threads.insert(thread, record);
-
-        let mut family = Family::new();
-        let branch = repo.head_branch()?;
-        let deltas = import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
-        self.store.append_deltas(family_id, &deltas).await?;
-        self.families.insert(family_id, family);
-
-        let checkout_path = if isolated {
-            let commit = head.ok_or_else(|| CoreError::Invalid("an isolated checkout needs at least one commit".into()))?;
-            repo.create_managed_checkout(&thread.to_string(), commit, None)?.path
-        } else {
-            repo.root().to_owned()
-        };
-        let checkout_actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        let existing = self
-            .checkouts
-            .values()
-            .find(|checkout| checkout.record.path == checkout_path)
-            .map(|checkout| checkout.record.clone());
-        let checkout = match existing {
-            Some(previous) => {
-                self.checkouts.remove(&previous.id);
-                self.store.rebind_checkout(previous.id, thread, checkout_actor).await?;
-                CheckoutRecord {
-                    thread,
-                    actor: checkout_actor,
-                    ..previous
-                }
-            }
-            None => {
-                self.store
-                    .add_checkout(thread, &checkout_path, checkout_actor, isolated, now_ms())
-                    .await?
-            }
-        };
-        let checkout_id = checkout.id;
-        self.start_checkout(checkout, BTreeMap::new())?;
-        self.rescan(checkout_id).await?;
-
-        // `join("")` would add a trailing slash, which changes Claude's slug.
-        let agent_cwd = if relative.as_os_str().is_empty() {
-            checkout_path.clone()
-        } else {
-            checkout_path.join(&relative)
-        };
-        let config_dir = claude::config_dir().ok_or_else(|| CoreError::Invalid("HOME is not set".into()))?;
-        let transcript = claude::session_paths(&config_dir, &agent_cwd, session_id).transcript;
-        let session = SessionRecord {
-            agent: agent.to_owned(),
-            session_id: session_id.to_owned(),
-            thread,
-            checkout_id,
-        };
-        self.store.add_session(&session, now_ms()).await?;
-        let main = SessionFileOffset {
-            file: "main".into(),
-            path: transcript.clone(),
-            offset: 0,
-        };
-        self.store.set_session_offset(agent, session_id, &main).await?;
-        self.sessions.push(Session {
-            record: session,
-            family: family_id,
-            transcript,
-            offsets: HashMap::from([("main".to_owned(), main)]),
-            open_tool: None,
-            attached: HashMap::new(),
-        });
-        let reference = SessionRef {
-            agent: agent.to_owned(),
-            id: session_id.to_owned(),
-        };
-        self.append_session_started(family_id, thread, reference, &agent_cwd, &checkout_path)
-            .await?;
-        if let Some(commit) = head {
-            self.record_bundle(family_id, thread, &repo, commit).await?;
-        }
-        Ok(SessionStarted {
-            thread: thread.to_string(),
-            mount: isolated.then(|| self.mount(&repo)),
-            checkout: checkout_path,
-            agent_cwd,
-        })
     }
 
     pub(crate) fn start_checkout(&mut self, record: CheckoutRecord, entries: BTreeMap<String, DiskEntry>) -> Result<(), CoreError> {
@@ -794,102 +633,6 @@ impl Core {
         Ok(())
     }
 
-    fn author_for(&self, checkout: i64) -> Author {
-        self.sessions
-            .iter()
-            .filter(|session| session.record.checkout_id == checkout)
-            .find_map(|session| {
-                session.open_tool.as_ref().map(|tool| Author::Agent {
-                    agent: session.record.agent.clone(),
-                    session: session.record.session_id.clone(),
-                    tool_use_id: Some(tool.clone()),
-                })
-            })
-            .unwrap_or(Author::User)
-    }
-
-    /// Returns a response to send now, or `None` when the reply is deferred.
-    async fn hook(
-        &mut self,
-        event: &str,
-        input: serde_json::Value,
-        reply: oneshot::Sender<Response>,
-    ) -> Option<(Response, oneshot::Sender<Response>)> {
-        let input: claude::HookInput = match serde_json::from_value(input) {
-            Ok(input) => input,
-            Err(error) => return Some((Response::error(error), reply)),
-        };
-        let session_id = input.session_id.clone();
-        let Some(thread) = self.session(&session_id).map(|session| session.record.thread) else {
-            return Some((Response::ok(HookReply::default()), reply));
-        };
-        let result = match event {
-            "UserPromptSubmit" => {
-                let tailed = self.tail_session(&session_id).await;
-                let recorded = match tailed {
-                    Ok(()) => self.record_turn(&session_id, TurnMark::PromptSubmitted).await,
-                    Err(error) => Err(error),
-                };
-                let reply_data = HookReply {
-                    additional_context: self.take_notices(thread),
-                };
-                return Some((to_response(recorded.map(|()| reply_data)), reply));
-            }
-            "PreToolUse" => {
-                let tool_use_id = input.tool_use_id.clone().unwrap_or_default();
-                if let Some(session) = self.session_mut(&session_id) {
-                    session.open_tool = Some(tool_use_id.clone());
-                }
-                let mark = TurnMark::ToolStarted {
-                    tool_use_id,
-                    tool: input.tool_name.clone().unwrap_or_default(),
-                };
-                self.record_turn(&session_id, mark).await
-            }
-            "PostToolUse" => {
-                let events = self.events.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(TOOL_SETTLE).await;
-                    let _ = events.send(Event::CloseTool { session_id, reply });
-                });
-                return None;
-            }
-            "SessionStart" if input.source.as_deref() == Some("compact") => {
-                let tailed = self.tail_session(&session_id).await;
-                let reply_data = HookReply {
-                    additional_context: Some(format!(
-                        "{} This session's thread is {thread}.",
-                        silt_mcp::INSTRUCTIONS
-                    )),
-                };
-                return Some((to_response(tailed.map(|()| reply_data)), reply));
-            }
-            "Stop" => {
-                let tailed = self.tail_session(&session_id).await;
-                match tailed {
-                    Ok(()) => self.record_turn(&session_id, TurnMark::Stopped).await,
-                    Err(error) => Err(error),
-                }
-            }
-            _ => Ok(()),
-        };
-        Some((to_response(result.map(|()| HookReply::default())), reply))
-    }
-
-    async fn record_turn(&mut self, session_id: &str, mark: TurnMark) -> Result<(), CoreError> {
-        let Some(session) = self.session(session_id) else {
-            return Ok(());
-        };
-        let reference = SessionRef {
-            agent: session.record.agent.clone(),
-            id: session.record.session_id.clone(),
-        };
-        let (family, thread) = (session.family, session.record.thread);
-        let author = agent_author(&reference);
-        self.append_conv(family, thread, author, ConvOp::Turn { session: reference, mark }).await?;
-        Ok(())
-    }
-
     pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
@@ -899,164 +642,10 @@ impl Core {
         Ok(delta)
     }
 
-    /// Records new lines of a session's transcripts.
-    async fn tail_session(&mut self, session_id: &str) -> Result<(), CoreError> {
-        let Some(session) = self.session(session_id) else {
-            return Ok(());
-        };
-        let mut files = vec![("main".to_owned(), session.transcript.clone())];
-        let subagents = session.transcript.with_extension("").join("subagents");
-        if let Ok(entries) = fs::read_dir(&subagents) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|extension| extension == "jsonl") {
-                    let name = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
-                    files.push((format!("subagent:{name}"), path));
-                }
-            }
-        }
-        for (key, path) in files {
-            self.tail_file(session_id, &key, &path).await?;
-        }
-        self.attach_side_files(session_id).await
-    }
-
-    /// Records the session's tool-result files and subagent metadata as
-    /// attachments when they are new or changed, so a restored session is
-    /// complete.
-    async fn attach_side_files(&mut self, session_id: &str) -> Result<(), CoreError> {
-        let session = self.session(session_id).expect("caller checked");
-        let session_dir = session.transcript.with_extension("");
-        let mut changed = Vec::new();
-        for (dir, keep) in [
-            ("tool-results", (|_: &Path| true) as fn(&Path) -> bool),
-            ("subagents", |path: &Path| path.extension().is_none_or(|extension| extension != "jsonl")),
-        ] {
-            let Ok(entries) = fs::read_dir(session_dir.join(dir)) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(metadata) = entry.metadata() else {
-                    continue;
-                };
-                if !metadata.is_file() || !keep(&path) {
-                    continue;
-                }
-                let name = format!("{dir}/{}", entry.file_name().to_string_lossy());
-                let stamp = (metadata.len(), metadata.modified()?);
-                if session.attached.get(&name) != Some(&stamp) {
-                    changed.push((name, path, stamp));
-                }
-            }
-        }
-        if changed.is_empty() {
-            return Ok(());
-        }
-        let reference = SessionRef {
-            agent: session.record.agent.clone(),
-            id: session.record.session_id.clone(),
-        };
-        let (family, thread) = (session.family, session.record.thread);
-        for (name, path, stamp) in changed {
-            let bytes = fs::read(&path)?;
-            let bytes = match String::from_utf8(bytes) {
-                Ok(text) => self.redactor.replace(&text).into_bytes(),
-                Err(error) => error.into_bytes(),
-            };
-            let blob = self.store.blobs().put(&bytes).await?;
-            let known = self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
-                Op::Conv(ConvOp::Attachment {
-                    session,
-                    name: attached,
-                    blob,
-                }) if *session == reference && *attached == name => Some(*blob),
-                _ => None,
-            });
-            if known != Some(blob) {
-                let op = ConvOp::Attachment {
-                    session: reference.clone(),
-                    name: name.clone(),
-                    blob,
-                };
-                self.append_conv(family, thread, agent_author(&reference), op).await?;
-            }
-            if let Some(session) = self.session_mut(session_id) {
-                session.attached.insert(name, stamp);
-            }
-        }
-        Ok(())
-    }
-
-    async fn tail_file(&mut self, session_id: &str, key: &str, path: &Path) -> Result<(), CoreError> {
-        let session = self.session(session_id).expect("caller checked");
-        let offset = session.offsets.get(key).map_or(0, |offset| offset.offset);
-        let Ok(mut file) = fs::File::open(path) else {
-            return Ok(());
-        };
-        if file.metadata()?.len() <= offset {
-            return Ok(());
-        }
-        file.seek(SeekFrom::Start(offset))?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
-        let (lines, consumed) = complete_lines(&buffer);
-        if lines.is_empty() {
-            return Ok(());
-        }
-        let reference = SessionRef {
-            agent: session.record.agent.clone(),
-            id: session.record.session_id.clone(),
-        };
-        let (family, thread) = (session.family, session.record.thread);
-        let source = match key.strip_prefix("subagent:") {
-            Some(name) => SessionFile::Subagent(name.to_owned()),
-            None => SessionFile::Main,
-        };
-        for line in lines {
-            let entries = claude::normalize(&line);
-            let delta = self
-                .append_conv(
-                    family,
-                    thread,
-                    agent_author(&reference),
-                    ConvOp::Native {
-                        session: reference.clone(),
-                        file: source.clone(),
-                        line,
-                    },
-                )
-                .await?;
-            for entry in entries {
-                if let Some(text) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
-                    self.store.index(thread, delta.span.first(), entry.kind(), &text).await?;
-                }
-            }
-        }
-        let advanced = SessionFileOffset {
-            file: key.to_owned(),
-            path: path.to_owned(),
-            offset: offset + consumed as u64,
-        };
-        self.store.set_session_offset(&reference.agent, &reference.id, &advanced).await?;
-        if let Some(session) = self.session_mut(session_id) {
-            session.offsets.insert(key.to_owned(), advanced);
-        }
-        Ok(())
-    }
-
     fn checkout(&self, id: i64) -> Result<&Checkout, CoreError> {
         self.checkouts
             .get(&id)
             .ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
-    }
-
-    fn session(&self, session_id: &str) -> Option<&Session> {
-        self.sessions.iter().find(|session| session.record.session_id == session_id)
-    }
-
-    fn session_mut(&mut self, session_id: &str) -> Option<&mut Session> {
-        self.sessions.iter_mut().find(|session| session.record.session_id == session_id)
     }
 
     pub(crate) fn families(&self) -> &HashMap<FamilyId, Family> {
@@ -1092,31 +681,6 @@ impl Core {
 }
 
 impl Core {
-    pub(crate) async fn append_session_started(
-        &mut self,
-        family: FamilyId,
-        thread: ThreadId,
-        session: SessionRef,
-        cwd: &Path,
-        checkout_root: &Path,
-    ) -> Result<(), CoreError> {
-        let author = agent_author(&session);
-        let config_dir = claude::config_dir().ok_or_else(|| CoreError::Invalid("HOME is not set".into()))?;
-        let dir = claude::session_paths(&config_dir, cwd, &session.id).session_dir;
-        let op = ConvOp::SessionStarted {
-            session: session.clone(),
-            cwd: cwd.to_string_lossy().into_owned(),
-            checkout_root: checkout_root.to_string_lossy().into_owned(),
-        };
-        self.append_conv(family, thread, author.clone(), op).await?;
-        let op = ConvOp::SessionDir {
-            session,
-            dir: dir.to_string_lossy().into_owned(),
-        };
-        self.append_conv(family, thread, author, op).await?;
-        Ok(())
-    }
-
     /// Stores a bundle of `commit` and its history that origin lacks, so
     /// another machine can get it from the server (ADR 0009).
     pub(crate) async fn record_bundle(
@@ -1297,14 +861,6 @@ impl Core {
     }
 }
 
-fn agent_author(session: &SessionRef) -> Author {
-    Author::Agent {
-        agent: session.agent.clone(),
-        session: session.id.clone(),
-        tool_use_id: None,
-    }
-}
-
 pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
     match &delta.op {
         Op::Create { .. } => Some(InodeId(delta.span.first())),
@@ -1323,7 +879,7 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
     }
 }
 
-fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {
+pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {
     match result {
         Ok(value) => Response::ok(value),
         Err(error) => Response::error(error),

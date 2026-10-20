@@ -10,6 +10,8 @@ pub mod protocol;
 mod recovery;
 mod resume;
 mod server;
+mod sessions;
+mod transcripts;
 mod sync;
 mod views;
 mod watch;

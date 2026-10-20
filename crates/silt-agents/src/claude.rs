@@ -10,7 +10,9 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::conventions::NativeConventions;
 use crate::entry::Entry;
+use crate::{Agent, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
 
 pub const AGENT: &str = "claude-code";
 
@@ -50,55 +52,23 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
     }
 }
 
-/// A session as recorded elsewhere, possibly continued across machines
-/// and forks, to be written back under one id.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RecordedSession {
-    /// The id to restore it as.
-    pub id: String,
-    /// Ids, working directories and session directories it was recorded
-    /// under; each is rewritten to the new one.
-    pub former_ids: Vec<String>,
-    pub former_cwds: Vec<String>,
-    /// Checkout roots, rewritten to the new checkout root after the cwds.
-    pub former_roots: Vec<String>,
-    pub former_dirs: Vec<String>,
-    pub main: Vec<String>,
-    pub subagents: Vec<(String, Vec<String>)>,
-    /// Side files by path relative to the session directory.
-    pub attachments: Vec<(String, Vec<u8>)>,
-}
-
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
 /// it, rewriting every former session directory, working directory and
-/// session id to the new ones (docs/research/probes.md). Returns the paths
-/// written, for tailing to continue after them.
-pub fn restore(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
+/// session id to the new ones (docs/research/probes.md).
+pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
     let paths = session_paths(config_dir, cwd, &session.id);
-    let new_dir = paths.session_dir.to_string_lossy().into_owned();
-    let new_cwd = cwd.to_string_lossy().into_owned();
-    let new_root = root.to_string_lossy().into_owned();
-    let mut rewrites: Vec<(&str, &str)> = Vec::new();
-    for (former, new) in [
-        (&session.former_dirs, new_dir.as_str()),
-        (&session.former_cwds, new_cwd.as_str()),
-        (&session.former_roots, new_root.as_str()),
-        (&session.former_ids, session.id.as_str()),
-    ] {
-        rewrites.extend(former.iter().filter(|old| !old.is_empty()).map(|old| (old.as_str(), new)));
-    }
-    // Longest first, so a path is never rewritten through a shorter path it
-    // starts with.
-    rewrites.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
-    let rewrite = |lines: &[String]| -> String {
-        lines.iter().map(|line| replace_once(line, &rewrites) + "\n").collect()
-    };
+    let rewrites = Rewrites::new(
+        session,
+        Some(&paths.session_dir.to_string_lossy()),
+        &cwd.to_string_lossy(),
+        &root.to_string_lossy(),
+    );
     fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
-    fs::write(&paths.transcript, rewrite(&session.main))?;
+    fs::write(&paths.transcript, rewrites.lines(&session.main))?;
     if !session.subagents.is_empty() {
         fs::create_dir_all(&paths.subagents)?;
         for (name, lines) in &session.subagents {
-            fs::write(paths.subagents.join(format!("{name}.jsonl")), rewrite(lines))?;
+            fs::write(paths.subagents.join(format!("{name}.jsonl")), rewrites.lines(lines))?;
         }
     }
     for (name, bytes) in &session.attachments {
@@ -113,26 +83,233 @@ pub fn restore(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSes
     Ok(paths)
 }
 
-/// Replaces every occurrence of each `old` with its `new` in one pass, so
-/// replacements are never themselves rewritten. Earlier pairs win.
-fn replace_once(text: &str, rewrites: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(ch) = rest.chars().next() {
-        match rewrites.iter().find(|(old, _)| rest.starts_with(old)) {
-            Some((old, new)) => {
-                out.push_str(new);
-                rest = &rest[old.len()..];
+/// Claude Code transcript lines holding `messages` as plain text, chained
+/// by `parentUuid` the way Claude writes them.
+pub fn transcript_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<String> {
+    let mut parent: Option<String> = None;
+    let timestamp = crate::time::timestamp_now();
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, (role, text))| {
+            let uuid = derived_uuid(id, index);
+            let message = match role {
+                Role::User => json!({"role": "user", "content": text}),
+                Role::Assistant => json!({
+                    "id": format!("msg_silt_{index}"),
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "<synthetic>",
+                    "content": [{"type": "text", "text": text}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 0, "output_tokens": 0}
+                }),
+            };
+            let line = json!({
+                "parentUuid": parent,
+                "isSidechain": false,
+                "userType": "external",
+                "cwd": cwd,
+                "sessionId": id,
+                "version": "2.1.0",
+                "type": if *role == Role::User { "user" } else { "assistant" },
+                "message": message,
+                "uuid": uuid,
+                "timestamp": timestamp,
+            });
+            parent = Some(uuid);
+            line.to_string()
+        })
+        .collect()
+}
+
+/// A stable UUID-shaped id for the `index`th translated line of a session.
+fn derived_uuid(session: &str, index: usize) -> String {
+    let mut hash: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    for byte in session.bytes().chain(index.to_le_bytes()) {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013B);
+    }
+    let hex = format!("{hash:032x}");
+    format!("{}-{}-4{}-8{}-{}", &hex[..8], &hex[8..12], &hex[13..16], &hex[17..20], &hex[20..])
+}
+
+/// The Claude Code adapter.
+pub struct ClaudeCode;
+
+impl Agent for ClaudeCode {
+    fn id(&self) -> &'static str {
+        AGENT
+    }
+
+    fn command(&self) -> &'static str {
+        "claude"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn native(&self) -> NativeConventions {
+        NativeConventions {
+            rules: &["CLAUDE.md", "CLAUDE.local.md"],
+            skill_dirs: &[".claude/skills"],
+            personal_skills: false,
+            given_skills: true,
+        }
+    }
+
+    fn reader(&self) -> Box<dyn Reader> {
+        Box::new(Stateless(|line| Read {
+            entries: normalize(line),
+            marks: Vec::new(),
+        }))
+    }
+
+    fn hooks(&self) -> bool {
+        true
+    }
+
+    fn session_ids(&self) -> SessionIds {
+        SessionIds::Chosen
+    }
+
+    fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
+        Some(session_paths(&config_dir()?, cwd, id).transcript)
+    }
+
+    fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
+        let Ok(entries) = fs::read_dir(transcript.with_extension("").join("subagents")) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+            .filter_map(|path| Some((path.file_stem()?.to_string_lossy().into_owned(), path.clone())))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn session_dir(&self, transcript: &Path) -> Option<PathBuf> {
+        Some(transcript.with_extension(""))
+    }
+
+    fn attachments(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
+        let session_dir = transcript.with_extension("");
+        let mut found = Vec::new();
+        for (dir, keep) in [
+            ("tool-results", (|_: &Path| true) as fn(&Path) -> bool),
+            ("subagents", |path: &Path| path.extension().is_none_or(|extension| extension != "jsonl")),
+        ] {
+            let Ok(entries) = fs::read_dir(session_dir.join(dir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if entry.file_type().is_ok_and(|kind| kind.is_file()) && keep(&path) {
+                    found.push((format!("{dir}/{}", entry.file_name().to_string_lossy()), path));
+                }
             }
-            None => {
-                out.push(ch);
-                rest = &rest[ch.len_utf8()..];
+        }
+        found.sort();
+        found
+    }
+
+    fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
+        let project = config_dir()?.join("projects").join(project_slug(cwd));
+        fs::read_dir(project)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+            .filter_map(|path| Some((crate::modified_ms(&path)?, path)))
+            .filter(|(modified, path)| {
+                *modified >= since_ms
+                    && path
+                        .file_stem()
+                        .is_some_and(|stem| !known.iter().any(|known| known.as_str() == stem.to_string_lossy()))
+            })
+            .max_by_key(|(modified, _)| *modified)
+            .map(|(_, path)| Found {
+                id: path.file_stem().expect("filtered on extension").to_string_lossy().into_owned(),
+                transcript: path,
+            })
+    }
+
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+        let config = config_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
+        Ok(restore_into(&config, root, cwd, session)?.transcript)
+    }
+
+    fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
+        Some(transcript_lines(&translated_text(entries), cwd, id))
+    }
+
+    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
+        let mut launch = Launch::new(self.command());
+        let mut prompt = None;
+        match &plan.start {
+            Start::New { id: Some(id) } => {
+                launch.arg("--session-id").arg(id);
+            }
+            Start::New { id: None } => {}
+            Start::Resume { id } => {
+                launch.arg("--resume").arg(id);
+            }
+            Start::Primed { id, prompt: text } => {
+                if let Some(id) = id {
+                    launch.arg("--session-id").arg(id);
+                }
+                prompt = Some(text.clone());
+            }
+        }
+        let mcp = json!({
+            "mcpServers": { "silt": { "command": plan.mcp.command, "args": plan.mcp.args } }
+        });
+        launch.arg("--mcp-config").arg(mcp.to_string());
+        launch.arg("--settings").arg(hook_settings(&plan.hook_command));
+        if let Some(instructions) = &plan.instructions {
+            launch.arg("--append-system-prompt").arg(instructions);
+        }
+        if !plan.skills.is_empty() {
+            launch.arg("--plugin-dir").arg(skills_plugin(&plan.scratch, &plan.skills)?);
+        }
+        for arg in &plan.args {
+            launch.arg(arg);
+        }
+        if let Some(prompt) = prompt {
+            launch.arg(prompt);
+        }
+        Ok(launch)
+    }
+}
+
+/// A plugin directory holding the given skills, so Claude Code loads them
+/// as its own skills and slash commands.
+fn skills_plugin(scratch: &Path, skills: &[PathBuf]) -> io::Result<PathBuf> {
+    let dir = scratch.join("claude-plugin");
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
+    fs::create_dir_all(dir.join(".claude-plugin"))?;
+    fs::write(
+        dir.join(".claude-plugin/plugin.json"),
+        json!({"name": "silt", "description": "Skills Silt found in this repository and your ~/.agents/skills"}).to_string(),
+    )?;
+    fs::create_dir_all(dir.join("skills"))?;
+    for skill in skills {
+        if let Some(name) = skill.file_name() {
+            let link = dir.join("skills").join(name);
+            if !link.exists() {
+                std::os::unix::fs::symlink(skill, link)?;
             }
         }
     }
-    out
+    Ok(dir)
 }
-
 /// The conversation steps recorded in one transcript line.
 pub fn normalize(line: &str) -> Vec<Entry> {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -343,7 +520,7 @@ mod tests {
                 ("../escape.txt".to_owned(), b"no".to_vec()),
             ],
         };
-        let paths = restore(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
+        let paths = restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
@@ -361,13 +538,19 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_never_apply_to_their_own_output() {
-        let rewrites = [("/a/repo/old", "/a/repo/new"), ("/a/repo", "/a/repo/new")];
-        assert_eq!(
-            replace_once("cd /a/repo/old && cd /a/repo", &rewrites),
-            "cd /a/repo/new && cd /a/repo/new"
+    fn translated_lines_chain_and_name_the_session() {
+        let lines = transcript_lines(
+            &[(Role::User, "hi".into()), (Role::Assistant, "hello".into())],
+            Path::new("/repo"),
+            "s1",
         );
-    }
+        let first: Value = serde_json::from_str(&lines[0]).expect("json");
+        let second: Value = serde_json::from_str(&lines[1]).expect("json");
+        assert_eq!(first["parentUuid"], Value::Null);
+        assert_eq!(second["parentUuid"], first["uuid"]);
+        assert_eq!(second["sessionId"], "s1");
+        assert_eq!(normalize(&lines[1]), vec![Entry::Assistant { text: "hello".into() }]);
+            }
 
     #[test]
     fn hook_input_parses_tool_events() {

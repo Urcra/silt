@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod fakes;
+
 /// Records a first session, or on `--resume` checks that the restored
 /// transcript is where Claude looks for it and points at this directory.
 pub const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -21,6 +23,8 @@ while [ $# -gt 0 ]; do
         --session-id) session="$2"; shift 2 ;;
         --resume) session="$2"; resume=1; shift 2 ;;
         --settings) shift 2 ;;
+        --append-system-prompt) printf '%s' "$2" > "$FAKE_LOG_DIR/claude-instructions"; shift 2 ;;
+        --plugin-dir) ls "$2/skills" > "$FAKE_LOG_DIR/claude-skills"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -36,9 +40,11 @@ say() {
 if [ -n "$resume" ]; then
     grep -q "\"cwd\":\"$(pwd)\"" "$transcript" || { echo "transcript not restored for $(pwd)" >&2; exit 3; }
     grep -q "Please add a farewell line" "$transcript" || { echo "conversation missing" >&2; exit 3; }
-    saved=$(sed -n 's/.*saved to \([^"]*\)".*/\1/p' "$transcript" | head -n 1)
-    [ "$saved" = "$dir/$session/tool-results/t1.txt" ] || { echo "tool result path not rewritten: $saved" >&2; exit 4; }
-    grep -q "big output" "$saved" || { echo "tool result missing" >&2; exit 4; }
+    if [ -z "${FAKE_TRANSLATED:-}" ]; then
+        saved=$(sed -n 's/.*saved to \([^"]*\)".*/\1/p' "$transcript" | head -n 1)
+        [ "$saved" = "$dir/$session/tool-results/t1.txt" ] || { echo "tool result path not rewritten: $saved" >&2; exit 4; }
+        grep -q "big output" "$saved" || { echo "tool result missing" >&2; exit 4; }
+    fi
     grep -q "\"sessionId\":\"$session\"" "$transcript" || { echo "session id not rewritten" >&2; exit 5; }
     for needle in ${FAKE_EXPECT:-}; do
         needle=$(printf '%s' "$needle" | tr '-' ' ')
@@ -170,6 +176,8 @@ pub struct Machine {
     pub claude_dir: PathBuf,
     pub repo: PathBuf,
     pub fake: PathBuf,
+    /// Homes of the other agents and the fakes' logs.
+    pub agents: PathBuf,
 }
 
 impl Machine {
@@ -187,11 +195,25 @@ impl Machine {
         let fake = home.join("claude-bin");
         fs::write(&fake, FAKE_CLAUDE).expect("write fake claude");
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let agents = home.join("agents");
+        for (name, script) in [
+            ("codex", fakes::FAKE_CODEX),
+            ("gemini", fakes::FAKE_GEMINI),
+            ("copilot", fakes::FAKE_COPILOT),
+            ("opencode", fakes::FAKE_OPENCODE),
+        ] {
+            fs::create_dir_all(agents.join(name)).expect("mkdir");
+            let bin = agents.join(format!("{name}-bin"));
+            fs::write(&bin, script).expect("write fake agent");
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        fs::create_dir_all(agents.join("logs")).expect("mkdir");
         let machine = Self {
             silt_home,
             claude_dir,
             repo: home.join("repo").canonicalize().expect("canonical"),
             fake,
+            agents,
         };
         let code = server.pairing_code_for(user);
         machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
@@ -209,6 +231,16 @@ impl Machine {
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
+            .env("SILT_CODEX_BIN", self.agents.join("codex-bin"))
+            .env("SILT_GEMINI_BIN", self.agents.join("gemini-bin"))
+            .env("SILT_COPILOT_BIN", self.agents.join("copilot-bin"))
+            .env("SILT_OPENCODE_BIN", self.agents.join("opencode-bin"))
+            .env("CODEX_HOME", self.agents.join("codex"))
+            .env("GEMINI_CLI_HOME", self.agents.join("gemini"))
+            .env("COPILOT_HOME", self.agents.join("copilot"))
+            .env("FAKE_OPENCODE_DIR", self.agents.join("opencode"))
+            .env("FAKE_LOG_DIR", self.agents.join("logs"))
+            .env("HOME", self.agents.parent().expect("the machine's home"))
             .env("SILT_HOOK", format!("{} hook", env!("CARGO_BIN_EXE_silt")))
             .envs(envs.iter().copied())
             .output()

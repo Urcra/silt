@@ -122,6 +122,7 @@ fn sync_recovers_from_server_restarts_and_rollbacks() {
         claude_dir: world.root.path().join("fresh-claude"),
         repo: world.home.repo.clone(),
         fake: world.home.fake.clone(),
+        agents: world.home.agents.clone(),
     };
     fs::create_dir_all(&machine.claude_dir).expect("mkdir");
     let code = world.server.pairing_code();

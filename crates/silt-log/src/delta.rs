@@ -171,6 +171,10 @@ pub enum ConvOp {
     /// `session` continues `from` under a new id, as when a fork restores
     /// its source's session; restoring `session` again needs both.
     SessionContinued { session: SessionRef, from: SessionRef },
+    /// `session` was started from the thread's conversation translated into
+    /// its agent's format; `lines` (a blob) is what came before its own
+    /// lines when restoring it.
+    SessionTranslated { session: SessionRef, lines: BlobHash },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

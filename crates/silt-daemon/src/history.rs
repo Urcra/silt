@@ -4,12 +4,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use silt_agents::{Entry, claude};
+use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
 use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{Core, CoreError, touched_inode};
+use crate::transcripts::native_entries;
 use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
 
 /// Longest text of one entry in a history page.
@@ -34,13 +35,14 @@ impl Core {
                 .collect(),
         };
         let mut entries = Vec::new();
+        let mut transcripts = Transcripts::default();
         for (delta, source) in items {
             let origin = match source {
                 HistorySource::Own => "own",
                 HistorySource::Inherited => "inherited",
                 HistorySource::Upstream => "upstream",
             };
-            for (kind, text) in entry_texts(delta) {
+            for (kind, text) in entry_texts(&mut transcripts, delta) {
                 let index = entries.len();
                 entries.push((
                     delta.span.first(),
@@ -232,8 +234,9 @@ impl Core {
         let mut turns = Vec::new();
         let mut entries = 0;
         let mut last_prompt: Option<(usize, String)> = None;
+        let mut transcripts = Transcripts::default();
         for item in family.history(thread) {
-            for (kind, text) in entry_texts(item.delta) {
+            for (kind, text) in entry_texts(&mut transcripts, item.delta) {
                 if kind == "user" {
                     last_prompt = Some((entries, text));
                 }
@@ -258,9 +261,9 @@ impl Core {
 }
 
 /// The history entries one delta contributes, as kind and text.
-fn entry_texts(delta: &Delta) -> Vec<(String, String)> {
+fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<(String, String)> {
     match &delta.op {
-        Op::Conv(ConvOp::Native { line, .. }) => claude::normalize(line)
+        Op::Conv(ConvOp::Native { .. }) => native_entries(transcripts, delta)
             .into_iter()
             .filter_map(|entry| match entry {
                 Entry::Other { .. } => None,
@@ -286,10 +289,11 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
     let mut touches: Vec<FileTouch> = Vec::new();
     let mut prompts: HashMap<ThreadId, String> = HashMap::new();
     let mut pending_prompt: HashMap<ThreadId, String> = HashMap::new();
+    let mut transcripts = Transcripts::default();
     for delta in family.log().iter().filter(|delta| include(delta)) {
         match &delta.op {
-            Op::Conv(ConvOp::Native { line, .. }) => {
-                for entry in claude::normalize(line) {
+            Op::Conv(ConvOp::Native { .. }) => {
+                for entry in native_entries(&mut transcripts, delta) {
                     if let Entry::User { text } = entry {
                         pending_prompt.insert(delta.thread, text);
                     }

@@ -7,16 +7,18 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "request", rename_all = "snake_case")]
 pub enum Request {
     Ping,
-    /// Starts recording a new agent session in a new thread.
+    /// Starts recording a new agent session in a new thread. Without a
+    /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
         cwd: PathBuf,
         agent: String,
-        session_id: String,
+        session_id: Option<String>,
         isolated: bool,
     },
     /// An agent hook fired; the input is what the agent passed to the hook.
     Hook { event: String, input: serde_json::Value },
-    EndSession { agent: String, session_id: String },
+    /// The agent running in `thread` exited: record the rest of its session.
+    EndSession { thread: String },
     Threads,
     Show { thread: String },
     /// What the thread changed: one `turn`, or everything since `base`
@@ -39,10 +41,23 @@ pub enum Request {
     /// Re-reads the server settings after `silt auth login`.
     Reload,
     Status,
-    /// Continues a thread on this machine (ADR 0009).
-    Resume { thread: String, cwd: PathBuf, here: bool },
+    /// Continues a thread on this machine (ADR 0009), with its own agent or
+    /// with `agent` (ADR 0012).
+    Resume {
+        thread: String,
+        cwd: PathBuf,
+        here: bool,
+        #[serde(default)]
+        agent: Option<String>,
+    },
     /// Starts a fork of a thread on this machine (ADR 0010).
-    Fork { thread: String, cwd: PathBuf, here: bool },
+    Fork {
+        thread: String,
+        cwd: PathBuf,
+        here: bool,
+        #[serde(default)]
+        agent: Option<String>,
+    },
     /// Merges a fork's source into it; `thread` defaults to the one checked
     /// out at `cwd`.
     Pull { thread: Option<String>, cwd: PathBuf },
@@ -112,6 +127,8 @@ impl Response {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStarted {
     pub thread: String,
+    /// The session's id, when the daemon chose it.
+    pub session_id: Option<String>,
     pub checkout: PathBuf,
     /// Where to start the agent so its relative position in the repo is kept.
     pub agent_cwd: PathBuf,
@@ -217,6 +234,19 @@ pub struct Resumed {
     /// The agent session to continue, when the thread has one.
     pub session_id: Option<String>,
     pub mount: Option<Mount>,
+    /// The agent to run and how to start it.
+    pub agent: String,
+    pub start: Option<AgentStart>,
+}
+
+/// How the CLI starts the agent on a resumed or forked thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentStart {
+    /// The agent's own session, restored natively or translated.
+    Resume { id: String },
+    /// A new session whose first prompt carries the conversation.
+    Primed { id: Option<String>, prompt: String },
 }
 
 /// What a hook should hand back to the agent.

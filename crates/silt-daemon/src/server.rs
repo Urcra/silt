@@ -75,6 +75,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Changed { checkout, paths } => core.changed(checkout, paths).await,
             Event::Tick => core.tick().await,
             Event::CloseTool { session_id, reply } => core.close_tool(&session_id, reply).await,
+            Event::Discovered { token, found } => core.discovered(token, found).await,
+            Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Pushed {
                 family,
                 generation,

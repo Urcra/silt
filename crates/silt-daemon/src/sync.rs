@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use silt_agents::claude;
 use silt_crdt::InodeId;
 use silt_log::{Applied, Content, ConvOp, Delta, GitOp, Op};
 use silt_proto::{Listing, ThreadInfo};
@@ -186,8 +185,8 @@ impl Core {
             .or_default()
             .appended_from_server(at, fresh.len() as u64);
         for delta in &fresh {
-            if let Op::Conv(ConvOp::Native { line, .. }) = &delta.op {
-                for entry in claude::normalize(line) {
+            if let Op::Conv(ConvOp::Native { .. }) = &delta.op {
+                for entry in crate::transcripts::native_entries(&mut self.index_transcripts, delta) {
                     if let Some(text) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
                         self.store.index(delta.thread, delta.span.first(), entry.kind(), &text).await?;
                     }
@@ -370,6 +369,7 @@ fn referenced_blobs(deltas: &[Delta]) -> Vec<BlobHash> {
                 ..
             }
             | Op::Conv(ConvOp::Attachment { blob: hash, .. })
+            | Op::Conv(ConvOp::SessionTranslated { lines: hash, .. })
             | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
             _ => None,
         })

@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use silt_agents::{Entry, claude};
+use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_types::{FamilyId, Frontier, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
+use crate::transcripts::native_entries;
 use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 
 impl Core {
@@ -54,12 +55,15 @@ impl Core {
                         title(&inherited)
                     }),
                     created_ms: record.created_ms,
-                    messages: conversation
-                        .iter()
-                        .flat_map(|delta| entries(delta))
-                        .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
-                        .count(),
-                    edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+                    messages: {
+                        let mut transcripts = Transcripts::default();
+                        conversation
+                            .iter()
+                            .flat_map(|delta| native_entries(&mut transcripts, delta))
+                            .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
+                            .count()
+                    },
+                                        edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
                     location: location.into(),
                     forked_from: deltas.iter().find_map(|delta| match delta.op {
                         Op::Fork { from } => Some(from.to_string()),
@@ -100,6 +104,7 @@ impl Core {
     fn show_lines(&self, family: Option<&Family>, thread: ThreadId, items: Vec<HistoryItem<'_>>) -> Vec<ShowLine> {
         let edits = family.map(|family| edits_by_tool(family, thread)).unwrap_or_default();
         let mut lines = Vec::new();
+        let mut transcripts = Transcripts::default();
         let mut segment = (HistorySource::Own, thread);
         for item in items {
             let delta = item.delta;
@@ -131,7 +136,7 @@ impl Core {
                     }
                 }
                 Op::Conv(ConvOp::Native { .. }) => {
-                    for entry in entries(delta) {
+                    for entry in native_entries(&mut transcripts, delta) {
                         match entry {
                             Entry::ToolCall { id, name, input } => lines.push(ShowLine::ToolCall {
                                 id,
@@ -294,15 +299,9 @@ impl Core {
     }
 }
 
-fn entries(delta: &Delta) -> Vec<Entry> {
-    match &delta.op {
-        Op::Conv(ConvOp::Native { line, .. }) => claude::normalize(line),
-        _ => Vec::new(),
-    }
-}
-
+/// The title the agent gave the conversation, or else its first prompt.
 fn title(conversation: &[&Delta]) -> Option<String> {
-    conversation.iter().rev().find_map(|delta| match &delta.op {
+    let named = conversation.iter().rev().find_map(|delta| match &delta.op {
         Op::Conv(ConvOp::Native { line, .. }) => {
             let value: serde_json::Value = serde_json::from_str(line).ok()?;
             (value.get("type")?.as_str()? == "ai-title")
@@ -311,7 +310,26 @@ fn title(conversation: &[&Delta]) -> Option<String> {
         }
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
+    });
+    named.or_else(|| {
+        let mut transcripts = Transcripts::default();
+        conversation
+            .iter()
+            .flat_map(|delta| native_entries(&mut transcripts, delta))
+            .find_map(|entry| match entry {
+                Entry::User { text } => text.lines().find(|line| !line.trim().is_empty()).map(|line| clip_title(line.trim())),
+                _ => None,
+            })
     })
+}
+
+fn clip_title(text: &str) -> String {
+    const TITLE_CHARS: usize = 60;
+    if text.chars().count() <= TITLE_CHARS {
+        text.to_owned()
+    } else {
+        text.chars().take(TITLE_CHARS).collect::<String>() + "…"
+    }
 }
 
 /// Files each tool call changed (`None`: changes made outside tool calls).

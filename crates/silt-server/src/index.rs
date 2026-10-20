@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use silt_agents::claude;
+use silt_agents::Transcripts;
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{ConvOp, Delta, GitOp, MrOp, Op};
 use silt_types::{ActorId, DeltaId, FamilyId, Lamport, ThreadId};
@@ -26,6 +26,7 @@ pub(crate) struct Index {
     requests: HashMap<DeltaId, ThreadId>,
     /// Each fork's source.
     forks: HashMap<ThreadId, ThreadId>,
+    transcripts: Transcripts,
 }
 
 /// A row to write for a delta.
@@ -74,8 +75,12 @@ impl Index {
             Op::Delete { inode } | Op::Text { inode, .. } | Op::SetContent { inode, .. } | Op::SetExecutable { inode, .. } => {
                 Some(*inode)
             }
-            Op::Conv(ConvOp::Native { line, .. }) => {
-                for entry in claude::normalize(line) {
+            Op::Conv(ConvOp::Native { session, file, line }) => {
+                let file = match file {
+                    silt_log::SessionFile::Main => "main".to_owned(),
+                    silt_log::SessionFile::Subagent(name) => format!("subagent:{name}"),
+                };
+                for entry in self.transcripts.entries(&session.agent, &session.id, &file, line) {
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
                         rows.push(Row::Text {
                             thread,

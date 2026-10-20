@@ -93,3 +93,72 @@ fn git_status(dir: &std::path::Path) -> String {
         .expect("git runs");
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
+
+#[test]
+fn skills_and_rules_reach_every_agent() {
+    let root = tempfile::Builder::new().prefix("silt-skills").tempdir_in("/tmp").expect("temp dir");
+    let origin = origin(root.path());
+    let seed = root.path().join("seed");
+    fs::create_dir_all(seed.join(".agents/skills/review")).expect("mkdir");
+    fs::write(
+        seed.join(".agents/skills/review/SKILL.md"),
+        "---\nname: review\ndescription: Review a change before it lands\n---\n\nRead the diff, then run the gate.\n",
+    )
+    .expect("write");
+    fs::write(seed.join("AGENTS.md"), "Always run the gate before committing.\n").expect("write");
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-q", "-m", "skills"]);
+    git(&seed, &["push", "-q", &origin.to_string_lossy(), "main"]);
+    let server = Server::start(&root.path().join("server"));
+    let machine = Machine::new(root.path(), "laptop", &origin, &server);
+
+    machine.silt(&["claude"]);
+    let logs = machine.agents.join("logs");
+    let instructions = fs::read_to_string(logs.join("claude-instructions")).expect("Claude got instructions");
+    assert!(instructions.contains("Always run the gate before committing."), "{instructions}");
+    assert!(!instructions.contains("silt_use_skill"), "Claude loads the skills itself: {instructions}");
+    assert_eq!(fs::read_to_string(logs.join("claude-skills")).expect("skills").trim(), "review");
+
+    machine.silt(&["codex"]);
+    let config = fs::read_to_string(machine.agents.join("codex/last-config")).expect("config");
+    assert!(
+        !config.contains("developer_instructions"),
+        "Codex reads AGENTS.md and .agents/skills itself: {config}"
+    );
+
+    let thread = thread_of(&machine);
+    let mut mcp = std::process::Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["mcp", "--thread", &thread, "--checkout"])
+        .arg(&machine.repo)
+        .env("SILT_HOME", &machine.silt_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("silt mcp runs");
+    {
+        use std::io::Write;
+        let mut stdin = mcp.stdin.take().expect("stdin");
+        for line in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"silt_skills","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"silt_use_skill","arguments":{"name":"review"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"prompts/list"}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"review"}}"#,
+        ] {
+            writeln!(stdin, "{line}").expect("write");
+        }
+    }
+    let output = mcp.wait_with_output().expect("mcp exits");
+    let replies: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json"))
+        .collect();
+    let text = |index: usize| replies[index]["result"]["content"][0]["text"].as_str().unwrap_or_default().to_owned();
+    assert!(text(0).contains("review: Review a change before it lands"), "{}", text(0));
+    assert!(text(1).contains("Read the diff, then run the gate."), "{}", text(1));
+    assert_eq!(replies[2]["result"]["prompts"][0]["name"], "review");
+    assert!(
+        replies[3]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Read the diff"))
+    );
+}

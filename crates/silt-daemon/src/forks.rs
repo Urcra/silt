@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use silt_agents::{Entry, claude};
+use silt_agents::{Entry, Transcripts};
 use silt_crdt::VersionVector;
 use silt_log::{Author, ConvOp, Delta, Family, HistorySource, MergeRequest, MrOp, MrStatus, Op};
 use silt_proto::Visibility;
@@ -12,6 +12,7 @@ use silt_types::{DeltaId, FamilyId, Frontier, ThreadId};
 use similar::{DiffTag, TextDiff};
 
 use crate::core::{Core, CoreError, touched_inode};
+use crate::transcripts::native_entries;
 use crate::protocol::{MrDetails, MrSummary, Pulled};
 
 /// Longest agent message quoted in a generated merge request summary.
@@ -122,11 +123,12 @@ impl Core {
 
         let family = &self.families[&family_id];
         let after = family.graph().version_vector(&family.thread_head(thread));
+        let mut transcripts = Transcripts::default();
         pulled.messages = family
             .history(thread)
             .iter()
             .filter(|item| item.source == HistorySource::Upstream && !known.contains(&item.delta.span.first()))
-            .flat_map(|item| entries(item.delta))
+            .flat_map(|item| native_entries(&mut transcripts, item.delta))
             .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
             .count();
         pulled.files = self
@@ -392,13 +394,6 @@ impl Core {
     }
 }
 
-fn entries(delta: &Delta) -> Vec<Entry> {
-    match &delta.op {
-        Op::Conv(ConvOp::Native { line, .. }) => claude::normalize(line),
-        _ => Vec::new(),
-    }
-}
-
 /// The files and the fork's last agent message, for a merge request whose
 /// author gave no summary.
 fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> String {
@@ -407,12 +402,16 @@ fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> Str
         [file] => format!("Changes {file}."),
         files => format!("Changes {} files: {}.", files.len(), files.join(", ")),
     };
-    let last_message = family
+    let mut transcripts = Transcripts::default();
+    let own: Vec<Entry> = family
         .history(thread)
         .iter()
-        .rev()
         .filter(|item| item.source == HistorySource::Own)
-        .flat_map(|item| entries(item.delta).into_iter().rev())
+        .flat_map(|item| native_entries(&mut transcripts, item.delta))
+        .collect();
+    let last_message = own
+        .into_iter()
+        .rev()
         .find_map(|entry| match entry {
             Entry::Assistant { text } if !text.trim().is_empty() => Some(text),
             _ => None,

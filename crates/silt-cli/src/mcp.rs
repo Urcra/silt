@@ -9,6 +9,7 @@ use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult};
+use silt_agents::conventions::{self, Skill};
 use silt_daemon::{client, paths};
 
 use crate::CliError;
@@ -19,12 +20,15 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 struct DaemonTools {
     thread: String,
     cwd: PathBuf,
+    checkout: PathBuf,
 }
 
-pub fn serve(thread: &str) -> Result<(), Exn<CliError>> {
+pub fn serve(thread: &str, checkout: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+    let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
     let mut tools = DaemonTools {
         thread: thread.to_owned(),
-        cwd: env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?,
+        checkout: checkout.unwrap_or_else(|| cwd.clone()),
+        cwd,
     };
     silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools)
         .or_raise(|| CliError("the MCP connection failed".into()))
@@ -53,8 +57,73 @@ fn number_arg(arguments: &Value, name: &str) -> Option<usize> {
         .and_then(|value| usize::try_from(value).ok())
 }
 
+impl DaemonTools {
+    fn skills(&self) -> Vec<Skill> {
+        let home = env::var_os("HOME").map(PathBuf::from);
+        conventions::discover_skills(&self.checkout, home.as_deref())
+    }
+
+    fn skill(&self, name: &str) -> Result<Skill, String> {
+        self.skills()
+            .into_iter()
+            .find(|skill| skill.name == name)
+            .ok_or_else(|| format!("no skill named {name}; silt_skills lists them"))
+    }
+}
+
 impl silt_mcp::Backend for DaemonTools {
+    fn prompts(&mut self) -> Vec<silt_mcp::Prompt> {
+        self.skills()
+            .into_iter()
+            .filter(|skill| skill.user_invocable)
+            .map(|skill| silt_mcp::Prompt {
+                name: skill.name,
+                description: skill.description,
+            })
+            .collect()
+    }
+
+    fn prompt(&mut self, name: &str) -> Result<String, String> {
+        let skill = self.skill(name)?;
+        let body = skill.body().map_err(|error| error.to_string())?;
+        Ok(format!("Use the {name} skill (its files are in {}):\n\n{body}", skill.dir.display()))
+    }
+
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String> {
+        match tool {
+            "silt_skills" => {
+                let skills: Vec<Skill> = self.skills().into_iter().filter(|skill| skill.model_invocable).collect();
+                if skills.is_empty() {
+                    return Ok("No skills in .silt/skills, .agents/skills or ~/.agents/skills.".into());
+                }
+                let mut out = String::from("Skills (load one with silt_use_skill):\n");
+                for skill in skills {
+                    let _ = writeln!(out, "- {}: {}", skill.name, skill.description);
+                }
+                return Ok(out);
+            }
+            "silt_use_skill" => {
+                let skill = self.skill(&text_arg(arguments, "name")?)?;
+                let body = skill.body().map_err(|error| error.to_string())?;
+                let mut files: Vec<String> = std::fs::read_dir(&skill.dir)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                            .filter(|name| name != "SKILL.md")
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                files.sort();
+                let mut out = format!("Skill {} from {}.", skill.name, skill.dir.display());
+                if !files.is_empty() {
+                    let _ = write!(out, " Its other files: {}.", files.join(", "));
+                }
+                let _ = write!(out, "\n\n{body}");
+                return Ok(out);
+            }
+            _ => {}
+        }
         let thread = arguments
             .get("thread")
             .and_then(Value::as_str)
