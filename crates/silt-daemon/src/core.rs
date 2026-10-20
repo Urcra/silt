@@ -29,8 +29,9 @@ pub enum Event {
     Changed { checkout: i64, paths: Vec<PathBuf>, noticed: Instant, settled: bool },
     Tick,
     CloseTool { session_id: String, reply: oneshot::Sender<Response> },
-    Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
-    Pulled { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
+    /// A push's answer, from sync epoch `epoch`.
+    Pushed { family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String> },
+    Pulled { family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String> },
     /// A listing, and when it was asked for.
     Listed(Result<Listing, String>, Instant),
     Discovered { token: u64, found: Option<silt_agents::Found> },
@@ -103,6 +104,9 @@ pub struct Core {
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
+    /// Bumped when a family's sync state is replaced, so answers to requests
+    /// made before aren't taken as answers to new ones.
+    pub(crate) sync_epochs: HashMap<FamilyId, u64>,
     pub(crate) redactor: Redactor,
     /// The secrets this machine knows, put back into what arrives redacted
     /// (ADR 0015).
@@ -167,6 +171,7 @@ impl Core {
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
             syncs: HashMap::new(),
+            sync_epochs: HashMap::new(),
             redactor: redactor(data_dir),
             overlay: Overlay::default(),
             last_listing: None,
@@ -273,13 +278,14 @@ impl Core {
                 let secrets = fresh.secrets().to_vec();
                 self.redactor = self.redactor.clone().with(secrets.iter().cloned());
                 self.learn_secrets(secrets);
+                for family in self.syncs.keys().copied().collect::<Vec<_>>() {
+                    *self.sync_epochs.entry(family).or_default() += 1;
+                }
                 self.syncs.clear();
                 for family in self.families.keys().chain(self.raw.keys()).copied().collect::<Vec<_>>() {
                     let state = self.store.sync_state(family).await.unwrap_or_default();
-                    self.syncs.insert(
-                        family,
-                        ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view),
-                    );
+                    let sync = ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view);
+                    self.replace_sync(family, sync);
                 }
                 self.drive_sync();
                 Response::ok("reloaded")

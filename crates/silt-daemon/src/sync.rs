@@ -6,7 +6,7 @@ use silt_crdt::InodeId;
 use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{SearchRow, Store, SyncState, ThreadRecord};
-use silt_sync::{Effect, Outcome};
+use silt_sync::{ClientSync, Effect, Outcome};
 use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
@@ -66,12 +66,14 @@ impl Core {
                 self.learn_secrets(found);
                 let blobs = referenced_blobs(&batch);
                 let (events, remote, store, uploaded) = (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
+                let epoch = self.sync_epoch(family);
                 tokio::spawn(async move {
                     // Deltas go only after their blobs, or others would get
                     // deltas whose content they can't fetch.
                     if let Err(error) = upload_blobs(&remote, &store, &uploaded, blobs).await {
                         let _ = events.send(Event::Pushed {
                             family,
+                            epoch,
                             generation: None,
                             outcome: Outcome::Failed,
                             error: Some(format!("could not upload a file to the server: {error}")),
@@ -81,6 +83,7 @@ impl Core {
                     let (generation, outcome, error) = remote.push(family, batch).await;
                     let _ = events.send(Event::Pushed {
                         family,
+                        epoch,
                         generation,
                         outcome,
                         error: error.map(|error| error.to_string()),
@@ -92,11 +95,12 @@ impl Core {
             }
             let sync = self.syncs.get_mut(&family).expect("inserted above");
             if let Some(pull) = sync.next_pull() {
-                let (events, remote) = (self.events.clone(), remote.clone());
+                let (events, remote, epoch) = (self.events.clone(), remote.clone(), self.sync_epoch(family));
                 tokio::spawn(async move {
                     let (generation, outcome, error) = remote.pull(family, pull.after, pull.last, PULL_WAIT).await;
                     let _ = events.send(Event::Pulled {
                         family,
+                        epoch,
                         generation,
                         outcome,
                         error: error.map(|error| error.to_string()),
@@ -106,14 +110,31 @@ impl Core {
         }
     }
 
-    pub(crate) async fn pushed(&mut self, family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+    /// Starts the family's sync over from `sync`. Answers to requests sent
+    /// under the old state are ignored when they come.
+    pub(crate) fn replace_sync(&mut self, family: FamilyId, sync: ClientSync) {
+        *self.sync_epochs.entry(family).or_default() += 1;
+        self.syncs.insert(family, sync);
+    }
+
+    fn sync_epoch(&self, family: FamilyId) -> u64 {
+        self.sync_epochs.get(&family).copied().unwrap_or_default()
+    }
+
+    pub(crate) async fn pushed(&mut self, family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+        if epoch != self.sync_epoch(family) {
+            return;
+        }
         self.note_sync_error(error);
         let effects = self.syncs.entry(family).or_default().on_push(generation, outcome);
         self.handle_effects(family, effects).await;
         self.save_sync(family).await;
     }
 
-    pub(crate) async fn pulled(&mut self, family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+    pub(crate) async fn pulled(&mut self, family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+        if epoch != self.sync_epoch(family) {
+            return;
+        }
         self.note_sync_error(error);
         let effects = self.syncs.entry(family).or_default().on_pull(generation, outcome);
         self.handle_effects(family, effects).await;

@@ -111,16 +111,18 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
             Event::Pushed {
                 family,
+                epoch,
                 generation,
                 outcome,
                 error,
-            } => core.pushed(family, generation, outcome, error).await,
+            } => core.pushed(family, epoch, generation, outcome, error).await,
             Event::Pulled {
                 family,
+                epoch,
                 generation,
                 outcome,
                 error,
-            } => core.pulled(family, generation, outcome, error).await,
+            } => core.pulled(family, epoch, generation, outcome, error).await,
             Event::Listed(listing, requested) => core.listed(listing, requested).await,
         }
     }

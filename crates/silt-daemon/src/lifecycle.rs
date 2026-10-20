@@ -155,7 +155,7 @@ impl Core {
             let keep = kept_after_purge(&log, threads);
             let kept: Vec<_> = log.into_iter().zip(keep).filter(|(_, kept)| *kept).map(|(delta, _)| delta).collect();
             self.store.replace_deltas(family, &kept).await?;
-            self.syncs.insert(family, ClientSync::default());
+            self.replace_sync(family, ClientSync::default());
             if self.families.contains_key(&family) {
                 let repo = self
                     .threads
