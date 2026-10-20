@@ -154,6 +154,8 @@ type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
 async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: mpsc::UnboundedReceiver<Command>) -> Result<(), String> {
     let mut child = tokio::process::Command::new(&start.program)
         .args(&start.args)
+        // Only what the daemon chose to pass: see `registry::agent_environment`.
+        .env_clear()
         .envs(start.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&start.cwd)
         .stdin(Stdio::piped())

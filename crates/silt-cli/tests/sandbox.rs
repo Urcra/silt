@@ -13,10 +13,16 @@ fn sandboxed(args: &[&str], script: &str) -> Output {
         .expect("silt runs")
 }
 
-/// Namespaces may be off on this machine; the tests then say so and pass.
+/// Namespaces may be off on this machine; the tests then say so and pass,
+/// unless `SILT_REQUIRE_SANDBOX` is set, as the gate does.
 fn available() -> bool {
     let output = sandboxed(&[], "true");
     if !output.status.success() {
+        assert!(
+            std::env::var_os("SILT_REQUIRE_SANDBOX").is_none(),
+            "the sandbox is required but unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         eprintln!("skipping: {}", String::from_utf8_lossy(&output.stderr));
     }
     output.status.success()

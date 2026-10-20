@@ -277,6 +277,55 @@ fn current_dir() -> Result<PathBuf, Exn<CliError>> {
 /// Links the project's shared paths into a newly mounted managed checkout
 /// and runs its `prepare` script there. Problems are reported, not fatal:
 /// the agent can still work, and the user sees what went wrong.
+/// Whether the checkout's prepare script may run (ADR 0016). It came with
+/// the thread, so possibly from someone else's work or their agent's: it
+/// runs unasked only when it is the one in this person's own clone, or one
+/// they allowed before; otherwise they see it and decide.
+fn prepare_trusted(script: &Path, checkout: &Path, source: &Path) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    let Ok(bytes) = fs::read(script) else {
+        return false;
+    };
+    let relative = script.strip_prefix(checkout).unwrap_or(script);
+    if fs::read(source.join(relative)).is_ok_and(|own| own == bytes) {
+        return true;
+    }
+    let digest = silt_redact::id(&String::from_utf8_lossy(&bytes));
+    let trusted = paths::data_dir().join("trusted-prepare");
+    if fs::read_to_string(&trusted).is_ok_and(|known| known.lines().any(|line| line.trim() == digest)) {
+        return true;
+    }
+    if !(io::stdin().is_terminal() && io::stderr().is_terminal()) {
+        eprintln!(
+            "silt: not running {}: it differs from the one in your clone; run this again in a terminal to review it",
+            relative.display()
+        );
+        return false;
+    }
+    eprintln!(
+        "silt: this thread's {} differs from the one in your clone. It runs on this machine, outside any sandbox:",
+        relative.display()
+    );
+    for line in String::from_utf8_lossy(&bytes).lines().take(40) {
+        eprintln!("  | {line}");
+    }
+    eprint!("silt: run it? [y/N] ");
+    let _ = io::stderr().flush();
+    let mut answer = String::new();
+    if io::stdin().lock().read_line(&mut answer).is_err() || !answer.trim().eq_ignore_ascii_case("y") {
+        return false;
+    }
+    let remembered = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&trusted)
+        .and_then(|mut file| writeln!(file, "{digest}"));
+    if let Err(error) = remembered {
+        eprintln!("silt: could not remember that: {error}");
+    }
+    true
+}
+
 fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
     match silt_git::Repo::discover(checkout)
         .and_then(|repo| project::link_shared_paths(&repo, &mount.source, &mount.shared))
@@ -299,6 +348,11 @@ fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
             }
         }
         Err(error) => eprintln!("silt: could not link shared paths: {error}"),
+    }
+    if let Some(script) = project::project_file(checkout, "prepare")
+        && !prepare_trusted(&script, checkout, &mount.source)
+    {
+        return;
     }
     let source = mount.source.to_string_lossy();
     let checkout_dir = checkout.to_string_lossy();

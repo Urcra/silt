@@ -84,6 +84,21 @@ fn managed_checkouts_link_shared_paths_and_run_prepare() {
     assert!(world.root.path().join("server").exists() && world.server.data.exists());
 }
 
+#[test]
+fn a_prepare_script_changed_by_someone_else_needs_approval() {
+    let world = world();
+    let changed = "#!/bin/sh\necho changed-prepare-ran\n";
+    fs::write(world.laptop.repo.join(".agents/prepare"), changed).expect("the laptop's work changes it");
+    world.laptop.silt(&["claude"]);
+    let thread = thread_of(&world.laptop);
+    assert!(eventually(|| world.home.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
+    let resumed = world.home.silt(&["resume", &thread]);
+    let checkout = checkout_from(&resumed.stderr);
+    assert_eq!(fs::read_to_string(checkout.join(".agents/prepare")).expect("synced"), changed);
+    assert!(!String::from_utf8_lossy(&resumed.stdout).contains("changed-prepare-ran"), "it ran without approval");
+    assert!(String::from_utf8_lossy(&resumed.stderr).contains("not running .agents/prepare"));
+}
+
 fn git_status(dir: &std::path::Path) -> String {
     let output = std::process::Command::new("git")
         .arg("-C")

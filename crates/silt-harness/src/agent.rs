@@ -419,7 +419,14 @@ impl Harness {
         ];
         let request = RequestPermissionRequest::new(
             id.clone(),
-            ToolCallUpdate::new(call.to_owned(), ToolCallUpdateFields::new().title(format!("Run `{command}`"))),
+            ToolCallUpdate::new(
+                call.to_owned(),
+                ToolCallUpdateFields::new().title(if self.config.unsandboxed {
+                    format!("Run `{command}` without the sandbox")
+                } else {
+                    format!("Run `{command}`")
+                }),
+            ),
             options,
         );
         let answer = connection.send_request(request).block_task().await?;

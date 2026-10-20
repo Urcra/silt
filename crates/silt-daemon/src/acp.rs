@@ -209,7 +209,15 @@ impl Core {
         let thread = self.find_thread(selector)?;
         self.running(thread)?;
         let run = self.acp.get_mut(&thread).expect("checked above");
-        if let Command::Answer { id, .. } = &command {
+        if let Command::Answer { id, option } = &command {
+            let asked = run
+                .asking
+                .iter()
+                .find(|asked| asked.id == *id)
+                .ok_or_else(|| CoreError::Invalid("the agent isn't waiting for that answer".into()))?;
+            if option.as_ref().is_some_and(|option| !asked.options.iter().any(|(offered, _)| offered == option)) {
+                return Err(CoreError::Invalid("the agent didn't offer that option".into()));
+            }
             run.asking.retain(|asked| asked.id != *id);
         }
         send(run, command);
@@ -413,7 +421,7 @@ fn spawn_agent(events: mpsc::UnboundedSender<Event>, thread: ThreadId, run: u64,
         };
         start.program = program;
         start.args = args;
-        start.env = env;
+        start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).collect();
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let handle = silt_acp::start(start, sender);
         let _ = events.send(Event::Acp {

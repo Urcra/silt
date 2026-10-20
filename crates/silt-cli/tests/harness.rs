@@ -2,7 +2,7 @@
 //! has a stale edit refused after a teammate's change, reads again, edits,
 //! and runs a command in the sandbox once allowed.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ use tokio::sync::mpsc;
 
 struct Model {
     checkout: PathBuf,
+    /// A directory outside the checkout the sandboxed command tries to write.
+    outside: PathBuf,
     requests: Mutex<Vec<Value>>,
 }
 
@@ -38,7 +40,11 @@ async fn messages(State(model): State<Arc<Model>>, Json(request): Json<Value>) -
         }
         3 => tool("t3", "read_file", json!({"path": "src/main.rs"})),
         4 => tool("t4", "edit_file", edit),
-        5 => tool("t5", "run", json!({"command": "cat src/main.rs && touch /etc/silt-harness-test"})),
+        5 => tool(
+            "t5",
+            "run",
+            json!({"command": format!("cat src/main.rs; touch {}/escaped", model.outside.display())}),
+        ),
         _ => json!({"content": [{"type": "text", "text": "All done."}], "stop_reason": "end_turn"}),
     })
 }
@@ -59,8 +65,10 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
     let checkout = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(checkout.path().join("src")).expect("dir");
     std::fs::write(checkout.path().join("src/main.rs"), "fn main() {}\n").expect("file");
+    let outside = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let model = Arc::new(Model {
         checkout: checkout.path().to_owned(),
+        outside: outside.path().to_owned(),
         requests: Mutex::default(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
@@ -74,7 +82,9 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
         ("ANTHROPIC_BASE_URL".to_owned(), format!("http://{address}")),
         ("SILT_HOME".to_owned(), home.path().to_string_lossy().into_owned()),
     ];
-    if !sandbox_available() {
+    let sandboxed = sandbox_available();
+    if !sandboxed {
+        assert!(std::env::var_os("SILT_REQUIRE_SANDBOX").is_none(), "the sandbox is required but unavailable");
         eprintln!("namespaces are off here; running the command unsandboxed");
         env.push(("SILT_HARNESS_UNSANDBOXED".to_owned(), "1".to_owned()));
     }
@@ -128,7 +138,9 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
     assert_eq!(std::fs::read_to_string(checkout.path().join("src/main.rs")).expect("reads"), edited);
     let ran = outputs.last().expect("the command's output");
     assert!(ran.contains("println!(\"hi\")"), "{ran}");
-    assert!(!Path::new("/etc/silt-harness-test").exists());
+    if sandboxed {
+        assert!(!outside.path().join("escaped").exists(), "the command wrote outside the checkout");
+    }
     agent.send(Command::Stop);
 }
 
