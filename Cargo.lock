@@ -3537,6 +3537,13 @@ dependencies = [
 [[package]]
 name = "silt-sync"
 version = "0.0.1"
+dependencies = [
+ "proptest",
+ "silt-crdt",
+ "silt-log",
+ "silt-types",
+ "thiserror",
+]
 
 [[package]]
 name = "silt-term"
