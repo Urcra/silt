@@ -116,6 +116,8 @@ pub enum Request {
     ThreadPurge { thread: String },
     /// The threads in the trash.
     Trash,
+    /// Lets `user` write into the thread, or stops it (ADR 0014).
+    ThreadShare { thread: String, user: String, remove: bool },
     Shutdown,
 }
 
@@ -177,6 +179,14 @@ pub struct ThreadSummary {
     /// from the server, `moved` when another device took it over.
     pub location: String,
     pub forked_from: Option<String>,
+    /// The owner's user name; empty when this machine isn't on a server.
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub collaborators: Vec<String>,
+    /// Whether this machine's user may write into it (ADR 0014).
+    #[serde(default)]
+    pub writable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

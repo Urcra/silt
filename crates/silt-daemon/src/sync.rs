@@ -36,12 +36,13 @@ impl Core {
             return;
         };
         if self.last_listing.is_none_or(|last| last.elapsed() >= LISTING_INTERVAL) {
-            self.last_listing = Some(Instant::now());
+            let requested = Instant::now();
+            self.last_listing = Some(requested);
             let events = self.events.clone();
             let remote = remote.clone();
             tokio::spawn(async move {
                 let listing = remote.listing().await.map_err(|error| error.to_string());
-                let _ = events.send(Event::Listed(listing));
+                let _ = events.send(Event::Listed(listing, requested));
             });
         }
         for family in self.family_ids() {
@@ -261,7 +262,7 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("no local clone for family {family}")))
     }
 
-    pub(crate) async fn listed(&mut self, listing: Result<Listing, String>) {
+    pub(crate) async fn listed(&mut self, listing: Result<Listing, String>, requested: Instant) {
         let listing = match listing {
             Ok(listing) => listing,
             Err(error) => {
@@ -280,8 +281,9 @@ impl Core {
             }
         }
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
-        self.follow_trash(&listing.deleted, &listing.purged, &remote_threads).await;
+        self.follow_trash(&listing.deleted, &listing.purged, &remote_threads, requested).await;
         for info in listing.threads {
+            self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {
                 if known.owner != info.owner && !info.owner.is_empty() {
                     let updated = ThreadRecord {
@@ -373,6 +375,7 @@ fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
         created_ms: thread.created_ms,
         lease: None,
         owner: String::new(),
+        collaborators: Vec::new(),
     }
 }
 

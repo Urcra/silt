@@ -435,6 +435,7 @@ async fn orgs_and_teams_decide_who_sees_a_project() {
         created_ms: 1,
         lease: None,
         owner: String::new(),
+        collaborators: Vec::new(),
     };
     let http = browser();
     let registered = api(&http, reqwest::Method::POST, format!("{base}/v1/threads")).bearer_auth(&alice).json(&thread).send().await.expect("sends");

@@ -31,7 +31,8 @@ pub enum Event {
     CloseTool { session_id: String, reply: oneshot::Sender<Response> },
     Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
     Pulled { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
-    Listed(Result<Listing, String>),
+    /// A listing, and when it was asked for.
+    Listed(Result<Listing, String>, Instant),
     Discovered { token: u64, found: Option<silt_agents::Found> },
     Snapshotted { session_id: String, result: Result<Vec<String>, String> },
 }
@@ -84,6 +85,11 @@ pub struct Core {
     pub(crate) importing: bool,
     /// Threads in the trash, hidden until restored or purged.
     pub(crate) deleted: HashSet<ThreadId>,
+    /// When this machine last moved each thread into or out of the trash;
+    /// listings asked for before that are out of date for it.
+    pub(crate) trash_changed: HashMap<ThreadId, Instant>,
+    /// Each thread's collaborators, from the server's listing.
+    pub(crate) collaborators: HashMap<ThreadId, Vec<String>>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -137,6 +143,8 @@ impl Core {
             change_noticed: None,
             importing: false,
             deleted: HashSet::new(),
+            trash_changed: HashMap::new(),
+            collaborators: HashMap::new(),
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -307,6 +315,7 @@ impl Core {
             Request::ThreadRestore { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Restore).await),
             Request::ThreadPurge { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Purge).await),
             Request::Trash => Response::ok(self.trash()),
+            Request::ThreadShare { thread, user, remove } => to_response(self.share(&thread, &user, remove).await),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -863,6 +872,34 @@ impl Core {
     async fn inbox_read(&self, read: &silt_proto::InboxRead) -> Result<(), CoreError> {
         let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
         remote.inbox_read(read).await.map_err(|error| CoreError::Invalid(error.to_string()))
+    }
+
+    /// Whether this machine's user may write into `thread`: its owner or a
+    /// collaborator, or anyone when there is no server.
+    pub(crate) fn may_write(&self, thread: ThreadId) -> bool {
+        let user = self.own_user();
+        let Some(record) = self.threads.get(&thread) else {
+            return false;
+        };
+        user.is_empty() || record.owner.is_empty() || record.owner == user
+            || self.collaborators.get(&thread).is_some_and(|names| names.contains(&user))
+    }
+
+    async fn share(&mut self, selector: &str, user: &str, remove: bool) -> Result<String, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("sharing needs a server; use `silt auth login`".into()))?;
+        remote.share(thread, user, remove).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let names = self.collaborators.entry(thread).or_default();
+        names.retain(|name| name != user);
+        if !remove {
+            names.push(user.to_owned());
+        }
+        let short = crate::forks::short(thread);
+        Ok(if remove {
+            format!("{user} no longer writes into thread {short}")
+        } else {
+            format!("{user} can now edit thread {short} with you")
+        })
     }
 
     pub(crate) fn mount(&self, source: &Repo) -> Mount {

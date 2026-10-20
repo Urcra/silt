@@ -299,6 +299,13 @@ enum ThreadCommand {
     Purge { thread: String },
     /// List the threads in the trash
     Trash,
+    /// Let someone edit a thread of yours with you, or stop it with --remove
+    Share {
+        thread: String,
+        user: String,
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -541,6 +548,7 @@ fn main() -> Result<(), Exn<CliError>> {
             ThreadCommand::Restore { thread } => commands::thread_change(Request::ThreadRestore { thread }),
             ThreadCommand::Purge { thread } => commands::thread_change(Request::ThreadPurge { thread }),
             ThreadCommand::Trash => commands::trash(),
+            ThreadCommand::Share { thread, user, remove } => commands::thread_change(Request::ThreadShare { thread, user, remove }),
         },
         Command::Inbox { all, command } => match command {
             None => commands::inbox(all),

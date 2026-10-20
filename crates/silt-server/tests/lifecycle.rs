@@ -39,20 +39,23 @@ impl Client {
             created_ms: 1,
             lease: None,
             owner: String::new(),
+            collaborators: Vec::new(),
         };
         let status = self.request(reqwest::Method::POST, "/v1/threads").json(&info).send().await.expect("sends").status();
         assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     async fn push(&self, deltas: &[Delta]) {
-        let status = self
-            .request(reqwest::Method::POST, &format!("/v1/families/{FAMILY}/deltas"))
+        assert_eq!(self.try_push(deltas).await, StatusCode::OK);
+    }
+
+    async fn try_push(&self, deltas: &[Delta]) -> StatusCode {
+        self.request(reqwest::Method::POST, &format!("/v1/families/{FAMILY}/deltas"))
             .json(&PushRequest { deltas: deltas.to_vec() })
             .send()
             .await
             .expect("sends")
-            .status();
-        assert_eq!(status, StatusCode::OK);
+            .status()
     }
 
     async fn pulled(&self) -> Vec<ThreadId> {
@@ -88,8 +91,8 @@ fn file(name: &str) -> Op {
     }
 }
 
-#[tokio::test]
-async fn purged_threads_leave_what_forks_need_and_never_come_back() {
+/// A server with Alice and Bob signed in.
+async fn two_people() -> (tempfile::TempDir, Client, Client) {
     let data = tempfile::tempdir().expect("temp dir");
     let admin = Admin::open(data.path()).await.expect("opens");
     admin.add_user("alice", Some("correct horse battery"), false).await.expect("adds");
@@ -122,6 +125,46 @@ async fn purged_threads_leave_what_forks_need_and_never_come_back() {
         }
     };
     let (alice, bob) = (login("alice").await, login("bob").await);
+    (data, alice, bob)
+}
+
+#[tokio::test]
+async fn only_the_owner_and_collaborators_write_a_thread() {
+    let (_data, alice, bob) = two_people().await;
+    let mut family = Family::new();
+    let first = delta(&mut family, MAIN, file("a"));
+    alice.register(MAIN).await;
+    alice.push(std::slice::from_ref(&first)).await;
+    let bobs = family.clone();
+    let edit = bobs.delta(ActorId(77), MAIN, Author::User, 0, bobs.thread_head(MAIN), file("bob"));
+    assert_eq!(bob.try_push(std::slice::from_ref(&edit)).await, StatusCode::FORBIDDEN);
+    let comment = bobs.delta(
+        ActorId(78),
+        MAIN,
+        Author::User,
+        0,
+        bobs.thread_head(MAIN),
+        Op::Comment(silt_log::CommentOp::Added {
+            target: silt_log::CommentTarget::Message { delta: first.span.first() },
+            text: "looks good".into(),
+            by: "bob".into(),
+        }),
+    );
+    assert_eq!(bob.try_push(&[comment]).await, StatusCode::OK, "anyone who sees a thread comments on it");
+    assert_eq!(bob.try_push(std::slice::from_ref(&first)).await, StatusCode::OK, "known deltas sync back freely");
+
+    let share = |remove: bool| silt_proto::ShareRequest { user: "bob".into(), remove };
+    let shared = bob.request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators")).json(&share(false)).send().await.expect("sends");
+    assert_eq!(shared.status(), StatusCode::FORBIDDEN, "only the owner shares");
+    let shared = alice.request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators")).json(&share(false)).send().await.expect("sends");
+    assert_eq!(shared.status(), StatusCode::NO_CONTENT);
+    assert_eq!(bob.listing().await.threads[0].collaborators, vec!["bob".to_owned()]);
+    assert_eq!(bob.try_push(&[edit]).await, StatusCode::OK, "a collaborator writes");
+}
+
+#[tokio::test]
+async fn purged_threads_leave_what_forks_need_and_never_come_back() {
+    let (_data, alice, bob) = two_people().await;
 
     let mut family = Family::new();
     let shared = delta(&mut family, MAIN, file("shared"));

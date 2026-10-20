@@ -94,7 +94,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 outcome,
                 error,
             } => core.pulled(family, generation, outcome, error).await,
-            Event::Listed(listing) => core.listed(listing).await,
+            Event::Listed(listing, requested) => core.listed(listing, requested).await,
         }
     }
     let _ = fs::remove_file(socket);

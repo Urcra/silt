@@ -32,6 +32,7 @@ use tokio::sync::{Mutex, Notify};
 
 pub mod accounts;
 pub mod backup;
+mod collab;
 pub mod config;
 mod git;
 mod inbox;
@@ -167,6 +168,7 @@ impl Server {
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))
+            .route("/v1/threads/{id}/collaborators", post(collab::share))
             .route("/v1/threads/{id}/delete", post(lifecycle::delete))
             .route("/v1/threads/{id}/restore", post(lifecycle::restore))
             .route("/v1/threads/{id}/purge", post(lifecycle::purge))
@@ -461,6 +463,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
     )
     .fetch_all(&server.shared.db)
     .await?;
+    let mut shared = collab::collaborators(&server.shared.db).await?;
     let threads = rows
         .iter()
         .filter(|row| viewer.sees_thread(ThreadId(id_from(row.get("id")))))
@@ -474,6 +477,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
                 epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default(),
             }),
             owner: row.get("owner"),
+            collaborators: shared.remove(&ThreadId(id_from(row.get("id")))).unwrap_or_default(),
         })
         .collect();
     let (deleted, purged) = server.lifecycle().await?;
@@ -557,6 +561,8 @@ async fn push(
     let room = rooms
         .entry(family)
         .or_insert_with(|| Room::new(server.shared.generation));
+    let new: Vec<&Delta> = pushed.iter().filter(|delta| room.position(delta.span.first()).is_none()).collect();
+    collab::check_writes(&server.shared.db, caller.user, &new).await?;
     let before = room.seq();
     let outcome = room.push(pushed).map_err(|error| match error {
         PushError::Conflict(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::Conflict { delta }),

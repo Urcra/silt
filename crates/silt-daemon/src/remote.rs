@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
-    InboxRead, InboxReply, LoginReply, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
+    InboxRead, InboxReply, LoginReply, ShareRequest, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
     VisibilityRequest,
 };
@@ -170,6 +170,20 @@ impl Remote {
     pub async fn thread_lifecycle(&self, thread: ThreadId, action: &str) -> Result<(), RemoteError> {
         let response = self
             .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/{action}"))
+            .send()
+            .await?;
+        checked(response).await?;
+        Ok(())
+    }
+
+    pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {
+        let request = ShareRequest {
+            user: user.to_owned(),
+            remove,
+        };
+        let response = self
+            .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/collaborators"))
+            .json(&request)
             .send()
             .await?;
         checked(response).await?;

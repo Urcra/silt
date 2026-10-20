@@ -81,6 +81,9 @@ impl Core {
                         Op::Fork { from } => Some(from.to_string()),
                         _ => None,
                     }),
+                    owner: record.owner.clone(),
+                    collaborators: self.collaborators.get(&record.id).cloned().unwrap_or_default(),
+                    writable: self.may_write(record.id),
                 }
             })
             .collect();

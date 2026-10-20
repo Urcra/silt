@@ -59,6 +59,7 @@ async fn a_backup_taken_while_running_restores() {
         created_ms: 1,
         lease: None,
         owner: String::new(),
+        collaborators: Vec::new(),
     };
     request(reqwest::Method::POST, "/v1/threads".into()).json(&info).send().await.expect("sends");
     let mut family = Family::new();

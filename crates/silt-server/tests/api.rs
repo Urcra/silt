@@ -247,6 +247,7 @@ async fn blobs_threads_and_leases() {
         created_ms: 1,
         lease: None,
         owner: String::new(),
+        collaborators: Vec::new(),
     };
     client
         .request(reqwest::Method::POST, "/v1/threads")
@@ -297,6 +298,7 @@ impl Client {
             created_ms: 1,
             lease: None,
             owner: String::new(),
+            collaborators: Vec::new(),
         };
         self.request(reqwest::Method::POST, "/v1/threads")
             .json(&thread)
@@ -525,6 +527,7 @@ async fn a_private_fork_stays_hidden_until_offered_back() {
         created_ms: 2,
         lease: None,
         owner: String::new(),
+        collaborators: Vec::new(),
     };
     let status = bob.request(reqwest::Method::POST, "/v1/threads").json(&fork_info).send().await.expect("sends").status();
     assert_eq!(status, StatusCode::NO_CONTENT);

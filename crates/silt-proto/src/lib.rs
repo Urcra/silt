@@ -75,6 +75,17 @@ pub struct ThreadInfo {
     /// The owning user's name; set by the server in listings.
     #[serde(default)]
     pub owner: String,
+    /// Users the owner lets write into it (ADR 0014); set in listings.
+    #[serde(default)]
+    pub collaborators: Vec<String>,
+}
+
+/// Adds a collaborator to a thread, or removes one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareRequest {
+    pub user: String,
+    #[serde(default)]
+    pub remove: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

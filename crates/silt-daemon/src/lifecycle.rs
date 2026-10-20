@@ -47,6 +47,7 @@ impl Core {
                 .map_err(|error| CoreError::Invalid(error.to_string()))?;
         }
         let short = crate::forks::short(thread);
+        self.trash_changed.insert(thread, std::time::Instant::now());
         match change {
             Lifecycle::Delete => {
                 self.mark_deleted(thread, true).await?;
@@ -78,7 +79,13 @@ impl Core {
 
     /// Follows the server's trash: threads deleted or restored elsewhere,
     /// and threads purged for good.
-    pub(crate) async fn follow_trash(&mut self, deleted: &[ThreadId], purged: &[ThreadId], listed: &HashSet<ThreadId>) {
+    pub(crate) async fn follow_trash(
+        &mut self,
+        deleted: &[ThreadId],
+        purged: &[ThreadId],
+        listed: &HashSet<ThreadId>,
+        requested: std::time::Instant,
+    ) {
         let purged: HashSet<ThreadId> = purged.iter().copied().filter(|thread| self.threads.contains_key(thread)).collect();
         if !purged.is_empty()
             && let Err(error) = self.drop_threads(&purged).await
@@ -86,7 +93,12 @@ impl Core {
             warn!(%error, "could not drop purged threads");
         }
         let deleted: HashSet<ThreadId> = deleted.iter().copied().collect();
-        let known: Vec<ThreadId> = self.threads.keys().copied().collect();
+        let known: Vec<ThreadId> = self
+            .threads
+            .keys()
+            .copied()
+            .filter(|thread| self.trash_changed.get(thread).is_none_or(|changed| *changed < requested))
+            .collect();
         for thread in known {
             let result = if deleted.contains(&thread) {
                 self.mark_deleted(thread, true).await

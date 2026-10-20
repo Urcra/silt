@@ -98,6 +98,7 @@ pub(crate) async fn trash(State(server): State<Server>, Extension(caller): Exten
                 created_ms: row.get("created_ms"),
                 lease: None,
                 owner: row.get("owner"),
+                collaborators: Vec::new(),
             })
             .collect(),
     ))
