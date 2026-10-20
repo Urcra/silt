@@ -232,6 +232,9 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
             if let Some(error) = status.sync_error {
                 println!("last sync error: {error}");
             }
+            for note in &status.recovered {
+                println!("recovered: {note}");
+            }
             for thread in &status.diverged {
                 println!(
                     "thread {} differs from the server's copy (was Silt's data here restored from a backup?) and no longer syncs from here",

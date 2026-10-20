@@ -172,3 +172,61 @@ fn resume_here_uses_the_current_clone() {
     );
     assert_eq!(git(&home.repo, &["log", "-1", "--format=%s"]).trim(), "wip, not pushed");
 }
+
+#[test]
+fn a_client_restored_from_a_backup_recovers_its_work_in_a_fork() {
+    let world = world();
+    let (laptop, home) = (&world.laptop, &world.home);
+    laptop.silt(&["claude"]);
+    let thread = thread_of(laptop);
+    assert!(eventually(|| home.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
+
+    laptop.silt(&["daemon", "stop"]);
+    let backup = world.root.path().join("laptop-backup");
+    copy_dir(&laptop.silt_home, &backup);
+    laptop.silt(&["daemon", "start"]);
+    let main = laptop.repo.join("src/main.rs");
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn synced() {}\n").expect("write");
+    assert!(eventually(|| home.try_stdout(&["show", &thread]).contains("farewell")
+        && laptop.stdout(&["diff", &thread]).contains("+fn synced() {}")));
+    assert!(eventually(|| {
+        let output = Command::new(env!("CARGO_BIN_EXE_silt"))
+            .args(["auth", "status"])
+            .env("SILT_HOME", &laptop.silt_home)
+            .output()
+            .expect("runs");
+        output.status.success()
+    }));
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    laptop.silt(&["daemon", "stop"]);
+    fs::remove_dir_all(&laptop.silt_home).expect("remove");
+    copy_dir(&backup, &laptop.silt_home);
+    laptop.silt(&["daemon", "start"]);
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn after_restore() {}\n").expect("write");
+
+    assert!(
+        eventually(|| laptop.stdout(&["auth", "status"]).contains("recovery thread")),
+        "{}",
+        laptop.stdout(&["auth", "status"])
+    );
+    let log = laptop.stdout(&["log"]);
+    let recovery = log
+        .lines()
+        .find(|line| line.contains(&format!("fork of {thread}")))
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_else(|| panic!("a recovery fork is listed: {log}"))
+        .to_owned();
+    assert!(
+        eventually(|| laptop.stdout(&["diff", &recovery, "--base", "merge-base"]).contains("+fn after_restore() {}")),
+        "{}",
+        laptop.stdout(&["diff", &recovery, "--base", "merge-base"])
+    );
+    assert!(!laptop.stdout(&["diff", &thread]).contains("after_restore"), "the original thread keeps the server's version");
+    assert!(fs::read_to_string(&main).expect("read").contains("fn after_restore() {}"), "the disk keeps the local work");
+    assert!(
+        eventually(|| home.try_stdout(&["in-flight", "src/main.rs"]).contains(&recovery)),
+        "the recovery's work reaches the server: {}",
+        home.try_stdout(&["in-flight", "src/main.rs"])
+    );
+}

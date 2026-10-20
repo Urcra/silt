@@ -117,7 +117,7 @@ impl Core {
 
     /// Pulls everything the server has for the family, so a resume never
     /// starts from a partial thread.
-    async fn catch_up(&mut self, family: FamilyId) -> Result<(), CoreError> {
+    pub(crate) async fn catch_up(&mut self, family: FamilyId) -> Result<(), CoreError> {
         let Some(remote) = self.remote.clone() else {
             return Ok(());
         };

@@ -7,6 +7,7 @@ mod history;
 pub mod remote;
 pub mod paths;
 pub mod protocol;
+mod recovery;
 mod resume;
 mod server;
 mod sync;

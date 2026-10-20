@@ -94,6 +94,8 @@ pub struct Core {
     /// Messages for each thread's agent, handed over on its next prompt.
     pub(crate) notices: HashMap<ThreadId, Vec<String>>,
     pub(crate) web: Option<crate::web::WebInfo>,
+    /// What recovery forks this daemon made, for `silt auth status`.
+    pub(crate) recoveries: Vec<String>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -137,6 +139,7 @@ impl Core {
             heads: HashMap::new(),
             notices: HashMap::new(),
             web: None,
+            recoveries: Vec::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -273,6 +276,7 @@ impl Core {
                     .filter(|thread| self.syncs.get(&thread.family).is_some_and(|sync| sync.diverged().is_some()))
                     .map(|thread| thread.id.to_string())
                     .collect(),
+                recovered: self.recoveries.clone(),
             }),
             Request::Resume { thread, cwd, here } => to_response(self.resume(&thread, &cwd, here).await),
             Request::Fork { thread, cwd, here } => to_response(self.fork(&thread, &cwd, here).await),
@@ -492,7 +496,7 @@ impl Core {
         Ok(())
     }
 
-    async fn rescan(&mut self, checkout: i64) -> Result<(), CoreError> {
+    pub(crate) async fn rescan(&mut self, checkout: i64) -> Result<(), CoreError> {
         let root = self.checkout(checkout)?.record.path.clone();
         self.ingest_paths(checkout, vec![root]).await
     }

@@ -245,8 +245,10 @@ async fn checked(response: reqwest::Response) -> Result<reqwest::Response, Remot
     if response.status().is_success() {
         return Ok(response);
     }
-    let reply: ErrorReply = response.json().await.unwrap_or(ErrorReply::Invalid {
-        message: "unreadable error".into(),
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let reply: ErrorReply = serde_json::from_str(&body).unwrap_or_else(|_| ErrorReply::Invalid {
+        message: format!("{status}: {}", body.trim()),
     });
     Err(match reply {
         ErrorReply::ProtocolMismatch { supported } => RemoteError::ProtocolMismatch { supported },

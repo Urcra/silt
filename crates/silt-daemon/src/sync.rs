@@ -120,7 +120,10 @@ impl Core {
                     }
                 }
                 Effect::Diverged(id) => {
-                    warn!(%id, %family, "a delta collides with a different one on the server; no longer pushing the family");
+                    warn!(%id, %family, "a delta collides with a different one on the server; recovering");
+                    if let Err(error) = self.recover_diverged(family).await {
+                        warn!(%error, %family, "could not recover; the family no longer syncs from here");
+                    }
                 }
             }
         }

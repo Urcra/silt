@@ -4177,6 +4177,7 @@ name = "silt-proto"
 version = "0.0.1"
 dependencies = [
  "serde",
+ "serde_json",
  "silt-log",
  "silt-types",
 ]

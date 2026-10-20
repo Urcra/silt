@@ -237,6 +237,17 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets the family's deltas and sync progress, to read it again from
+    /// the server.
+    pub async fn clear_deltas(&self, family: FamilyId) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        for statement in ["DELETE FROM deltas WHERE family_id = ?", "DELETE FROM sync_state WHERE family_id = ?"] {
+            sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
         let rows = sqlx::query("SELECT data FROM deltas WHERE family_id = ? ORDER BY seq")

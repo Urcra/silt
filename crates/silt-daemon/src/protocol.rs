@@ -193,6 +193,9 @@ pub struct DaemonStatus {
     /// Threads whose history here differs from the server's, so they no
     /// longer push.
     pub diverged: Vec<String>,
+    /// Recovery forks made since the daemon started.
+    #[serde(default)]
+    pub recovered: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

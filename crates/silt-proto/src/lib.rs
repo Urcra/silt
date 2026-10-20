@@ -96,8 +96,14 @@ pub struct VisibilityRequest {
 #[serde(tag = "code", rename_all = "kebab-case")]
 pub enum ErrorReply {
     UnknownCursor,
-    MissingParents { delta: DeltaId },
-    Conflict { delta: DeltaId },
+    MissingParents {
+        #[serde(with = "delta_id_text")]
+        delta: DeltaId,
+    },
+    Conflict {
+        #[serde(with = "delta_id_text")]
+        delta: DeltaId,
+    },
     Invalid { message: String },
     Unauthorized,
     Forbidden { message: String },
@@ -160,4 +166,38 @@ pub struct InFlightThread {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InFlightReply {
     pub threads: Vec<InFlightThread>,
+}
+
+/// Delta ids as `actor.lamport` text: internally tagged enums buffer their
+/// fields, and that loses the 128-bit actor ids JSON numbers would carry.
+mod delta_id_text {
+    use std::str::FromStr;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+    use silt_types::DeltaId;
+
+    pub fn serialize<S: Serializer>(id: &DeltaId, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(id)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DeltaId, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        DeltaId::from_str(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_types::{ActorId, Lamport};
+
+    use super::*;
+
+    #[test]
+    fn conflicts_round_trip_with_full_actor_ids() {
+        let reply = ErrorReply::Conflict {
+            delta: DeltaId::new(ActorId(u128::MAX - 5), Lamport(34)),
+        };
+        let json = serde_json::to_string(&reply).expect("serializes");
+        assert_eq!(serde_json::from_str::<ErrorReply>(&json).expect("deserializes"), reply);
+    }
 }

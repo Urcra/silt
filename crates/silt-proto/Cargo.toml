@@ -14,3 +14,6 @@ workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 silt-log = { path = "../silt-log" }
 silt-types = { path = "../silt-types" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
