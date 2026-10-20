@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{PollWatcher, RecommendedWatcher, RecursiveMode};
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -33,6 +34,17 @@ fn needs_polling(root: &Path) -> bool {
     })
 }
 
+/// Whether an event can mean the path changed. Opening and reading don't,
+/// and must be skipped: rescanning reads every file, which would otherwise
+/// report every file again, forever.
+fn may_change(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
+    }
+}
+
 /// Starts watching `root`; `on_change` gets batches of absolute paths, or the
 /// root itself when events were lost and everything must be rescanned.
 pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> notify::Result<Watcher> {
@@ -41,6 +53,7 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
         Ok(events) => {
             let mut paths: Vec<PathBuf> = events
                 .iter()
+                .filter(|event| event.need_rescan() || may_change(&event.kind))
                 .flat_map(|event| {
                     if event.need_rescan() {
                         vec![rescan_root.clone()]
@@ -73,3 +86,38 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
         Ok(Watcher::Native(debouncer))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{CreateKind, ModifyKind};
+
+    use super::*;
+
+    #[test]
+    fn reading_is_not_changing() {
+        assert!(!may_change(&EventKind::Access(AccessKind::Open(AccessMode::Any))));
+        assert!(!may_change(&EventKind::Access(AccessKind::Close(AccessMode::Read))));
+        assert!(may_change(&EventKind::Access(AccessKind::Close(AccessMode::Write))));
+        assert!(may_change(&EventKind::Create(CreateKind::File)));
+        assert!(may_change(&EventKind::Modify(ModifyKind::Any)));
+    }
+
+    #[test]
+    fn rescanning_a_checkout_reports_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "a").expect("write");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _watcher = watch(dir.path(), move |paths| {
+            let _ = sender.send(paths);
+        })
+        .expect("watches");
+        std::thread::sleep(Duration::from_millis(200));
+        for entry in std::fs::read_dir(dir.path()).expect("lists") {
+            std::fs::read(entry.expect("entry").path()).expect("reads");
+        }
+        assert!(receiver.recv_timeout(DEBOUNCE * 5).is_err(), "reading files is not a change");
+        std::fs::write(dir.path().join("a.txt"), "b").expect("write");
+        assert!(receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "writing is");
+    }
+}
+

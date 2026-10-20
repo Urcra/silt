@@ -557,13 +557,14 @@ impl Core {
         let entry_hash = self.checkout(checkout_id)?.bridge.entries().get(path).map(|entry| entry.hash);
         let family_id = self.checkout(checkout_id)?.family;
         let thread = self.checkout(checkout_id)?.record.thread;
-        let in_family = self
-            .families
-            .get(&family_id)
-            .is_some_and(|family| family.thread_view(thread).paths().contains_key(path));
+        let in_family = || {
+            self.families
+                .get(&family_id)
+                .is_some_and(|family| family.thread_view(thread).paths().contains_key(path))
+        };
         match (&raw, entry_hash) {
             (Some(raw), Some(hash)) if raw.hash == hash => return Ok(Vec::new()),
-            (None, None) if !in_family => return Ok(Vec::new()),
+            (None, None) if !in_family() => return Ok(Vec::new()),
             _ => {}
         }
         let disk_file = match raw {

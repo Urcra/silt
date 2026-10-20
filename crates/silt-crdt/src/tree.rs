@@ -300,15 +300,28 @@ impl FileTree {
     }
 
     fn collect_paths(&self, dir: Parent, prefix: &str, paths: &mut BTreeMap<String, InodeId>) {
-        let mut by_name: BTreeMap<&str, Vec<(Stamp, InodeId)>> = BTreeMap::new();
+        let mut children: Children = HashMap::new();
         for (inode, placement) in &self.placements {
-            if placement.parent == dir {
-                by_name
-                    .entry(placement.name.as_str())
-                    .or_default()
-                    .push((placement.placed_by, *inode));
-            }
+            children
+                .entry(placement.parent)
+                .or_default()
+                .entry(placement.name.as_str())
+                .or_default()
+                .push((placement.placed_by, *inode));
         }
+        self.collect_under(&mut children, dir, prefix, paths);
+    }
+
+    fn collect_under(
+        &self,
+        children: &mut Children<'_>,
+        dir: Parent,
+        prefix: &str,
+        paths: &mut BTreeMap<String, InodeId>,
+    ) {
+        let Some(by_name) = children.remove(&dir) else {
+            return;
+        };
         for (name, mut claimants) in by_name {
             claimants.sort();
             for (rank, (_, inode)) in claimants.into_iter().enumerate() {
@@ -323,13 +336,16 @@ impl FileTree {
                     format!("{prefix}/{name}")
                 };
                 if self.kinds.get(&inode) == Some(&InodeKind::Dir) {
-                    self.collect_paths(Parent::Dir(inode), &path, paths);
+                    self.collect_under(children, Parent::Dir(inode), &path, paths);
                 }
                 paths.insert(path, inode);
             }
         }
     }
 }
+
+/// Each directory's entries by name, with every inode claiming the name.
+type Children<'a> = HashMap<Parent, BTreeMap<&'a str, Vec<(Stamp, InodeId)>>>;
 
 fn is_valid_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
