@@ -15,7 +15,7 @@ use common::{Machine, Server, checkout_from, eventually, origin, thread_of};
 struct Team {
     alice: Machine,
     bob: Machine,
-    _server: Server,
+    server: Server,
     _root: tempfile::TempDir,
 }
 
@@ -28,7 +28,7 @@ fn team() -> Team {
     Team {
         alice,
         bob,
-        _server: server,
+        server,
         _root: root,
     }
 }
@@ -192,7 +192,7 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
 
 #[test]
 fn a_private_project_stays_invisible_to_teammates() {
-    let Team { alice, bob, _server: server, .. } = &team();
+    let Team { alice, bob, server, .. } = &team();
     server.admin(&["user", "admin", "alice"]);
     let set = alice.stdout(&["visibility", "private"]);
     assert!(set.contains("is now private"), "{set}");
@@ -420,3 +420,59 @@ fn the_owners_agent_hears_teammates_drafts() {
     let context = prompt_hook(alice, &first_session(alice));
     assert!(context.contains("bob: also handle the empty case"), "Alice's agent hears Bob's draft: {context}");
 }
+
+fn mirrored_family(server: &Server) -> Option<std::ffi::OsString> {
+    fs::read_dir(server.data.join("git"))
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_name().to_string_lossy().ends_with(".git"))
+        .map(|entry| entry.file_name())
+}
+
+/// Runs git against the server's mirror of the only family, as `machine`.
+fn mirror_git(machine: &Machine, server: &Server, args: &[&str]) -> std::process::Output {
+    let config: serde_json::Value =
+        serde_json::from_str(&read(&machine.silt_home.join("server.json"))).expect("the machine is signed in");
+    let family = mirrored_family(server).expect("the mirror exists");
+    let url = format!("{}/git/{}", server.url, family.to_string_lossy());
+    let header = format!("http.extraHeader=Authorization: Bearer {}", config["token"].as_str().expect("token"));
+    let mut command = Command::new("git");
+    command.args(["-c", &header, "-c", "http.extraHeader=silt-protocol: 2"]).current_dir(&machine.repo);
+    for arg in args {
+        command.arg(if *arg == "URL" { url.as_str() } else { arg });
+    }
+    command.output().expect("git runs")
+}
+
+#[test]
+fn the_git_mirror_shows_and_takes_only_what_each_person_may() {
+    let Team { alice, bob, server, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    fs::write(alice.repo.join("notes.txt"), "mirrored\n").expect("write");
+    common::git(&alice.repo, &["add", "notes.txt"]);
+    common::git(&alice.repo, &["-c", "user.name=a", "-c", "user.email=a@example.com", "commit", "-q", "-m", "notes"]);
+    let thread_ref = |listing: &str| listing.lines().any(|line| line.contains("refs/silt/threads/"));
+    assert!(eventually(|| mirrored_family(server).is_some()), "the commit reaches the mirror");
+    assert!(eventually(|| thread_ref(&String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout))));
+    assert!(eventually(|| thread_ref(&String::from_utf8_lossy(&mirror_git(bob, server, &["ls-remote", "URL"]).stdout))), "bob sees alice's thread");
+    let listing = String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout).into_owned();
+    let alice_ref = listing
+        .lines()
+        .find_map(|line| line.split_whitespace().nth(1).filter(|name| name.starts_with("refs/silt/threads/")))
+        .expect("alice's thread ref")
+        .to_owned();
+
+    let pushed = mirror_git(bob, server, &["push", "URL", &format!("HEAD:{alice_ref}")]);
+    assert!(!pushed.status.success(), "bob may not write alice's thread");
+    let deleted = mirror_git(alice, server, &["push", "URL", &format!(":{alice_ref}")]);
+    assert!(!deleted.status.success(), "refs can't be deleted");
+
+    alice.silt(&["visibility", "private", "--thread", &thread]);
+    assert!(
+        eventually(|| !thread_ref(&String::from_utf8_lossy(&mirror_git(bob, server, &["ls-remote", "URL"]).stdout))),
+        "a private thread's ref is hidden from others"
+    );
+    assert!(thread_ref(&String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout)));
+}
+

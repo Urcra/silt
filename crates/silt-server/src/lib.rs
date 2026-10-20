@@ -886,9 +886,12 @@ pub(crate) fn id_bytes(id: u128) -> Vec<u8> {
     id.to_be_bytes().to_vec()
 }
 
+/// An id stored by `id_bytes`. Ids are always 16 bytes; anything shorter
+/// is padded rather than allowed to panic.
 pub(crate) fn id_from(bytes: &[u8]) -> u128 {
     let mut buffer = [0u8; 16];
-    buffer.copy_from_slice(&bytes[..16.min(bytes.len())]);
+    let len = bytes.len().min(16);
+    buffer[16 - len..].copy_from_slice(&bytes[..len]);
     u128::from_be_bytes(buffer)
 }
 

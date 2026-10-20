@@ -11,7 +11,8 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use silt_types::FamilyId;
+use silt_types::{FamilyId, ThreadId};
+use sqlx::Row;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -41,9 +42,117 @@ pub(crate) async fn serve(
     if !dir.exists() {
         init_bare(&dir).await.map_err(|error| internal(&error))?;
     }
-    run_backend(&root, &format!("/{repo}/{rest}"), &method, &uri, &headers, body, caller.user)
+    let hooks = install_hooks(&root).await.map_err(|error| internal(&error))?;
+    let rights = thread_rights(&server, family, caller.user).await?;
+    let mut access = access_config(&rights, &hooks);
+    // `http-backend` only accepts pushes from an authenticated user.
+    access.push(("REMOTE_USER".to_owned(), caller.user.to_string()));
+    run_backend(&root, &format!("/{repo}/{rest}"), &method, &uri, &headers, body, &access)
         .await
         .map_err(|error| internal(&error))
+}
+
+/// What a caller may do with one family's thread refs. The mirror is one
+/// repository per family, while access is per thread (ADR 0010, 0014).
+struct ThreadRights {
+    visible: Vec<ThreadId>,
+    writable: Vec<ThreadId>,
+    known: Vec<ThreadId>,
+}
+
+async fn thread_rights(server: &Server, family: FamilyId, user: i64) -> Result<ThreadRights, ApiError> {
+    let viewer = server.viewer(user).await?;
+    let rows = sqlx::query(
+        "SELECT t.id, t.owner_id, EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
+         FROM threads t WHERE t.family_id = ?",
+    )
+    .bind(user)
+    .bind(crate::id_bytes(family.0))
+    .fetch_all(&server.shared.db)
+    .await?;
+    let mut rights = ThreadRights {
+        visible: Vec::new(),
+        writable: Vec::new(),
+        known: Vec::new(),
+    };
+    for row in rows {
+        let thread = ThreadId(crate::id_from(row.get("id")));
+        rights.known.push(thread);
+        if viewer.sees_thread(thread) {
+            rights.visible.push(thread);
+        }
+        if row.get::<i64, _>("owner_id") == user || row.get::<i64, _>("shared") != 0 {
+            rights.writable.push(thread);
+        }
+    }
+    Ok(rights)
+}
+
+fn thread_ref(thread: ThreadId) -> String {
+    format!("refs/silt/threads/{thread}")
+}
+
+/// Per-request git configuration: fetches see only the caller's visible
+/// threads' refs, and pushes go through the hook that checks writes.
+fn access_config(rights: &ThreadRights, hooks: &Path) -> Vec<(String, String)> {
+    let mut config = vec![
+        ("uploadpack.hideRefs".to_owned(), "refs/".to_owned()),
+        ("receive.hideRefs".to_owned(), "refs/".to_owned()),
+        ("core.hooksPath".to_owned(), hooks.to_string_lossy().into_owned()),
+        ("receive.denyDeletes".to_owned(), "true".to_owned()),
+        ("receive.maxInputSize".to_owned(), MAX_PACK.to_string()),
+    ];
+    for thread in &rights.visible {
+        config.push(("uploadpack.hideRefs".to_owned(), format!("!{}", thread_ref(*thread))));
+    }
+    for thread in &rights.writable {
+        config.push(("receive.hideRefs".to_owned(), format!("!{}", thread_ref(*thread))));
+    }
+    let refs = |threads: &[ThreadId]| threads.iter().map(|thread| thread_ref(*thread)).collect::<Vec<_>>().join(" ");
+    let mut environment: Vec<(String, String)> = vec![("GIT_CONFIG_COUNT".to_owned(), config.len().to_string())];
+    for (index, (key, value)) in config.into_iter().enumerate() {
+        environment.push((format!("GIT_CONFIG_KEY_{index}"), key));
+        environment.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+    }
+    environment.push(("SILT_WRITABLE_REFS".to_owned(), refs(&rights.writable)));
+    environment.push(("SILT_KNOWN_REFS".to_owned(), refs(&rights.known)));
+    environment
+}
+
+/// Largest pack one push may send.
+const MAX_PACK: u64 = 512 * 1024 * 1024;
+
+/// Lets a push update only `refs/silt/threads/<thread>` for threads its user
+/// may write, or that the server doesn't know yet (a device pushes a new
+/// thread's commits before registering it), and never delete one.
+const PRE_RECEIVE: &str = r#"#!/bin/sh
+# Written by the Silt server.
+while read old new ref; do
+    case "$new" in
+        *[!0]*) ;;
+        *) echo "silt: refs can't be deleted" >&2; exit 1 ;;
+    esac
+    case " $SILT_WRITABLE_REFS " in *" $ref "*) continue ;; esac
+    case " $SILT_KNOWN_REFS " in *" $ref "*) echo "silt: $ref belongs to a thread you can't write" >&2; exit 1 ;; esac
+    case "$ref" in
+        refs/silt/threads/*) ;;
+        *) echo "silt: only thread refs can be pushed" >&2; exit 1 ;;
+    esac
+done
+"#;
+
+async fn install_hooks(root: &Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let hooks = root.with_file_name("git-hooks");
+    let hook = hooks.join("pre-receive");
+    if tokio::fs::read_to_string(&hook).await.ok().as_deref() != Some(PRE_RECEIVE) {
+        tokio::fs::create_dir_all(&hooks).await?;
+        let staged = hooks.join(".pre-receive.new");
+        tokio::fs::write(&staged, PRE_RECEIVE).await?;
+        tokio::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).await?;
+        tokio::fs::rename(&staged, &hook).await?;
+    }
+    Ok(hooks)
 }
 
 fn internal(error: &std::io::Error) -> ApiError {
@@ -69,7 +178,7 @@ async fn run_backend(
     uri: &Uri,
     headers: &HeaderMap,
     body: Bytes,
-    user: i64,
+    access: &[(String, String)],
 ) -> std::io::Result<Response> {
     let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default();
     let mut child = Command::new("git")
@@ -83,9 +192,9 @@ async fn run_backend(
         .env("CONTENT_LENGTH", body.len().to_string())
         .env("HTTP_CONTENT_ENCODING", header("content-encoding"))
         .env("GIT_PROTOCOL", header("git-protocol"))
-        // `http-backend` only accepts pushes from an authenticated user.
-        .env("REMOTE_USER", user.to_string())
         .env("REMOTE_ADDR", "127.0.0.1")
+        .envs(access.iter().map(|(key, value)| (key, value)))
+        .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
