@@ -13,7 +13,7 @@ fi
 cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo build -p silt-types -p silt-sumtree -p silt-crdt --target wasm32-unknown-unknown
+cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm --target wasm32-unknown-unknown
 
 # Playwright drives the built UI against a real daemon.
 if [ -f web/package.json ]; then

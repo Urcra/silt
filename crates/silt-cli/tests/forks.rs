@@ -395,3 +395,28 @@ fn deleted_threads_hide_everywhere_and_purged_ones_are_gone() {
     assert!(bob.log_line(&second).is_none(), "a restarted device doesn't bring it back");
     assert!(alice.log_line(&second).is_none());
 }
+
+#[test]
+fn the_owners_agent_hears_teammates_drafts() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    assert!(eventually(|| bob.log_line(&thread).is_some()));
+    let url = bob.stdout(&["open", "--no-browser"]);
+    let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+    let full = alice.stdout(&["history", &thread]);
+    let full_id = full.split_whitespace().nth(1).expect("the thread's full id").trim_end_matches(':').to_owned();
+    let posted = Command::new("curl")
+        .args(["-s", "-X", "POST", "-H", "Content-Type: application/json", "-H"])
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg("--data")
+        .arg(r#"{"file":"src/main.rs","draft":"also handle the empty case"}"#)
+        .arg(format!("{base}/api/threads/{full_id}/presence"))
+        .output()
+        .expect("curl runs");
+    assert!(posted.status.success(), "{}", String::from_utf8_lossy(&posted.stderr));
+    let reply = String::from_utf8_lossy(&posted.stdout);
+    assert!(reply.contains("people"), "{reply} for {full_id}");
+    let context = prompt_hook(alice, &first_session(alice));
+    assert!(context.contains("bob: also handle the empty case"), "Alice's agent hears Bob's draft: {context}");
+}

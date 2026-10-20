@@ -1,0 +1,24 @@
+[package]
+name = "silt-wasm"
+description = "A thread family replica for the browser, compiled to WebAssembly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+postcard = { version = "1.1.3", features = ["alloc"] }
+silt-checkout = { path = "../silt-checkout" }
+silt-log = { path = "../silt-log" }
+silt-types = { path = "../silt-types" }
+wasm-bindgen = "=0.2.126"
+
+[dev-dependencies]
+silt-crdt = { path = "../silt-crdt" }

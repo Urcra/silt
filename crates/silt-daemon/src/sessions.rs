@@ -935,8 +935,9 @@ impl Core {
         };
         if !hooked {
             let tailed = self.tail_session(&session_id).await;
+            let context = if event == "UserPromptSubmit" { self.prompt_context(thread).await } else { None };
             let reply_data = HookReply {
-                additional_context: (event == "UserPromptSubmit").then(|| self.take_notices(thread)).flatten(),
+                additional_context: context,
             };
             return Some((to_response(tailed.map(|()| reply_data)), reply));
         }
@@ -948,7 +949,7 @@ impl Core {
                     Err(error) => Err(error),
                 };
                 let reply_data = HookReply {
-                    additional_context: self.take_notices(thread),
+                    additional_context: self.prompt_context(thread).await,
                 };
                 return Some((to_response(recorded.map(|()| reply_data)), reply));
             }
@@ -991,6 +992,13 @@ impl Core {
             _ => Ok(()),
         };
         Some((to_response(result.map(|()| HookReply::default())), reply))
+    }
+
+    /// What the agent hears with a prompt: Silt's notices and teammates'
+    /// live drafts.
+    async fn prompt_context(&mut self, thread: ThreadId) -> Option<String> {
+        let parts: Vec<String> = [self.take_notices(thread), self.teammates_drafts(thread).await].into_iter().flatten().collect();
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
     pub(crate) async fn close_tool(&mut self, session_id: &str, reply: oneshot::Sender<Response>) {

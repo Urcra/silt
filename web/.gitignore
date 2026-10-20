@@ -25,3 +25,4 @@ dist-ssr
 .fixture.json
 test-results/
 playwright-report/
+src/wasm/

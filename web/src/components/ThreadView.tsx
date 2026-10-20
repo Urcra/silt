@@ -3,6 +3,7 @@ import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo 
 import { href } from '../router'
 import { useLoad } from '../useLoad'
 import { Diff } from './Diff'
+import { LivePanel } from './Live'
 
 const KIND_STYLE: Record<string, string> = {
   user: 'font-medium text-neutral-900',
@@ -236,6 +237,7 @@ export function ThreadView({ id }: { id: string }) {
         )}
         {showDiff && diff.error && <p className="text-sm text-rose-700">{diff.error}</p>}
         {showDiff && diff.data !== undefined && <Diff text={diff.data} />}
+        {history.data?.thread && <LivePanel thread={history.data.thread} onChange={history.reload} />}
         {history.error && <p className="text-rose-700">{history.error}</p>}
         <div className="mt-4 space-y-1">
           {(history.data?.entries ?? []).map((entry, index, entries) => (

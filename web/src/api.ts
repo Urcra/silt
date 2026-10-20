@@ -13,6 +13,10 @@ export function takeTokenFromUrl(): void {
 
 export class ApiError extends Error {}
 
+export function token(): string {
+  return sessionStorage.getItem(TOKEN_KEY) ?? ''
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
@@ -36,6 +40,9 @@ export interface ThreadSummary {
   /** The command of the agent that recorded the latest session. */
   agent: string | null
   created_ms: number
+  owner: string
+  collaborators: string[]
+  writable: boolean
   messages: number
   edits: number
   location: 'here' | 'remote' | 'moved' | 'diverged'
@@ -127,6 +134,20 @@ export type CommentOn =
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 
+export interface Presence {
+  user: string
+  device: string
+  file: string | null
+  draft: string
+  age_ms: number
+}
+
+export interface ReplicaDeltas {
+  total: number
+  deltas: string
+  writable: boolean
+}
+
 export interface Notification {
   id: number
   kind: 'mr_opened' | 'mr_approved' | 'mr_declined' | 'comment' | 'mention'
@@ -160,6 +181,12 @@ export const api = {
     }
     return request<SearchResult[]>('GET', `/api/search?${params}`)
   },
+  replica: (id: string, after: number) => request<ReplicaDeltas>('GET', `${thread(id)}/replica?after=${after}`),
+  gitText: (id: string, oid: string) => request<string>('GET', `${thread(id)}/git/${oid}`),
+  sendDeltas: (id: string, deltas: string) => request<number>('POST', `${thread(id)}/replica`, { deltas }),
+  presence: (id: string, state: { file: string | null; draft: string; leaving?: boolean }) =>
+    request<{ people: Presence[] }>('POST', `${thread(id)}/presence`, state),
+  liveUrl: (id: string) => `${thread(id)}/live?token=${token()}`,
   inbox: (all: boolean) =>
     request<Notification[]>('GET', `/api/inbox${all ? '?all=true' : ''}`),
   readNotifications: (read: { ids?: number[]; all?: boolean }) => request<string>('POST', '/api/inbox/read', read),

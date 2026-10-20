@@ -5,6 +5,7 @@ mod disk;
 mod forks;
 mod history;
 mod lifecycle;
+mod live;
 pub mod remote;
 pub mod paths;
 pub mod protocol;

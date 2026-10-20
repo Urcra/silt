@@ -5,14 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "build": "./scripts/build-wasm.sh && tsc -b && vite build",
+    "lint": "oxlint --ignore-pattern src/wasm",
     "preview": "vite preview",
-    "test": "vitest run",
-    "e2e": "playwright test"
+    "test": "./scripts/build-wasm.sh && vitest run",
+    "e2e": "playwright test",
+    "wasm": "./scripts/build-wasm.sh"
   },
   "dependencies": {
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
     "@tailwindcss/vite": "^4.3.3",
+    "codemirror": "^6.0.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3"

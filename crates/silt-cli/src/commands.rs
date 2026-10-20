@@ -561,7 +561,9 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
 
 pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let url: String = call(&Request::OpenWeb)?;
+    let url: String = call(&Request::OpenWeb {
+        cwd: env::current_dir().ok(),
+    })?;
     println!("{url}");
     if !no_browser {
         // `wslview` opens the Windows browser from WSL; the others are the

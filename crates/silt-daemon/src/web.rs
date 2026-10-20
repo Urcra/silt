@@ -65,6 +65,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/search", get(search))
+        .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
+        .route("/api/threads/{id}/git/{oid}", get(git_text))
+        .route("/api/threads/{id}/live", get(live))
+        .route("/api/threads/{id}/presence", post(presence))
         .route("/api/inbox", get(inbox))
         .route("/api/inbox/read", post(inbox_read))
         .route("/api/mrs", get(merge_requests))
@@ -97,12 +101,18 @@ async fn local_host_only(State(web): State<Web>, request: HttpRequest, next: Nex
 }
 
 async fn authenticate(State(web): State<Web>, request: HttpRequest, next: Next) -> HttpResponse {
-    let token = request
+    let header_token = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    if token == Some(web.token.as_str()) {
+    // The browser's EventSource can't send headers, so event streams carry
+    // the token in the query instead.
+    let query_token = request
+        .uri()
+        .query()
+        .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("token=")));
+    if header_token.or(query_token) == Some(web.token.as_str()) {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, Json(json!({"error": "open the UI with `silt open`"}))).into_response()
@@ -232,6 +242,77 @@ async fn search(State(web): State<Web>, Query(query): Query<HashMap<String, Stri
         },
     };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct AfterQuery {
+    #[serde(default)]
+    after: usize,
+}
+
+async fn replica(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<AfterQuery>) -> HttpResponse {
+    ask(&web, Request::Replica { thread, after: query.after }).await
+}
+
+#[derive(Deserialize)]
+struct BrowserDeltas {
+    deltas: String,
+}
+
+async fn browser_deltas(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<BrowserDeltas>) -> HttpResponse {
+    ask(&web, Request::BrowserDeltas { thread, deltas: body.deltas }).await
+}
+
+async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::GitText { thread, oid }).await
+}
+
+#[derive(Deserialize, Default)]
+struct PresenceBody {
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    draft: String,
+    #[serde(default)]
+    leaving: bool,
+}
+
+async fn presence(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<PresenceBody>) -> HttpResponse {
+    let request = Request::Presence {
+        thread,
+        file: body.file,
+        draft: body.draft,
+        leaving: body.leaving,
+    };
+    ask(&web, request).await
+}
+
+/// How often a thread's event stream looks for changes.
+const LIVE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Server-sent events with the thread's live state whenever it changes.
+async fn live(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    let stream = futures_util::stream::unfold((web, thread, None::<serde_json::Value>), |(web, thread, last)| async move {
+        loop {
+            let (reply, answer) = oneshot::channel();
+            let request = Request::Live { thread: thread.clone() };
+            if web.events.send(Event::Request(request, reply)).is_err() {
+                return None;
+            }
+            let state = match answer.await {
+                Ok(Response::Ok { data }) => data,
+                _ => return None,
+            };
+            if last.as_ref() != Some(&state) {
+                let event = axum::response::sse::Event::default().event("state").data(state.to_string());
+                return Some((Ok::<_, std::convert::Infallible>(event), (web, thread, Some(state))));
+            }
+            tokio::time::sleep(LIVE_INTERVAL).await;
+        }
+    });
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
 
 #[derive(Deserialize)]

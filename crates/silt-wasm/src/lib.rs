@@ -1,0 +1,251 @@
+//! A replica of one thread family in the browser (ADR 0014). The web UI
+//! loads the family's deltas into it, edits files locally as new deltas,
+//! and merges everyone else's as they arrive, so co-editing never waits on
+//! the network.
+
+use std::collections::HashMap;
+use std::str::FromStr;
+
+use silt_checkout::text_edits;
+use silt_log::{Author, Delta, Family, FileView, LogError, Op};
+use silt_types::{ActorId, GitOid, ThreadId};
+use wasm_bindgen::prelude::*;
+
+/// The replica's logic, free of JavaScript types so it runs in tests.
+pub struct Core {
+    family: Family,
+    bases: HashMap<GitOid, String>,
+    actor: ActorId,
+    thread: ThreadId,
+    /// Deltas received but not applied yet, waiting for a git base text.
+    pending: Vec<Delta>,
+    received: usize,
+}
+
+impl Core {
+    pub fn new(thread: &str, actor: &str) -> Result<Self, String> {
+        Ok(Self {
+            family: Family::new(),
+            bases: HashMap::new(),
+            actor: ActorId::from_str(actor).map_err(|error| error.to_string())?,
+            thread: ThreadId::from_str(thread).map_err(|error| error.to_string())?,
+            pending: Vec::new(),
+            received: 0,
+        })
+    }
+
+    pub fn receive(&mut self, deltas: Vec<Delta>) -> Result<Option<GitOid>, String> {
+        self.received += deltas.len();
+        self.pending.extend(deltas);
+        self.apply_pending()
+    }
+
+    pub fn add_base(&mut self, oid: GitOid, text: String) -> Result<Option<GitOid>, String> {
+        self.bases.insert(oid, text);
+        self.apply_pending()
+    }
+
+    fn apply_pending(&mut self) -> Result<Option<GitOid>, String> {
+        while let Some(delta) = self.pending.first().cloned() {
+            match self.family.apply(delta, &mut self.bases) {
+                Ok(_) => {
+                    self.pending.remove(0);
+                }
+                Err(LogError::MissingBase(oid)) => return Ok(Some(oid)),
+                Err(other) => return Err(other.to_string()),
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn paths(&self) -> Vec<String> {
+        self.family.thread_view(self.thread).paths().into_keys().collect()
+    }
+
+    pub fn needed_base(&self, path: &str) -> Option<GitOid> {
+        let inode = *self.family.thread_view(self.thread).paths().get(path)?;
+        match self.family.file(inode)? {
+            FileView::GitText(oid) if !self.bases.contains_key(&oid) => Some(oid),
+            _ => None,
+        }
+    }
+
+    pub fn text(&self, path: &str) -> Option<String> {
+        let view = self.family.thread_view(self.thread);
+        let inode = *view.paths().get(path)?;
+        match view.file(inode)? {
+            FileView::Text(text) => Some(text),
+            FileView::GitText(oid) => self.bases.get(&oid).cloned(),
+            FileView::Blob(_) => None,
+        }
+    }
+
+    pub fn version(&self) -> String {
+        format!("{:?}", self.family.thread_head(self.thread))
+    }
+
+    /// Makes `path` hold `text` as edits by this replica's actor, and
+    /// returns them.
+    pub fn edit(&mut self, path: &str, text: &str, time_ms: i64) -> Result<Vec<Delta>, String> {
+        let inode = *self
+            .family
+            .thread_view(self.thread)
+            .paths()
+            .get(path)
+            .ok_or_else(|| format!("{path} is not a file of this thread"))?;
+        let old = self.text(path).ok_or_else(|| format!("{path} has no text to edit"))?;
+        self.family
+            .text_doc_or_base(inode, &mut self.bases)
+            .map_err(|error| error.to_string())?;
+        let mut made = Vec::new();
+        for op in text_edits(&old, text) {
+            let delta = self.family.delta(
+                self.actor,
+                self.thread,
+                Author::User,
+                time_ms,
+                self.family.thread_head(self.thread),
+                Op::Text { inode, op },
+            );
+            self.family
+                .apply(delta.clone(), &mut self.bases)
+                .map_err(|error| error.to_string())?;
+            made.push(delta);
+        }
+        Ok(made)
+    }
+}
+
+/// The replica as the web UI sees it; deltas travel postcard-encoded.
+#[wasm_bindgen]
+pub struct Replica(Core);
+
+fn js(message: impl std::fmt::Display) -> JsError {
+    JsError::new(&message.to_string())
+}
+
+#[wasm_bindgen]
+impl Replica {
+    /// A replica writing as `actor` (32 hex digits, fresh for each tab)
+    /// into `thread`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(thread: &str, actor: &str) -> Result<Replica, JsError> {
+        Core::new(thread, actor).map(Self).map_err(js)
+    }
+
+    /// How many of the daemon's deltas were received; ask for those after.
+    pub fn received(&self) -> usize {
+        self.0.received
+    }
+
+    /// Takes deltas from the daemon. Returns the git blob whose text is
+    /// needed before the rest can apply, if any.
+    pub fn receive(&mut self, bytes: &[u8]) -> Result<Option<String>, JsError> {
+        let deltas: Vec<Delta> = postcard::from_bytes(bytes).map_err(js)?;
+        Ok(self.0.receive(deltas).map_err(js)?.map(|oid| oid.to_string()))
+    }
+
+    /// A git blob's text, as asked for by `receive` or `needed_base`.
+    pub fn add_base(&mut self, oid: &str, text: String) -> Result<Option<String>, JsError> {
+        let oid = GitOid::from_str(oid).map_err(js)?;
+        Ok(self.0.add_base(oid, text).map_err(js)?.map(|oid| oid.to_string()))
+    }
+
+    /// The thread's files, one path per line.
+    pub fn paths(&self) -> String {
+        self.0.paths().join("\n")
+    }
+
+    /// The git blob a file's text still comes from, before anyone edited it.
+    pub fn needed_base(&self, path: &str) -> Option<String> {
+        self.0.needed_base(path).map(|oid| oid.to_string())
+    }
+
+    /// The file's text in the thread as it is now.
+    pub fn text(&self, path: &str) -> Option<String> {
+        self.0.text(path)
+    }
+
+    /// The thread's head, to tell whether anything changed.
+    pub fn version(&self) -> String {
+        self.0.version()
+    }
+
+    /// Makes `path` hold `text`; returns the new deltas to send to the
+    /// daemon.
+    pub fn edit(&mut self, path: &str, text: &str, time_ms: f64) -> Result<Vec<u8>, JsError> {
+        #[expect(clippy::cast_possible_truncation, reason = "milliseconds since the epoch fit in an i64")]
+        let made = self.0.edit(path, text, time_ms as i64).map_err(js)?;
+        postcard::to_allocvec(&made).map_err(js)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use silt_crdt::{InodeKind, Parent};
+    use silt_log::Content;
+
+    use super::*;
+
+    const THREAD: &str = "0000000000000000000000000000000a";
+
+    /// The daemon's side: a file `main.rs` that came from git, unedited.
+    fn daemon_log() -> (Vec<Delta>, GitOid) {
+        let oid = GitOid::from_str("1111111111111111111111111111111111111111").expect("oid");
+        let mut family = Family::new();
+        let thread = ThreadId::from_str(THREAD).expect("thread");
+        let delta = family.delta(
+            ActorId(1),
+            thread,
+            Author::Import,
+            0,
+            family.thread_head(thread),
+            Op::Create {
+                kind: InodeKind::File,
+                parent: Parent::Root,
+                name: "main.rs".into(),
+                content: Content::GitText(oid),
+                executable: false,
+            },
+        );
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        (vec![delta], oid)
+    }
+
+    #[test]
+    fn two_browsers_edit_one_file_and_converge() {
+        let (log, oid) = daemon_log();
+        let mut alice = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
+        let mut bob = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
+        for replica in [&mut alice, &mut bob] {
+            assert_eq!(replica.receive(log.clone()), Ok(None));
+            assert_eq!(replica.paths(), vec!["main.rs".to_owned()]);
+            assert_eq!(replica.needed_base("main.rs"), Some(oid));
+            assert_eq!(replica.add_base(oid, "fn main() {}\n".into()), Ok(None));
+        }
+        let from_alice = alice.edit("main.rs", "// alice\nfn main() {}\n", 1).expect("edits");
+        let from_bob = bob.edit("main.rs", "fn main() {}\nfn bob() {}\n", 1).expect("edits");
+        assert_eq!(bob.receive(from_alice), Ok(None));
+        assert_eq!(alice.receive(from_bob), Ok(None));
+        let merged = "// alice\nfn main() {}\nfn bob() {}\n";
+        assert_eq!(alice.text("main.rs").as_deref(), Some(merged));
+        assert_eq!(bob.text("main.rs").as_deref(), Some(merged));
+        assert_eq!(alice.version(), bob.version());
+    }
+
+    #[test]
+    fn deltas_wait_for_their_base_text() {
+        let (log, oid) = daemon_log();
+        let mut writer = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
+        writer.receive(log.clone()).expect("receives");
+        writer.add_base(oid, "x\n".into()).expect("base");
+        let edits = writer.edit("main.rs", "y\n", 1).expect("edits");
+        let mut reader = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
+        reader.receive(log).expect("receives");
+        assert_eq!(reader.receive(edits), Ok(Some(oid)), "the edit needs the file's git text first");
+        assert_eq!(reader.add_base(oid, "x\n".into()), Ok(None));
+        assert_eq!(reader.text("main.rs").as_deref(), Some("y\n"));
+    }
+}

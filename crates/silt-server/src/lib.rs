@@ -40,6 +40,7 @@ mod index;
 mod lifecycle;
 mod orgs;
 mod pages;
+mod presence;
 mod sign_in;
 mod visibility;
 
@@ -87,6 +88,7 @@ struct Shared {
     http: reqwest::Client,
     /// Threads purged for good; their deltas are never stored again.
     purged: Mutex<std::collections::HashSet<ThreadId>>,
+    presence: Mutex<presence::Board>,
 }
 
 #[derive(Clone)]
@@ -136,6 +138,7 @@ impl Server {
                 index: Mutex::new(index),
                 data_dir: data_dir.to_owned(),
                 purged: Mutex::new(purged),
+                presence: Mutex::new(presence::Board::default()),
                 config,
                 http: reqwest::Client::builder()
                     .timeout(Duration::from_secs(20))
@@ -173,6 +176,7 @@ impl Server {
             .route("/v1/threads/{id}/restore", post(lifecycle::restore))
             .route("/v1/threads/{id}/purge", post(lifecycle::purge))
             .route("/v1/trash", get(lifecycle::trash))
+            .route("/v1/presence", get(presence::list).post(presence::update))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))

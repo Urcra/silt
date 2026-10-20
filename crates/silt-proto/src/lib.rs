@@ -391,3 +391,35 @@ pub struct InboxRead {
     #[serde(default)]
     pub all: bool,
 }
+
+/// What one viewer of a thread is doing (ADR 0014); sent every couple of
+/// seconds while they look at it, forgotten soon after they stop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceUpdate {
+    pub thread: ThreadId,
+    /// The file they have open, if any.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Their draft of the next prompt.
+    #[serde(default)]
+    pub draft: String,
+    /// They closed the thread.
+    #[serde(default)]
+    pub leaving: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Presence {
+    pub user: String,
+    pub device: String,
+    pub file: Option<String>,
+    pub draft: String,
+    /// Milliseconds since they were last heard from.
+    pub age_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceReply {
+    /// Everyone else on the thread.
+    pub people: Vec<Presence>,
+}

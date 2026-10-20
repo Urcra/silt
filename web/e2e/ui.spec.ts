@@ -36,7 +36,7 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await page.getByRole('button', { name: 'Comment', exact: true }).click()
   await expect(page.getByText(/: clear prompt/)).toBeVisible()
 
-  await page.getByLabel('file').fill('src/main.rs')
+  await page.getByLabel('file', { exact: true }).fill('src/main.rs')
   await page.getByLabel('lines').fill('2')
   await page.getByLabel('code comment').fill('needs a doc comment')
   await page.getByRole('button', { name: 'Add' }).click()

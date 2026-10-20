@@ -82,7 +82,12 @@ pub enum Request {
     /// The thread's turns, for showing each turn's diff next to its prompt.
     Turns { thread: String },
     /// Starts the web UI if needed; answers with its URL.
-    OpenWeb,
+    OpenWeb {
+        /// The clone `silt open` ran in; its repository's threads can then
+        /// be opened from the web UI even when they started elsewhere.
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
     /// The turns that changed a file of the thread.
     FileHistory { thread: String, path: String },
     /// Other threads of the repository at `cwd` that changed `path`.
@@ -116,6 +121,26 @@ pub enum Request {
     ThreadPurge { thread: String },
     /// The threads in the trash.
     Trash,
+    /// This machine's viewer of a thread: what file is open and the draft
+    /// prompt; answers with everyone else on it (ADR 0014).
+    Presence {
+        thread: String,
+        #[serde(default)]
+        file: Option<String>,
+        #[serde(default)]
+        draft: String,
+        #[serde(default)]
+        leaving: bool,
+    },
+    /// The family's deltas after the first `after`, for the browser's
+    /// replica (ADR 0014).
+    Replica { thread: String, after: usize },
+    /// A git blob's text, for the browser's replica.
+    GitText { thread: String, oid: String },
+    /// Edits made in the browser's replica, postcard and base64 encoded.
+    BrowserDeltas { thread: String, deltas: String },
+    /// A fingerprint of the thread's live state.
+    Live { thread: String },
     /// Lets `user` write into the thread, or stops it (ADR 0014).
     ThreadShare { thread: String, user: String, remove: bool },
     Shutdown,
@@ -416,4 +441,21 @@ pub struct InboxEntry {
     pub text: String,
     pub created_ms: i64,
     pub read: bool,
+}
+
+/// Deltas for the browser's replica (ADR 0014).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplicaDeltas {
+    /// How many deltas the family has here; ask for those after next time.
+    pub total: usize,
+    /// postcard-encoded `Vec<Delta>`, in base64.
+    pub deltas: String,
+    /// Whether this machine's user may edit the thread.
+    pub writable: bool,
+}
+
+/// What the web UI watches for changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveState {
+    pub deltas: usize,
 }

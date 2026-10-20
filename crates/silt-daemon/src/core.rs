@@ -90,6 +90,9 @@ pub struct Core {
     pub(crate) trash_changed: HashMap<ThreadId, Instant>,
     /// Each thread's collaborators, from the server's listing.
     pub(crate) collaborators: HashMap<ThreadId, Vec<String>>,
+    /// Clones this machine knows by repository, for projecting families
+    /// that started elsewhere.
+    pub(crate) clones: HashMap<String, PathBuf>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
     pub(crate) remote: Option<Remote>,
@@ -145,6 +148,7 @@ impl Core {
             deleted: HashSet::new(),
             trash_changed: HashMap::new(),
             collaborators: HashMap::new(),
+            clones: HashMap::new(),
             events,
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
@@ -289,7 +293,12 @@ impl Core {
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
-            Request::OpenWeb => to_response(self.open_web().await),
+            Request::OpenWeb { cwd } => {
+                if let Some(cwd) = cwd {
+                    self.remember_clone(&cwd);
+                }
+                to_response(self.open_web().await)
+            }
             Request::HistoryRead { thread, offset, limit } => {
                 to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
             }
@@ -316,6 +325,16 @@ impl Core {
             Request::ThreadPurge { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Purge).await),
             Request::Trash => Response::ok(self.trash()),
             Request::ThreadShare { thread, user, remove } => to_response(self.share(&thread, &user, remove).await),
+            Request::Replica { thread, after } => to_response(self.replica_deltas(&thread, after).await),
+            Request::GitText { thread, oid } => to_response(self.git_text(&thread, &oid)),
+            Request::BrowserDeltas { thread, deltas } => to_response(self.receive_from_browser(&thread, &deltas).await),
+            Request::Live { thread } => to_response(self.live_state(&thread)),
+            Request::Presence {
+                thread,
+                file,
+                draft,
+                leaving,
+            } => to_response(self.presence(&thread, file, draft, leaving).await),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -872,6 +891,43 @@ impl Core {
     async fn inbox_read(&self, read: &silt_proto::InboxRead) -> Result<(), CoreError> {
         let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
         remote.inbox_read(read).await.map_err(|error| CoreError::Invalid(error.to_string()))
+    }
+
+    async fn presence(&self, selector: &str, file: Option<String>, draft: String, leaving: bool) -> Result<silt_proto::PresenceReply, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let Some(remote) = &self.remote else {
+            return Ok(silt_proto::PresenceReply::default());
+        };
+        let update = silt_proto::PresenceUpdate {
+            thread,
+            file,
+            draft,
+            leaving,
+        };
+        remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
+    }
+
+    /// Teammates' current drafts for the thread's next prompt, for its
+    /// agent (ADR 0014).
+    pub(crate) async fn teammates_drafts(&self, thread: ThreadId) -> Option<String> {
+        let remote = self.remote.as_ref()?;
+        let reply = remote.present(thread).await.ok()?;
+        let drafts: Vec<String> = reply
+            .people
+            .iter()
+            .filter(|person| !person.draft.trim().is_empty())
+            .map(|person| format!("- {}: {}", person.user, person.draft.trim()))
+            .collect();
+        (!drafts.is_empty()).then(|| format!("Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}", drafts.join("\n")))
+    }
+
+    fn remember_clone(&mut self, cwd: &Path) {
+        let Ok(repo) = Repo::discover(cwd) else {
+            return;
+        };
+        if let Ok(Some(url)) = repo.remote_url("origin") {
+            self.clones.insert(silt_git::normalize_remote(&url), repo.root().to_owned());
+        }
     }
 
     /// Whether this machine's user may write into `thread`: its owner or a

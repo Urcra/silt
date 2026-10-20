@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
-    InboxRead, InboxReply, LoginReply, ShareRequest, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
+    InboxRead, InboxReply, LoginReply, PresenceReply, PresenceUpdate, ShareRequest, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
     VisibilityRequest,
 };
@@ -174,6 +174,15 @@ impl Remote {
             .await?;
         checked(response).await?;
         Ok(())
+    }
+
+    pub async fn presence(&self, update: &PresenceUpdate) -> Result<PresenceReply, RemoteError> {
+        Ok(checked(self.request(reqwest::Method::POST, "/v1/presence").json(update).send().await?).await?.json().await?)
+    }
+
+    pub async fn present(&self, thread: ThreadId) -> Result<PresenceReply, RemoteError> {
+        let path = format!("/v1/presence?thread={thread}");
+        Ok(checked(self.request(reqwest::Method::GET, &path).send().await?).await?.json().await?)
     }
 
     pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {

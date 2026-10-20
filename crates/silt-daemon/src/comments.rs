@@ -42,6 +42,7 @@ impl Core {
                     .filter(|record| record.repo == first.repo && !record.repo_root.as_os_str().is_empty())
                     .find_map(|record| Repo::discover(&record.repo_root).ok())
             })
+            .or_else(|| self.clones.get(&first.repo).and_then(|root| Repo::discover(root).ok()))
             .ok_or_else(|| {
                 CoreError::Invalid(format!(
                     "no clone of {} is known here; run `silt fork` or `silt resume` in one first",
