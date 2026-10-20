@@ -11,3 +11,11 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+silt-crdt = { path = "../silt-crdt" }
+silt-log = { path = "../silt-log" }
+silt-types = { path = "../silt-types" }
+similar = "3.2.0"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.12.0"
