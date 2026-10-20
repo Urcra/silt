@@ -13,6 +13,7 @@ use silt_types::{ActorId, FamilyId, ThreadId};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
+use crate::visibility::Viewer;
 use crate::{ApiError, Caller, Server, bad_request, forbidden, id_bytes, id_from, not_found};
 
 pub(crate) async fn share(
@@ -106,13 +107,11 @@ pub(crate) async fn admit(
             return Err(forbidden(format!("thread {thread} is not part of family {family}")));
         }
     }
-    if admitted.iter().any(|delta| matches!(delta.op, Op::Comment(_))) {
-        let viewer = server.viewer(user).await?;
-        if let Some(delta) = admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_)) && !viewer.sees_thread(delta.thread)) {
-            return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
-        }
+    let viewer = server.viewer(user).await?;
+    if let Some(delta) = admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_)) && !viewer.sees_thread(delta.thread)) {
+        return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
     }
-    check_writes(db, user, &admitted).await?;
+    check_writes(db, &viewer, user, &admitted).await?;
     let claims = owners
         .into_iter()
         .filter(|(actor, owner)| owner.is_none() && admitted.iter().any(|delta| delta.span.actor == *actor))
@@ -135,7 +134,7 @@ pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: i64, act
 
 /// Fails unless `user` may write every one of `deltas`, which are new to
 /// the server. Threads nobody registered yet belong to whoever writes them.
-pub(crate) async fn check_writes(db: &SqlitePool, user: i64, deltas: &[&Delta]) -> Result<(), ApiError> {
+pub(crate) async fn check_writes(db: &SqlitePool, viewer: &Viewer, user: i64, deltas: &[&Delta]) -> Result<(), ApiError> {
     let threads: HashSet<ThreadId> = deltas
         .iter()
         .filter(|delta| !matches!(delta.op, Op::Comment(_)))
@@ -153,7 +152,10 @@ pub(crate) async fn check_writes(db: &SqlitePool, user: i64, deltas: &[&Delta]) 
         let Some(row) = row else {
             continue;
         };
-        if row.get::<i64, _>("owner_id") != user && row.get::<i64, _>("shared") == 0 {
+        // A collaborator the thread was hidden from since sharing writes no
+        // more than anyone else who can't see it.
+        let collaborator = row.get::<i64, _>("shared") != 0 && viewer.sees_thread(thread);
+        if row.get::<i64, _>("owner_id") != user && !collaborator {
             return Err(forbidden(format!(
                 "thread {thread} belongs to someone else; fork it, or ask its owner to share it with you"
             )));
