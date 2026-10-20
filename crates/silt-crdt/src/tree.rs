@@ -348,7 +348,16 @@ impl FileTree {
 type Children<'a> = HashMap<Parent, BTreeMap<&'a str, Vec<(Stamp, InodeId)>>>;
 
 fn is_valid_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0']) && !is_git_dir_name(name)
+}
+
+/// Names git itself refuses to track because a filesystem may treat them as
+/// `.git`: any case, trailing dots or spaces (NTFS), and the 8.3 short name.
+/// A peer must never be able to place files in a repository's git
+/// directory, where hooks and config run code.
+pub fn is_git_dir_name(name: &str) -> bool {
+    let name = name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    name == ".git" || name == "git~1"
 }
 
 #[cfg(test)]
@@ -499,5 +508,15 @@ mod tests {
         tree.apply(&event).expect("applies");
         tree.apply(&event).expect("applies again");
         assert_eq!(path_list(&tree), vec!["f"]);
+    }
+
+    #[test]
+    fn git_directories_are_not_names() {
+        for name in [".git", ".GIT", ".Git", ".git.", ".git ", "GIT~1"] {
+            assert!(!is_valid_name(name), "{name}");
+        }
+        for name in [".gitignore", ".github", "git", "x.git"] {
+            assert!(is_valid_name(name), "{name}");
+        }
     }
 }

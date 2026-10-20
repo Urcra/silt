@@ -318,9 +318,7 @@ impl Core {
             disk::remove(&root, &path)?;
         }
         let again = self.perform_with(checkout_id, actions, true).await?;
-        for path in again {
-            self.ingest_file(checkout_id, &path).await?;
-        }
+        self.ingest_changed_meanwhile(checkout_id, again).await?;
         Ok(())
     }
 

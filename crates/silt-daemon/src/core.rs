@@ -459,11 +459,9 @@ impl Core {
                 candidates.push(relative);
             }
         }
-        candidates.retain(|path| !disk::is_internal(path));
         candidates.sort();
         candidates.dedup();
-        let ignored = self.checkout(checkout_id)?.repo.ignored(&candidates)?;
-        let mut worklist: Vec<String> = candidates.into_iter().filter(|path| !ignored.contains(path)).collect();
+        let mut worklist = self.trackable(checkout_id, candidates)?;
         for path in self.ingest_renames(checkout_id, &worklist).await? {
             worklist.retain(|candidate| *candidate != path);
         }
@@ -474,7 +472,7 @@ impl Core {
             for path in std::mem::take(&mut worklist) {
                 retry.extend(self.ingest_file(checkout_id, &path).await?);
             }
-            worklist = retry;
+            worklist = self.trackable(checkout_id, retry)?;
         }
         Ok(())
     }
@@ -627,9 +625,7 @@ impl Core {
             let family = &self.families[&family_id];
             let actions = checkout.bridge.reconcile(family, &mut RepoBases(&checkout.repo), inodes);
             let again = self.perform(other, actions).await?;
-            for path in again {
-                Box::pin(self.ingest_file(other, &path)).await?;
-            }
+            self.ingest_changed_meanwhile(other, again).await?;
         }
         Ok(Vec::new())
     }
@@ -650,64 +646,96 @@ impl Core {
     ) -> Result<Vec<String>, CoreError> {
         let mut changed_meanwhile = Vec::new();
         for action in actions {
-            let root = self.checkout(checkout_id)?.record.path.clone();
-            match action {
-                DiskAction::Write {
-                    path,
-                    inode,
-                    content,
-                    executable,
-                    version,
-                } => {
-                    let current = disk::read(&root, &path)?;
-                    let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
-                    if let Some(current) = &current
-                        && recorded != Some(current.hash)
-                        && !(force && recorded.is_none())
-                    {
-                        changed_meanwhile.push(path);
-                        continue;
-                    }
-                    let bytes = match content {
-                        DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
-                        DiskContent::Blob(hash) => self.blob(hash).await?,
-                    };
-                    let written = match current {
-                        Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
-                        _ => disk::write(&root, &path, &bytes, executable)?,
-                    };
-                    let entry = DiskEntry {
-                        inode,
-                        hash: written.hash,
-                        size: written.size(),
-                        mtime_ns: written.mtime_ns,
-                        version,
-                    };
-                    self.checkouts
-                        .get_mut(&checkout_id)
-                        .expect("checked above")
-                        .bridge
-                        .record_written(&path, entry);
-                    self.persist_entry(checkout_id, &path).await?;
-                }
-                DiskAction::Remove { path } => {
-                    let current = disk::read(&root, &path)?;
-                    let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
-                    if current.as_ref().is_some_and(|current| Some(current.hash) != recorded) {
-                        changed_meanwhile.push(path);
-                        continue;
-                    }
-                    disk::remove(&root, &path)?;
-                    self.checkouts
-                        .get_mut(&checkout_id)
-                        .expect("checked above")
-                        .bridge
-                        .record_removed(&path);
-                    self.store.remove_disk_file(checkout_id, &path).await?;
-                }
+            match self.perform_action(checkout_id, action, force).await {
+                Ok(Some(path)) => changed_meanwhile.push(path),
+                Ok(None) => {}
+                // One file that can't be written must not keep the others
+                // from reaching the disk.
+                Err(error) => warn!(%error, "could not update a file of the checkout"),
             }
         }
         Ok(changed_meanwhile)
+    }
+
+    /// Applies one disk action; returns the path when the file changed on
+    /// disk since it was last recorded.
+    async fn perform_action(&mut self, checkout_id: i64, action: DiskAction, force: bool) -> Result<Option<String>, CoreError> {
+        let root = self.checkout(checkout_id)?.record.path.clone();
+        match action {
+            DiskAction::Write {
+                path,
+                inode,
+                content,
+                executable,
+                version,
+            } => {
+                let current = disk::read(&root, &path)?;
+                let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
+                if let Some(current) = &current
+                    && recorded != Some(current.hash)
+                    && !(force && recorded.is_none())
+                {
+                    return Ok(Some(path));
+                }
+                let bytes = match content {
+                    DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
+                    DiskContent::Blob(hash) => self.blob(hash).await?,
+                };
+                let written = match current {
+                    Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
+                    _ => disk::write(&root, &path, &bytes, executable)?,
+                };
+                let entry = DiskEntry {
+                    inode,
+                    hash: written.hash,
+                    size: written.size(),
+                    mtime_ns: written.mtime_ns,
+                    version,
+                };
+                self.checkouts
+                    .get_mut(&checkout_id)
+                    .expect("checked above")
+                    .bridge
+                    .record_written(&path, entry);
+                self.persist_entry(checkout_id, &path).await?;
+            }
+            DiskAction::Remove { path } => {
+                let current = disk::read(&root, &path)?;
+                let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
+                if current.as_ref().is_some_and(|current| Some(current.hash) != recorded) {
+                    return Ok(Some(path));
+                }
+                disk::remove(&root, &path)?;
+                self.checkouts
+                    .get_mut(&checkout_id)
+                    .expect("checked above")
+                    .bridge
+                    .record_removed(&path);
+                self.store.remove_disk_file(checkout_id, &path).await?;
+            }
+        }
+        Ok(None)
+    }
+
+    /// Takes in files that changed on disk while the thread's version was
+    /// being written there. Ignored files stay out: a peer's file of the
+    /// same name must not make this machine record its own `.env`.
+    pub(crate) async fn ingest_changed_meanwhile(&mut self, checkout_id: i64, paths: Vec<String>) -> Result<(), CoreError> {
+        for path in self.trackable(checkout_id, paths)? {
+            Box::pin(self.ingest_file(checkout_id, &path)).await?;
+        }
+        Ok(())
+    }
+
+    /// `paths` without Silt's and git's own data and ignored files.
+    fn trackable(&self, checkout_id: i64, mut paths: Vec<String>) -> Result<Vec<String>, CoreError> {
+        paths.retain(|path| !disk::is_internal(path));
+        if paths.is_empty() {
+            return Ok(paths);
+        }
+        let ignored = self.checkout(checkout_id)?.repo.ignored(&paths)?;
+        paths.retain(|path| !ignored.contains(path));
+        Ok(paths)
     }
 
     async fn persist_entry(&self, checkout: i64, path: &str) -> Result<(), CoreError> {

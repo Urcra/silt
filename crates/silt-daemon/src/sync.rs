@@ -246,9 +246,7 @@ impl Core {
                 .bridge
                 .reconcile(&self.families[&family_id], &mut RepoBases(&checkout.repo), inodes);
             let again = self.perform(id, actions).await?;
-            for path in again {
-                Box::pin(self.ingest_file(id, &path)).await?;
-            }
+            self.ingest_changed_meanwhile(id, again).await?;
         }
         Ok(())
     }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 /// Files larger than this are stored whole instead of as text.
@@ -27,15 +27,51 @@ impl RawFile {
     }
 }
 
-/// Whether `path` (relative to the checkout) is Silt's or git's own data.
+/// Whether `path` (relative to the checkout) is Silt's or git's own data,
+/// or a path Silt never writes.
 pub fn is_internal(path: &str) -> bool {
     let first = path.split('/').next().unwrap_or(path);
-    first == ".git" || first == ".silt"
+    first == ".silt" || !silt_checkout::is_writable(path)
 }
 
-/// Reads a regular file. Missing files and symlinks give `None`.
+/// The full path of `path` in the checkout at `root`, refusing paths Silt
+/// must not touch and paths that pass through a symlinked directory, which
+/// could lead outside the checkout. With `create`, missing directories are
+/// made on the way.
+fn inside(root: &Path, path: &str, create: bool) -> io::Result<PathBuf> {
+    if !silt_checkout::is_writable(path) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{path} is not a path Silt writes")));
+    }
+    let mut full = root.to_owned();
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        full.push(component);
+        if components.peek().is_none() {
+            break;
+        }
+        match fs::symlink_metadata(&full) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{path} goes through {}, which is not a directory", full.display()),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && create => fs::create_dir(&full)?,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(full)
+}
+
+/// Reads a regular file. Missing files, symlinks and paths Silt doesn't
+/// write give `None`.
 pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
-    let full = root.join(path);
+    let full = match inside(root, path, false) {
+        Ok(full) => full,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let metadata = match fs::symlink_metadata(&full) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -55,9 +91,8 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
 
 /// Writes atomically (temporary file, then rename), creating directories.
 pub fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Result<RawFile> {
-    let full = root.join(path);
+    let full = inside(root, path, true)?;
     let dir = full.parent().unwrap_or(root);
-    fs::create_dir_all(dir)?;
     let file_name = full.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let temporary = dir.join(format!(".{file_name}.silt-tmp"));
     fs::write(&temporary, bytes)?;
@@ -76,7 +111,12 @@ pub fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Res
 }
 
 pub fn remove(root: &Path, path: &str) -> io::Result<()> {
-    match fs::remove_file(root.join(path)) {
+    let full = match inside(root, path, false) {
+        Ok(full) => full,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    match fs::remove_file(full) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
     }
@@ -112,5 +152,21 @@ mod tests {
         write(dir.path(), "img.bin", &[1, 0, 2], false).expect("writes");
         assert!(!read(dir.path(), "img.bin").expect("reads").expect("exists").is_text());
         assert!(is_internal(".git/HEAD") && is_internal(".silt/checkouts/x/a") && !is_internal("src/.gitignore"));
+        assert!(is_internal("vendor/.GIT/config"));
+    }
+
+    #[test]
+    fn never_writes_into_git_data_or_through_symlinks() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("temp dir");
+        assert!(write(dir.path(), ".git/hooks/pre-commit", b"x", true).is_err());
+        assert!(write(dir.path(), "a/../../escape", b"x", false).is_err());
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).expect("symlink");
+        assert!(write(dir.path(), "linked/planted", b"x", false).is_err());
+        assert!(!outside.path().join("planted").exists());
+        std::fs::write(outside.path().join("secret"), "s").expect("writes");
+        assert!(read(dir.path(), "linked/secret").expect("reads").is_none());
+        remove(dir.path(), "linked/secret").expect_err("refuses");
+        assert!(outside.path().join("secret").exists());
     }
 }

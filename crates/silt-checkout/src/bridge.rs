@@ -232,6 +232,9 @@ impl Bridge {
                 version: version.clone(),
             });
         }
+        actions.retain(|action| match action {
+            DiskAction::Write { path, .. } | DiskAction::Remove { path } => crate::is_writable(path),
+        });
         actions
     }
 
