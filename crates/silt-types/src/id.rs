@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// A replica that produces deltas: one checkout, daemon or server writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -9,13 +10,18 @@ pub struct ActorId(pub u128);
 
 impl ActorId {
     /// A distinct actor for one part of this replica's work, such as one
-    /// thread. The same inputs always give the same actor.
+    /// thread. The same inputs always give the same actor, but a derived
+    /// actor doesn't give away the one it came from: otherwise anyone who
+    /// saw one thread's actor could predict this replica's next ones and
+    /// claim them first on the server (ADR 0016).
     pub fn derive(self, salt: u128) -> Self {
-        let mut state = self.0 ^ salt.rotate_left(64).wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835);
-        state ^= state >> 67;
-        state = state.wrapping_mul(0xd6e8_feb8_6659_fd93_9e37_79b9_7f4a_7c15);
-        state ^= state >> 61;
-        Self(state)
+        let mut input = [0u8; 32];
+        input[..16].copy_from_slice(&self.0.to_be_bytes());
+        input[16..].copy_from_slice(&salt.to_be_bytes());
+        let digest = Sha256::digest(input);
+        let mut first = [0u8; 16];
+        first.copy_from_slice(&digest[..16]);
+        Self(u128::from_be_bytes(first))
     }
 }
 

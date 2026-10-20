@@ -9,7 +9,7 @@ use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::StatusCode;
 use silt_log::{Delta, Op};
 use silt_proto::ShareRequest;
-use silt_types::ThreadId;
+use silt_types::{ActorId, FamilyId, ThreadId};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
@@ -69,6 +69,70 @@ pub(crate) async fn collaborators(db: &SqlitePool) -> Result<HashMap<ThreadId, V
         found.entry(ThreadId(id_from(row.get("thread_id")))).or_default().push(row.get("name"));
     }
     Ok(found)
+}
+
+/// The pushed deltas new to the server that `user` may add (ADR 0016),
+/// and the actors to record as theirs.
+/// - A delta written as an actor another person's device owns is dropped:
+///   a client re-pushing after a server restore legitimately sends others'
+///   deltas, but taking an actor's ids would wedge its owner's sync.
+/// - Every delta's thread must belong to `family`.
+/// - Comments need only that `user` sees the thread; other deltas that they
+///   may write it (`check_writes`).
+pub(crate) async fn admit(
+    server: &Server,
+    user: i64,
+    family: FamilyId,
+    deltas: Vec<&Delta>,
+) -> Result<(Vec<Delta>, Vec<ActorId>), ApiError> {
+    let db = server.db();
+    let mut owners: HashMap<ActorId, Option<i64>> = HashMap::new();
+    for actor in deltas.iter().map(|delta| delta.span.actor).collect::<HashSet<_>>() {
+        let owner = sqlx::query("SELECT user_id FROM actor_owners WHERE actor = ?")
+            .bind(id_bytes(actor.0))
+            .fetch_optional(db)
+            .await?
+            .map(|row| row.get::<i64, _>("user_id"));
+        owners.insert(actor, owner);
+    }
+    let admitted: Vec<&Delta> = deltas
+        .into_iter()
+        .filter(|delta| owners[&delta.span.actor].is_none_or(|owner| owner == user))
+        .collect();
+    for thread in admitted.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
+        let registered = sqlx::query("SELECT family_id FROM threads WHERE id = ?")
+            .bind(id_bytes(thread.0))
+            .fetch_optional(db)
+            .await?;
+        if registered.is_some_and(|row| id_from(row.get("family_id")) != family.0) {
+            return Err(forbidden(format!("thread {thread} is not part of family {family}")));
+        }
+    }
+    if admitted.iter().any(|delta| matches!(delta.op, Op::Comment(_))) {
+        let viewer = server.viewer(user).await?;
+        if let Some(delta) = admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_)) && !viewer.sees_thread(delta.thread)) {
+            return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
+        }
+    }
+    check_writes(db, user, &admitted).await?;
+    let claims = owners
+        .into_iter()
+        .filter(|(actor, owner)| owner.is_none() && admitted.iter().any(|delta| delta.span.actor == *actor))
+        .map(|(actor, _)| actor)
+        .collect();
+    Ok((admitted.into_iter().cloned().collect(), claims))
+}
+
+/// Records `actors` as written by `user`'s devices.
+pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: i64, actors: &[ActorId]) -> Result<(), sqlx::Error> {
+    for actor in actors {
+        sqlx::query("INSERT INTO actor_owners (actor, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(id_bytes(actor.0))
+            .bind(user)
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Fails unless `user` may write every one of `deltas`, which are new to

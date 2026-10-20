@@ -163,6 +163,38 @@ async fn only_the_owner_and_collaborators_write_a_thread() {
 }
 
 #[tokio::test]
+async fn nobody_writes_as_another_persons_device() {
+    let (_data, alice, bob) = two_people().await;
+    let mut family = Family::new();
+    let first = delta(&mut family, MAIN, file("a"));
+    alice.register(MAIN).await;
+    alice.push(std::slice::from_ref(&first)).await;
+
+    // Bob takes Alice's actor and her next lamport for a comment, which
+    // would make her real next delta conflict.
+    let mut forged = family.clone();
+    let comment = forged.delta(
+        ActorId(MAIN.0),
+        MAIN,
+        Author::User,
+        0,
+        forged.thread_head(MAIN),
+        Op::Comment(silt_log::CommentOp::Added {
+            target: silt_log::CommentTarget::Message { delta: first.span.first() },
+            text: "mine now".into(),
+            by: "bob".into(),
+        }),
+    );
+    forged.apply(comment.clone(), &mut HashMap::new()).expect("applies");
+    assert_eq!(bob.try_push(&[comment]).await, StatusCode::OK);
+    assert_eq!(alice.pulled().await.len(), 1, "the forged delta was not stored");
+
+    let second = delta(&mut family, MAIN, file("b"));
+    alice.push(&[second]).await;
+    assert_eq!(alice.pulled().await.len(), 2);
+}
+
+#[tokio::test]
 async fn purged_threads_leave_what_forks_need_and_never_come_back() {
     let (_data, alice, bob) = two_people().await;
 

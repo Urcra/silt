@@ -300,13 +300,7 @@ impl Bridge {
 
 /// The actor for one checkout's text edits to one file.
 pub fn file_actor(checkout: ActorId, inode: InodeId) -> ActorId {
-    let mut state = checkout.0
-        ^ inode.0.actor.0.rotate_left(64)
-        ^ u128::from(inode.0.lamport.0).wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835);
-    state ^= state >> 67;
-    state = state.wrapping_mul(0xd6e8_feb8_6659_fd93_9e37_79b9_7f4a_7c15);
-    state ^= state >> 61;
-    ActorId(state)
+    checkout.derive(inode.0.actor.0).derive(u128::from(inode.0.lamport.0))
 }
 
 fn current_content(family: &Family, thread: ThreadId, inode: InodeId) -> Option<DiskContent> {

@@ -565,8 +565,9 @@ async fn push(
     let room = rooms
         .entry(family)
         .or_insert_with(|| Room::new(server.shared.generation));
-    let new: Vec<&Delta> = pushed.iter().filter(|delta| room.position(delta.span.first()).is_none()).collect();
-    collab::check_writes(&server.shared.db, caller.user, &new).await?;
+    let (known, new): (Vec<&Delta>, Vec<&Delta>) = pushed.iter().partition(|delta| room.position(delta.span.first()).is_some());
+    let (new, claims) = collab::admit(&server, caller.user, family, new).await?;
+    let pushed: Vec<Delta> = known.into_iter().cloned().chain(new).collect();
     let before = room.seq();
     let outcome = room.push(pushed).map_err(|error| match error {
         PushError::Conflict(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::Conflict { delta }),
@@ -584,6 +585,7 @@ async fn push(
         stored.iter().flat_map(|(_, delta)| index.observe(family, delta)).collect()
     };
     let mut tx = server.shared.db.begin().await?;
+    collab::claim_actors(&mut tx, caller.user, &claims).await?;
     index::write(&mut tx, &index_rows).await?;
     for (seq, delta) in &stored {
         sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, ?, ?)")
