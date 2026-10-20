@@ -1,9 +1,11 @@
 //! Randomised schedules of concurrent creates, moves and deletes across
 //! replicas. After full delivery every replica must have the same paths, no
-//! inode may be lost or caught in a cycle, and every live inode has one path.
+//! inode may be lost or caught in a cycle, and every live file has one path.
+
+use std::collections::HashSet;
 
 use proptest::prelude::*;
-use silt_crdt::{CausalGraph, FileTree, InodeKind, Parent, TreeEvent, TreeOp};
+use silt_crdt::{CausalGraph, FileTree, InodeId, InodeKind, Parent, TreeEvent, TreeOp};
 use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier};
 
 #[derive(Debug, Clone)]
@@ -141,8 +143,17 @@ fn run(replica_count: usize, actions: &[Action]) -> Result<(), TestCaseError> {
         prop_assert_eq!(&replica.tree.paths(), &paths);
         prop_assert!(replica.tree.is_well_formed());
         prop_assert_eq!(replica.tree.inodes().len(), created, "inode lost");
-        let live = replica.tree.inodes().into_iter().filter(|inode| replica.tree.is_live(*inode)).count();
-        prop_assert_eq!(live, paths.len(), "every live inode has exactly one path");
+        let tree = &replica.tree;
+        let live: Vec<InodeId> = tree.inodes().into_iter().filter(|inode| tree.is_live(*inode)).collect();
+        let is_dir = |inode: &InodeId| tree.kind(*inode) == Some(InodeKind::Dir);
+        let live_files = live.iter().filter(|inode| !is_dir(inode)).count();
+        prop_assert_eq!(live_files, paths.values().filter(|inode| !is_dir(inode)).count(), "every live file has exactly one path");
+        prop_assert!(paths.values().all(|inode| tree.is_live(*inode)), "every path names a live inode");
+        // Directories made at once under one name are listed as one, so some
+        // live directories have no path of their own; their files do.
+        let listed: HashSet<InodeId> = paths.values().copied().collect();
+        prop_assert_eq!(listed.len(), paths.len(), "no inode has two paths");
+        prop_assert!(listed.iter().filter(|inode| is_dir(inode)).count() <= live.iter().filter(|inode| is_dir(inode)).count());
     }
     Ok(())
 }

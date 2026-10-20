@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_types::{ActorId, DeltaId, Lamport};
 
@@ -309,39 +309,75 @@ impl FileTree {
                 .or_default()
                 .push((placement.placed_by, *inode));
         }
-        self.collect_under(&mut children, dir, prefix, paths);
+        self.collect_under(&mut children, &[dir], prefix, paths);
     }
 
+    /// Lists what is in `dirs`, which are one directory: directories created
+    /// under one name in one place, concurrently, hold their creators' files
+    /// together rather than one of them being renamed.
     fn collect_under(
         &self,
         children: &mut Children<'_>,
-        dir: Parent,
+        dirs: &[Parent],
         prefix: &str,
         paths: &mut BTreeMap<String, InodeId>,
     ) {
-        let Some(by_name) = children.remove(&dir) else {
-            return;
-        };
-        for (name, mut claimants) in by_name {
-            claimants.sort();
-            for (rank, (_, inode)) in claimants.into_iter().enumerate() {
-                let name = if rank == 0 {
-                    name.to_owned()
-                } else {
-                    format!("{name} (conflict {})", inode.0)
-                };
-                let path = if prefix.is_empty() {
-                    name
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                if self.kinds.get(&inode) == Some(&InodeKind::Dir) {
-                    self.collect_under(children, Parent::Dir(inode), &path, paths);
+        let mut by_name: BTreeMap<&str, Vec<(Stamp, InodeId)>> = BTreeMap::new();
+        for dir in dirs {
+            for (name, claimants) in children.remove(dir).unwrap_or_default() {
+                by_name.entry(name).or_default().extend(claimants);
+            }
+        }
+        let mut taken: HashSet<String> = by_name.keys().map(|name| (*name).to_owned()).collect();
+        for (name, claimants) in by_name {
+            for (rank, entry) in entries(claimants, &self.kinds).into_iter().enumerate() {
+                let first = entry[0];
+                let name = if rank == 0 { name.to_owned() } else { conflict_name(name, first, &mut taken) };
+                let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+                if self.kinds.get(&first) == Some(&InodeKind::Dir) {
+                    let merged: Vec<Parent> = entry.iter().map(|inode| Parent::Dir(*inode)).collect();
+                    self.collect_under(children, &merged, &path, paths);
                 }
-                paths.insert(path, inode);
+                paths.insert(path, first);
             }
         }
     }
+}
+
+/// The things claiming one name, earliest first: each file on its own, and
+/// all directories together as one.
+fn entries(mut claimants: Vec<(Stamp, InodeId)>, kinds: &HashMap<InodeId, InodeKind>) -> Vec<Vec<InodeId>> {
+    claimants.sort();
+    let mut entries: Vec<Vec<InodeId>> = Vec::new();
+    let mut dirs: Option<usize> = None;
+    for (_, inode) in claimants {
+        if kinds.get(&inode) != Some(&InodeKind::Dir) {
+            entries.push(vec![inode]);
+            continue;
+        }
+        match dirs {
+            Some(index) => entries[index].push(inode),
+            None => {
+                dirs = Some(entries.len());
+                entries.push(vec![inode]);
+            }
+        }
+    }
+    entries
+}
+
+/// A name for a claimant that lost `name`, unlike any other in the
+/// directory. Every replica sees the same names in the same order, so they
+/// all pick the same one.
+fn conflict_name(name: &str, inode: InodeId, taken: &mut HashSet<String>) -> String {
+    let base = format!("{name} (conflict {})", inode.0);
+    let mut candidate = base.clone();
+    let mut again = 1;
+    while !taken.insert(candidate.clone()) {
+        again += 1;
+        candidate = format!("{base} {again}");
+    }
+    candidate
 }
 
 /// Each directory's entries by name, with every inode claiming the name.
@@ -463,6 +499,40 @@ mod tests {
             paths["lib.rs (conflict 00000000000000000000000000000001.7)"],
             InodeId(id(1, 7))
         );
+    }
+
+    #[test]
+    fn directories_made_at_once_under_one_name_are_one_directory() {
+        let a = InodeId(id(1, 0));
+        let b = InodeId(id(2, 0));
+        let tree = apply_all(&[
+            create(id(1, 0), InodeKind::Dir, Parent::Root, "src"),
+            create(id(2, 0), InodeKind::Dir, Parent::Root, "src"),
+            create(id(1, 1), InodeKind::File, Parent::Dir(a), "a.rs"),
+            create(id(2, 1), InodeKind::File, Parent::Dir(b), "b.rs"),
+            create(id(1, 2), InodeKind::File, Parent::Dir(a), "same.rs"),
+            create(id(2, 2), InodeKind::File, Parent::Dir(b), "same.rs"),
+        ]);
+        let paths = tree.paths();
+        assert_eq!(paths["src"], a);
+        assert_eq!(paths["src/a.rs"], InodeId(id(1, 1)));
+        assert_eq!(paths["src/b.rs"], InodeId(id(2, 1)));
+        assert_eq!(paths["src/same.rs"], InodeId(id(1, 2)));
+        assert_eq!(paths["src/same.rs (conflict 00000000000000000000000000000002.2)"], InodeId(id(2, 2)));
+        assert_eq!(paths.len(), 5, "{paths:?}");
+    }
+
+    #[test]
+    fn a_conflict_name_never_hides_a_real_file() {
+        let tree = apply_all(&[
+            create(id(2, 5), InodeKind::File, Parent::Root, "lib.rs"),
+            create(id(1, 7), InodeKind::File, Parent::Root, "lib.rs"),
+            create(id(3, 9), InodeKind::File, Parent::Root, "lib.rs (conflict 00000000000000000000000000000001.7)"),
+        ]);
+        let paths = tree.paths();
+        assert_eq!(paths.len(), 3, "{paths:?}");
+        assert_eq!(paths["lib.rs (conflict 00000000000000000000000000000001.7)"], InodeId(id(3, 9)));
+        assert_eq!(paths["lib.rs (conflict 00000000000000000000000000000001.7) 2"], InodeId(id(1, 7)));
     }
 
     #[test]
