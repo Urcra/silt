@@ -177,7 +177,12 @@ impl Core {
             core.threads.insert(thread.id, thread);
         }
         core.deleted = core.store.deleted_threads().await?.into_iter().collect();
-        core.overlay = Overlay::new(core.store.secrets().await?.into_iter().chain(core.redactor.secrets().iter().cloned()));
+        // The overlay's secrets are redacted too, so deltas recorded while a
+        // secret was in the environment stay redacted after it's gone.
+        let stored = core.store.secrets().await?;
+        core.store.learn_secrets(core.redactor.secrets()).await?;
+        core.redactor = core.redactor.clone().with(stored.iter().cloned());
+        core.overlay = Overlay::new(stored.into_iter().chain(core.redactor.secrets().iter().cloned()));
         core.clones = core
             .store
             .clones()
@@ -275,10 +280,10 @@ impl Core {
             Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {
                 self.remote = remote::load_config(&self.data_dir).map(Remote::new);
-                self.redactor = redactor(&self.data_dir);
-                for secret in self.redactor.secrets().to_vec() {
-                    self.overlay.learn(secret);
-                }
+                let fresh = redactor(&self.data_dir);
+                let secrets = fresh.secrets().to_vec();
+                self.redactor = self.redactor.clone().with(secrets.iter().cloned());
+                self.learn_secrets(secrets);
                 self.syncs.clear();
                 for family in self.families.keys().chain(self.raw.keys()).copied().collect::<Vec<_>>() {
                     let state = self.store.sync_state(family).await.unwrap_or_default();
@@ -599,7 +604,13 @@ impl Core {
                 Err(error) => DiskContent::Blob(self.store.blobs().put(error.as_bytes()).await?),
             }
         } else {
-            DiskContent::Blob(self.store.blobs().put(&raw.bytes).await?)
+            // Too large to merge as text, yet text all the same: its secrets
+            // are masked before it can leave the machine, like any edit's.
+            let bytes = match std::str::from_utf8(&raw.bytes) {
+                Ok(text) => self.redactor.mask_text(text).into_bytes(),
+                Err(_) => raw.bytes.clone(),
+            };
+            DiskContent::Blob(self.store.blobs().put(&bytes).await?)
         };
         Ok(DiskFile {
             content,
@@ -989,6 +1000,21 @@ impl Core {
         (!drafts.is_empty()).then(|| format!("Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}", drafts.join("\n")))
     }
 
+    /// Whether this machine's secrets go back into `delta` (ADR 0015, 0016):
+    /// only into what this user's own devices could have written. A thread
+    /// is written by its owner and collaborators only, so that means one of
+    /// this user's threads without collaborators, and never a comment, which
+    /// anyone who sees the thread may add. Otherwise someone could plant a
+    /// placeholder and have this machine fill in the secret for them.
+    pub(crate) fn reveals(&self, delta: &Delta) -> bool {
+        if matches!(delta.op, Op::Comment(_)) {
+            return false;
+        }
+        let me = self.own_user();
+        self.threads.get(&delta.thread).is_some_and(|thread| thread.owner == me)
+            && self.collaborators.get(&delta.thread).is_none_or(Vec::is_empty)
+    }
+
     /// Adds secrets just redacted to the overlay, here and in the store.
     pub(crate) fn learn_secrets(&mut self, found: Vec<String>) {
         let new: Vec<String> = found.into_iter().filter(|secret| self.overlay.learn(secret.clone())).collect();
@@ -1140,7 +1166,12 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
 /// Redacts the secrets in this process's environment and in the data
 /// directory's `secrets` file.
 fn redactor(data_dir: &Path) -> Redactor {
-    Redactor::from_env().with(silt_redact::read_secrets_file(&data_dir.join("secrets")))
+    let file = data_dir.join("secrets");
+    let secrets = silt_redact::read_secrets_file(&file).unwrap_or_else(|error| {
+        warn!(%error, path = %file.display(), "could not read the secrets file; its secrets are not redacted");
+        Vec::new()
+    });
+    Redactor::from_env().with(secrets)
 }
 
 pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {

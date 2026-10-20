@@ -342,7 +342,15 @@ fn prompt_text(request: &PromptRequest) -> String {
 
 /// Serves the harness over ACP on stdin and stdout until the client leaves.
 pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
-    let redactor = Redactor::from_env().with(config.secrets_file.as_deref().map(silt_redact::read_secrets_file).unwrap_or_default());
+    let from_file = match config.secrets_file.as_deref().map(silt_redact::read_secrets_file) {
+        Some(Ok(secrets)) => secrets,
+        Some(Err(error)) => {
+            eprintln!("silt harness: could not read the secrets file ({error}); its secrets are not redacted");
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let redactor = Redactor::from_env().with(from_file);
     let overlay = Mutex::new(Overlay::new(redactor.secrets().iter().cloned()));
     let harness = Arc::new(Harness {
         config,

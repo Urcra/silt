@@ -102,6 +102,14 @@ pub struct Store {
 }
 
 impl Store {
+    /// Every transaction here writes. Taking the write lock at the start
+    /// makes a concurrent writer wait for it; a transaction that reads
+    /// first would instead fail when it tries to write after another one
+    /// committed.
+    async fn write_transaction(&self) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, StoreError> {
+        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    }
+
     /// Opens (creating if needed) the store in `dir` and migrates it.
     pub async fn open(dir: &Path) -> Result<Self, StoreError> {
         tokio::fs::create_dir_all(dir).await?;
@@ -109,6 +117,7 @@ impl Store {
             .filename(dir.join("silt.sqlite"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(10))
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options).await?;
         MIGRATOR.run(&pool).await?;
@@ -123,7 +132,7 @@ impl Store {
     }
 
     pub async fn create_thread(&self, thread: &ThreadRecord) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         sqlx::query("INSERT OR IGNORE INTO families (id, created_ms) VALUES (?, ?)")
             .bind(id_bytes(thread.family.0))
             .bind(thread.created_ms)
@@ -215,7 +224,7 @@ impl Store {
 
     /// Appends deltas after the family's existing ones, keeping their order.
     pub async fn append_deltas(&self, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM deltas WHERE family_id = ?")
             .bind(id_bytes(family.0))
             .fetch_one(&mut *tx)
@@ -240,7 +249,7 @@ impl Store {
     /// Forgets the family's deltas and sync progress, to read it again from
     /// the server.
     pub async fn clear_deltas(&self, family: FamilyId) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         for statement in ["DELETE FROM deltas WHERE family_id = ?", "DELETE FROM sync_state WHERE family_id = ?"] {
             sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
         }
@@ -317,7 +326,7 @@ impl Store {
     /// Files on disk stay.
     pub async fn remove_thread(&self, thread: ThreadId) -> Result<(), StoreError> {
         let id = id_bytes(thread.0);
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         for statement in [
             "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions WHERE thread_id = ?)",
             "DELETE FROM sessions WHERE thread_id = ?",
@@ -374,7 +383,7 @@ impl Store {
     /// Hands an existing checkout to another thread, forgetting what it
     /// recorded about the disk for the previous one.
     pub async fn rebind_checkout(&self, checkout: i64, thread: ThreadId, actor: ActorId) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         sqlx::query("UPDATE checkouts SET thread_id = ?, actor = ? WHERE id = ?")
             .bind(id_bytes(thread.0))
             .bind(id_bytes(actor.0))
@@ -392,7 +401,7 @@ impl Store {
     /// Points a checkout, and the sessions recorded in it, at another thread
     /// of the same family, keeping what it knows about the disk.
     pub async fn move_checkout(&self, checkout: i64, thread: ThreadId) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.write_transaction().await?;
         sqlx::query("UPDATE checkouts SET thread_id = ? WHERE id = ?")
             .bind(id_bytes(thread.0))
             .bind(checkout)

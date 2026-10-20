@@ -31,6 +31,7 @@ pub fn text_edits(old: &str, new: &str) -> Vec<TextOp> {
             removed[prefix..].iter().rev(),
             added[prefix..].iter().rev(),
         );
+        let (prefix, suffix) = whole_tokens(removed, added, prefix, suffix);
         hunks.push((
             old_range.start + prefix,
             removed.len() - prefix - suffix,
@@ -48,6 +49,44 @@ pub fn text_edits(old: &str, new: &str) -> Vec<TextOp> {
         }
     }
     ops
+}
+
+/// Characters that make up keys and tokens.
+fn is_token_char(char: char) -> bool {
+    char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '+' | '/' | '=')
+}
+
+/// Runs this long are replaced whole when an edit touches them.
+const TOKEN_RUN: usize = 8;
+
+/// Widens a change that falls inside a long run of token characters to the
+/// whole run, in both texts. Rotating a key then inserts the new key whole,
+/// where redaction recognises it, instead of only its changed tail
+/// (ADR 0016). Short runs, which are ordinary words, keep fine-grained
+/// edits.
+fn whole_tokens(removed: &[char], added: &[char], mut prefix: usize, mut suffix: usize) -> (usize, usize) {
+    let run_len = |chars: &[char], at: usize| {
+        let start = chars[..at].iter().rev().take_while(|char| is_token_char(**char)).count();
+        let end = chars[at..].iter().take_while(|char| is_token_char(**char)).count();
+        (start, end)
+    };
+    if prefix > 0 && is_token_char(removed[prefix - 1]) {
+        let (back, removed_ahead) = run_len(removed, prefix);
+        let (_, added_ahead) = run_len(added, prefix);
+        if back + removed_ahead.max(added_ahead) >= TOKEN_RUN {
+            prefix -= back;
+        }
+    }
+    let (removed_end, added_end) = (removed.len() - suffix, added.len() - suffix);
+    if suffix > 0 && is_token_char(removed[removed_end]) {
+        let (removed_behind, ahead) = run_len(removed, removed_end);
+        let (added_behind, _) = run_len(added, added_end);
+        let behind = removed_behind.min(removed_end - prefix).max(added_behind.min(added_end - prefix));
+        if ahead + behind >= TOKEN_RUN {
+            suffix -= ahead;
+        }
+    }
+    (prefix, suffix)
 }
 
 /// Char offset where each line starts, plus the total length at the end.
@@ -125,5 +164,19 @@ mod tests {
         ) {
             prop_assert_eq!(apply(&old, &text_edits(&old, &new)), new);
         }
+    }
+
+    #[test]
+    fn a_changed_key_is_replaced_whole() {
+        let old = "token: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
+        let new = "token: ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n";
+        let ops = text_edits(old, new);
+        assert_eq!(apply(old, &ops), new);
+        assert!(
+            ops.iter().any(|op| matches!(op, TextOp::Insert { content, .. } if content == "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
+            "{ops:?}"
+        );
+        let ops = text_edits("let x = 1;\n", "let y = 1;\n");
+        assert_eq!(ops, vec![TextOp::Delete { pos: 4, len: 1 }, TextOp::Insert { pos: 4, content: "y".into() }]);
     }
 }

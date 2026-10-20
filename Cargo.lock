@@ -4308,6 +4308,7 @@ dependencies = [
  "sha2 0.11.1",
  "silt-crdt",
  "silt-log",
+ "silt-types",
 ]
 
 [[package]]

@@ -110,6 +110,19 @@ fn a_thread_continues_on_another_machine() {
     );
     assert!(!dir_contains(&world.server.data, token.as_bytes()), "secrets stay off the server");
 
+    // Someone else who happens to know the token gets nothing filled in: a
+    // placeholder from another person may be planted (ADR 0016).
+    let eve_home = world.root.path().join("eve").join("silt");
+    fs::create_dir_all(&eve_home).expect("mkdir");
+    fs::write(eve_home.join("secrets"), format!("{token}\n")).expect("write");
+    let eve = Machine::new_for(world.root.path(), "eve", "eve", &world.root.path().join("origin.git"), &world.server);
+    assert!(
+        eventually(|| eve.try_stdout(&["show", &thread]).contains(&silt_redact::placeholder(token))),
+        "{}",
+        eve.try_stdout(&["show", &thread])
+    );
+    assert!(!eve.stdout(&["show", &thread]).contains(token));
+
 }
 
 #[test]

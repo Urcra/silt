@@ -21,7 +21,15 @@ const MIN_TOKEN_BODY: usize = 16;
 /// Hex digits of a secret's hash in its placeholder and mask: enough to
 /// tell a machine's secrets apart, too few to check guesses against.
 const ID_LEN: usize = 12;
+/// Parts of an environment variable's name, split at `_`, that mark its
+/// value as a secret: a part equal to one of these, or ending in one of the
+/// first five (`APIKEY`, `GHTOKEN`).
 const SECRET_NAME_PARTS: [&str; 7] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH"];
+/// Name parts that say the value is about a secret rather than one.
+const NOT_SECRET_PARTS: [&str; 12] = ["URL", "URI", "PATH", "FILE", "DIR", "SOCK", "HOST", "PORT", "NAME", "EMAIL", "USER", "ID"];
+/// Token prefixes rare enough in ordinary text that an insert ending in one
+/// is taken for a token still being typed.
+const STRONG_PREFIXES: [&str; 8] = ["github_pat_", "ghp_", "gho_", "ghs_", "sk-ant-", "xoxb-", "xoxp-", "AKIA"];
 const TOKEN_PREFIXES: [&str; 9] = ["github_pat_", "ghp_", "gho_", "ghs_", "sk-ant-", "sk-", "xoxb-", "xoxp-", "AKIA"];
 
 /// The secret's short hash, which names it in placeholders and masks.
@@ -42,23 +50,60 @@ pub fn placeholder(secret: &str) -> String {
 /// secret's length in characters.
 pub fn mask(secret: &str) -> String {
     let length = secret.chars().count();
+    if length < 3 {
+        return "*".repeat(length);
+    }
     let shown = id(secret);
     let shown = &shown[..ID_LEN.min(length.saturating_sub(2))];
     format!("*{shown}{}", "*".repeat(length - 1 - shown.len()))
 }
 
 /// Values in a secrets file, one per line; blank lines and `#` comments are
-/// skipped.
-pub fn read_secrets_file(path: &Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .map(|text| {
-            text.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+/// skipped. A missing file has none.
+pub fn read_secrets_file(path: &Path) -> std::io::Result<Vec<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_owned)
+            .collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether an environment variable called `name` holding `value` is a
+/// secret.
+fn is_secret_variable(name: &str, value: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    let parts: Vec<&str> = name.split('_').collect();
+    let marked = parts.iter().any(|part| {
+        SECRET_NAME_PARTS
+            .iter()
+            .enumerate()
+            .any(|(index, marker)| *part == *marker || (index < 5 && part.ends_with(marker)))
+    });
+    let about = parts.last().is_some_and(|last| NOT_SECRET_PARTS.contains(last));
+    let looks_like_path = value.starts_with(['/', '~', '.']);
+    marked && !about && !looks_like_path
+}
+
+/// `secret` as it appears inside a JSON string.
+fn json_escaped(secret: &str) -> String {
+    let mut out = String::with_capacity(secret.len());
+    for char in secret.chars() {
+        match char {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            char if u32::from(char) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(char))),
+            char => out.push(char),
+        }
+    }
+    out
 }
 
 /// A delta made safe to push, and the secrets taken out of it.
@@ -86,14 +131,13 @@ impl Redactor {
         self.secrets.dedup();
     }
 
-    /// Secrets from this process's environment.
+    /// Secrets from this process's environment. Variables that aren't
+    /// valid UTF-8 are skipped.
     pub fn from_env() -> Self {
         Self::new(
-            env::vars()
-                .filter(|(name, value)| {
-                    let name = name.to_uppercase();
-                    SECRET_NAME_PARTS.iter().any(|part| name.contains(part)) && !value.starts_with('/')
-                })
+            env::vars_os()
+                .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+                .filter(|(name, value)| is_secret_variable(name, value))
                 .map(|(_, value)| value)
                 .collect(),
         )
@@ -120,8 +164,8 @@ impl Redactor {
             Op::Text {
                 op: TextOp::Insert { content, .. },
                 ..
-            } => *content = self.cover(content, mask, &mut found),
-            Op::Conv(ConvOp::Native { line, .. }) => text(line),
+            } => *content = self.cover_partial(&self.cover(content, mask, &mut found)),
+            Op::Conv(ConvOp::Native { line, .. }) => *line = self.cover_json(line, &mut found),
             Op::Conv(ConvOp::Title(title)) => text(title),
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
                 text(title);
@@ -139,10 +183,58 @@ impl Redactor {
         self.cover(text, placeholder, &mut Vec::new())
     }
 
+    /// `text` with every secret masked, keeping its length.
+    pub fn mask_text(&self, text: &str) -> String {
+        self.cover(text, mask, &mut Vec::new())
+    }
+
     /// `text` with every secret replaced by its placeholder, and the secrets.
     pub fn replace_found(&self, text: &str) -> (String, Vec<String>) {
         let mut found = Vec::new();
         (self.cover(text, placeholder, &mut found), found)
+    }
+
+    #[cfg(test)]
+    fn cover_json_found(&self, line: &str) -> (String, Vec<String>) {
+        let mut found = Vec::new();
+        (self.cover_json(line, &mut found), found)
+    }
+
+    /// A transcript line is JSON: secrets appear there escaped.
+    fn cover_json(&self, line: &str, found: &mut Vec<String>) -> String {
+        let mut out = line.to_owned();
+        for secret in &self.secrets {
+            let escaped = json_escaped(secret);
+            if escaped != *secret && out.contains(&escaped) {
+                out = out.replace(&escaped, &placeholder(secret));
+                found.push(secret.clone());
+            }
+        }
+        self.cover(&out, placeholder, found)
+    }
+
+    /// An insert that ends in what may be the start of a secret, a token
+    /// prefix or the beginning of a known secret, is masked: the rest may
+    /// arrive in a later edit, and a secret typed in pieces must not leave
+    /// in pieces (ADR 0016).
+    fn cover_partial(&self, content: &str) -> String {
+        let tail_len = content
+            .chars()
+            .rev()
+            .take_while(|char| char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '+' | '/' | '='))
+            .count();
+        if tail_len == 0 {
+            return content.to_owned();
+        }
+        let split = content.char_indices().rev().nth(tail_len - 1).map_or(0, |(at, _)| at);
+        let tail = &content[split..];
+        let started = STRONG_PREFIXES.iter().any(|prefix| tail.starts_with(prefix))
+            || (tail.len() >= 4 && self.secrets.iter().any(|secret| secret.starts_with(tail) && secret != tail));
+        if started {
+            format!("{}{}", &content[..split], mask(tail))
+        } else {
+            content.to_owned()
+        }
     }
 
     fn cover(&self, text: &str, cover: impl Fn(&str) -> String, found: &mut Vec<String>) -> String {
@@ -193,14 +285,28 @@ impl Overlay {
 
     /// `text` with the placeholders and masks of known secrets put back.
     pub fn reveal(&self, text: &str) -> String {
+        self.reveal_as(text, Hidden::Both, str::to_owned)
+    }
+
+    /// Like [`Overlay::reveal`] for JSON text, such as transcript lines:
+    /// the secrets go back escaped.
+    pub fn reveal_json(&self, text: &str) -> String {
+        self.reveal_as(text, Hidden::Both, json_escaped)
+    }
+
+    fn reveal_as(&self, text: &str, hidden: Hidden, form: impl Fn(&str) -> String) -> String {
         let mut out = text.to_owned();
         if !out.contains("[REDACTED:") && !out.contains('*') {
             return out;
         }
         for secret in &self.secrets {
-            for hidden in [placeholder(secret), mask(secret)] {
-                if out.contains(&hidden) {
-                    out = out.replace(&hidden, secret);
+            let forms = match hidden {
+                Hidden::Both => vec![placeholder(secret), mask(secret)],
+                Hidden::Masks => vec![mask(secret)],
+            };
+            for covered in forms {
+                if out.contains(&covered) {
+                    out = out.replace(&covered, &form(secret));
                 }
             }
         }
@@ -216,11 +322,12 @@ impl Overlay {
         let mut delta = delta;
         let reveal = |text: &mut String| *text = self.reveal(text);
         match &mut delta.op {
+            // Only masks keep an insert's length, which its span counts.
             Op::Text {
                 op: TextOp::Insert { content, .. },
                 ..
-            } => reveal(content),
-            Op::Conv(ConvOp::Native { line, .. }) => reveal(line),
+            } => *content = self.reveal_as(content, Hidden::Masks, str::to_owned),
+            Op::Conv(ConvOp::Native { line, .. }) => *line = self.reveal_as(line, Hidden::Both, json_escaped),
             Op::Conv(ConvOp::Title(title)) => reveal(title),
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
                 reveal(title);
@@ -232,6 +339,13 @@ impl Overlay {
         }
         delta
     }
+}
+
+/// Which redacted forms to put secrets back into.
+#[derive(Clone, Copy)]
+enum Hidden {
+    Both,
+    Masks,
 }
 
 /// Byte ranges of well-known token formats in `text`.
@@ -246,10 +360,14 @@ fn tokens(text: &str) -> Vec<(usize, usize)> {
         let Some((start, prefix_len)) = next else {
             break;
         };
-        let at_boundary = text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|before| !before.is_ascii_alphanumeric());
+        // `\n` and friends in JSON text end in a letter, yet are boundaries.
+        let mut before = text[..start].chars().rev();
+        let at_boundary = match (before.next(), before.next()) {
+            (None, _) => true,
+            (Some(char), _) if !char.is_ascii_alphanumeric() => true,
+            (Some(_), Some('\\')) => true,
+            _ => false,
+        };
         let body = text[start + prefix_len..]
             .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'))
             .unwrap_or(text.len() - start - prefix_len);
@@ -317,5 +435,66 @@ mod tests {
         let text = "risk-free task-runner sk-ip ask-me";
         assert_eq!(redactor.replace(text), text);
         assert_eq!(Overlay::new(["s3cr3t-value".to_owned()]).reveal("a * b ** [REDACTED]"), "a * b ** [REDACTED]");
+    }
+
+    #[test]
+    fn inserts_get_masks_back_and_keep_their_length() {
+        use silt_crdt::InodeId;
+        use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier, Lamport, ThreadId};
+        let insert = |content: String| Delta {
+            span: DeltaSpan::new(ActorId(1), Lamport(1), content.chars().count() as u64),
+            parents: Frontier::root(),
+            thread: ThreadId(1),
+            author: silt_log::Author::User,
+            time_ms: 0,
+            op: Op::Text {
+                inode: InodeId(DeltaId::new(ActorId(1), Lamport(0))),
+                op: TextOp::Insert { pos: 0, content },
+            },
+        };
+        let overlay = Overlay::new([TOKEN.to_owned()]);
+        let masked = overlay.reveal_delta(insert(format!("x {}", mask(TOKEN))));
+        assert!(matches!(&masked.op, Op::Text { op: TextOp::Insert { content, .. }, .. } if *content == format!("x {TOKEN}")));
+        let pasted = format!("x {}", placeholder(TOKEN));
+        let kept = overlay.reveal_delta(insert(pasted.clone()));
+        assert!(matches!(&kept.op, Op::Text { op: TextOp::Insert { content, .. }, .. } if *content == pasted), "a placeholder in a file stays");
+    }
+
+    #[test]
+    fn transcript_lines_are_matched_and_revealed_as_json() {
+        let redactor = Redactor::new(vec![r#"pa"ss\word12"#.to_owned()]);
+        let line = r#"{"text":"pw pa\"ss\\word12\nghp_abcdefghijklmnopqrstuvwxyz123456 done"}"#;
+        let (redacted, found) = redactor.cover_json_found(line);
+        assert!(!redacted.contains("word12") && !redacted.contains("ghp_abcdef"), "{redacted}");
+        assert_eq!(found.len(), 2);
+        let overlay = Overlay::new(found);
+        let mut delta_line = redacted.clone();
+        delta_line = overlay.reveal_as(&delta_line, Hidden::Both, json_escaped);
+        assert_eq!(delta_line, line);
+    }
+
+    #[test]
+    fn only_secret_variables_count() {
+        for (name, value) in [("OPENAI_API_KEY", "sk-x"), ("APIKEY", "abc"), ("DB_PASSWORD", "x"), ("GH_TOKEN", "x")] {
+            assert!(is_secret_variable(name, value), "{name}");
+        }
+        for (name, value) in [
+            ("GIT_AUTHOR_EMAIL", "me@example.com"),
+            ("NEXTAUTH_URL", "http://localhost:3000"),
+            ("SSH_AUTH_SOCK", "/run/user/1000/ssh"),
+            ("TOKEN_FILE", "secrets/token"),
+            ("AWS_ACCESS_KEY_ID", "AKIA..."),
+        ] {
+            assert!(!is_secret_variable(name, value), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_secret_typed_in_pieces_is_masked_from_the_first_piece() {
+        let redactor = Redactor::new(vec!["correcthorsebattery".to_owned()]);
+        assert_eq!(redactor.cover_partial("key = ghp_ab"), format!("key = {}", mask("ghp_ab")));
+        assert_eq!(redactor.cover_partial("pw: correct"), format!("pw: {}", mask("correct")));
+        assert_eq!(redactor.cover_partial("let total = sum"), "let total = sum");
+        assert_eq!(mask("a"), "*");
     }
 }

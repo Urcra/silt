@@ -182,7 +182,10 @@ impl Core {
     /// sync. A delta that needs a git blob this clone lacks stops the batch;
     /// its index is returned so the pull can come back to it.
     async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
-        let deltas: Vec<Delta> = deltas.into_iter().map(|delta| self.overlay.reveal_delta(delta)).collect();
+        let deltas: Vec<Delta> = deltas
+            .into_iter()
+            .map(|delta| if self.reveals(&delta) { self.overlay.reveal_delta(delta) } else { delta })
+            .collect();
         let at = self.local_log(family_id).len() as u64;
         let mut fresh = Vec::new();
         let mut stopped = None;
