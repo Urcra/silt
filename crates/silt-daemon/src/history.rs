@@ -18,7 +18,7 @@ const ENTRY_CHARS: usize = 4000;
 impl Core {
     /// The thread's history as numbered entries, with the delta each came
     /// from. Works for threads only known from the server too.
-    fn history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
+    pub(crate) fn history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
         let family_id = self.threads[&thread].family;
         let items: Vec<(&Delta, HistorySource)> = match self.families.get(&family_id) {
             Some(family) => family

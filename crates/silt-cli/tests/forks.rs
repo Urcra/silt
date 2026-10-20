@@ -127,7 +127,7 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
         read(&transcript) + "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"alice: continuing upstream\"}}\n",
     )
     .expect("append to Alice's session");
-    assert!(eventually(|| bob.stdout(&["diff", &thread]).contains("+// alice was here")));
+    assert!(eventually(|| bob.try_stdout(&["diff", &thread]).contains("+// alice was here")));
     assert!(eventually(|| bob.stdout(&["show", &thread]).contains("alice: continuing upstream")));
 
     let pulled = bob.run_with(&["pull", &fork], &[]);
@@ -209,7 +209,7 @@ fn search_and_in_flight_span_the_team() {
     alice.silt(&["claude"]);
     let thread = thread_of(alice);
     let short = &thread[thread.len() - 12..];
-    assert!(eventually(|| bob.stdout(&["search", "farewell", "--author", "alice"]).contains(short)));
+    assert!(eventually(|| bob.try_stdout(&["search", "farewell", "--author", "alice"]).contains(short)));
     let found = bob.stdout(&["search", "farewell", "--file", "src", "--since", "1d", "--status", "active"]);
     assert!(found.contains(short) && found.contains("alice, active"), "{found}");
     assert!(bob.stdout(&["search", "farewell", "--author", "bob"]).contains("no matches"));
@@ -222,4 +222,38 @@ fn search_and_in_flight_span_the_team() {
         alice.stdout(&["in-flight", "src"]).contains("no other thread"),
         "a thread doesn't list itself where it is checked out"
     );
+}
+
+#[test]
+fn comments_follow_their_lines_and_sync_between_users() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    let added = alice.stdout(&["comment", &thread, "--file", "src/main.rs", "--lines", "2", "farewell needs a doc comment"]);
+    assert!(added.contains("at src/main.rs:2"), "{added}");
+    let id = added.split_whitespace().nth(2).expect("comment id").to_owned();
+
+    let main = alice.repo.join("src/main.rs");
+    fs::write(&main, format!("// one\n// two\n{}", read(&main))).expect("edit above the comment");
+    assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("src/main.rs:4")));
+
+    assert!(
+        eventually(|| bob.try_stdout(&["history", &thread]).contains("[0] user: Please add a farewell line")),
+        "{}",
+        bob.try_stdout(&["history", &thread])
+    );
+    assert!(eventually(|| bob.stdout(&["comments", &thread]).contains("farewell needs a doc comment")));
+    let from_bob = bob.stdout(&["comment", &thread, "--entry", "0", "good prompt"]);
+    assert!(from_bob.contains("at entry 0"), "{from_bob}");
+    let bobs = from_bob.split_whitespace().nth(2).expect("comment id").to_owned();
+    assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("bob  entry 0")));
+
+    fs::write(&main, "// one\n// two\nfn main() {}\n").expect("delete the commented line");
+    assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("outdated")));
+    alice.silt(&["comments", &thread, "--resolve", &bobs]);
+    assert!(eventually(|| bob
+        .stdout(&["comments", &thread])
+        .lines()
+        .any(|line| line.starts_with(&bobs) && line.contains("[resolved]"))));
+    assert!(alice.stdout(&["comments", &thread]).contains(&id));
 }

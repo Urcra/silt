@@ -11,7 +11,7 @@ use silt_agents::claude;
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    DaemonStatus, HookReply, InFlight, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
+    CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
     SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 
@@ -417,6 +417,68 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
         path: path.into(),
     })?;
     print!("{}", render::in_flight(&found));
+    Ok(())
+}
+
+pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let page: HistoryPage = call(&Request::HistoryRead {
+        thread: thread.into(),
+        offset,
+        limit,
+    })?;
+    print!("{}", render::history(&page));
+    Ok(())
+}
+
+pub fn comment(
+    thread: &str,
+    file: Option<String>,
+    lines: Option<&str>,
+    entry: Option<usize>,
+    text: &str,
+) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let on = match (file, lines, entry) {
+        (Some(path), Some(lines), None) => {
+            let (start, end) = match lines.split_once('-') {
+                Some((start, end)) => (start.trim().parse(), end.trim().parse()),
+                None => (lines.trim().parse(), lines.trim().parse()),
+            };
+            let (Ok(start), Ok(end)) = (start, end) else {
+                return Err(fail(format!("--lines takes a line or a range like 10-14, not {lines:?}")));
+            };
+            CommentOn::Lines { path, start, end }
+        }
+        (None, None, Some(index)) => CommentOn::Entry { index },
+        _ => return Err(fail("comment on either --file with --lines, or --entry")),
+    };
+    let comment: CommentView = call(&Request::Comment {
+        thread: thread.into(),
+        on,
+        text: text.into(),
+        cwd: current_dir()?,
+    })?;
+    println!("added comment {} at {}", comment.id, render::comment_location(&comment.location));
+    Ok(())
+}
+
+pub fn comments(thread: &str, resolve: Option<&str>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    if let Some(comment) = resolve {
+        let resolved: CommentView = call(&Request::ResolveComment {
+            thread: thread.into(),
+            comment: comment.into(),
+            cwd: current_dir()?,
+        })?;
+        println!("resolved {}", resolved.id);
+        return Ok(());
+    }
+    let comments: Vec<CommentView> = call(&Request::Comments {
+        thread: thread.into(),
+        cwd: current_dir()?,
+    })?;
+    print!("{}", render::comments(&comments));
     Ok(())
 }
 

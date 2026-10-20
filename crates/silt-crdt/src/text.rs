@@ -428,6 +428,34 @@ impl TextDoc {
     }
 
     /// Where `anchor` is in the current text.
+    /// An anchor at `pos` in the text as of `version`.
+    pub fn anchor_at(&self, graph: &CausalGraph, version: &Frontier, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
+        let vv = graph.version_vector(version);
+        let len: usize = self.fragments.iter().map(|fragment| fragment.visible_len_at(&vv)).sum();
+        if pos > len {
+            return Err(TextError::AnchorOutOfBounds { pos, len });
+        }
+        let index = match bias {
+            Bias::Left if pos == 0 => return Ok(Anchor { char_id: None, bias }),
+            Bias::Left => pos - 1,
+            Bias::Right if pos == len => return Ok(Anchor { char_id: None, bias }),
+            Bias::Right => pos,
+        };
+        let mut seen = 0;
+        for fragment in self.fragments.iter() {
+            // The characters visible at a version are a prefix of a fragment.
+            let visible = fragment.visible_len_at(&vv);
+            if index < seen + visible {
+                return Ok(Anchor {
+                    char_id: Some(fragment.first_char().offset(run_len(index - seen))),
+                    bias,
+                });
+            }
+            seen += visible;
+        }
+        Err(TextError::AnchorOutOfBounds { pos, len })
+    }
+
     pub fn resolve(&self, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
         let Some(char_id) = anchor.char_id else {
             let pos = match anchor.bias {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
+use silt_crdt::{Anchor, InodeId, InodeKind, Parent, TextOp};
 use silt_types::{BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
@@ -68,6 +68,24 @@ pub enum Op {
     /// otherwise the approval of that merge request.
     Merge { from: ThreadId, mr: Option<DeltaId> },
     Mr(MrOp),
+    Comment(CommentOp),
+}
+
+/// A comment on a thread (ADR 0011), identified by its `Added` delta's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentOp {
+    /// `by` is the commenting user's name; deltas don't carry users.
+    Added { target: CommentTarget, text: String, by: String },
+    Resolved { comment: DeltaId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentTarget {
+    /// A conversation delta.
+    Message { delta: DeltaId },
+    /// Lines of a file: `start` before their first character and `end`
+    /// after their last, so the comment follows the code through edits.
+    Code { inode: InodeId, start: Anchor, end: Anchor },
 }
 
 /// A merge request's life (ADR 0010). It is identified by the id of its

@@ -169,3 +169,21 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn anchors_made_at_an_old_version_follow_their_character() {
+    let mut replica = TextReplica::new(A);
+    replica.insert(0, "line one\nline two\n").expect("insert");
+    let old = replica.frontier().clone();
+    replica.insert(0, "new first\n").expect("insert");
+    let at_old = replica
+        .doc()
+        .anchor_at(replica.graph(), &old, 9, Bias::Right)
+        .expect("anchor at the old version");
+    assert_eq!(at_old, replica.doc().anchor(19, Bias::Right).expect("same character now"));
+    assert_eq!(replica.doc().resolve(&at_old), Ok(resolved(19)));
+    assert!(matches!(
+        replica.doc().anchor_at(replica.graph(), &old, 99, Bias::Left),
+        Err(TextError::AnchorOutOfBounds { .. })
+    ));
+}

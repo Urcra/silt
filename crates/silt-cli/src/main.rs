@@ -108,6 +108,35 @@ enum Command {
         #[arg(long)]
         until: Option<String>,
     },
+    /// A thread's full history as numbered entries, across compactions and forks
+    History {
+        thread: String,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+    },
+    /// Comment on lines of a file or on a history entry of a thread
+    Comment {
+        thread: String,
+        /// A file of the thread, with --lines
+        #[arg(long, requires = "lines", conflicts_with = "entry")]
+        file: Option<String>,
+        /// A line or a range such as 10-14
+        #[arg(long)]
+        lines: Option<String>,
+        /// A history entry, numbered as `silt history` shows them
+        #[arg(long)]
+        entry: Option<usize>,
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+    /// List a thread's comments, or resolve one
+    Comments {
+        thread: String,
+        #[arg(long)]
+        resolve: Option<String>,
+    },
     /// Other threads changing a file or directory of this repository
     InFlight {
         #[arg(default_value = ".")]
@@ -285,6 +314,15 @@ fn main() -> Result<(), Exn<CliError>> {
             },
         ),
         Command::InFlight { path } => commands::in_flight(&path),
+        Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
+        Command::Comment {
+            thread,
+            file,
+            lines,
+            entry,
+            text,
+        } => commands::comment(&thread, file, lines.as_deref(), entry, &text.join(" ")),
+        Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
         Command::Server { command } => match command {
             ServerCommand::Run { listen, data } => commands::server_run(&listen, data),
             ServerCommand::Pair { data, user } => commands::server_pair(data, &user),

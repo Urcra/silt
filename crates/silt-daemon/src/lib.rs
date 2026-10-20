@@ -1,4 +1,5 @@
 pub mod client;
+mod comments;
 mod core;
 mod disk;
 mod forks;

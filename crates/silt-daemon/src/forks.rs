@@ -67,7 +67,13 @@ impl Core {
     }
 
     /// Appends a delta by this daemon on `thread` with the given parents.
-    async fn append_op(&mut self, family_id: FamilyId, thread: ThreadId, parents: Frontier, op: Op) -> Result<Delta, CoreError> {
+    pub(crate) async fn append_op(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        parents: Frontier,
+        op: Op,
+    ) -> Result<Delta, CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("caller loaded the family");
         let delta = family.delta(actor, thread, Author::User, crate::core::now_ms(), parents, op);

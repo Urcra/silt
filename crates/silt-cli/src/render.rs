@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
-use silt_daemon::protocol::{InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
+use silt_daemon::protocol::{
+    CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
 
 /// The last 12 hex digits: UUIDv7 ids share their leading time digits.
 fn short(id: &str) -> &str {
@@ -86,6 +87,54 @@ pub fn search(hits: &[SearchResult]) -> String {
             _ => String::new(),
         };
         let _ = writeln!(out, "{}  {who}{:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
+    }
+    out
+}
+
+pub fn history(page: &HistoryPage) -> String {
+    let mut out = format!("thread {}: {} entries\n", page.thread, page.total);
+    for entry in &page.entries {
+        let origin = match entry.origin.as_str() {
+            "own" => String::new(),
+            other => format!(" ({other} from {})", short(&entry.thread)),
+        };
+        let _ = writeln!(out, "[{}] {}{origin}: {}", entry.index, entry.kind, clip(entry.text.trim(), 200));
+    }
+    out
+}
+
+pub fn comment_location(location: &CommentLocation) -> String {
+    match location {
+        CommentLocation::Lines {
+            path,
+            start,
+            end,
+            outdated,
+        } => {
+            let lines = if start == end { format!("{start}") } else { format!("{start}-{end}") };
+            let note = if *outdated { " (outdated: the lines were deleted)" } else { "" };
+            format!("{path}:{lines}{note}")
+        }
+        CommentLocation::Entry { index, excerpt } => format!("entry {index} ({})", clip(excerpt, 60)),
+        CommentLocation::Unknown => "an unknown place".into(),
+    }
+}
+
+pub fn comments(comments: &[CommentView]) -> String {
+    let mut out = String::new();
+    if comments.is_empty() {
+        out.push_str("no comments\n");
+    }
+    for comment in comments {
+        let resolved = if comment.resolved { " [resolved]" } else { "" };
+        let _ = writeln!(
+            out,
+            "{}  {}  {}{resolved}\n    {}",
+            comment.id,
+            comment.by,
+            comment_location(&comment.location),
+            comment.text
+        );
     }
     out
 }

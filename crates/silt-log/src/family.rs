@@ -7,7 +7,7 @@ use silt_crdt::{
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
 
-use crate::delta::{Author, Content, Delta, MrOp, Op};
+use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op};
 
 /// Supplies the text of git blobs, which the projection needs the first
 /// time a file that came from git is edited.
@@ -106,6 +106,16 @@ pub enum HistorySource {
     /// From the thread a pull brought in; listed just before that pull. Not
     /// part of the thread's own agent session.
     Upstream,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment {
+    pub id: DeltaId,
+    pub target: CommentTarget,
+    pub text: String,
+    pub by: String,
+    pub time_ms: i64,
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +270,36 @@ impl Family {
             });
         }
         items
+    }
+
+    /// The comments on `thread`, oldest first.
+    pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
+        let mut comments: Vec<Comment> = Vec::new();
+        for delta in self.log.iter().filter(|delta| delta.thread == thread) {
+            match &delta.op {
+                Op::Comment(CommentOp::Added { target, text, by }) => comments.push(Comment {
+                    id: delta.span.first(),
+                    target: *target,
+                    text: text.clone(),
+                    by: by.clone(),
+                    time_ms: delta.time_ms,
+                    resolved: false,
+                }),
+                Op::Comment(CommentOp::Resolved { comment }) => {
+                    if let Some(found) = comments.iter_mut().find(|found| found.id == *comment) {
+                        found.resolved = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        comments
+    }
+
+    /// The file's text document, turning a git-lazy file into one first, as
+    /// a first edit would. Its characters get the same ids on every replica.
+    pub fn text_doc_or_base(&mut self, inode: InodeId, bases: &mut dyn BaseText) -> Result<&TextDoc, LogError> {
+        Ok(materialize(&mut self.files, inode, bases)?)
     }
 
     /// Every merge request in the family, oldest first.
@@ -422,7 +462,21 @@ impl Family {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => {}
+            Op::Comment(CommentOp::Added {
+                target: CommentTarget::Code { inode, .. },
+                ..
+            }) => {
+                if self.tree.kind(*inode).is_none() {
+                    return Err(LogError::NotAFile(*inode));
+                }
+            }
+            Op::Conv(_)
+            | Op::Git(_)
+            | Op::Lease { .. }
+            | Op::Fork { .. }
+            | Op::Merge { .. }
+            | Op::Mr(_)
+            | Op::Comment(_) => {}
         }
         Ok(false)
     }
@@ -497,7 +551,13 @@ impl Family {
                     state.executable_stamp = Stamp::from(id);
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => {}
+            Op::Conv(_)
+            | Op::Git(_)
+            | Op::Lease { .. }
+            | Op::Fork { .. }
+            | Op::Merge { .. }
+            | Op::Mr(_)
+            | Op::Comment(_) => {}
         }
         Ok(())
     }

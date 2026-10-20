@@ -230,6 +230,16 @@ impl Machine {
         output
     }
 
+    /// Output of a command that may fail for now, for polling.
+    pub fn try_stdout(&self, args: &[&str]) -> String {
+        let output = self.run(args);
+        if output.status.success() {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        } else {
+            String::new()
+        }
+    }
+
     pub fn stdout(&self, args: &[&str]) -> String {
         String::from_utf8_lossy(&self.silt(args).stdout).into_owned()
     }

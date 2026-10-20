@@ -296,6 +296,11 @@ impl Core {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_history(thread, &path)))
             }
             Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
+            Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
+            Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),
+            Request::ResolveComment { thread, comment, cwd } => {
+                to_response(self.resolve_comment(&thread, &comment, &cwd).await)
+            }
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }
@@ -1243,7 +1248,13 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) => None,
+        Op::Conv(_)
+        | Op::Git(_)
+        | Op::Lease { .. }
+        | Op::Fork { .. }
+        | Op::Merge { .. }
+        | Op::Mr(_)
+        | Op::Comment(_) => None,
     }
 }
 

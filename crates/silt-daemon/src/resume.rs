@@ -142,7 +142,7 @@ impl Core {
         }
     }
 
-    fn genesis_commit(&self, family: FamilyId) -> Result<Option<GitOid>, CoreError> {
+    pub(crate) fn genesis_commit(&self, family: FamilyId) -> Result<Option<GitOid>, CoreError> {
         Ok(self.local_log(family).iter().find_map(|delta| match &delta.op {
             Op::Git(GitOp::Genesis { commit, .. }) => Some(*commit),
             _ => None,
@@ -151,7 +151,7 @@ impl Core {
 
     /// Makes sure `commit` is in `repo`: from origin, else from the family's
     /// bundles.
-    async fn ensure_commit(&self, repo: &Repo, family: FamilyId, thread: ThreadId, commit: GitOid) -> Result<(), CoreError> {
+    pub(crate) async fn ensure_commit(&self, repo: &Repo, family: FamilyId, thread: ThreadId, commit: GitOid) -> Result<(), CoreError> {
         if repo.has_commit(commit) {
             return Ok(());
         }
@@ -185,7 +185,7 @@ impl Core {
 
     /// Turns a family known only from the server into a projection, reading
     /// git blobs from `repo`.
-    fn project_family(&mut self, family_id: FamilyId, repo: &Repo) -> Result<(), CoreError> {
+    pub(crate) fn project_family(&mut self, family_id: FamilyId, repo: &Repo) -> Result<(), CoreError> {
         let Some(deltas) = self.raw.remove(&family_id) else {
             return Ok(());
         };

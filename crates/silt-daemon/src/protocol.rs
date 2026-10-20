@@ -56,6 +56,16 @@ pub enum Request {
     FileHistory { thread: String, path: String },
     /// Other threads of the repository at `cwd` that changed `path`.
     InFlight { cwd: PathBuf, path: String },
+    /// Comments on a history entry or on lines of a file (ADR 0011).
+    /// `cwd` is a clone to read the thread's files from if needed.
+    Comment {
+        thread: String,
+        on: CommentOn,
+        text: String,
+        cwd: PathBuf,
+    },
+    Comments { thread: String, cwd: PathBuf },
+    ResolveComment { thread: String, comment: String, cwd: PathBuf },
     /// Sets the visibility of the project at `cwd`, or of `thread`'s family.
     SetVisibility {
         cwd: PathBuf,
@@ -270,4 +280,32 @@ pub struct InFlight {
     pub owner: String,
     pub files: Vec<String>,
     pub last_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "on", rename_all = "snake_case")]
+pub enum CommentOn {
+    /// A history entry, by its index.
+    Entry { index: usize },
+    /// Lines `start..=end` (1-based) of a file as the thread has it now.
+    Lines { path: String, start: usize, end: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "at", rename_all = "snake_case")]
+pub enum CommentLocation {
+    Entry { index: usize, excerpt: String },
+    /// Where the commented lines are now; `outdated` once they're deleted.
+    Lines { path: String, start: usize, end: usize, outdated: bool },
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentView {
+    pub id: String,
+    pub by: String,
+    pub time_ms: i64,
+    pub text: String,
+    pub resolved: bool,
+    pub location: CommentLocation,
 }
