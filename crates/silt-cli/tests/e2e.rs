@@ -34,6 +34,8 @@ printf 'fn farewell() {}\n' >> src/main.rs
 hook PostToolUse
 printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"edited","is_error":false}]}}' >> "$transcript"
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: farewell added."}]}}' >> "$transcript"
+printf '%s\n' '{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}' >> "$transcript"
+printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: farewell was added to main."}}' >> "$transcript"
 hook Stop
 "#;
 
@@ -155,6 +157,8 @@ fn records_a_session_with_attributed_edits_and_survives_a_restart() {
     assert!(show.contains("> Please add a farewell line to main"), "{show}");
     assert!(show.contains("⚙ Edit"), "{show}");
     assert!(show.contains("Done: farewell added."), "{show}");
+    let compacted = show.find("context compacted: Summary: farewell was added").expect("compaction is shown");
+    assert!(show.find("> Please add a farewell line").expect("prompt") < compacted, "history before compaction stays");
     assert!(env.stdout(&["diff", &thread]).contains("+fn farewell() {}"));
     assert!(env.stdout(&["diff", &thread, "--turn", "1"]).contains("+fn farewell() {}"));
     assert!(env.stdout(&["search", "farewell"]).contains(&thread));
@@ -189,5 +193,24 @@ fn isolated_sessions_work_in_a_managed_checkout() {
     );
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").contains("fn farewell"));
     assert_eq!(fs::read_to_string(env.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+}
+
+#[test]
+fn track_attaches_to_a_session_started_without_silt() {
+    let env = Env::new();
+    let output = Command::new(&env.fake)
+        .args(["--session-id", "11111111-2222-4333-8444-555555555555"])
+        .current_dir(&env.repo)
+        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+        .env("SILT_HOME", &env.silt_home)
+        .env("SILT_HOOK", "true")
+        .output()
+        .expect("fake claude runs");
+    assert!(output.status.success());
+
+    assert!(env.stdout(&["track"]).contains("tracking session"));
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["show", &thread]).contains("> Please add a farewell line to main")));
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
 }
