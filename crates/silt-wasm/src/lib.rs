@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use silt_checkout::text_edits;
 use silt_log::{Author, Delta, Family, FileView, LogError, Op};
-use silt_types::{ActorId, GitOid, ThreadId};
+use silt_types::{ActorId, Frontier, GitOid, ThreadId};
 use wasm_bindgen::prelude::*;
 
 /// The replica's logic, free of JavaScript types so it runs in tests.
@@ -20,6 +20,10 @@ pub struct Core {
     /// Deltas received but not applied yet, waiting for a git base text.
     pending: Vec<Delta>,
     received: usize,
+    /// What the editor shows of each file and the version it is of. Edits
+    /// are made against it, so changes that arrived since are merged, not
+    /// undone.
+    shown: HashMap<String, (Frontier, String)>,
 }
 
 impl Core {
@@ -31,6 +35,7 @@ impl Core {
             thread: ThreadId::from_str(thread).map_err(|error| error.to_string())?,
             pending: Vec::new(),
             received: 0,
+            shown: HashMap::new(),
         })
     }
 
@@ -92,7 +97,16 @@ impl Core {
         format!("{:?}", self.family.thread_head(self.thread))
     }
 
-    /// Makes `path` hold `text` as edits by this replica's actor, and
+    /// The file's current text, now shown in the editor.
+    pub fn show(&mut self, path: &str) -> Option<String> {
+        let text = self.text(path)?;
+        self.shown
+            .insert(path.to_owned(), (self.family.thread_head(self.thread), text.clone()));
+        Some(text)
+    }
+
+    /// The editor turned what it showed of `path` into `text`: makes those
+    /// edits, as this replica's actor, at the version it showed, and
     /// returns them.
     pub fn edit(&mut self, path: &str, text: &str, time_ms: i64) -> Result<Vec<Delta>, String> {
         let inode = *self
@@ -101,25 +115,25 @@ impl Core {
             .paths()
             .get(path)
             .ok_or_else(|| format!("{path} is not a file of this thread"))?;
-        let old = self.text(path).ok_or_else(|| format!("{path} has no text to edit"))?;
+        let (mut parents, old) = match self.shown.get(path) {
+            Some(shown) => shown.clone(),
+            None => (self.family.thread_head(self.thread), self.text(path).ok_or_else(|| format!("{path} has no text to edit"))?),
+        };
         self.family
             .text_doc_or_base(inode, &mut self.bases)
             .map_err(|error| error.to_string())?;
         let mut made = Vec::new();
         for op in text_edits(&old, text) {
-            let delta = self.family.delta(
-                self.actor,
-                self.thread,
-                Author::User,
-                time_ms,
-                self.family.thread_head(self.thread),
-                Op::Text { inode, op },
-            );
+            let delta = self
+                .family
+                .delta(self.actor, self.thread, Author::User, time_ms, parents.clone(), Op::Text { inode, op });
             self.family
                 .apply(delta.clone(), &mut self.bases)
                 .map_err(|error| error.to_string())?;
+            parents = Frontier::single(delta.span.last());
             made.push(delta);
         }
+        self.shown.insert(path.to_owned(), (parents, text.to_owned()));
         Ok(made)
     }
 }
@@ -175,13 +189,19 @@ impl Replica {
         self.0.text(path)
     }
 
+    /// The file's text as it is now, to show in the editor; later edits are
+    /// made against it.
+    pub fn show(&mut self, path: &str) -> Option<String> {
+        self.0.show(path)
+    }
+
     /// The thread's head, to tell whether anything changed.
     pub fn version(&self) -> String {
         self.0.version()
     }
 
-    /// Makes `path` hold `text`; returns the new deltas to send to the
-    /// daemon.
+    /// The editor's text of `path` is now `text`; returns the deltas that
+    /// make it so, to send to the daemon.
     pub fn edit(&mut self, path: &str, text: &str, time_ms: f64) -> Result<Vec<u8>, JsError> {
         #[expect(clippy::cast_possible_truncation, reason = "milliseconds since the epoch fit in an i64")]
         let made = self.0.edit(path, text, time_ms as i64).map_err(js)?;
@@ -256,6 +276,24 @@ mod tests {
         assert_eq!(reader.receive(1, edits), Ok(Some(oid)), "the edit needs the file's git text first");
         assert_eq!(reader.add_base(oid, "x\n".into()), Ok(None));
         assert_eq!(reader.text("main.rs").as_deref(), Some("y\n"));
+    }
+
+    #[test]
+    fn an_edit_keeps_changes_that_arrived_after_the_editor_showed_the_file() {
+        let (log, oid) = daemon_log();
+        let mut other = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
+        other.receive(0, log.clone()).expect("receives");
+        other.add_base(oid, "x\n".into()).expect("base");
+        let remote = other.edit("main.rs", "remote\nx\n", 1).expect("edits");
+
+        let mut here = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
+        here.receive(0, log).expect("receives");
+        here.add_base(oid, "x\n".into()).expect("base");
+        assert_eq!(here.show("main.rs").as_deref(), Some("x\n"));
+        here.receive(1, remote).expect("someone else's edit arrives");
+        here.edit("main.rs", "x\nlocal\n", 2).expect("the editor, still showing x, types a line");
+        assert_eq!(here.text("main.rs").as_deref(), Some("remote\nx\nlocal\n"));
+        assert_eq!(here.show("main.rs").as_deref(), Some("remote\nx\nlocal\n"));
     }
 
     #[test]

@@ -128,7 +128,7 @@ function FileEditor({
 
   useEffect(() => {
     let current = true
-    void replica.text(path).then((text) => {
+    void replica.show(path).then((text) => {
       if (!current || !host.current) return
       view.current = new EditorView({
         doc: text ?? '',
@@ -163,12 +163,20 @@ function FileEditor({
     void (async () => {
       await flush()
       await replica.sync()
-      const text = await replica.text(path)
-      if (view.current && text !== undefined) {
+      await replica.prepare(path)
+      if (!view.current) return
+      // From here on nothing awaits, so no keystroke can land between taking
+      // the editor's text and replacing it with the merged one.
+      if (pending.current) clearTimeout(pending.current)
+      pending.current = null
+      const sent = replica.edit(path, view.current.state.doc.toString())
+      const text = replica.showNow(path)
+      if (text !== undefined) {
         applying.current = true
         replaceText(view.current, text)
         applying.current = false
       }
+      await sent.catch((e: Error) => setError(e.message))
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changes])

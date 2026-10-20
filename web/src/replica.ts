@@ -62,14 +62,33 @@ export class LiveReplica {
     return this.replica.paths().split('\n').filter(Boolean)
   }
 
-  async text(path: string): Promise<string | undefined> {
+  /** Fetches the git text the file still needs, so `showNow` can read it. */
+  async prepare(path: string): Promise<void> {
     await this.fill(this.replica.needed_base(path))
+  }
+
+  async text(path: string): Promise<string | undefined> {
+    await this.prepare(path)
     return this.replica.text(path)
   }
 
-  /** Makes the file hold `text` and sends the edits to the daemon. */
-  async edit(path: string, text: string): Promise<void> {
+  /** The file's text, to show in the editor: later edits are made against it. */
+  async show(path: string): Promise<string | undefined> {
+    await this.prepare(path)
+    return this.showNow(path)
+  }
+
+  /** `show` for a prepared file, at once. */
+  showNow(path: string): string | undefined {
+    return this.replica.show(path)
+  }
+
+  /**
+   * The editor's text of the file is now `text`. The edits are made at once,
+   * against what the editor was shown; sending them to the daemon follows.
+   */
+  edit(path: string, text: string): Promise<void> {
     const made = this.replica.edit(path, text, Date.now())
-    if (made.length > 1) await api.sendDeltas(this.thread, toBase64(made))
+    return made.length > 1 ? api.sendDeltas(this.thread, toBase64(made)).then(() => undefined) : Promise.resolve()
   }
 }
