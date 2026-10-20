@@ -205,18 +205,15 @@ impl Bridge {
         inodes: impl IntoIterator<Item = InodeId>,
     ) -> Vec<DiskAction> {
         let view = family.thread_view(self.thread);
-        let paths = view.paths();
+        // Paths as listed, with conflict names, rather than built from each
+        // file's own name.
+        let listed: HashMap<InodeId, String> = view.paths().into_iter().map(|(path, inode)| (inode, path)).collect();
         let by_inode: HashMap<InodeId, &String> =
             self.entries.iter().map(|(path, entry)| (entry.inode, path)).collect();
         let version = view.version().clone();
         let mut actions = Vec::new();
         for inode in inodes {
-            let live_path = view
-                .tree()
-                .is_live(inode)
-                .then(|| view.tree().path_of(inode))
-                .flatten()
-                .filter(|path| paths.get(path) == Some(&inode));
+            let live_path = listed.get(&inode).cloned();
             let moved_from = by_inode
                 .get(&inode)
                 .filter(|old| Some(**old) != live_path.as_ref())

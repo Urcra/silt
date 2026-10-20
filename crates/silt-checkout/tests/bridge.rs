@@ -361,6 +361,34 @@ fn a_binary_git_file_that_becomes_text_is_replaced() {
 }
 
 #[test]
+fn both_files_of_one_name_reach_the_disk() {
+    let mut family = imported_family();
+    let head = family.thread_head(THREAD);
+    let same = |actor: u128| {
+        family.delta(
+            ActorId(actor),
+            THREAD,
+            Author::User,
+            0,
+            head.clone(),
+            silt_log::Op::Create {
+                kind: silt_crdt::InodeKind::File,
+                parent: silt_crdt::Parent::Root,
+                name: "notes.md".into(),
+                content: silt_log::Content::Empty,
+                executable: false,
+            },
+        )
+    };
+    let (first, second) = (same(7), same(8));
+    family.apply(first, &mut bases()).expect("applies");
+    family.apply(second, &mut bases()).expect("applies");
+    let checkout = Checkout::new(1, &family);
+    let notes: Vec<&String> = checkout.disk.keys().filter(|path| path.starts_with("notes.md")).collect();
+    assert_eq!(notes.len(), 2, "the one that lost the name is written under its conflict name: {notes:?}");
+}
+
+#[test]
 fn a_file_never_written_here_is_missing_not_deleted() {
     let mut family = imported_family();
     let mut checkout = Checkout::new(1, &family);
