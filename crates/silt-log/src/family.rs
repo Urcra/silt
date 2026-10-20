@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, TextDoc, TextError, TextEvent,
-    TreeError, TreeEvent, TreeOp,
+    TreeError, TreeEvent, TreeOp, VersionVector,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
 
@@ -78,8 +78,43 @@ struct FileState {
     /// The delta that set the current content; text edits only apply to the
     /// content they were made against.
     content_source: DeltaId,
+    /// The other contents the file was given, replaced by `content` or
+    /// set concurrently with it, for views of threads that haven't seen
+    /// `content_source`.
+    earlier: Vec<(DeltaId, FileContent)>,
     executable: bool,
     executable_stamp: Stamp,
+    /// Every executable bit it was given, for the same views.
+    executable_changes: Vec<(DeltaId, bool)>,
+}
+
+impl FileState {
+    fn new(content: FileContent, source: DeltaId, executable: bool) -> Self {
+        Self {
+            content,
+            content_source: source,
+            earlier: Vec::new(),
+            executable,
+            executable_stamp: Stamp::from(source),
+            executable_changes: vec![(source, executable)],
+        }
+    }
+
+    /// The content as of a version: the latest one set within it.
+    fn content_at(&self, contains: impl Fn(DeltaId) -> bool) -> Option<(DeltaId, &FileContent)> {
+        std::iter::once((self.content_source, &self.content))
+            .chain(self.earlier.iter().map(|(source, content)| (*source, content)))
+            .filter(|(source, _)| contains(*source))
+            .max_by_key(|(source, _)| Stamp::from(*source))
+    }
+
+    fn executable_at(&self, contains: impl Fn(DeltaId) -> bool) -> bool {
+        self.executable_changes
+            .iter()
+            .filter(|(source, _)| contains(*source))
+            .max_by_key(|(source, _)| Stamp::from(*source))
+            .is_some_and(|(_, executable)| *executable)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -158,7 +193,8 @@ pub struct ThreadView<'a> {
     family: &'a Family,
     version: Frontier,
     tree: Cow<'a, FileTree>,
-    whole: bool,
+    /// What the thread has seen, unless it has seen everything.
+    seen: Option<VersionVector>,
 }
 
 impl ThreadView<'_> {
@@ -175,21 +211,28 @@ impl ThreadView<'_> {
     }
 
     pub fn file(&self, inode: InodeId) -> Option<FileView> {
-        if self.whole {
+        let Some(seen) = &self.seen else {
             return self.family.file(inode);
-        }
+        };
         self.tree.kind(inode)?;
-        match self.family.file(inode)? {
-            FileView::Text(_) => {
-                let doc = self.family.text_doc(inode)?;
-                Some(FileView::Text(doc.text_at(&self.family.graph, &self.version)))
-            }
-            other => Some(other),
-        }
+        let state = self.family.files.get(&inode)?;
+        let (_, content) = state.content_at(|id| seen.contains(id))?;
+        Some(match content {
+            FileContent::Text(doc) => FileView::Text(doc.text_at(&self.family.graph, &self.version)),
+            FileContent::GitText(oid) => FileView::GitText(*oid),
+            FileContent::Blob(hash) => FileView::Blob(*hash),
+        })
     }
 
     pub fn is_executable(&self, inode: InodeId) -> bool {
-        self.family.is_executable(inode)
+        match &self.seen {
+            None => self.family.is_executable(inode),
+            Some(seen) => self
+                .family
+                .files
+                .get(&inode)
+                .is_some_and(|state| state.executable_at(|id| seen.contains(id))),
+        }
     }
 }
 
@@ -425,17 +468,16 @@ impl Family {
     pub fn thread_view(&self, thread: ThreadId) -> ThreadView<'_> {
         let version = self.thread_head(thread);
         let whole = self.threads.len() <= 1 || version == *self.graph.frontier();
-        let tree = if whole {
-            Cow::Borrowed(&self.tree)
-        } else {
-            let vv = self.graph.version_vector(&version);
-            Cow::Owned(self.tree.at(|id| vv.contains(id)))
+        let seen = (!whole).then(|| self.graph.version_vector(&version));
+        let tree = match &seen {
+            None => Cow::Borrowed(&self.tree),
+            Some(seen) => Cow::Owned(self.tree.at(|id| seen.contains(id))),
         };
         ThreadView {
             family: self,
             version,
             tree,
-            whole,
+            seen,
         }
     }
 
@@ -567,15 +609,7 @@ impl Family {
             } => {
                 self.tree.apply(&tree_event(id, &delta.op))?;
                 if *kind != InodeKind::Dir {
-                    self.files.insert(
-                        InodeId(id),
-                        FileState {
-                            content: file_content(*content, id),
-                            content_source: id,
-                            executable: *executable,
-                            executable_stamp: Stamp::from(id),
-                        },
-                    );
+                    self.files.insert(InodeId(id), FileState::new(file_content(*content, id), id, *executable));
                 }
             }
             Op::Move { .. } | Op::Delete { .. } => {
@@ -598,13 +632,18 @@ impl Family {
             }
             Op::SetContent { inode, content } => {
                 let state = self.files.get_mut(inode).expect("checked");
+                let new = file_content(*content, id);
                 if Stamp::from(id) > Stamp::from(state.content_source) {
-                    state.content = file_content(*content, id);
+                    let old = std::mem::replace(&mut state.content, new);
+                    state.earlier.push((state.content_source, old));
                     state.content_source = id;
+                } else {
+                    state.earlier.push((id, new));
                 }
             }
             Op::SetExecutable { inode, executable } => {
                 let state = self.files.get_mut(inode).expect("checked");
+                state.executable_changes.push((id, *executable));
                 if Stamp::from(id) > state.executable_stamp {
                     state.executable = *executable;
                     state.executable_stamp = Stamp::from(id);

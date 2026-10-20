@@ -377,6 +377,24 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
 }
 
 #[test]
+fn a_forks_new_content_and_mode_stay_in_the_fork() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = family.thread_head(FORK);
+    let replaced = on_thread(&mut family, CHECKOUT_B, FORK, head, Op::SetContent { inode: main, content: Content::Blob(BlobHash([7; 32])) });
+    on_thread(&mut family, CHECKOUT_B, FORK, Frontier::single(replaced.span.last()), Op::SetExecutable { inode: main, executable: true });
+
+    let source = family.thread_view(THREAD);
+    assert_eq!(source.file(main), Some(FileView::GitText(oid(1))), "the source keeps its content");
+    assert!(!source.is_executable(main), "and its mode");
+    let fork = family.thread_view(FORK);
+    assert_eq!(fork.file(main), Some(FileView::Blob(BlobHash([7; 32]))));
+    assert!(fork.is_executable(main));
+}
+
+#[test]
 fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
     use silt_log::{CommentOp, CommentTarget, MrOp};
     let mut family = Family::new();
