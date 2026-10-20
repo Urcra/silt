@@ -668,14 +668,8 @@ impl Core {
                 version,
                 moved_from,
             } => {
-                let current = disk::read(&root, &path)?;
-                let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
-                if let Some(current) = &current
-                    && recorded != Some(current.hash)
-                    && !(force && recorded.is_none())
-                {
-                    return Ok(Some(path));
-                }
+                // The bytes come first: fetching them may wait, and the disk
+                // must be checked after any wait, right before writing.
                 let bytes = match content {
                     DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
                     DiskContent::Blob(hash) => self.blob(hash).await?,
@@ -684,9 +678,18 @@ impl Core {
                         repo.filters()?.to_worktree(&path, &repo.blob(oid)?)?
                     }
                 };
+                let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
+                let unchanged = |current: Option<[u8; 32]>| current.is_none() || current == recorded || (force && recorded.is_none());
+                let current = disk::read(&root, &path)?;
+                if !unchanged(current.as_ref().map(|current| current.hash)) {
+                    return Ok(Some(path));
+                }
                 let written = match current {
                     Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
-                    _ => disk::write(&root, &path, &bytes, executable)?,
+                    _ => match disk::replace(&root, &path, &bytes, executable, unchanged)? {
+                        Some(written) => written,
+                        None => return Ok(Some(path)),
+                    },
                 };
                 let entry = DiskEntry {
                     inode,

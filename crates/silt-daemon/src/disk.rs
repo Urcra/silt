@@ -90,7 +90,17 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
 }
 
 /// Writes atomically (temporary file, then rename), creating directories.
-pub fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Result<RawFile> {
+/// Writes the file unless, checked right before the new content takes its
+/// place, `unchanged` says someone changed it meanwhile (it gets the
+/// current content's hash, `None` if there is no file). Returns `None` when
+/// it left the file alone.
+pub fn replace(
+    root: &Path,
+    path: &str,
+    bytes: &[u8],
+    executable: bool,
+    unchanged: impl FnOnce(Option<[u8; 32]>) -> bool,
+) -> io::Result<Option<RawFile>> {
     let full = inside(root, path, true)?;
     let dir = full.parent().unwrap_or(root);
     let file_name = full.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -100,14 +110,23 @@ pub fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Res
     let mode = permissions.mode();
     permissions.set_mode(if executable { mode | 0o111 } else { mode & !0o111 });
     fs::set_permissions(&temporary, permissions)?;
+    let current = match fs::read(&full) {
+        Ok(current) => Some(*blake3::hash(&current).as_bytes()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if !unchanged(current) {
+        fs::remove_file(&temporary)?;
+        return Ok(None);
+    }
     fs::rename(&temporary, &full)?;
     let metadata = fs::metadata(&full)?;
-    Ok(RawFile {
+    Ok(Some(RawFile {
         hash: *blake3::hash(bytes).as_bytes(),
         mtime_ns: mtime_ns(&metadata),
         executable,
         bytes: bytes.to_vec(),
-    })
+    }))
 }
 
 pub fn remove(root: &Path, path: &str) -> io::Result<()> {
@@ -133,6 +152,21 @@ fn mtime_ns(metadata: &fs::Metadata) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Result<RawFile> {
+        Ok(replace(root, path, bytes, executable, |_| true)?.expect("an unconditional write happens"))
+    }
+
+    #[test]
+    fn a_file_changed_meanwhile_is_left_alone() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = write(dir.path(), "a.txt", b"recorded\n", false).expect("writes");
+        std::fs::write(dir.path().join("a.txt"), "edited meanwhile\n").expect("edits");
+        let replaced = replace(dir.path(), "a.txt", b"from the thread\n", false, |current| current == Some(first.hash)).expect("checks");
+        assert!(replaced.is_none());
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).expect("reads"), "edited meanwhile\n");
+        assert!(!dir.path().join(".a.txt.silt-tmp").exists(), "the new content is thrown away");
+    }
 
     #[test]
     fn write_then_read_round_trips_with_mode() {
