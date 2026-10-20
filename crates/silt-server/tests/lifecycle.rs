@@ -220,6 +220,27 @@ async fn nobody_builds_on_history_they_cannot_read() {
 }
 
 #[tokio::test]
+async fn a_deleted_private_thread_stays_hidden() {
+    let (_data, alice, bob) = two_people().await;
+    let mut family = Family::new();
+    alice.register(MAIN).await;
+    alice.push(&[delta(&mut family, MAIN, file("shared"))]).await;
+    bob.register(FORK).await;
+    let private = silt_proto::VisibilityRequest {
+        repo: None,
+        thread: Some(FORK),
+        visibility: silt_proto::Visibility::Private,
+    };
+    let set = bob.request(reqwest::Method::PUT, "/v1/visibility").json(&private).send().await.expect("sends");
+    assert_eq!(set.status(), StatusCode::NO_CONTENT);
+    bob.push(&[delta(&mut family, FORK, file("bobs secret"))]).await;
+    assert!(!alice.pulled().await.contains(&FORK));
+
+    assert_eq!(bob.status(reqwest::Method::POST, &format!("/v1/threads/{FORK}/delete")).await, StatusCode::NO_CONTENT);
+    assert!(!alice.pulled().await.contains(&FORK), "the family's owner doesn't get the deleted private thread");
+}
+
+#[tokio::test]
 async fn a_repository_is_not_claimed_by_someone_without_threads_in_it() {
     let (_data, alice, bob) = two_people().await;
     let squat = silt_proto::VisibilityRequest {

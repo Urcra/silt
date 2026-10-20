@@ -140,7 +140,15 @@ impl Viewer {
                 .iter()
                 .map(|row| id_from(row.get("id")))
                 .collect(),
-            known_threads: threads.keys().copied().collect(),
+            // Deleted threads are known too: an unknown thread counts as its
+            // family owner's, which would hand them someone's deleted
+            // private thread.
+            known_threads: sqlx::query("SELECT id FROM threads")
+                .fetch_all(db)
+                .await?
+                .iter()
+                .map(|row| ThreadId(id_from(row.get("id"))))
+                .collect(),
             ..Self::default()
         };
         for (id, row) in &threads {
