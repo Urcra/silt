@@ -33,6 +33,10 @@ impl Core {
             )));
         }
 
+        if here && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
+            return Err(CoreError::Invalid("--here needs a clean working tree".into()));
+        }
+
         self.catch_up(record.family).await?;
         let base = self.genesis_commit(record.family)?;
         if let Some(base) = base {
@@ -48,10 +52,6 @@ impl Core {
         self.take_lease(thread).await?;
 
         let checkout_path = if here {
-            let status = repo.git(&["status", "--porcelain"], None)?;
-            if !status.is_empty() {
-                return Err(CoreError::Invalid("--here needs a clean working tree".into()));
-            }
             if let Some(base) = base {
                 repo.git(&["checkout", "-q", "--detach", &base.to_string()], None)?;
             }

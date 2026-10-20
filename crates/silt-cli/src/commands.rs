@@ -193,6 +193,12 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
             if let Some(error) = status.sync_error {
                 println!("last sync error: {error}");
             }
+            for thread in &status.diverged {
+                println!(
+                    "thread {} differs from the server's copy (was Silt's data here restored from a backup?) and no longer syncs from here",
+                    short(thread)
+                );
+            }
         }
         None => println!("not connected to a server; use `silt auth login`"),
     }

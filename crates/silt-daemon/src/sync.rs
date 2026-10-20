@@ -120,7 +120,7 @@ impl Core {
                     }
                 }
                 Effect::Diverged(id) => {
-                    warn!(%id, %family, "a delta collides with a different one on the server");
+                    warn!(%id, %family, "a delta collides with a different one on the server; no longer pushing the family");
                 }
             }
         }

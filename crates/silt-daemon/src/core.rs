@@ -259,6 +259,12 @@ impl Core {
                 device: self.remote.as_ref().map(|remote| remote.config.device.to_string()),
                 sync_error: self.sync_error.clone(),
                 threads: self.threads.len(),
+                diverged: self
+                    .threads
+                    .values()
+                    .filter(|thread| self.syncs.get(&thread.family).is_some_and(|sync| sync.diverged().is_some()))
+                    .map(|thread| thread.id.to_string())
+                    .collect(),
             }),
             Request::Resume { thread, cwd, here } => to_response(self.resume(&thread, &cwd, here).await),
             Request::Shutdown => Response::ok("shutting down"),

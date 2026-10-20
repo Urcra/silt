@@ -103,6 +103,9 @@ pub struct DaemonStatus {
     pub device: Option<String>,
     pub sync_error: Option<String>,
     pub threads: usize,
+    /// Threads whose history here differs from the server's, so they no
+    /// longer push.
+    pub diverged: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

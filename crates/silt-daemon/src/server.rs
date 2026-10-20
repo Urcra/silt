@@ -6,6 +6,7 @@ use std::time::Duration;
 use silt_store::Store;
 use silt_types::ActorId;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
@@ -14,6 +15,7 @@ use crate::core::{Core, CoreError, Event};
 use crate::protocol::{Request, Response};
 
 const TAIL_INTERVAL: Duration = Duration::from_millis(300);
+const SHUTDOWN_REPLY_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -43,9 +45,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         source,
     })?;
     let accept_events = events.clone();
+    let (answered, mut answered_rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(serve(stream, accept_events.clone()));
+            tokio::spawn(serve(stream, accept_events.clone(), answered.clone()));
         }
     });
     let tick_events = events.clone();
@@ -63,8 +66,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         match event {
             Event::Request(Request::Shutdown, reply) => {
                 core.tick().await;
+                let _ = fs::remove_file(socket);
                 let _ = reply.send(Response::ok("shutting down"));
-                break;
+                let _ = tokio::time::timeout(SHUTDOWN_REPLY_WAIT, answered_rx.recv()).await;
+                return Ok(());
             }
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths } => core.changed(checkout, paths).await,
@@ -89,11 +94,15 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     Ok(())
 }
 
-async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>) {
+/// Serves one connection. `answered` hears when a shutdown request has been
+/// answered, since the daemon exits, and drops this task, right after.
+async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let response = match serde_json::from_str::<Request>(&line) {
+        let request = serde_json::from_str::<Request>(&line);
+        let shutdown = matches!(request, Ok(Request::Shutdown));
+        let response = match request {
             Ok(request) => {
                 let (reply, response) = oneshot::channel();
                 if events.send(Event::Request(request, reply)).is_err() {
@@ -103,15 +112,22 @@ async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>) {
             }
             Err(error) => Response::error(format!("invalid request: {error}")),
         };
-        let Ok(mut encoded) = serde_json::to_vec(&response) else {
-            break;
-        };
-        encoded.push(b'\n');
-        if let Err(error) = write.write_all(&encoded).await {
+        let written = write_response(&mut write, &response).await;
+        if shutdown {
+            let _ = answered.send(());
+        }
+        if let Err(error) = written {
             warn!(%error, "client went away");
             break;
         }
     }
+}
+
+async fn write_response(write: &mut OwnedWriteHalf, response: &Response) -> io::Result<()> {
+    let mut encoded = serde_json::to_vec(response)?;
+    encoded.push(b'\n');
+    write.write_all(&encoded).await?;
+    write.flush().await
 }
 
 /// This daemon's actor, kept across restarts so its deltas stay one chain.

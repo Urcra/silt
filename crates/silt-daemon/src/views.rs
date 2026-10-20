@@ -31,7 +31,10 @@ impl Core {
                     _ => None,
                 });
                 let checked_out = self.checkouts.values().any(|checkout| checkout.record.thread == record.id);
-                let location = if lease.is_some_and(|holder| Some(holder) != device) {
+                let diverged = self.syncs.get(&record.family).is_some_and(|sync| sync.diverged().is_some());
+                let location = if diverged {
+                    "diverged"
+                } else if lease.is_some_and(|holder| Some(holder) != device) {
                     "moved"
                 } else if checked_out {
                     "here"

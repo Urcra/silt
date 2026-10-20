@@ -52,6 +52,9 @@ pub struct ClientSync {
     last_pulled: Option<DeltaId>,
     push_in_flight: Option<Push>,
     pull_in_flight: Option<Pull>,
+    /// Set once the server holds a different delta under one of ours. Later
+    /// local deltas build on it, so pushing them could only fail.
+    diverged: Option<DeltaId>,
 }
 
 impl ClientSync {
@@ -81,9 +84,13 @@ impl ClientSync {
         self.last_pulled
     }
 
+    pub fn diverged(&self) -> Option<DeltaId> {
+        self.diverged
+    }
+
     /// The next push, given how many deltas the local log has.
     pub fn next_push(&mut self, local_len: u64) -> Option<Push> {
-        if self.push_in_flight.is_some() || self.pushed >= local_len {
+        if self.push_in_flight.is_some() || self.diverged.is_some() || self.pushed >= local_len {
             return None;
         }
         let push = Push {
@@ -127,9 +134,7 @@ impl ClientSync {
                 Vec::new()
             }
             Outcome::Conflict(id) => {
-                if push.from <= self.pushed {
-                    self.pushed = self.pushed.max(push.to);
-                }
+                self.diverged = Some(id);
                 vec![Effect::Diverged(id)]
             }
             Outcome::Failed | Outcome::Pulled(_) => Vec::new(),
@@ -195,5 +200,23 @@ impl ClientSync {
         self.pushed = 0;
         self.pulled = 0;
         self.last_pulled = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_types::{ActorId, Lamport};
+
+    use super::*;
+
+    #[test]
+    fn a_conflict_stops_pushing_but_not_pulling() {
+        let mut sync = ClientSync::default();
+        assert_eq!(sync.next_push(3), Some(Push { from: 0, to: 3 }));
+        let id = DeltaId::new(ActorId(1), Lamport(0));
+        assert_eq!(sync.on_push(Some(7), Outcome::Conflict(id)), vec![Effect::Diverged(id)]);
+        assert_eq!(sync.diverged(), Some(id));
+        assert_eq!(sync.next_push(4), None);
+        assert!(sync.next_pull().is_some());
     }
 }
