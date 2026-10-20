@@ -25,6 +25,7 @@ export class LiveReplica {
   writable = false
   private readonly thread: string
   private readonly replica: Replica
+  private syncing: Promise<void> = Promise.resolve()
 
   private constructor(thread: string, replica: Replica) {
     this.thread = thread
@@ -39,11 +40,18 @@ export class LiveReplica {
     return live
   }
 
-  /** Takes in whatever the daemon has that this replica hasn't. */
-  async sync(): Promise<void> {
-    const reply = await api.replica(this.thread, this.replica.received())
+  /** Takes in whatever the daemon has that this replica hasn't, one sync at a time. */
+  sync(): Promise<void> {
+    const next = this.syncing.then(() => this.syncOnce())
+    this.syncing = next.catch(() => undefined)
+    return next
+  }
+
+  private async syncOnce(): Promise<void> {
+    const after = this.replica.received()
+    const reply = await api.replica(this.thread, after)
     this.writable = reply.writable
-    await this.fill(this.replica.receive(fromBase64(reply.deltas)))
+    await this.fill(this.replica.receive(after, fromBase64(reply.deltas)))
   }
 
   private async fill(needed: string | undefined): Promise<void> {

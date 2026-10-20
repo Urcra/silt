@@ -34,9 +34,16 @@ impl Core {
         })
     }
 
-    pub fn receive(&mut self, deltas: Vec<Delta>) -> Result<Option<GitOid>, String> {
-        self.received += deltas.len();
-        self.pending.extend(deltas);
+    /// Takes the daemon's deltas from position `after` on. Ones already
+    /// received, as when two syncs overlap, are skipped; a batch that would
+    /// leave a gap is refused.
+    pub fn receive(&mut self, after: usize, deltas: Vec<Delta>) -> Result<Option<GitOid>, String> {
+        if after > self.received {
+            return Err(format!("deltas from {after} on can't follow the {} received", self.received));
+        }
+        let fresh: Vec<Delta> = deltas.into_iter().skip(self.received - after).collect();
+        self.received += fresh.len();
+        self.pending.extend(fresh);
         self.apply_pending()
     }
 
@@ -45,14 +52,15 @@ impl Core {
         self.apply_pending()
     }
 
+    /// A delta that can't apply is dropped, as the daemon does (ADR 0016);
+    /// one waiting for a git base stays first until the text arrives.
     fn apply_pending(&mut self) -> Result<Option<GitOid>, String> {
         while let Some(delta) = self.pending.first().cloned() {
             match self.family.apply(delta, &mut self.bases) {
-                Ok(_) => {
+                Err(LogError::MissingBase(oid)) => return Ok(Some(oid)),
+                Ok(_) | Err(_) => {
                     self.pending.remove(0);
                 }
-                Err(LogError::MissingBase(oid)) => return Ok(Some(oid)),
-                Err(other) => return Err(other.to_string()),
             }
         }
         Ok(None)
@@ -138,11 +146,12 @@ impl Replica {
         self.0.received
     }
 
-    /// Takes deltas from the daemon. Returns the git blob whose text is
-    /// needed before the rest can apply, if any.
-    pub fn receive(&mut self, bytes: &[u8]) -> Result<Option<String>, JsError> {
+    /// Takes deltas from the daemon, starting at position `after` of its
+    /// log. Returns the git blob whose text is needed before the rest can
+    /// apply, if any.
+    pub fn receive(&mut self, after: usize, bytes: &[u8]) -> Result<Option<String>, JsError> {
         let deltas: Vec<Delta> = postcard::from_bytes(bytes).map_err(js)?;
-        Ok(self.0.receive(deltas).map_err(js)?.map(|oid| oid.to_string()))
+        Ok(self.0.receive(after, deltas).map_err(js)?.map(|oid| oid.to_string()))
     }
 
     /// A git blob's text, as asked for by `receive` or `needed_base`.
@@ -220,15 +229,15 @@ mod tests {
         let mut alice = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
         let mut bob = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
         for replica in [&mut alice, &mut bob] {
-            assert_eq!(replica.receive(log.clone()), Ok(None));
+            assert_eq!(replica.receive(0, log.clone()), Ok(None));
             assert_eq!(replica.paths(), vec!["main.rs".to_owned()]);
             assert_eq!(replica.needed_base("main.rs"), Some(oid));
             assert_eq!(replica.add_base(oid, "fn main() {}\n".into()), Ok(None));
         }
         let from_alice = alice.edit("main.rs", "// alice\nfn main() {}\n", 1).expect("edits");
         let from_bob = bob.edit("main.rs", "fn main() {}\nfn bob() {}\n", 1).expect("edits");
-        assert_eq!(bob.receive(from_alice), Ok(None));
-        assert_eq!(alice.receive(from_bob), Ok(None));
+        assert_eq!(bob.receive(1, from_alice), Ok(None));
+        assert_eq!(alice.receive(1, from_bob), Ok(None));
         let merged = "// alice\nfn main() {}\nfn bob() {}\n";
         assert_eq!(alice.text("main.rs").as_deref(), Some(merged));
         assert_eq!(bob.text("main.rs").as_deref(), Some(merged));
@@ -239,13 +248,31 @@ mod tests {
     fn deltas_wait_for_their_base_text() {
         let (log, oid) = daemon_log();
         let mut writer = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
-        writer.receive(log.clone()).expect("receives");
+        writer.receive(0, log.clone()).expect("receives");
         writer.add_base(oid, "x\n".into()).expect("base");
         let edits = writer.edit("main.rs", "y\n", 1).expect("edits");
         let mut reader = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
-        reader.receive(log).expect("receives");
-        assert_eq!(reader.receive(edits), Ok(Some(oid)), "the edit needs the file's git text first");
+        reader.receive(0, log).expect("receives");
+        assert_eq!(reader.receive(1, edits), Ok(Some(oid)), "the edit needs the file's git text first");
         assert_eq!(reader.add_base(oid, "x\n".into()), Ok(None));
         assert_eq!(reader.text("main.rs").as_deref(), Some("y\n"));
+    }
+
+    #[test]
+    fn overlapping_syncs_count_each_delta_once() {
+        let (log, oid) = daemon_log();
+        let mut writer = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
+        writer.receive(0, log.clone()).expect("receives");
+        writer.add_base(oid, "x\n".into()).expect("base");
+        let edits = writer.edit("main.rs", "y\n", 1).expect("edits");
+        let daemon: Vec<Delta> = log.into_iter().chain(edits).collect();
+
+        let mut reader = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
+        reader.add_base(oid, "x\n".into()).expect("base");
+        reader.receive(0, daemon[..1].to_vec()).expect("first sync");
+        reader.receive(0, daemon.clone()).expect("a second sync that started at the same point");
+        assert_eq!(reader.received, daemon.len());
+        assert_eq!(reader.text("main.rs").as_deref(), Some("y\n"));
+        assert!(reader.receive(daemon.len() + 1, Vec::new()).is_err(), "a gap is refused");
     }
 }
