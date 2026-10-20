@@ -8,7 +8,7 @@ use silt_log::Delta;
 use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
     InboxRead, InboxReply, LoginReply, PresenceReply, PresenceUpdate, ShareRequest, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
-    InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
+    InFlightQuery, InFlightReply, PullReply, PushRequest, RegisterThread, SearchQuery, SearchReply, ThreadInfo, Visibility,
     VisibilityRequest,
 };
 use silt_sync::Outcome;
@@ -178,8 +178,12 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
-    pub async fn register_thread(&self, thread: &ThreadInfo) -> Result<(), RemoteError> {
-        let response = self.request(reqwest::Method::POST, "/v1/threads").json(thread).send().await?;
+    pub async fn register_thread(&self, thread: &ThreadInfo, visibility: Option<Visibility>) -> Result<(), RemoteError> {
+        let body = RegisterThread {
+            thread: thread.clone(),
+            visibility,
+        };
+        let response = self.request(reqwest::Method::POST, "/v1/threads").json(&body).send().await?;
         checked(response).await?;
         Ok(())
     }

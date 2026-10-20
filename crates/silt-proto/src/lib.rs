@@ -80,6 +80,17 @@ pub struct ThreadInfo {
     pub collaborators: Vec<String>,
 }
 
+/// A device registering a thread. A thread meant to be private from the
+/// start says so here, before any of its deltas reach the server, so no one
+/// else can see it in between.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisterThread {
+    #[serde(flatten)]
+    pub thread: ThreadInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+}
+
 /// Adds a collaborator to a thread, or removes one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareRequest {

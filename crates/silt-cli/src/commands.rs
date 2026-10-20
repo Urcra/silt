@@ -253,13 +253,14 @@ pub fn resume(thread: &str, here: bool, agent: Option<&str>, args: &[String]) ->
     continue_session(resumed, args)
 }
 
-pub fn fork(thread: &str, here: bool, agent: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
+pub fn fork(thread: &str, private: bool, here: bool, agent: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let forked: Resumed = call(&Request::Fork {
         thread: thread.into(),
         cwd: current_dir()?,
         here,
         agent: agent.map(|name| find_agent(name).map(|agent| agent.id().to_owned())).transpose()?,
+        private,
     })?;
     eprintln!(
         "silt: forked {} as thread {}, in {}",

@@ -8,7 +8,7 @@ use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
 use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
-use silt_proto::Listing;
+use silt_proto::{Listing, Visibility};
 use silt_redact::{Overlay, Redactor};
 use silt_sync::{ClientSync, Outcome};
 use tokio::sync::{mpsc, oneshot};
@@ -304,7 +304,13 @@ impl Core {
                 recovered: self.recoveries.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
-            Request::Fork { thread, cwd, here, agent } => to_response(self.fork(&thread, &cwd, here, agent.as_deref()).await),
+            Request::Fork {
+                thread,
+                cwd,
+                here,
+                agent,
+                private,
+            } => to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private).await),
             Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
             Request::MrCreate {
                 thread,
@@ -1089,7 +1095,7 @@ impl Core {
         if ids.is_empty() {
             return Ok(());
         }
-        let fork = self.fork_thread_at(thread, at).await?;
+        let fork = self.fork_thread_at(thread, at, None).await?;
         for id in ids {
             self.store.move_checkout(id, fork).await?;
             let checkout = self.checkouts.get_mut(&id).expect("listed above");
@@ -1307,12 +1313,14 @@ impl Core {
 
     /// Starts a new thread in `from`'s family at `from`'s current head.
     pub(crate) async fn fork_thread(&mut self, from: ThreadId) -> Result<ThreadId, CoreError> {
-        self.fork_thread_at(from, None).await
+        self.fork_thread_at(from, None, None).await
     }
 
     /// Starts a new thread in `from`'s family at `at`, by default `from`'s
-    /// current head.
-    pub(crate) async fn fork_thread_at(&mut self, from: ThreadId, at: Option<Frontier>) -> Result<ThreadId, CoreError> {
+    /// current head. A fork with its own `visibility` is registered with the
+    /// server before it has a delta to push, so it is never visible to
+    /// anyone else in between.
+    pub(crate) async fn fork_thread_at(&mut self, from: ThreadId, at: Option<Frontier>, visibility: Option<Visibility>) -> Result<ThreadId, CoreError> {
         let source = self.threads[&from].clone();
         let fork = ThreadId(uuid::Uuid::now_v7().as_u128());
         let record = ThreadRecord {
@@ -1321,8 +1329,14 @@ impl Core {
             owner: self.own_user(),
             ..source.clone()
         };
+        match (&visibility, &self.remote) {
+            (Some(_), Some(remote)) => remote
+                .register_thread(&crate::sync::thread_info(&record), visibility)
+                .await
+                .map_err(|error| CoreError::Invalid(format!("could not register the fork with the server: {error}")))?,
+            _ => self.register_thread(&record),
+        }
         self.store.create_thread(&record).await?;
-        self.register_thread(&record);
         self.threads.insert(fork, record);
         let actor = self.thread_actor(fork);
         let family = self.families.get_mut(&source.family).expect("forked thread's family is loaded");

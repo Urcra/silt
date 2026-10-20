@@ -20,7 +20,7 @@ use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, FamilyInfo, GENERATION_HEADER, Lease,
     Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, InFlightThread, PullReply, PushReply, PushRequest, SearchHit, SearchQuery, SearchReply,
-    ThreadInfo, VisibilityRequest,
+    RegisterThread, ThreadInfo, VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -527,7 +527,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
 async fn register_thread(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
-    Json(thread): Json<ThreadInfo>,
+    Json(RegisterThread { thread, visibility }): Json<RegisterThread>,
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
     claim_family(&server, thread.family, caller).await?;
@@ -537,12 +537,13 @@ async fn register_thread(
         .bind(id_bytes(thread.family.0))
         .execute(db)
         .await?;
-    sqlx::query("INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(id_bytes(thread.id.0))
         .bind(id_bytes(thread.family.0))
         .bind(&thread.repo)
         .bind(thread.created_ms)
         .bind(caller.user)
+        .bind(visibility.map(|visibility| visibility.to_string()))
         .execute(db)
         .await?;
     orgs::place_project(db, &thread.repo, caller.user).await?;

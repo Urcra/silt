@@ -270,7 +270,7 @@ fn a_private_fork_is_shared_only_through_its_merge_request() {
     let thread = thread_of(alice);
     assert!(eventually(|| bob.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
     let forked = bob.silt_with(
-        &["fork", &thread],
+        &["fork", "--private", &thread],
         &[("FAKE_SAY", "Bob tries something quietly"), ("FAKE_LINE", "fn quiet() {}")],
     );
     let fork_checkout = checkout_from(&forked.stderr);
@@ -281,8 +281,6 @@ fn a_private_fork_is_shared_only_through_its_merge_request() {
         .and_then(|line| line.split_whitespace().next())
         .expect("the fork is listed")
         .to_owned();
-    let set = bob.stdout(&["visibility", "private", "--thread", &fork]);
-    assert!(set.contains("is now private"), "{set}");
     let fork_main = fork_checkout.join("src/main.rs");
     fs::write(&fork_main, read(&fork_main) + "fn quieter() {}\n").expect("Bob keeps working");
     assert!(eventually(|| bob.stdout(&["diff", &fork]).contains("+fn quieter() {}")));

@@ -51,6 +51,9 @@ enum Command {
     /// Fork a thread, yours or a teammate's, with its code and conversation
     Fork {
         thread: String,
+        /// Only you see the fork, until a merge request offers it back
+        #[arg(long)]
+        private: bool,
         #[command(flatten)]
         continued: Continue,
     },
@@ -550,8 +553,8 @@ fn main() -> Result<(), Exn<CliError>> {
         Command::Resume { thread, continued } => {
             commands::resume(&thread, continued.here, continued.agent.as_deref(), &continued.args)
         }
-        Command::Fork { thread, continued } => {
-            commands::fork(&thread, continued.here, continued.agent.as_deref(), &continued.args)
+        Command::Fork { thread, private, continued } => {
+            commands::fork(&thread, private, continued.here, continued.agent.as_deref(), &continued.args)
         }
         Command::Pull { thread } => commands::pull(thread),
         Command::Mr { command } => match command {

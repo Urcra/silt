@@ -61,6 +61,9 @@ pub enum Request {
         here: bool,
         #[serde(default)]
         agent: Option<String>,
+        /// Private from the start, not made private afterwards.
+        #[serde(default)]
+        private: bool,
     },
     /// Merges a fork's source into it; `thread` defaults to the one checked
     /// out at `cwd`.

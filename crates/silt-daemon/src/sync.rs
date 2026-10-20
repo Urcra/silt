@@ -420,7 +420,7 @@ impl Core {
         };
         let info = thread_info(thread);
         tokio::spawn(async move {
-            if let Err(error) = remote.register_thread(&info).await {
+            if let Err(error) = remote.register_thread(&info, None).await {
                 warn!(%error, "could not register a thread with the server");
             }
         });
@@ -433,7 +433,7 @@ impl Core {
             return Ok(());
         };
         remote
-            .register_thread(&thread_info(&self.threads[&thread]))
+            .register_thread(&thread_info(&self.threads[&thread]), None)
             .await
             .map_err(|error| CoreError::Invalid(format!("could not register the thread with the server: {error}")))
     }
@@ -456,7 +456,7 @@ impl Core {
     }
 }
 
-fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
+pub(crate) fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
     ThreadInfo {
         id: thread.id,
         family: thread.family,
