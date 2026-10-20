@@ -59,6 +59,21 @@ fn reads_head_branch_remote_and_tree() {
 }
 
 #[test]
+fn files_whose_names_are_not_utf8_are_left_out() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let dir = repo_with_commit();
+    let root = dir.path();
+    fs::write(root.join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt")), "latin-1\n").expect("write");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "latin-1 name"]);
+    let repo = Repo::discover(root).expect("discovers");
+    let head = repo.head_commit().expect("head").expect("has a commit");
+    let paths: Vec<String> = repo.files_at(head).expect("tree").into_iter().map(|file| file.path).collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert_eq!(repo.worktree_files().expect("files"), vec![".gitignore", "run.sh", "src/main.rs"]);
+}
+
+#[test]
 fn unborn_repository_has_no_head_commit() {
     let dir = tempfile::tempdir().expect("temp dir");
     git(dir.path(), &["init", "-q"]);

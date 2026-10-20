@@ -4258,6 +4258,7 @@ dependencies = [
  "silt-types",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

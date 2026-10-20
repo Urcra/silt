@@ -117,7 +117,7 @@ impl Repo {
                     return None;
                 };
                 Some(TreeFile {
-                    path: entry.filepath.to_str_lossy().into_owned(),
+                    path: utf8_path(&entry.filepath)?,
                     oid: oid(entry.oid),
                     mode,
                 })
@@ -137,7 +137,7 @@ impl Repo {
         let mut files: Vec<String> = output
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
-            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .filter_map(utf8_path)
             .filter(|path| self.root.join(path).symlink_metadata().is_ok())
             .collect();
         files.sort();
@@ -235,6 +235,19 @@ fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String
         });
     }
     Ok(output.stdout)
+}
+
+/// A path Silt can track. Paths aren't UTF-8 text in the family, so other
+/// names are left alone: a lossy copy would be a different file, and the
+/// real one would look deleted.
+fn utf8_path(path: &[u8]) -> Option<String> {
+    match std::str::from_utf8(path) {
+        Ok(path) => Some(path.to_owned()),
+        Err(_) => {
+            tracing::warn!(path = %path.to_str_lossy(), "leaving out a file whose name isn't UTF-8");
+            None
+        }
+    }
 }
 
 fn oid(id: gix::ObjectId) -> GitOid {
