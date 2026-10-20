@@ -95,6 +95,8 @@ struct Shared {
     /// Threads purged for good; their deltas are never stored again.
     purged: Mutex<std::collections::HashSet<ThreadId>>,
     presence: Mutex<presence::Board>,
+    /// Password checks: how many run at once, and recent failures by name.
+    passwords: accounts::PasswordChecks,
 }
 
 #[derive(Clone)]
@@ -145,6 +147,7 @@ impl Server {
                 data_dir: data_dir.to_owned(),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
+                passwords: accounts::PasswordChecks::default(),
                 config,
                 http: reqwest::Client::builder()
                     .timeout(Duration::from_secs(20))
@@ -430,9 +433,14 @@ async fn password_login(
     if !server.config().auth.passwords {
         return Err(forbidden("passwords are turned off on this server; use `silt auth login` without --user"));
     }
-    let user = accounts::check_password(server.db(), body.user.trim(), &body.password)
-        .await?
-        .ok_or(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized))?;
+    let user = match accounts::check_password(&server, body.user.trim(), &body.password).await {
+        Ok(user) => user,
+        Err(accounts::PasswordError::Database(error)) => return Err(error.into()),
+        Err(accounts::PasswordError::TooManyFailures) => {
+            return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, ErrorReply::Unauthorized));
+        }
+    }
+    .ok_or(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized))?;
     Ok(Json(accounts::issue_device(server.db(), user.id, &body.name).await?))
 }
 

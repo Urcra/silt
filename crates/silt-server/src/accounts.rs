@@ -12,7 +12,7 @@ use silt_types::DeviceId;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
-use crate::{ServerError, hash, id_bytes, now_ms, open_db};
+use crate::{Server, ServerError, hash, id_bytes, now_ms, open_db};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 pub(crate) const DEVICE_REQUEST_TTL_MS: i64 = 15 * 60 * 1000;
@@ -173,20 +173,83 @@ pub(crate) async fn free_name(db: &SqlitePool, wanted: &str) -> Result<String, s
     Ok(format!("{base}-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]))
 }
 
-pub(crate) async fn check_password(db: &SqlitePool, name: &str, password: &str) -> Result<Option<User>, sqlx::Error> {
+/// Checked whenever a name has no password, so the answer takes as long as
+/// a real check and names can't be probed by timing.
+const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2lsdHNhbHRzYWx0$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+/// Password checks running at once. Each takes ~19 MiB and a few dozen
+/// milliseconds of CPU.
+const CONCURRENT_CHECKS: usize = 4;
+/// Failed sign-ins a name gets per window before it has to wait.
+const FAILURES_ALLOWED: u32 = 10;
+const FAILURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Keeps password checks from taking the server down: they run on blocking
+/// threads, a few at a time, and a name that keeps failing waits.
+pub(crate) struct PasswordChecks {
+    running: tokio::sync::Semaphore,
+    failures: std::sync::Mutex<std::collections::HashMap<String, (u32, std::time::Instant)>>,
+}
+
+impl Default for PasswordChecks {
+    fn default() -> Self {
+        Self {
+            running: tokio::sync::Semaphore::new(CONCURRENT_CHECKS),
+            failures: std::sync::Mutex::default(),
+        }
+    }
+}
+
+impl PasswordChecks {
+    fn cooling_down(&self, name: &str) -> bool {
+        let mut failures = self.failures.lock().expect("lock");
+        failures.retain(|_, (_, since)| since.elapsed() < FAILURE_WINDOW);
+        failures.get(name).is_some_and(|(count, _)| *count >= FAILURES_ALLOWED)
+    }
+
+    fn record(&self, name: &str, succeeded: bool) {
+        let mut failures = self.failures.lock().expect("lock");
+        if succeeded {
+            failures.remove(name);
+        } else {
+            let entry = failures.entry(name.to_owned()).or_insert((0, std::time::Instant::now()));
+            entry.0 += 1;
+        }
+    }
+
+    async fn verify(&self, stored: String, password: String) -> bool {
+        let Ok(_permit) = self.running.acquire().await else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || verify_password(&stored, &password))
+            .await
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PasswordError {
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+    #[error("too many failed sign-ins for this name; try again later")]
+    TooManyFailures,
+}
+
+pub(crate) async fn check_password(server: &Server, name: &str, password: &str) -> Result<Option<User>, PasswordError> {
+    let checks = &server.shared.passwords;
+    if checks.cooling_down(name) {
+        return Err(PasswordError::TooManyFailures);
+    }
     let row = sqlx::query(users_query!("WHERE name = ?"))
         .bind(name)
-        .fetch_optional(db)
+        .fetch_optional(server.db())
         .await?;
-    let Some(row) = row else {
-        // Spends the same time as a real check, so names can't be probed.
-        let _ = verify_password("$argon2id$v=19$m=19456,t=2,p=1$c2lsdHNhbHRzYWx0$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", password);
-        return Ok(None);
-    };
-    let stored: Option<String> = row.get("password_hash");
-    Ok(stored
-        .filter(|stored| verify_password(stored, password))
-        .map(|_| user_from(&row)))
+    let stored: Option<String> = row.as_ref().and_then(|row| row.get("password_hash"));
+    let matches = checks
+        .verify(stored.clone().unwrap_or_else(|| DUMMY_HASH.to_owned()), password.to_owned())
+        .await
+        && stored.is_some();
+    checks.record(name, matches);
+    Ok(row.filter(|_| matches).map(|row| user_from(&row)))
 }
 
 /// Registers a device of `user` and returns its token, shown only now.

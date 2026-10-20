@@ -188,15 +188,12 @@ pub(crate) async fn login(State(server): State<Server>, headers: HeaderMap, Form
     if !server.config().auth.passwords {
         return error_page(StatusCode::FORBIDDEN, "Passwords are turned off on this server.");
     }
-    match accounts::check_password(server.db(), form.user.trim(), &form.password).await {
-        Ok(Some(user)) => start_session(&server, user.id, &next).await,
-        _ => Redirect::to(&format!(
-            "/login?next={}&error={}",
-            sign_in::encode(&next),
-            sign_in::encode("That user name and password don't match.")
-        ))
-        .into_response(),
-    }
+    let refused = match accounts::check_password(&server, form.user.trim(), &form.password).await {
+        Ok(Some(user)) => return start_session(&server, user.id, &next).await,
+        Err(accounts::PasswordError::TooManyFailures) => "Too many failed sign-ins for this name; try again in a while.",
+        _ => "That user name and password don't match.",
+    };
+    Redirect::to(&format!("/login?next={}&error={}", sign_in::encode(&next), sign_in::encode(refused))).into_response()
 }
 
 pub(crate) async fn logout(State(server): State<Server>, headers: HeaderMap) -> Response {

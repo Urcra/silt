@@ -102,6 +102,22 @@ async fn passwords_sign_devices_in_and_out() {
     assert_eq!(password_login(&base, "carol", "correct horse battery").await.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn a_name_that_keeps_failing_has_to_wait() {
+    let data = tempfile::tempdir().expect("temp dir");
+    Admin::open(data.path()).await.expect("opens").add_user("alice", Some("correct horse battery"), false).await.expect("adds");
+    let base = start(data.path(), |_| Config::default()).await;
+    for _ in 0..10 {
+        assert_eq!(password_login(&base, "alice", "a wrong guess").await.status(), StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(password_login(&base, "alice", "another guess").await.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        password_login(&base, "alice", "correct horse battery").await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "guessing right during the wait doesn't help"
+    );
+}
+
 /// Signs in on the server's page and returns the session cookie.
 async fn sign_in_page(base: &str, user: &str, password: &str) -> String {
     let response = browser()
