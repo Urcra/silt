@@ -86,7 +86,8 @@ fn failed(error: impl std::fmt::Display) -> agent_client_protocol::Error {
     agent_client_protocol::Error::internal_error().data(error.to_string())
 }
 
-fn system_prompt(root: &Path) -> String {
+fn system_prompt(workspace: &Workspace) -> String {
+    let root = workspace.root();
     let mut prompt = format!(
         "You are Silt's coding agent, working in a checkout of a git repository at {}. \
          Use the tools to read, change and run things there; paths are relative to the checkout. \
@@ -96,7 +97,8 @@ fn system_prompt(root: &Path) -> String {
         root.display()
     );
     for name in ["AGENTS.md", "CLAUDE.md"] {
-        if let Ok(rules) = std::fs::read_to_string(root.join(name)) {
+        // A rules file could be a link to a credential file elsewhere.
+        if let Ok(rules) = workspace.read_text(name) {
             let rules: String = rules.chars().take(RULES_BUDGET).collect();
             prompt.push_str(&format!("\n\nThe project's {name}:\n{rules}"));
         }
@@ -193,7 +195,7 @@ impl Harness {
             role: Role::User,
             parts: vec![Part::Text { text: self.redact(&prompt) }],
         });
-        let system = self.redact(&system_prompt(session.workspace.root()));
+        let system = self.redact(&system_prompt(&session.workspace));
         let specs = tools::specs();
         let notify = |update| connection.send_notification(SessionNotification::new(id.clone(), update));
         for _ in 0..MAX_STEPS {

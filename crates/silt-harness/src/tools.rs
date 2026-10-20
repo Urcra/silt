@@ -16,8 +16,9 @@ const MAX_OUTPUT: usize = 30_000;
 
 pub struct Workspace {
     root: PathBuf,
-    /// The content hash of each file as the agent last saw it.
-    seen: HashMap<PathBuf, String>,
+    /// The content hash of each file as the agent last saw it, by path in
+    /// the checkout.
+    seen: HashMap<String, String>,
 }
 
 fn hash(text: &str) -> String {
@@ -40,6 +41,69 @@ pub(crate) fn truncate(mut text: String) -> String {
     text
 }
 
+/// File access confined to one directory. Every step is taken from a
+/// descriptor of the checkout without following symlinks, so neither a
+/// link placed by the repository or a command nor one swapped in between
+/// a check and a write can lead outside it (ADR 0016).
+mod beneath {
+    use std::fs::File;
+    use std::io::{self, Read as _, Write as _};
+    use std::os::fd::OwnedFd;
+    use std::path::Path;
+
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, fchmod, mkdirat, openat, renameat, statat};
+
+    fn open_dir(root: &Path, dirs: &[&str], create: bool) -> io::Result<OwnedFd> {
+        let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut dir = openat(rustix::fs::CWD, root, flags, Mode::empty())?;
+        for name in dirs {
+            dir = match openat(&dir, *name, flags, Mode::empty()) {
+                Ok(next) => next,
+                Err(rustix::io::Errno::NOENT) if create => {
+                    mkdirat(&dir, *name, Mode::from_raw_mode(0o755))?;
+                    openat(&dir, *name, flags, Mode::empty())?
+                }
+                Err(error) => return Err(error.into()),
+            };
+        }
+        Ok(dir)
+    }
+
+    pub fn read(root: &Path, path: &[&str]) -> io::Result<String> {
+        let (name, dirs) = path.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let dir = open_dir(root, dirs, false)?;
+        let fd = openat(&dir, *name, OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+        let mut text = String::new();
+        File::from(fd).read_to_string(&mut text)?;
+        Ok(text)
+    }
+
+    /// Replaces the file with `text`: written beside it, then renamed over
+    /// it, keeping its permissions.
+    pub fn write(root: &Path, path: &[&str], text: &str) -> io::Result<()> {
+        let (name, dirs) = path.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let dir = open_dir(root, dirs, true)?;
+        let mode = match statat(&dir, *name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => Mode::from_raw_mode(stat.st_mode & 0o7777),
+            Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")),
+            Err(rustix::io::Errno::NOENT) => Mode::from_raw_mode(0o644),
+            Err(error) => return Err(error.into()),
+        };
+        let temporary = format!(".{name}.silt-tmp-{}", std::process::id());
+        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = openat(&dir, temporary.as_str(), flags, mode)?;
+        fchmod(&fd, mode)?;
+        File::from(fd).write_all(text.as_bytes())?;
+        renameat(&dir, temporary.as_str(), &dir, *name)?;
+        Ok(())
+    }
+
+    /// Whether `path` names a directory reached without symlinks.
+    pub fn is_dir(root: &Path, path: &[&str]) -> bool {
+        open_dir(root, path, false).is_ok()
+    }
+}
+
 impl Workspace {
     pub fn new(root: &Path) -> std::io::Result<Self> {
         Ok(Self {
@@ -52,66 +116,68 @@ impl Workspace {
         &self.root
     }
 
-    /// The path inside the checkout that `path` names, or why it is not
-    /// allowed. Symlinks may not lead out either.
-    fn resolve(&self, path: &str) -> Result<PathBuf, String> {
-        let mut resolved = self.root.clone();
-        for component in Path::new(path).components() {
+    /// `path` as a path in the checkout, or why it is not allowed: outside
+    /// the checkout, or git's or Silt's own data.
+    fn resolve(&self, path: &str) -> Result<String, String> {
+        let given = Path::new(path);
+        let relative = if given.is_absolute() {
+            given.strip_prefix(&self.root).map_err(|_| format!("{path} is outside the checkout"))?
+        } else {
+            given
+        };
+        let mut parts: Vec<String> = Vec::new();
+        for component in relative.components() {
             match component {
-                Component::Normal(part) => resolved.push(part),
+                Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
                 Component::ParentDir => {
-                    resolved.pop();
+                    parts.pop().ok_or_else(|| format!("{path} is outside the checkout"))?;
                 }
                 Component::CurDir => {}
-                Component::RootDir | Component::Prefix(_) => resolved = PathBuf::from("/"),
+                Component::RootDir | Component::Prefix(_) => return Err(format!("{path} is outside the checkout")),
             }
         }
-        let inside = |candidate: &Path| candidate.starts_with(&self.root);
-        if !inside(&resolved) {
-            return Err(format!("{path} is outside the checkout"));
+        let joined = parts.join("/");
+        if !joined.is_empty() && !silt_checkout::is_writable(&joined) {
+            return Err("git's and Silt's own data is not for editing".into());
         }
-        if resolved.strip_prefix(&self.root).is_ok_and(|rest| rest.starts_with(".git")) {
-            return Err("the git directory is not for editing".into());
-        }
-        let existing = resolved.ancestors().find(|ancestor| ancestor.exists()).unwrap_or(&self.root);
-        match existing.canonicalize() {
-            Ok(real) if inside(&real) => Ok(resolved),
-            _ => Err(format!("{path} leads outside the checkout")),
-        }
+        Ok(joined)
     }
 
-    fn relative(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root).unwrap_or(path).to_string_lossy().into_owned()
+    fn parts(path: &str) -> Vec<&str> {
+        path.split('/').filter(|part| !part.is_empty()).collect()
+    }
+
+    pub(crate) fn read_text(&self, path: &str) -> std::io::Result<String> {
+        beneath::read(&self.root, &Self::parts(path))
     }
 
     pub fn read_file(&mut self, input: &Value) -> Outcome {
         let path = self.resolve(field(input, "path")?)?;
-        let text = std::fs::read_to_string(&path).map_err(|error| format!("cannot read {}: {error}", self.relative(&path)))?;
+        let text = self.read_text(&path).map_err(|error| format!("cannot read {path}: {error}"))?;
         self.seen.insert(path, hash(&text));
         Ok(truncate(text))
     }
 
-    /// Refuses to change a file that exists but is not as last read.
-    fn check_fresh(&self, path: &Path) -> Result<Option<String>, String> {
-        let Ok(current) = std::fs::read_to_string(path) else {
-            return Ok(None);
+    /// Refuses to change a file that exists but is not as last read. Only a
+    /// file that isn't there counts as new.
+    fn check_fresh(&self, path: &str) -> Result<Option<String>, String> {
+        let current = match self.read_text(path) {
+            Ok(current) => current,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read {path}: {error}")),
         };
         match self.seen.get(path) {
             Some(seen) if *seen == hash(&current) => Ok(Some(current)),
             Some(_) => Err(format!(
-                "{} changed since you last read it, probably edited by someone else; read it again before changing it",
-                self.relative(path)
+                "{path} changed since you last read it, probably edited by someone else; read it again before changing it"
             )),
-            None => Err(format!("read {} before changing it", self.relative(path))),
+            None => Err(format!("read {path} before changing it")),
         }
     }
 
-    fn store(&mut self, path: PathBuf, text: &str) -> Outcome {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        std::fs::write(&path, text).map_err(|error| format!("cannot write {}: {error}", self.relative(&path)))?;
-        let done = format!("wrote {}", self.relative(&path));
+    fn store(&mut self, path: String, text: &str) -> Outcome {
+        beneath::write(&self.root, &Self::parts(&path), text).map_err(|error| format!("cannot write {path}: {error}"))?;
+        let done = format!("wrote {path}");
         self.seen.insert(path, hash(text));
         Ok(done)
     }
@@ -126,9 +192,7 @@ impl Workspace {
     pub fn edit_file(&mut self, input: &Value) -> Outcome {
         let path = self.resolve(field(input, "path")?)?;
         let (old, new) = (field(input, "old")?, field(input, "new")?);
-        let current = self
-            .check_fresh(&path)?
-            .ok_or_else(|| format!("{} does not exist", self.relative(&path)))?;
+        let current = self.check_fresh(&path)?.ok_or_else(|| format!("{path} does not exist"))?;
         let edited = match current.matches(old).count() {
             1 => current.replacen(old, new, 1),
             0 => return Err("`old` is not in the file".into()),
@@ -139,8 +203,11 @@ impl Workspace {
 
     pub fn list_files(&self, input: &Value) -> Outcome {
         let start = self.resolve(input["path"].as_str().unwrap_or("."))?;
+        if !beneath::is_dir(&self.root, &Self::parts(&start)) {
+            return Err(format!("{start} is not a directory of the checkout"));
+        }
         let mut found = Vec::new();
-        let mut stack = vec![start];
+        let mut stack = vec![self.root.join(&start)];
         while let Some(dir) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
@@ -151,10 +218,12 @@ impl Workspace {
                 if name == ".git" || name == "node_modules" || name == "target" {
                     continue;
                 }
+                // `file_type` doesn't follow symlinks, so links are listed,
+                // never walked into.
                 if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                     stack.push(path);
                 } else {
-                    found.push(self.relative(&path));
+                    found.push(path.strip_prefix(&self.root).unwrap_or(&path).to_string_lossy().into_owned());
                 }
             }
         }
@@ -216,6 +285,14 @@ mod tests {
         assert!(workspace.write_file(&json!({"path": ".git/config", "content": "x"})).is_err());
         std::os::unix::fs::symlink("/etc", dir.path().join("out")).expect("symlink");
         assert!(workspace.read_file(&json!({"path": "out/passwd"})).is_err());
+        let outside = tempfile::tempdir().expect("tempdir");
+        let target = outside.path().join("planted");
+        std::os::unix::fs::symlink(&target, dir.path().join("dangling")).expect("symlink");
+        assert!(workspace.write_file(&json!({"path": "dangling", "content": "x"})).is_err());
+        assert!(!target.exists(), "a dangling link must not create its target");
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linkdir")).expect("symlink");
+        assert!(workspace.write_file(&json!({"path": "linkdir/new", "content": "x"})).is_err());
+        assert!(!outside.path().join("new").exists());
         assert_eq!(workspace.read_file(&json!({"path": "./src/../src/main.rs"})), Ok("fn main() {}\n".into()));
     }
 
