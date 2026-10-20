@@ -255,13 +255,25 @@ pub(crate) async fn device(State(server): State<Server>, headers: HeaderMap, For
     let Some(user) = signed_in(&server, &headers).await else {
         return Redirect::to("/login").into_response();
     };
-    if form.action != "approve" {
-        let _ = accounts::deny_device(server.db(), &form.code).await;
-        return page("Device denied", "<p>The device was not signed in.</p>").into_response();
+    // Codes are short enough to type, so guessing them is limited: a signed-in
+    // person could otherwise approve someone else's device into their own
+    // account, or deny everyone's.
+    let guesses = format!("device-codes:{}", user.id);
+    let checks = &server.shared.passwords;
+    if checks.cooling_down(&guesses) {
+        return error_page(StatusCode::TOO_MANY_REQUESTS, "Too many unknown codes; try again in a while.");
     }
-    match accounts::approve_device(server.db(), &form.code, user.id).await {
-        Ok(true) => page("Device signed in", "<p>You can close this page; the device is signed in.</p>").into_response(),
-        _ => error_page(StatusCode::BAD_REQUEST, "This code is unknown or expired."),
+    let known = if form.action == "approve" {
+        accounts::approve_device(server.db(), &form.code, user.id).await
+    } else {
+        accounts::deny_device(server.db(), &form.code).await
+    };
+    let known = known.unwrap_or(false);
+    checks.record(&guesses, known);
+    match (known, form.action == "approve") {
+        (true, true) => page("Device signed in", "<p>You can close this page; the device is signed in.</p>").into_response(),
+        (true, false) => page("Device denied", "<p>The device was not signed in.</p>").into_response(),
+        (false, _) => error_page(StatusCode::BAD_REQUEST, "This code is unknown or expired."),
     }
 }
 

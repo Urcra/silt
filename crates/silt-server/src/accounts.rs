@@ -200,13 +200,14 @@ impl Default for PasswordChecks {
 }
 
 impl PasswordChecks {
-    fn cooling_down(&self, name: &str) -> bool {
+    /// Whether attempts under `name` have to wait after too many failures.
+    pub(crate) fn cooling_down(&self, name: &str) -> bool {
         let mut failures = self.failures.lock().expect("lock");
         failures.retain(|_, (_, since)| since.elapsed() < FAILURE_WINDOW);
         failures.get(name).is_some_and(|(count, _)| *count >= FAILURES_ALLOWED)
     }
 
-    fn record(&self, name: &str, succeeded: bool) {
+    pub(crate) fn record(&self, name: &str, succeeded: bool) {
         let mut failures = self.failures.lock().expect("lock");
         if succeeded {
             failures.remove(name);
@@ -320,11 +321,17 @@ pub(crate) async fn end_session(db: &SqlitePool, token: &str) -> Result<(), sqlx
 }
 
 fn user_code() -> String {
-    let bytes = uuid::Uuid::new_v4().into_bytes();
-    let letters: String = bytes[..8]
-        .iter()
-        .map(|byte| char::from(CODE_LETTERS[usize::from(*byte) % CODE_LETTERS.len()]))
-        .collect();
+    // Bytes past the last whole multiple of the alphabet's size are skipped,
+    // so every letter is equally likely.
+    let limit = 256 - 256 % CODE_LETTERS.len();
+    let mut letters = String::new();
+    while letters.len() < 8 {
+        for byte in uuid::Uuid::new_v4().into_bytes() {
+            if usize::from(byte) < limit && letters.len() < 8 {
+                letters.push(char::from(CODE_LETTERS[usize::from(byte) % CODE_LETTERS.len()]));
+            }
+        }
+    }
     format!("{}-{}", &letters[..4], &letters[4..])
 }
 
@@ -373,36 +380,36 @@ pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: i64) 
     Ok(updated == 1)
 }
 
-pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM device_requests WHERE user_code = ?")
+/// Refuses a waiting request; one already approved stays approved.
+pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<bool, sqlx::Error> {
+    let denied = sqlx::query("DELETE FROM device_requests WHERE user_code = ? AND user_id IS NULL")
         .bind(normalize_user_code(user_code))
         .execute(db)
-        .await?;
-    Ok(())
+        .await?
+        .rows_affected();
+    Ok(denied == 1)
 }
 
 pub(crate) async fn poll_device(db: &SqlitePool, device_code: &str) -> Result<DevicePollReply, sqlx::Error> {
-    let row = sqlx::query("SELECT name, user_id, expires_ms FROM device_requests WHERE code_hash = ?")
+    // Taking an approved request and issuing its token happen once, however
+    // many polls race for it.
+    let approved = sqlx::query("DELETE FROM device_requests WHERE code_hash = ? AND user_id IS NOT NULL RETURNING name, user_id")
         .bind(hash(device_code).to_vec())
         .fetch_optional(db)
         .await?;
-    let Some(row) = row else {
-        return Ok(DevicePollReply::Gone);
-    };
-    let user: Option<i64> = row.get("user_id");
-    match user {
-        Some(user) => {
-            sqlx::query("DELETE FROM device_requests WHERE code_hash = ?")
-                .bind(hash(device_code).to_vec())
-                .execute(db)
-                .await?;
-            let name: String = row.get("name");
-            Ok(DevicePollReply::Approved {
-                login: issue_device(db, user, &name).await?,
-            })
-        }
-        None if row.get::<i64, _>("expires_ms") <= now_ms() => Ok(DevicePollReply::Gone),
-        None => Ok(DevicePollReply::Pending),
+    if let Some(row) = approved {
+        let name: String = row.get("name");
+        return Ok(DevicePollReply::Approved {
+            login: issue_device(db, row.get("user_id"), &name).await?,
+        });
+    }
+    let waiting = sqlx::query("SELECT expires_ms FROM device_requests WHERE code_hash = ?")
+        .bind(hash(device_code).to_vec())
+        .fetch_optional(db)
+        .await?;
+    match waiting {
+        Some(row) if row.get::<i64, _>("expires_ms") > now_ms() => Ok(DevicePollReply::Pending),
+        _ => Ok(DevicePollReply::Gone),
     }
 }
 
@@ -577,6 +584,16 @@ impl Admin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_codes_are_two_groups_of_four_letters() {
+        for _ in 0..200 {
+            let code = user_code();
+            assert_eq!(code.len(), 9, "{code}");
+            assert!(code.chars().enumerate().all(|(at, char)| if at == 4 { char == '-' } else { CODE_LETTERS.contains(&(char as u8)) }));
+            assert_eq!(normalize_user_code(&code.to_lowercase()), code);
+        }
+    }
 
     #[test]
     fn passwords_hash_and_verify() {
