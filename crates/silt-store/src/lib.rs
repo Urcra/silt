@@ -210,6 +210,24 @@ impl Store {
         })
     }
 
+    /// Hands an existing checkout to another thread, forgetting what it
+    /// recorded about the disk for the previous one.
+    pub async fn rebind_checkout(&self, checkout: i64, thread: ThreadId, actor: ActorId) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE checkouts SET thread_id = ?, actor = ? WHERE id = ?")
+            .bind(id_bytes(thread.0))
+            .bind(id_bytes(actor.0))
+            .bind(checkout)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM disk_files WHERE checkout_id = ?")
+            .bind(checkout)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn checkouts(&self) -> Result<Vec<CheckoutRecord>, StoreError> {
         let rows = sqlx::query("SELECT id, thread_id, path, actor, managed FROM checkouts ORDER BY id")
             .fetch_all(&self.pool)

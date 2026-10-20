@@ -1,11 +1,11 @@
+mod commands;
 mod dev_status;
+mod render;
 
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use exn::{Exn, ResultExt};
+use exn::Exn;
 
 #[derive(Debug, Parser)]
 #[command(name = "silt", version, about = "Resume, fork and search your agent sessions")]
@@ -16,11 +16,58 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run Claude Code with Silt recording the session and every file edit
+    Claude {
+        /// Work in a managed checkout instead of the current one
+        #[arg(long)]
+        isolated: bool,
+        /// Arguments passed on to `claude`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Start recording the most recent Claude Code session in this directory
+    Track,
+    /// List recorded threads
+    Log,
+    /// Show a thread's conversation and the files each tool call changed
+    Show { thread: String },
+    /// Show what a thread, or one of its turns, changed
+    Diff {
+        thread: String,
+        /// Only the changes made in this turn (1-based)
+        #[arg(long)]
+        turn: Option<usize>,
+    },
+    /// Search conversations
+    Search {
+        #[arg(required = true)]
+        query: Vec<String>,
+    },
+    /// Manage the background daemon
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+    /// Called by agent hooks; reads the hook input on stdin
+    #[command(hide = true)]
+    Hook { event: String },
     /// Commands for working on Silt itself
     Dev {
         #[command(subcommand)]
         command: DevCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonCommand {
+    /// Run the daemon in the foreground
+    Run,
+    /// Start the daemon in the background if it isn't running
+    Start,
+    /// Stop the daemon
+    Stop,
+    /// Show whether the daemon is running
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -35,38 +82,28 @@ enum DevCommand {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-struct CliError(String);
+pub struct CliError(pub String);
 
 fn main() -> Result<(), Exn<CliError>> {
     match Cli::parse().command {
+        Command::Claude { isolated, args } => commands::claude(isolated, &args),
+        Command::Track => commands::track(),
+        Command::Log => commands::log(),
+        Command::Show { thread } => commands::show(&thread),
+        Command::Diff { thread, turn } => commands::diff(&thread, turn),
+        Command::Search { query } => commands::search(&query.join(" ")),
+        Command::Daemon { command } => match command {
+            DaemonCommand::Run => commands::daemon_run(),
+            DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),
+            DaemonCommand::Stop => commands::daemon_stop(),
+            DaemonCommand::Status => commands::daemon_status(),
+        },
+        Command::Hook { event } => {
+            commands::hook(&event);
+            Ok(())
+        }
         Command::Dev {
             command: DevCommand::Status { root },
-        } => print_dev_status(root),
+        } => dev_status::print(root),
     }
-}
-
-fn print_dev_status(root: Option<PathBuf>) -> Result<(), Exn<CliError>> {
-    let root = match root {
-        Some(root) => root,
-        None => find_repo_root()?,
-    };
-    let roadmap = read(&root.join("ROADMAP.md"))?;
-    let tasks = read(&root.join("TASKS.md"))?;
-    print!(
-        "{}",
-        dev_status::render(&dev_status::parse_roadmap(&roadmap), &dev_status::parse_tasks(&tasks))
-    );
-    Ok(())
-}
-
-fn find_repo_root() -> Result<PathBuf, Exn<CliError>> {
-    let cwd = env::current_dir().or_raise(|| CliError("cannot read current directory".into()))?;
-    cwd.ancestors()
-        .find(|dir| dir.join("ROADMAP.md").is_file())
-        .map(Path::to_path_buf)
-        .ok_or_else(|| Exn::new(CliError("no ROADMAP.md found in any parent directory".into())))
-}
-
-fn read(path: &Path) -> Result<String, Exn<CliError>> {
-    fs::read_to_string(path).or_raise(|| CliError(format!("cannot read {}", path.display())))
 }

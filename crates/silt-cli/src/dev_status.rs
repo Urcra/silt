@@ -1,4 +1,11 @@
+use std::env;
 use std::fmt::Write;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use exn::{Exn, ResultExt};
+
+use crate::CliError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Milestone {
@@ -115,6 +122,29 @@ fn parse_milestone_heading(heading: &str) -> Option<Milestone> {
         done: 0,
         total: 0,
     })
+}
+
+pub fn print(root: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+    let root = match root {
+        Some(root) => root,
+        None => find_repo_root()?,
+    };
+    let roadmap = read(&root.join("ROADMAP.md"))?;
+    let tasks = read(&root.join("TASKS.md"))?;
+    print!("{}", render(&parse_roadmap(&roadmap), &parse_tasks(&tasks)));
+    Ok(())
+}
+
+fn find_repo_root() -> Result<PathBuf, Exn<CliError>> {
+    let cwd = env::current_dir().or_raise(|| CliError("cannot read current directory".into()))?;
+    cwd.ancestors()
+        .find(|dir| dir.join("ROADMAP.md").is_file())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| Exn::new(CliError("no ROADMAP.md found in any parent directory".into())))
+}
+
+fn read(path: &Path) -> Result<String, Exn<CliError>> {
+    fs::read_to_string(path).or_raise(|| CliError(format!("cannot read {}", path.display())))
 }
 
 #[cfg(test)]
