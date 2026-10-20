@@ -29,6 +29,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 
+mod git;
 mod index;
 mod visibility;
 
@@ -44,6 +45,7 @@ const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
 /// Threads written to within this long are `active`.
 const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
 const SEARCH_LIMIT: u32 = 50;
+const MAX_BODY: usize = 1 << 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -65,6 +67,7 @@ struct Shared {
     waiters: Mutex<HashMap<FamilyId, Arc<Notify>>>,
     /// Locked after `rooms` when both are needed.
     index: Mutex<Index>,
+    data_dir: std::path::PathBuf,
 }
 
 #[derive(Clone)]
@@ -106,6 +109,7 @@ impl Server {
                 rooms: Mutex::new(rooms),
                 waiters: Mutex::new(HashMap::new()),
                 index: Mutex::new(index),
+                data_dir: data_dir.to_owned(),
             }),
         })
     }
@@ -120,11 +124,14 @@ impl Server {
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
+            .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         Router::new()
             .route("/v1/login", post(login))
             .merge(authed)
             .layer(middleware::from_fn_with_state(self.clone(), protocol))
+            // Bundles and git pushes are bigger than axum's default limit.
+            .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
             .with_state(self.clone())
     }
 
@@ -165,7 +172,7 @@ async fn open_db(data_dir: &Path) -> Result<SqlitePool, ServerError> {
     Ok(db)
 }
 
-struct ApiError(StatusCode, ErrorReply);
+pub(crate) struct ApiError(StatusCode, ErrorReply);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -191,7 +198,7 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-fn bad_request(message: impl Into<String>) -> ApiError {
+pub(crate) fn bad_request(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, ErrorReply::Invalid { message: message.into() })
 }
 
@@ -199,25 +206,25 @@ fn forbidden(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::FORBIDDEN, ErrorReply::Forbidden { message: message.into() })
 }
 
-fn not_found() -> ApiError {
+pub(crate) fn not_found() -> ApiError {
     ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound)
 }
 
 /// The authenticated device and the user it belongs to.
 #[derive(Debug, Clone, Copy)]
-struct Caller {
+pub(crate) struct Caller {
     device: DeviceId,
     user: i64,
 }
 
-enum FamilyAccess {
+pub(crate) enum FamilyAccess {
     /// No device has registered or pushed it yet.
     Unknown,
     Visible,
     Hidden,
 }
 
-async fn family_access(server: &Server, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
+pub(crate) async fn family_access(server: &Server, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
     let row = sqlx::query("SELECT owner_id FROM families WHERE id = ?")
         .bind(id_bytes(family.0))
         .fetch_optional(&server.shared.db)
@@ -233,7 +240,7 @@ async fn family_access(server: &Server, family: FamilyId, user: i64) -> Result<F
 }
 
 /// Lets `caller` read or write the family, claiming it when it's new.
-async fn claim_family(server: &Server, family: FamilyId, caller: Caller) -> Result<(), ApiError> {
+pub(crate) async fn claim_family(server: &Server, family: FamilyId, caller: Caller) -> Result<(), ApiError> {
     match family_access(server, family, caller.user).await? {
         FamilyAccess::Visible => Ok(()),
         FamilyAccess::Hidden => Err(not_found()),

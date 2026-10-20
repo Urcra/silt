@@ -149,8 +149,8 @@ impl Core {
         }))
     }
 
-    /// Makes sure `commit` is in `repo`: from origin, else from the family's
-    /// bundles.
+    /// Makes sure `commit` is in `repo`: from origin, else from the server's
+    /// git mirror, else from the family's bundles.
     pub(crate) async fn ensure_commit(&self, repo: &Repo, family: FamilyId, thread: ThreadId, commit: GitOid) -> Result<(), CoreError> {
         if repo.has_commit(commit) {
             return Ok(());
@@ -158,6 +158,17 @@ impl Core {
         repo.fetch_origin();
         if repo.has_commit(commit) {
             return Ok(());
+        }
+        if let Some(remote) = &self.remote {
+            let (url, headers) = remote.git_mirror(family);
+            match repo.fetch_from_mirror(&url, &headers) {
+                Ok(()) if repo.has_commit(commit) => {
+                    repo.protect(&thread.to_string(), commit)?;
+                    return Ok(());
+                }
+                Ok(()) => {}
+                Err(error) => warn!(%error, "could not fetch from the server's git mirror"),
+            }
         }
         let bundles: Vec<_> = self
             .local_log(family)

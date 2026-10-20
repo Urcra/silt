@@ -10,7 +10,7 @@ use silt_crdt::InodeId;
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, SessionFile, SessionRef, TurnMark};
 use silt_store::{CheckoutRecord, SessionFileOffset, SessionRecord, Store, ThreadRecord};
-use silt_types::{ActorId, FamilyId, GitOid, ThreadId};
+use silt_types::{ActorId, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
 use silt_redact::Redactor;
 use silt_sync::{ClientSync, Outcome};
@@ -1124,6 +1124,7 @@ impl Core {
         let Some(bytes) = repo.bundle(commit)? else {
             return Ok(());
         };
+        self.push_to_mirror(family_id, thread, repo, commit);
         let blob = self.store.blobs().put(&bytes).await?;
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("thread's family is loaded");
@@ -1166,7 +1167,10 @@ impl Core {
 
     /// Threads whose lease moved to another device stop taking writes from
     /// this one.
-    pub(crate) async fn lease_changes(&mut self, deltas: &[Delta]) -> Result<(), CoreError> {
+    /// Threads whose lease moved to another device stop taking writes from
+    /// this one. `before` holds the heads the moved threads had here before
+    /// `deltas` arrived, which is where this device's work continues.
+    pub(crate) async fn lease_changes(&mut self, deltas: &[Delta], before: &HashMap<ThreadId, Frontier>) -> Result<(), CoreError> {
         let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
             return Ok(());
         };
@@ -1174,15 +1178,16 @@ impl Core {
             if let Op::Lease { device: holder, .. } = delta.op
                 && holder != device
             {
-                self.thread_moved(delta.thread).await?;
+                self.thread_moved(delta.thread, before.get(&delta.thread).cloned()).await?;
             }
         }
         Ok(())
     }
 
     /// Another device took `thread`'s lease: checkouts of it here continue in
-    /// a fork, so nothing written here lands in the moved thread.
-    pub(crate) async fn thread_moved(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+    /// a fork from `at` (by default the thread's head), so nothing written
+    /// here lands in the moved thread and nothing from there lands here.
+    pub(crate) async fn thread_moved(&mut self, thread: ThreadId, at: Option<Frontier>) -> Result<(), CoreError> {
         let ids: Vec<i64> = self
             .checkouts
             .iter()
@@ -1190,7 +1195,7 @@ impl Core {
             .map(|(id, _)| *id)
             .collect();
         for id in ids {
-            let fork = self.fork_thread(thread).await?;
+            let fork = self.fork_thread_at(thread, at.clone()).await?;
             self.store.move_checkout(id, fork).await?;
             let checkout = self.checkouts.get_mut(&id).expect("listed above");
             checkout.record.thread = fork;
@@ -1201,6 +1206,27 @@ impl Core {
             warn!(%thread, %fork, "the thread moved to another device; continuing here in a fork");
         }
         Ok(())
+    }
+
+    /// Pushes a commit origin lacks to the server's git mirror, in the
+    /// background; the bundle recorded next to it covers a failure.
+    fn push_to_mirror(&self, family: FamilyId, thread: ThreadId, repo: &Repo, commit: GitOid) {
+        let Some(remote) = &self.remote else {
+            return;
+        };
+        let (url, headers) = remote.git_mirror(family);
+        let root = repo.root().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let pushed = Repo::discover(&root)
+                .map_err(|error| error.to_string())
+                .and_then(|repo| {
+                    repo.push_to_mirror(&url, &headers, commit, &thread.to_string())
+                        .map_err(|error| error.to_string())
+                });
+            if let Err(error) = pushed {
+                warn!(%error, "could not push to the server's git mirror");
+            }
+        });
     }
 
     /// The web UI's URL, starting it first if needed.
@@ -1224,6 +1250,12 @@ impl Core {
 
     /// Starts a new thread in `from`'s family at `from`'s current head.
     pub(crate) async fn fork_thread(&mut self, from: ThreadId) -> Result<ThreadId, CoreError> {
+        self.fork_thread_at(from, None).await
+    }
+
+    /// Starts a new thread in `from`'s family at `at`, by default `from`'s
+    /// current head.
+    pub(crate) async fn fork_thread_at(&mut self, from: ThreadId, at: Option<Frontier>) -> Result<ThreadId, CoreError> {
         let source = self.threads[&from].clone();
         let fork = ThreadId(uuid::Uuid::now_v7().as_u128());
         let record = ThreadRecord {
@@ -1237,7 +1269,8 @@ impl Core {
         self.threads.insert(fork, record);
         let actor = self.thread_actor(fork);
         let family = self.families.get_mut(&source.family).expect("forked thread's family is loaded");
-        let delta = family.delta(actor, fork, Author::User, now_ms(), family.thread_head(from), Op::Fork { from });
+        let parents = at.unwrap_or_else(|| family.thread_head(from));
+        let delta = family.delta(actor, fork, Author::User, now_ms(), parents, Op::Fork { from });
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.store.append_deltas(source.family, &[delta]).await?;
         Ok(fork)

@@ -96,6 +96,18 @@ impl Remote {
             .bearer_auth(&self.config.token)
     }
 
+    /// The family's repository on the server's git mirror, and the headers
+    /// git must send with every request to it.
+    pub fn git_mirror(&self, family: FamilyId) -> (String, Vec<String>) {
+        (
+            format!("{}/git/{family}.git", self.config.url),
+            vec![
+                format!("Authorization: Bearer {}", self.config.token),
+                format!("{PROTOCOL_HEADER}: {PROTOCOL}"),
+            ],
+        )
+    }
+
     pub async fn listing(&self) -> Result<Listing, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/listing").send().await?;
         Ok(checked(response).await?.json().await?)

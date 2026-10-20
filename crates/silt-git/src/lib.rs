@@ -175,13 +175,29 @@ impl Repo {
     pub fn git(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {
         run_git(&self.root, args, stdin)
     }
+
+    /// Runs git with extra configuration given through the environment, so
+    /// values such as tokens don't show up in process listings.
+    pub fn git_with_config(&self, args: &[&str], config: &[(&str, &str)]) -> Result<Vec<u8>, GitError> {
+        let mut envs = vec![("GIT_CONFIG_COUNT".to_owned(), config.len().to_string())];
+        for (index, (key, value)) in config.iter().enumerate() {
+            envs.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_owned()));
+            envs.push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_owned()));
+        }
+        run_git_with(&self.root, args, None, &envs)
+    }
 }
 
 pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {
+    run_git_with(dir, args, stdin, &[])
+}
+
+fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String, String)]) -> Result<Vec<u8>, GitError> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
+        .envs(envs.iter().map(|(key, value)| (key, value)))
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

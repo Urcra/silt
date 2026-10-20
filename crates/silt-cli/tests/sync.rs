@@ -61,6 +61,17 @@ fn a_thread_continues_on_another_machine() {
         "pub fn wip() {}\n"
     );
     assert_eq!(fs::read_to_string(home.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
+    let wip = git(&laptop.repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    let mirror = fs::read_dir(world.server.data.join("git"))
+        .expect("the server keeps a git mirror")
+        .flatten()
+        .next()
+        .expect("one repository per family")
+        .path();
+    let mirrored = git(&mirror, &["for-each-ref", "--format=%(objectname)", "refs/silt/threads/"]);
+    assert!(mirrored.contains(&wip), "the unpushed commit is on the server's mirror: {mirrored}");
+    let fetched = git(&home.repo, &["for-each-ref", "--format=%(objectname)", "refs/silt/mirror/"]);
+    assert!(fetched.contains(&wip), "the home machine fetched it from the mirror: {fetched}");
 
     assert!(eventually(|| home.stdout(&["diff", &thread]).contains("+fn home() {}")));
     let show = home.stdout(&["show", &thread]);

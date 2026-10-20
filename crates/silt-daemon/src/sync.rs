@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use silt_agents::claude;
@@ -152,9 +152,13 @@ impl Core {
     async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<(), CoreError> {
         let at = self.local_log(family_id).len() as u64;
         let mut fresh = Vec::new();
+        let mut heads_before = HashMap::new();
         if self.families.contains_key(&family_id) {
             let repo = self.family_repo(family_id)?;
             let family = self.families.get_mut(&family_id).expect("checked above");
+            for checkout in self.checkouts.values().filter(|checkout| checkout.family == family_id) {
+                heads_before.insert(checkout.record.thread, family.thread_head(checkout.record.thread));
+            }
             for delta in deltas {
                 if family.apply(delta.clone(), &mut RepoBases(&repo))? == Applied::New {
                     fresh.push(delta);
@@ -188,7 +192,7 @@ impl Core {
             }
         }
         if self.families.contains_key(&family_id) {
-            self.lease_changes(&fresh).await?;
+            self.lease_changes(&fresh, &heads_before).await?;
             self.update_checkouts(family_id, &fresh).await?;
         }
         Ok(())
