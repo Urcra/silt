@@ -6,7 +6,13 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
 work=$(mktemp -d /tmp/silt-live-XXXXXX)
-port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+free_port() {
+    python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+port=$(free_port)
+# The tests serve a stand-in model API here for the harness.
+model_port=$(free_port)
+export ANTHROPIC_API_KEY=test-key ANTHROPIC_BASE_URL="http://127.0.0.1:$model_port"
 url="http://127.0.0.1:$port"
 password="correct horse battery"
 
@@ -54,4 +60,4 @@ for _ in $(seq 1 100); do
 done
 bob_url=$("$silt" open --no-browser)
 
-printf '{"alice":"%s","bob":"%s","thread":"%s","work":"%s"}\n' "$alice_url" "$bob_url" "$thread" "$work"
+printf '{"alice":"%s","bob":"%s","thread":"%s","work":"%s","model":%s}\n' "$alice_url" "$bob_url" "$thread" "$work" "$model_port"

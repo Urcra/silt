@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 
@@ -10,13 +11,42 @@ interface Live {
   bob: string
   thread: string
   work: string
+  model: number
 }
 
 let live: Live
+let model: Server
+
+/** A stand-in for Anthropic's API that answers by how far the turn is. */
+function serveModel(port: number): Promise<void> {
+  const tool = (name: string, input: unknown) => ({
+    content: [{ type: 'tool_use', id: `t-${name}`, name, input }],
+    stop_reason: 'tool_use',
+  })
+  model = createServer((request, response) => {
+    let body = ''
+    request.on('data', (chunk: Buffer) => (body += chunk.toString()))
+    request.on('end', () => {
+      const { messages } = JSON.parse(body) as { messages: unknown[] }
+      const answer =
+        messages.length === 1
+          ? tool('read_file', { path: 'src/main.rs' })
+          : messages.length === 3
+            ? tool('edit_file', { path: 'src/main.rs', old: 'fn main() {}', new: 'fn main() { harness() }' })
+            : messages.length === 5
+              ? tool('run', { command: 'echo sandboxed' })
+              : { content: [{ type: 'text', text: 'Harness done.' }], stop_reason: 'end_turn' }
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(answer))
+    })
+  })
+  return new Promise((resolve) => model.listen(port, '127.0.0.1', resolve))
+}
 
 test.beforeAll(() => {
   const output = execFileSync(join(import.meta.dirname, 'live-fixture.sh'), { encoding: 'utf8' })
   live = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Live
+  return serveModel(live.model)
 })
 
 test.afterAll(() => {
@@ -25,6 +55,7 @@ test.afterAll(() => {
   }
   const pid = Number(readFileSync(join(live.work, 'server.pid'), 'utf8'))
   process.kill(pid)
+  model?.close()
   rmSync(live.work, { recursive: true, force: true })
 })
 
@@ -131,4 +162,21 @@ test('a new thread starts with an agent in a known clone', async ({ page }) => {
   await page.getByRole('button', { name: 'Send' }).click()
   await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: hello')).toBeVisible()
+})
+
+test("Silt's harness works from the web UI on a model API", async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByLabel('agent to start').selectOption({ label: 'Silt harness' })
+  await page.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Silt harness is ready')
+  await page.getByLabel('draft').fill('call the harness from main')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const asked = page.getByRole('group', { name: 'permission' })
+  await expect(asked).toContainText('Run `echo sandboxed`')
+  await asked.getByRole('button', { name: 'Allow', exact: true }).click()
+  await expect(page.getByText('Harness done.')).toBeVisible()
+  await expect(page.getByText('⚙ Edit src/main.rs')).toBeVisible()
+  await expect(page.getByText(/^exit status 0\s+sandboxed/)).toBeVisible()
+  await page.getByRole('button', { name: 'src/main.rs' }).click()
+  await expect(page.getByTestId('editor')).toContainText('fn main() { harness() }')
 })
