@@ -4,4 +4,4 @@ pub mod text;
 
 pub use causal::{Added, CausalError, CausalGraph, Run, VersionVector};
 pub use replica::{ReplicaError, TextReplica};
-pub use text::{TextDoc, TextError, TextEvent, TextOp};
+pub use text::{Anchor, Bias, ResolvedAnchor, TextDoc, TextError, TextEvent, TextOp};

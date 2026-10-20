@@ -26,6 +26,30 @@ pub struct TextEvent {
     pub op: TextOp,
 }
 
+/// Which side of a position an anchor sticks to when text is inserted there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Bias {
+    /// Stays after the character to its left.
+    Left,
+    /// Stays before the character to its right.
+    Right,
+}
+
+/// A position that survives edits: it follows the character it is attached
+/// to, or the start or end of the document when there is none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Anchor {
+    pub char_id: Option<DeltaId>,
+    pub bias: Bias,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedAnchor {
+    pub pos: usize,
+    /// The character the anchor was attached to is not visible any more.
+    pub outdated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TextError {
     #[error("{op:?} is outside a document of length {len} at its parent version")]
@@ -34,6 +58,10 @@ pub enum TextError {
     SpanLengthMismatch { span_len: u64, units: usize },
     #[error("operation is empty")]
     Empty,
+    #[error("anchor position {pos} is outside a document of length {len}")]
+    AnchorOutOfBounds { pos: usize, len: usize },
+    #[error("anchor refers to character {0} that is not in this document")]
+    UnknownAnchor(DeltaId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +84,10 @@ impl Item {
 
     fn is_deleted(&self) -> bool {
         !self.deleted_by.is_empty()
+    }
+
+    fn is_visible_now(&self) -> bool {
+        !self.is_deleted()
     }
 }
 
@@ -98,6 +130,63 @@ impl TextDoc {
             .filter(|item| item.visible_at(&vv))
             .map(|item| item.ch)
             .collect()
+    }
+
+    /// An anchor at `pos` in the current text.
+    pub fn anchor(&self, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
+        let visible: Vec<&Item> = self.items.iter().filter(|item| !item.is_deleted()).collect();
+        if pos > visible.len() {
+            return Err(TextError::AnchorOutOfBounds {
+                pos,
+                len: visible.len(),
+            });
+        }
+        let char_id = match bias {
+            Bias::Left => pos.checked_sub(1).map(|index| visible[index].id),
+            Bias::Right => visible.get(pos).map(|item| item.id),
+        };
+        Ok(Anchor { char_id, bias })
+    }
+
+    /// Where `anchor` is in the current text.
+    pub fn resolve(&self, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
+        self.resolve_with(anchor, Item::is_visible_now)
+    }
+
+    /// Where `anchor` is in the text as of `version`.
+    pub fn resolve_at(
+        &self,
+        graph: &CausalGraph,
+        version: &Frontier,
+        anchor: &Anchor,
+    ) -> Result<ResolvedAnchor, TextError> {
+        let vv = graph.version_vector(version);
+        self.resolve_with(anchor, |item| item.visible_at(&vv))
+    }
+
+    fn resolve_with(
+        &self,
+        anchor: &Anchor,
+        visible: impl Fn(&Item) -> bool,
+    ) -> Result<ResolvedAnchor, TextError> {
+        let Some(char_id) = anchor.char_id else {
+            let pos = match anchor.bias {
+                Bias::Left => 0,
+                Bias::Right => self.items.iter().filter(|item| visible(item)).count(),
+            };
+            return Ok(ResolvedAnchor { pos, outdated: false });
+        };
+        let index = self.index_of(char_id).ok_or(TextError::UnknownAnchor(char_id))?;
+        let before = self.items[..index].iter().filter(|item| visible(item)).count();
+        let target_visible = visible(&self.items[index]);
+        let pos = match anchor.bias {
+            Bias::Left if target_visible => before + 1,
+            Bias::Left | Bias::Right => before,
+        };
+        Ok(ResolvedAnchor {
+            pos,
+            outdated: !target_visible,
+        })
     }
 
     /// The delta that inserted each visible character.
