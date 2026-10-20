@@ -210,6 +210,45 @@ async fn data_survives_a_restart_under_a_new_generation() {
 }
 
 #[tokio::test]
+async fn a_stored_delta_that_no_longer_applies_does_not_block_pushes() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (client, _) = Client::login(data.path(), &base).await;
+    let chain = deltas(3);
+    assert_eq!(client.push(chain[..1].to_vec()).await.status(), StatusCode::OK);
+
+    let family = Family::new();
+    let orphan = family.delta(
+        ActorId(5),
+        THREAD,
+        Author::User,
+        0,
+        silt_types::Frontier::single(silt_types::DeltaId::new(ActorId(99), silt_types::Lamport(0))),
+        Op::Create {
+            kind: InodeKind::File,
+            parent: Parent::Root,
+            name: "lost".into(),
+            content: Content::Empty,
+            executable: false,
+        },
+    );
+    let db = sqlx::SqlitePool::connect(&format!("sqlite://{}", data.path().join("server.sqlite").display())).await.expect("opens");
+    sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, 2, ?)")
+        .bind(FAMILY.0.to_be_bytes().to_vec())
+        .bind(postcard::to_allocvec(&orphan).expect("encodes"))
+        .execute(&db)
+        .await
+        .expect("inserts");
+    db.close().await;
+
+    let client = Client { base: start(data.path()).await, ..client };
+    assert_eq!(client.push(chain[1..].to_vec()).await.status(), StatusCode::OK, "new deltas are numbered after the skipped one");
+    let client = Client { base: start(data.path()).await, ..client };
+    let pulled: PullReply = client.pull("after=0").await.json().await.expect("pull reply");
+    assert_eq!(pulled.deltas.len(), 3);
+}
+
+#[tokio::test]
 async fn routes_without_an_account_take_only_small_bodies() {
     let data = tempfile::tempdir().expect("temp dir");
     let base = start(data.path()).await;

@@ -594,39 +594,31 @@ async fn push(
         return Err(ApiError(StatusCode::CONFLICT, ErrorReply::MissingParents { delta: delta.span.first() }));
     }
     let pushed: Vec<Delta> = known.into_iter().cloned().chain(new).collect();
-    let before = room.seq();
-    let outcome = room.push(pushed).map_err(|error| match error {
+    let prepared = room.prepare(pushed).map_err(|error| match error {
         PushError::Conflict(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::Conflict { delta }),
         PushError::MissingParents(delta) => ApiError(StatusCode::CONFLICT, ErrorReply::MissingParents { delta }),
         PushError::Invalid { reason, .. } => bad_request(reason),
     })?;
-    let stored: Vec<(u64, Delta)> = room.deltas()[usize::try_from(before).unwrap_or(usize::MAX)..]
-        .iter()
-        .cloned()
-        .zip(before + 1..)
-        .map(|(delta, seq)| (seq, delta))
-        .collect();
-    let index_rows: Vec<index::Row> = {
-        let mut index = server.shared.index.lock().await;
-        stored.iter().flat_map(|(_, delta)| index.observe(family, delta)).collect()
-    };
+    let stored: Vec<Delta> = prepared.fresh().to_vec();
     let mut tx = server.shared.db.begin().await?;
     collab::claim_actors(&mut tx, caller.user, &claims).await?;
-    index::write(&mut tx, &index_rows).await?;
-    for (seq, delta) in &stored {
-        sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, ?, ?)")
+    for delta in &stored {
+        // Numbered after what is stored rather than by the room, which may
+        // have skipped a stored delta that no longer applies.
+        sqlx::query("INSERT INTO deltas (family_id, seq, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2 FROM deltas WHERE family_id = ?1")
             .bind(id_bytes(family.0))
-            .bind(i64::try_from(*seq).unwrap_or(i64::MAX))
             .bind(postcard::to_allocvec(delta).map_err(ServerError::from)?)
             .execute(&mut *tx)
             .await?;
     }
     tx.commit().await?;
+    let outcome = room.commit(prepared);
+    let index_rows = server.observe(family, &stored).await;
     drop(rooms);
+    server.write_index(&index_rows).await;
     if !stored.is_empty() {
         server.wake_pulls(family);
-        let deltas: Vec<Delta> = stored.into_iter().map(|(_, delta)| delta).collect();
-        if let Err(error) = server.notify(&deltas, caller).await {
+        if let Err(error) = server.notify(&stored, caller).await {
             tracing::warn!(%error, "could not write notifications");
         }
     }
@@ -929,6 +921,25 @@ impl Server {
     async fn viewer(&self, user: i64) -> Result<Viewer, sqlx::Error> {
         let forks = self.shared.index.lock().await.forks().clone();
         Viewer::load(&self.shared.db, user, &forks).await
+    }
+
+    /// Takes stored deltas into the index, returning the rows to write.
+    async fn observe(&self, family: FamilyId, deltas: &[Delta]) -> Vec<index::Row> {
+        let mut index = self.shared.index.lock().await;
+        deltas.iter().flat_map(|delta| index.observe(family, delta)).collect()
+    }
+
+    /// Writes index rows. The index is rebuilt from the deltas at every
+    /// start, so a failed write only leaves search short until then.
+    async fn write_index(&self, rows: &[index::Row]) {
+        let written = async {
+            let mut tx = self.shared.db.begin().await?;
+            index::write(&mut tx, rows).await?;
+            tx.commit().await
+        };
+        if let Err(error) = written.await {
+            tracing::warn!(%error, "could not write the search index; it is rebuilt at the next start");
+        }
     }
 
     fn waiter(&self, family: FamilyId) -> Waiter<'_> {

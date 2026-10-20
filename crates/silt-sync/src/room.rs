@@ -19,6 +19,21 @@ pub struct PushOutcome {
     pub seq: u64,
 }
 
+/// A checked batch, ready to store.
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    graph: CausalGraph,
+    fresh: Vec<Delta>,
+    after: u64,
+}
+
+impl Prepared {
+    /// The deltas the room doesn't have yet.
+    pub fn fresh(&self) -> &[Delta] {
+        &self.fresh
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PushError {
     #[error("delta {0} is already stored with different content")]
@@ -78,6 +93,13 @@ impl Room {
     /// Stores new deltas, skipping known ones. The batch is checked whole
     /// first, so a rejected batch changes nothing.
     pub fn push(&mut self, batch: Vec<Delta>) -> Result<PushOutcome, PushError> {
+        let prepared = self.prepare(batch)?;
+        Ok(self.commit(prepared))
+    }
+
+    /// Checks a batch without storing it: the new deltas, in the order
+    /// [`Room::commit`] will number them, from `seq() + 1`.
+    pub fn prepare(&self, batch: Vec<Delta>) -> Result<Prepared, PushError> {
         let mut graph = self.graph.clone();
         let mut fresh = Vec::new();
         for delta in batch {
@@ -112,16 +134,27 @@ impl Room {
             }
             fresh.push(delta);
         }
-        let accepted = fresh.len();
-        self.graph = graph;
-        for delta in fresh {
+        Ok(Prepared {
+            graph,
+            fresh,
+            after: self.seq(),
+        })
+    }
+
+    /// Stores a batch [`Room::prepare`] checked. Nothing may have been
+    /// stored in between.
+    pub fn commit(&mut self, prepared: Prepared) -> PushOutcome {
+        assert_eq!(prepared.after, self.seq(), "the room changed since the batch was prepared");
+        let accepted = prepared.fresh.len();
+        self.graph = prepared.graph;
+        for delta in prepared.fresh {
             self.by_first.insert(delta.span.first(), self.deltas.len());
             self.deltas.push(delta);
         }
-        Ok(PushOutcome {
+        PushOutcome {
             accepted,
             seq: self.seq(),
-        })
+        }
     }
 
     /// The `seq` of the delta whose first id is `id`.
