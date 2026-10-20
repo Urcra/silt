@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn ids_round_trip_as_hex() {
-        let thread = ThreadId(0x0192_ab);
+        let thread = ThreadId(0x0001_92ab);
         assert_eq!(thread.to_string().parse::<ThreadId>(), Ok(thread));
     }
 }
