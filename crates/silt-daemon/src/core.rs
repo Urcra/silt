@@ -932,27 +932,53 @@ impl Core {
     pub(crate) async fn check_commits(&mut self) -> Result<(), CoreError> {
         let ids: Vec<i64> = self.checkouts.keys().copied().collect();
         for id in ids {
-            let checkout = &self.checkouts[&id];
-            let Some(head) = checkout.repo.head_commit()? else {
-                continue;
-            };
-            let previous = self.heads.insert(id, head);
-            if previous.is_none() || previous == Some(head) {
-                continue;
+            if let Err(error) = self.check_commit(id).await {
+                warn!(%error, checkout = id, "could not record a new commit");
             }
-            let (family_id, thread) = (checkout.family, checkout.record.thread);
-            let branch = checkout.repo.head_branch()?;
-            let repo = Repo::discover(&checkout.record.path)?;
-            let actor = self.thread_actor(thread);
-            let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
-            let op = Op::Git(GitOp::Committed { commit: head, branch });
-            let delta = family.delta(actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
-            family.apply(delta.clone(), &mut HashMap::new())?;
-            self.persist(family_id, &[delta]).await?;
-            repo.protect(&thread.to_string(), head)?;
-            self.record_bundle(family_id, thread, &repo, head).await?;
         }
         Ok(())
+    }
+
+    /// Records the checkout's HEAD when it differs from the last commit its
+    /// thread has, which also catches commits made while the daemon was
+    /// down. The head is remembered only once it is recorded, so a failure
+    /// is retried next time.
+    async fn check_commit(&mut self, id: i64) -> Result<(), CoreError> {
+        let checkout = &self.checkouts[&id];
+        let Some(head) = checkout.repo.head_commit()? else {
+            return Ok(());
+        };
+        let (family_id, thread) = (checkout.family, checkout.record.thread);
+        let known = match self.heads.get(&id) {
+            Some(known) => Some(*known),
+            None => self.recorded_commit(family_id, thread),
+        };
+        if known == Some(head) {
+            self.heads.insert(id, head);
+            return Ok(());
+        }
+        let branch = checkout.repo.head_branch()?;
+        let repo = Repo::discover(&checkout.record.path)?;
+        let actor = self.thread_actor(thread);
+        let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
+        let op = Op::Git(GitOp::Committed { commit: head, branch });
+        let delta = family.delta(actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
+        family.apply(delta.clone(), &mut HashMap::new())?;
+        self.persist(family_id, &[delta]).await?;
+        repo.protect(&thread.to_string(), head)?;
+        self.record_bundle(family_id, thread, &repo, head).await?;
+        self.heads.insert(id, head);
+        Ok(())
+    }
+
+    /// The last commit the thread has recorded, its own or inherited.
+    fn recorded_commit(&self, family_id: FamilyId, thread: ThreadId) -> Option<GitOid> {
+        let family = self.families.get(&family_id)?;
+        let seen = family.graph().version_vector(&family.thread_head(thread));
+        family.log().iter().rev().find_map(|delta| match &delta.op {
+            Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => Some(*commit),
+            _ => None,
+        })
     }
 
     /// Threads whose lease moved to another device stop taking writes from
