@@ -127,6 +127,24 @@ impl Delta {
     /// Checks what can be checked without the family: the delta's own
     /// fields. Deltas come from other people (ADR 0016), so the server runs
     /// this before accepting one and every replica before applying one.
+    /// The blob the delta refers to, which has to travel with it.
+    pub fn blob(&self) -> Option<BlobHash> {
+        match &self.op {
+            Op::Create {
+                content: Content::Blob(hash),
+                ..
+            }
+            | Op::SetContent {
+                content: Content::Blob(hash),
+                ..
+            }
+            | Op::Conv(ConvOp::Attachment { blob: hash, .. })
+            | Op::Conv(ConvOp::SessionTranslated { lines: hash, .. })
+            | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
+            _ => None,
+        }
+    }
+
     pub fn check_shape(&self) -> Result<(), ShapeError> {
         let units = self.op.units();
         if self.span.len != units as u64 {

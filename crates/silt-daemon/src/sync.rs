@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use silt_crdt::InodeId;
-use silt_log::{Applied, Content, ConvOp, Delta, GitOp, LogError, Op};
+use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{SyncState, ThreadRecord};
 use silt_sync::{Effect, Outcome};
@@ -425,21 +425,5 @@ fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
 }
 
 fn referenced_blobs(deltas: &[Delta]) -> Vec<BlobHash> {
-    deltas
-        .iter()
-        .filter_map(|delta| match &delta.op {
-            Op::Create {
-                content: Content::Blob(hash),
-                ..
-            }
-            | Op::SetContent {
-                content: Content::Blob(hash),
-                ..
-            }
-            | Op::Conv(ConvOp::Attachment { blob: hash, .. })
-            | Op::Conv(ConvOp::SessionTranslated { lines: hash, .. })
-            | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
-            _ => None,
-        })
-        .collect()
+    deltas.iter().filter_map(Delta::blob).collect()
 }

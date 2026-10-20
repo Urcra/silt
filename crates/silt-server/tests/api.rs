@@ -230,14 +230,23 @@ async fn blobs_threads_and_leases() {
         .await
         .expect("sends");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let fetched = client
-        .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}"))
-        .send()
-        .await
-        .expect("sends")
-        .bytes()
-        .await
-        .expect("body");
+    let fetch = || client.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).send();
+    assert_eq!(
+        fetch().await.expect("sends").status(),
+        StatusCode::NOT_FOUND,
+        "a blob no delta refers to is no one's to fetch"
+    );
+    let family = Family::new();
+    let bundle = family.delta(
+        ActorId(9),
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob: hash }),
+    );
+    assert_eq!(client.push(vec![bundle]).await.status(), StatusCode::OK);
+    let fetched = fetch().await.expect("sends").bytes().await.expect("body");
     assert_eq!(&fetched[..], b"bundle bytes");
 
     let thread = ThreadInfo {

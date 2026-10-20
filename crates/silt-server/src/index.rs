@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use silt_agents::Transcripts;
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{ConvOp, Delta, GitOp, MrOp, Op};
-use silt_types::{ActorId, DeltaId, FamilyId, Lamport, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
 use sqlx::{Sqlite, Transaction};
 
 /// One inode's latest placement.
@@ -26,6 +26,9 @@ pub(crate) struct Index {
     requests: HashMap<DeltaId, ThreadId>,
     /// Each fork's source.
     forks: HashMap<ThreadId, ThreadId>,
+    /// The deltas that refer to each blob: whoever may read one of them
+    /// may fetch the blob.
+    blobs: HashMap<BlobHash, Vec<(FamilyId, DeltaId)>>,
     transcripts: Transcripts,
 }
 
@@ -41,6 +44,9 @@ pub(crate) enum Row {
 impl Index {
     /// Takes in a delta and returns the rows it adds to the index.
     pub(crate) fn observe(&mut self, family: FamilyId, delta: &Delta) -> Vec<Row> {
+        if let Some(blob) = delta.blob() {
+            self.blobs.entry(blob).or_default().push((family, delta.span.first()));
+        }
         let thread = delta.thread;
         let time_ms = delta.time_ms;
         let mut rows = vec![Row::Activity {
@@ -143,6 +149,11 @@ impl Index {
 
     pub(crate) fn forks(&self) -> &HashMap<ThreadId, ThreadId> {
         &self.forks
+    }
+
+    /// The deltas that refer to `blob`.
+    pub(crate) fn blob_references(&self, blob: BlobHash) -> Vec<(FamilyId, DeltaId)> {
+        self.blobs.get(&blob).cloned().unwrap_or_default()
     }
 
     fn path(&self, family: FamilyId, inode: InodeId) -> Option<String> {

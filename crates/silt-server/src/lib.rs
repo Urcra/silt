@@ -868,8 +868,28 @@ async fn put_blob(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_blob(State(server): State<Server>, UrlPath(hash_hex): UrlPath<String>) -> Result<Vec<u8>, ApiError> {
+/// A blob, for someone who may read a delta that refers to it. Knowing a
+/// blob's hash is not enough: it could be a guess at a file's content, or
+/// left over from access since taken away.
+async fn get_blob(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(hash_hex): UrlPath<String>,
+) -> Result<Vec<u8>, ApiError> {
     let hash = parse_blob_hash(&hash_hex).ok_or_else(|| bad_request("invalid blob hash"))?;
+    let references = server.shared.index.lock().await.blob_references(hash);
+    let viewer = server.viewer(caller.user).await?;
+    let readable = {
+        let rooms = server.shared.rooms.lock().await;
+        references.iter().any(|(family, id)| {
+            rooms
+                .get(family)
+                .is_some_and(|room| viewer.readable_history(family.0, room).contains(*id))
+        })
+    };
+    if !readable {
+        return Err(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound));
+    }
     server
         .shared
         .blobs

@@ -20,22 +20,44 @@ impl BlobStore {
         BlobHash(*blake3::hash(bytes).as_bytes())
     }
 
+    /// Stores `bytes` durably: written to a file of this call's own, synced,
+    /// then renamed into place, so concurrent stores of one blob and crashes
+    /// never leave a partial blob behind.
     pub async fn put(&self, bytes: &[u8]) -> io::Result<BlobHash> {
         let hash = Self::hash(bytes);
         let path = self.path(hash);
         if fs::try_exists(&path).await? {
+            // Fresh again: garbage collection spares recently stored blobs,
+            // and a delta referring to this one may be on its way.
+            let touched = path.clone();
+            tokio::task::spawn_blocking(move || std::fs::File::open(touched)?.set_modified(SystemTime::now()))
+                .await
+                .map_err(io::Error::other)??;
             return Ok(hash);
         }
         let dir = path.parent().expect("blob paths have a parent");
         fs::create_dir_all(dir).await?;
-        let temporary = dir.join(format!(".{hash}.tmp"));
-        fs::write(&temporary, bytes).await?;
+        let unique = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+        let temporary = dir.join(format!(".{hash}.{}-{unique}.tmp", std::process::id()));
+        let mut file = fs::File::create(&temporary).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await?;
+        file.sync_all().await?;
+        drop(file);
         fs::rename(&temporary, &path).await?;
+        fs::File::open(dir).await?.sync_all().await?;
         Ok(hash)
     }
 
+    /// The blob's bytes. One damaged on disk counts as missing, so it gets
+    /// stored again rather than handed out.
     pub async fn get(&self, hash: BlobHash) -> io::Result<Vec<u8>> {
-        fs::read(self.path(hash)).await
+        let bytes = fs::read(self.path(hash)).await?;
+        if Self::hash(&bytes) == hash {
+            Ok(bytes)
+        } else {
+            let _ = fs::remove_file(self.path(hash)).await;
+            Err(io::Error::new(io::ErrorKind::NotFound, format!("blob {hash} was damaged")))
+        }
     }
 
     /// Every stored blob and when it was written.
