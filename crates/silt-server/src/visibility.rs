@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use silt_crdt::VersionVector;
 use silt_log::{MrOp, Op};
 use silt_proto::Visibility;
 use silt_sync::Room;
@@ -200,6 +201,20 @@ impl Viewer {
             hasher.update(&id.lamport.0.to_be_bytes());
         }
         u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().expect("8 bytes"))
+    }
+
+    /// Every id of `room` this user may read: their threads' deltas and what
+    /// those build on.
+    pub(crate) fn readable_history(&self, family: u128, room: &Room) -> VersionVector {
+        let readable = self.readable(family, room);
+        let tips: Frontier = room
+            .deltas()
+            .iter()
+            .zip(readable)
+            .filter(|(_, readable)| *readable)
+            .map(|(delta, _)| delta.span.last())
+            .collect();
+        room.graph().version_vector(&tips)
     }
 
     /// Positions in `room` of the deltas this user may read.

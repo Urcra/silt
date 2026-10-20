@@ -195,6 +195,31 @@ async fn nobody_writes_as_another_persons_device() {
 }
 
 #[tokio::test]
+async fn nobody_builds_on_history_they_cannot_read() {
+    let (_data, alice, bob) = two_people().await;
+    let mut family = Family::new();
+    alice.register(MAIN).await;
+    alice.register(FORK).await;
+    let open = delta(&mut family, MAIN, file("open"));
+    alice.push(std::slice::from_ref(&open)).await;
+    let private = silt_proto::VisibilityRequest {
+        repo: None,
+        thread: Some(FORK),
+        visibility: silt_proto::Visibility::Private,
+    };
+    let set = alice.request(reqwest::Method::PUT, "/v1/visibility").json(&private).send().await.expect("sends");
+    assert_eq!(set.status(), StatusCode::NO_CONTENT);
+    let secret = delta(&mut family, FORK, file("secret"));
+    alice.push(std::slice::from_ref(&secret)).await;
+
+    let bobs_thread = ThreadId(93);
+    let probe = family.delta(ActorId(93), bobs_thread, Author::User, 0, family.thread_head(FORK), file("probe"));
+    assert_eq!(bob.try_push(&[probe]).await, StatusCode::CONFLICT, "the private thread's deltas count as missing");
+    let honest = family.delta(ActorId(93), bobs_thread, Author::User, 0, family.thread_head(MAIN), file("honest"));
+    assert_eq!(bob.try_push(&[honest]).await, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn a_repository_is_not_claimed_by_someone_without_threads_in_it() {
     let (_data, alice, bob) = two_people().await;
     let squat = silt_proto::VisibilityRequest {

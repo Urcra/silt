@@ -567,6 +567,15 @@ async fn push(
         .or_insert_with(|| Room::new(server.shared.generation));
     let (known, new): (Vec<&Delta>, Vec<&Delta>) = pushed.iter().partition(|delta| room.position(delta.span.first()).is_some());
     let (new, claims) = collab::admit(&server, caller.user, family, new).await?;
+    // Building on history the caller can't read would let them pull it in
+    // their own thread; such parents count as missing, so the answer tells
+    // hidden history and none apart no better (ADR 0016).
+    let readable = server.viewer(caller.user).await?.readable_history(family.0, room);
+    if let Some(delta) = new.iter().find(|delta| {
+        delta.parents.ids().iter().any(|parent| room.graph().contains(*parent) && !readable.contains(*parent))
+    }) {
+        return Err(ApiError(StatusCode::CONFLICT, ErrorReply::MissingParents { delta: delta.span.first() }));
+    }
     let pushed: Vec<Delta> = known.into_iter().cloned().chain(new).collect();
     let before = room.seq();
     let outcome = room.push(pushed).map_err(|error| match error {
