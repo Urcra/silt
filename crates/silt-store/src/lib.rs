@@ -47,6 +47,8 @@ pub struct CheckoutRecord {
 /// What a checkout last read from or wrote to disk for one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskFile {
+    /// The id of the delta that created the file's inode.
+    pub inode: DeltaId,
     pub hash: [u8; 32],
     pub size: u64,
     pub mtime_ns: i64,
@@ -226,7 +228,8 @@ impl Store {
     }
 
     pub async fn disk_files(&self, checkout: i64) -> Result<HashMap<String, DiskFile>, StoreError> {
-        let rows = sqlx::query("SELECT path, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?")
+        let rows =
+            sqlx::query("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?")
             .bind(checkout)
             .fetch_all(&self.pool)
             .await?;
@@ -236,6 +239,7 @@ impl Store {
                 Ok((
                     row.get("path"),
                     DiskFile {
+                        inode: postcard::from_bytes(row.get::<&[u8], _>("inode"))?,
                         hash: hash.try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?,
                         size: u64::try_from(row.get::<i64, _>("size")).unwrap_or_default(),
                         mtime_ns: row.get("mtime_ns"),
@@ -248,12 +252,13 @@ impl Store {
 
     pub async fn put_disk_file(&self, checkout: i64, path: &str, file: &DiskFile) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO disk_files (checkout_id, path, hash, size, mtime_ns, version) VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (checkout_id, path) DO UPDATE SET
+            "INSERT INTO disk_files (checkout_id, path, inode, hash, size, mtime_ns, version) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (checkout_id, path) DO UPDATE SET inode = excluded.inode,
                  hash = excluded.hash, size = excluded.size, mtime_ns = excluded.mtime_ns, version = excluded.version",
         )
         .bind(checkout)
         .bind(path)
+        .bind(postcard::to_allocvec(&file.inode)?)
         .bind(file.hash.as_slice())
         .bind(i64::try_from(file.size).unwrap_or(i64::MAX))
         .bind(file.mtime_ns)

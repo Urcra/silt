@@ -65,6 +65,7 @@ async fn checkouts_and_disk_state() {
         .await
         .expect("checkout");
     let file = DiskFile {
+        inode: DeltaId::new(ActorId(1), Lamport(1)),
         hash: [1; 32],
         size: 3,
         mtime_ns: 99,

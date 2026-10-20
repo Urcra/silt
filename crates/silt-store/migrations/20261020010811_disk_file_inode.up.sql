@@ -1,0 +1,1 @@
+ALTER TABLE disk_files ADD COLUMN inode BLOB NOT NULL DEFAULT x'';
