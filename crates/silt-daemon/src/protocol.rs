@@ -21,6 +21,11 @@ pub enum Request {
     Show { thread: String },
     Diff { thread: String, turn: Option<usize> },
     Search { query: String, limit: u32 },
+    /// Re-reads the server settings after `silt auth login`.
+    Reload,
+    Status,
+    /// Continues a thread on this machine (ADR 0009).
+    Resume { thread: String, cwd: PathBuf, here: bool },
     Shutdown,
 }
 
@@ -57,11 +62,15 @@ pub struct SessionStarted {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub id: String,
-    pub repo: PathBuf,
+    pub repo: String,
     pub title: Option<String>,
     pub created_ms: i64,
     pub messages: usize,
     pub edits: usize,
+    /// `here` when checked out on this machine, `remote` when only known
+    /// from the server, `moved` when another device took it over.
+    pub location: String,
+    pub forked_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,4 +95,21 @@ pub struct SearchResult {
     pub thread: String,
     pub kind: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonStatus {
+    pub server: Option<String>,
+    pub device: Option<String>,
+    pub sync_error: Option<String>,
+    pub threads: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resumed {
+    pub thread: String,
+    pub checkout: PathBuf,
+    pub agent_cwd: PathBuf,
+    /// The agent session to continue, when the thread has one.
+    pub session_id: Option<String>,
 }

@@ -23,14 +23,20 @@ pub fn threads(threads: &[ThreadSummary]) -> String {
         return out;
     }
     for thread in threads {
+        let fork = thread
+            .forked_from
+            .as_deref()
+            .map(|from| format!(" fork of {}", short(from)))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "{}  {:>4} msgs {:>5} edits  {}  ({})",
+            "{}  {:<6} {:>4} msgs {:>5} edits  {}  ({}){fork}",
             short(&thread.id),
+            thread.location,
             thread.messages,
             thread.edits,
             thread.title.as_deref().unwrap_or("untitled"),
-            thread.repo.display(),
+            thread.repo,
         );
     }
     out

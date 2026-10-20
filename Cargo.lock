@@ -3566,6 +3566,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -4059,6 +4060,7 @@ dependencies = [
  "blake3",
  "notify",
  "notify-debouncer-full",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",
@@ -4067,7 +4069,10 @@ dependencies = [
  "silt-crdt",
  "silt-git",
  "silt-log",
+ "silt-proto",
+ "silt-redact",
  "silt-store",
+ "silt-sync",
  "silt-types",
  "similar",
  "tempfile",
@@ -4109,6 +4114,14 @@ dependencies = [
  "serde",
  "silt-log",
  "silt-types",
+]
+
+[[package]]
+name = "silt-redact"
+version = "0.0.1"
+dependencies = [
+ "silt-crdt",
+ "silt-log",
 ]
 
 [[package]]

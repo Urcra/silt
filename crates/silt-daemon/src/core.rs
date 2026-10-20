@@ -2,20 +2,24 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use silt_agents::{claude, complete_lines};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile, ImportFile, import};
 use silt_crdt::InodeId;
 use silt_git::{FileMode, Repo};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, Op, SessionFile, SessionRef, TurnMark};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, SessionFile, SessionRef, TurnMark};
 use silt_store::{CheckoutRecord, SessionFileOffset, SessionRecord, Store, ThreadRecord};
 use silt_types::{ActorId, FamilyId, GitOid, ThreadId};
+use silt_proto::Listing;
+use silt_redact::Redactor;
+use silt_sync::{ClientSync, Outcome};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
 use crate::protocol::{Request, Response, SessionStarted};
+use crate::remote::{self, Remote};
 use crate::watch::{self, Watcher};
 
 /// How long after a tool finishes its file changes still count as its own;
@@ -27,6 +31,9 @@ pub enum Event {
     Changed { checkout: i64, paths: Vec<PathBuf> },
     Tick,
     CloseTool { session_id: String, reply: oneshot::Sender<Response> },
+    Pushed { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
+    Pulled { family: FamilyId, generation: Option<u64>, outcome: Outcome, error: Option<String> },
+    Listed(Result<Listing, String>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -47,34 +54,45 @@ pub enum CoreError {
     Invalid(String),
 }
 
-struct Checkout {
-    record: CheckoutRecord,
-    family: FamilyId,
-    repo: Repo,
-    bridge: Bridge,
-    _watcher: Option<Watcher>,
+pub(crate) struct Checkout {
+    pub(crate) record: CheckoutRecord,
+    pub(crate) family: FamilyId,
+    pub(crate) repo: Repo,
+    pub(crate) bridge: Bridge,
+    pub(crate) _watcher: Option<Watcher>,
 }
 
-struct Session {
-    record: SessionRecord,
-    family: FamilyId,
-    transcript: PathBuf,
-    offsets: HashMap<String, SessionFileOffset>,
-    open_tool: Option<String>,
+pub(crate) struct Session {
+    pub(crate) record: SessionRecord,
+    pub(crate) family: FamilyId,
+    pub(crate) transcript: PathBuf,
+    pub(crate) offsets: HashMap<String, SessionFileOffset>,
+    pub(crate) open_tool: Option<String>,
 }
 
 pub struct Core {
-    store: Store,
-    actor: ActorId,
-    families: HashMap<FamilyId, Family>,
-    threads: HashMap<ThreadId, ThreadRecord>,
-    checkouts: BTreeMap<i64, Checkout>,
-    sessions: Vec<Session>,
-    events: mpsc::UnboundedSender<Event>,
+    pub(crate) store: Store,
+    pub(crate) actor: ActorId,
+    pub(crate) families: HashMap<FamilyId, Family>,
+    /// Families only known from the server: their deltas, not yet projected
+    /// because there's no local clone to read git blobs from.
+    pub(crate) raw: HashMap<FamilyId, Vec<Delta>>,
+    pub(crate) threads: HashMap<ThreadId, ThreadRecord>,
+    pub(crate) checkouts: BTreeMap<i64, Checkout>,
+    pub(crate) sessions: Vec<Session>,
+    pub(crate) events: mpsc::UnboundedSender<Event>,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) remote: Option<Remote>,
+    pub(crate) syncs: HashMap<FamilyId, ClientSync>,
+    pub(crate) redactor: Redactor,
+    pub(crate) last_listing: Option<Instant>,
+    pub(crate) sync_error: Option<String>,
+    /// The HEAD commit each checkout was last seen at.
+    pub(crate) heads: HashMap<i64, GitOid>,
 }
 
 /// Reads git blobs for lazily imported files.
-struct RepoBases<'a>(&'a Repo);
+pub(crate) struct RepoBases<'a>(pub(crate) &'a Repo);
 
 impl BaseText for RepoBases<'_> {
     fn text(&mut self, oid: GitOid) -> Option<String> {
@@ -90,39 +108,59 @@ impl Core {
     /// Loads everything from the store, restarts watchers and tails, and
     /// queues a rescan of every checkout to pick up changes made while the
     /// daemon was down.
-    pub async fn load(store: Store, actor: ActorId, events: mpsc::UnboundedSender<Event>) -> Result<Self, CoreError> {
+    pub async fn load(
+        store: Store,
+        actor: ActorId,
+        data_dir: &Path,
+        events: mpsc::UnboundedSender<Event>,
+    ) -> Result<Self, CoreError> {
         let mut core = Self {
             store,
             actor,
             families: HashMap::new(),
+            raw: HashMap::new(),
             threads: HashMap::new(),
             checkouts: BTreeMap::new(),
             sessions: Vec::new(),
             events,
+            data_dir: data_dir.to_owned(),
+            remote: remote::load_config(data_dir).map(Remote::new),
+            syncs: HashMap::new(),
+            redactor: Redactor::from_env(),
+            last_listing: None,
+            sync_error: None,
+            heads: HashMap::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
         }
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
-            let repo_root = core
+            let repo = core
                 .threads
                 .values()
-                .find(|thread| thread.family == family_id)
-                .map(|thread| thread.repo_root.clone())
-                .expect("family has a thread");
-            let mut family = Family::new();
-            let repo = Repo::discover(&repo_root).ok();
-            for delta in core.store.deltas(family_id).await? {
-                let result = match &repo {
-                    Some(repo) => family.apply(delta, &mut RepoBases(repo)),
-                    None => family.apply(delta, &mut HashMap::new()),
-                };
-                if let Err(error) = result {
-                    warn!(%error, "skipping a delta that no longer applies");
+                .filter(|thread| thread.family == family_id && !thread.repo_root.as_os_str().is_empty())
+                .find_map(|thread| Repo::discover(&thread.repo_root).ok());
+            let deltas = core.store.deltas(family_id).await?;
+            match repo {
+                Some(repo) => {
+                    let mut family = Family::new();
+                    for delta in deltas {
+                        if let Err(error) = family.apply(delta, &mut RepoBases(&repo)) {
+                            warn!(%error, "skipping a delta that no longer applies");
+                        }
+                    }
+                    core.families.insert(family_id, family);
+                }
+                None => {
+                    core.raw.insert(family_id, deltas);
                 }
             }
-            core.families.insert(family_id, family);
+            let state = core.store.sync_state(family_id).await?;
+            core.syncs.insert(
+                family_id,
+                ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled),
+            );
         }
         for record in core.store.checkouts().await? {
             if !record.path.exists() {
@@ -203,6 +241,26 @@ impl Core {
                 to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn)))
             }
             Request::Search { query, limit } => to_response(self.search(&query, limit).await),
+            Request::Reload => {
+                self.remote = remote::load_config(&self.data_dir).map(Remote::new);
+                self.syncs.clear();
+                for family in self.families.keys().chain(self.raw.keys()).copied().collect::<Vec<_>>() {
+                    let state = self.store.sync_state(family).await.unwrap_or_default();
+                    self.syncs.insert(
+                        family,
+                        ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled),
+                    );
+                }
+                self.drive_sync();
+                Response::ok("reloaded")
+            }
+            Request::Status => Response::ok(crate::protocol::DaemonStatus {
+                server: self.remote.as_ref().map(|remote| remote.config.url.clone()),
+                device: self.remote.as_ref().map(|remote| remote.config.device.to_string()),
+                sync_error: self.sync_error.clone(),
+                threads: self.threads.len(),
+            }),
+            Request::Resume { thread, cwd, here } => to_response(self.resume(&thread, &cwd, here).await),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -215,6 +273,10 @@ impl Core {
     }
 
     pub async fn tick(&mut self) {
+        self.drive_sync();
+        if let Err(error) = self.check_commits().await {
+            warn!(%error, "could not record new commits");
+        }
         let ids: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
         for id in ids {
             if let Err(error) = self.tail_session(&id).await {
@@ -263,9 +325,14 @@ impl Core {
             id: thread,
             family: family_id,
             repo_root: repo.root().to_owned(),
+            repo: repo
+                .remote_url("origin")?
+                .map(|url| silt_git::normalize_remote(&url))
+                .unwrap_or_default(),
             created_ms: now_ms(),
         };
         self.store.create_thread(&record).await?;
+        self.register_thread(&record);
         self.threads.insert(thread, record);
 
         let mut family = Family::new();
@@ -334,6 +401,15 @@ impl Core {
             offsets: HashMap::from([("main".to_owned(), main)]),
             open_tool: None,
         });
+        let reference = SessionRef {
+            agent: agent.to_owned(),
+            id: session_id.to_owned(),
+        };
+        self.append_session_started(family_id, thread, reference, &agent_cwd, &checkout_path)
+            .await?;
+        if let Some(commit) = head {
+            self.record_bundle(family_id, thread, &repo, commit).await?;
+        }
         Ok(SessionStarted {
             thread: thread.to_string(),
             checkout: checkout_path,
@@ -341,7 +417,7 @@ impl Core {
         })
     }
 
-    fn start_checkout(&mut self, record: CheckoutRecord, entries: BTreeMap<String, DiskEntry>) -> Result<(), CoreError> {
+    pub(crate) fn start_checkout(&mut self, record: CheckoutRecord, entries: BTreeMap<String, DiskEntry>) -> Result<(), CoreError> {
         let family = self
             .threads
             .get(&record.thread)
@@ -429,11 +505,10 @@ impl Core {
         self.families
             .get(&checkout.family)
             .map(|family| {
-                family
-                    .tree()
-                    .paths()
+                let view = family.thread_view(checkout.record.thread);
+                view.paths()
                     .into_iter()
-                    .filter(|(_, inode)| family.tree().kind(*inode) != Some(silt_crdt::InodeKind::Dir))
+                    .filter(|(_, inode)| view.tree().kind(*inode) != Some(silt_crdt::InodeKind::Dir))
                     .map(|(path, _)| path)
                     .collect()
             })
@@ -442,15 +517,16 @@ impl Core {
 
     /// Records one file's disk state. Returns paths that changed again
     /// meanwhile and need another pass.
-    async fn ingest_file(&mut self, checkout_id: i64, path: &str) -> Result<Vec<String>, CoreError> {
+    pub(crate) async fn ingest_file(&mut self, checkout_id: i64, path: &str) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
         let raw = disk::read(&root, path)?;
         let entry_hash = self.checkout(checkout_id)?.bridge.entries().get(path).map(|entry| entry.hash);
         let family_id = self.checkout(checkout_id)?.family;
+        let thread = self.checkout(checkout_id)?.record.thread;
         let in_family = self
             .families
             .get(&family_id)
-            .is_some_and(|family| family.tree().paths().contains_key(path));
+            .is_some_and(|family| family.thread_view(thread).paths().contains_key(path));
         match (&raw, entry_hash) {
             (Some(raw), Some(hash)) if raw.hash == hash => return Ok(Vec::new()),
             (None, None) if !in_family => return Ok(Vec::new()),
@@ -525,7 +601,18 @@ impl Core {
 
     /// Applies disk actions, skipping files that changed on disk since they
     /// were last recorded; those are returned to be ingested first.
-    async fn perform(&mut self, checkout_id: i64, actions: Vec<DiskAction>) -> Result<Vec<String>, CoreError> {
+    pub(crate) async fn perform(&mut self, checkout_id: i64, actions: Vec<DiskAction>) -> Result<Vec<String>, CoreError> {
+        self.perform_with(checkout_id, actions, false).await
+    }
+
+    /// Like [`Core::perform`]; with `force`, files on disk are overwritten
+    /// even when the checkout never recorded them (materializing a thread).
+    pub(crate) async fn perform_with(
+        &mut self,
+        checkout_id: i64,
+        actions: Vec<DiskAction>,
+        force: bool,
+    ) -> Result<Vec<String>, CoreError> {
         let mut changed_meanwhile = Vec::new();
         for action in actions {
             let root = self.checkout(checkout_id)?.record.path.clone();
@@ -541,13 +628,14 @@ impl Core {
                     let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
                     if let Some(current) = &current
                         && recorded != Some(current.hash)
+                        && !(force && recorded.is_none())
                     {
                         changed_meanwhile.push(path);
                         continue;
                     }
                     let bytes = match content {
                         DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
-                        DiskContent::Blob(hash) => self.store.blobs().get(hash).await?,
+                        DiskContent::Blob(hash) => self.blob(hash).await?,
                     };
                     let written = match current {
                         Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
@@ -686,7 +774,7 @@ impl Core {
         Ok(())
     }
 
-    async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
+    pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(self.actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
@@ -819,6 +907,134 @@ impl Core {
     }
 }
 
+impl Core {
+    pub(crate) async fn append_session_started(
+        &mut self,
+        family: FamilyId,
+        thread: ThreadId,
+        session: SessionRef,
+        cwd: &Path,
+        checkout_root: &Path,
+    ) -> Result<(), CoreError> {
+        let author = agent_author(&session);
+        let op = ConvOp::SessionStarted {
+            session,
+            cwd: cwd.to_string_lossy().into_owned(),
+            checkout_root: checkout_root.to_string_lossy().into_owned(),
+        };
+        self.append_conv(family, thread, author, op).await?;
+        Ok(())
+    }
+
+    /// Stores a bundle of `commit` and its history that origin lacks, so
+    /// another machine can get it from the server (ADR 0009).
+    pub(crate) async fn record_bundle(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        repo: &Repo,
+        commit: GitOid,
+    ) -> Result<(), CoreError> {
+        let Some(bytes) = repo.bundle(commit)? else {
+            return Ok(());
+        };
+        let blob = self.store.blobs().put(&bytes).await?;
+        let family = self.families.get_mut(&family_id).expect("thread's family is loaded");
+        let op = Op::Git(GitOp::Bundle {
+            commits: vec![commit],
+            blob,
+        });
+        let delta = family.delta(self.actor, thread, Author::Import, now_ms(), family.thread_head(thread), op);
+        family.apply(delta.clone(), &mut HashMap::new())?;
+        self.store.append_deltas(family_id, &[delta]).await?;
+        Ok(())
+    }
+
+    /// Records commits made in checkouts since the last look, with bundles.
+    pub(crate) async fn check_commits(&mut self) -> Result<(), CoreError> {
+        let ids: Vec<i64> = self.checkouts.keys().copied().collect();
+        for id in ids {
+            let checkout = &self.checkouts[&id];
+            let Some(head) = checkout.repo.head_commit()? else {
+                continue;
+            };
+            let previous = self.heads.insert(id, head);
+            if previous.is_none() || previous == Some(head) {
+                continue;
+            }
+            let (family_id, thread) = (checkout.family, checkout.record.thread);
+            let branch = checkout.repo.head_branch()?;
+            let repo = Repo::discover(&checkout.record.path)?;
+            let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
+            let op = Op::Git(GitOp::Committed { commit: head, branch });
+            let delta = family.delta(self.actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
+            family.apply(delta.clone(), &mut HashMap::new())?;
+            self.store.append_deltas(family_id, &[delta]).await?;
+            repo.protect(&thread.to_string(), head)?;
+            self.record_bundle(family_id, thread, &repo, head).await?;
+        }
+        Ok(())
+    }
+
+    /// Threads whose lease moved to another device stop taking writes from
+    /// this one.
+    pub(crate) async fn lease_changes(&mut self, deltas: &[Delta]) -> Result<(), CoreError> {
+        let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
+            return Ok(());
+        };
+        for delta in deltas {
+            if let Op::Lease { device: holder, .. } = delta.op
+                && holder != device
+            {
+                self.thread_moved(delta.thread).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Another device took `thread`'s lease: checkouts of it here continue in
+    /// a fork, so nothing written here lands in the moved thread.
+    pub(crate) async fn thread_moved(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let ids: Vec<i64> = self
+            .checkouts
+            .iter()
+            .filter(|(_, checkout)| checkout.record.thread == thread)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            let fork = self.fork_thread(thread).await?;
+            self.store.move_checkout(id, fork).await?;
+            let checkout = self.checkouts.get_mut(&id).expect("listed above");
+            checkout.record.thread = fork;
+            checkout.bridge = Bridge::new(checkout.record.actor, fork, checkout.bridge.entries().clone());
+            for session in self.sessions.iter_mut().filter(|session| session.record.checkout_id == id) {
+                session.record.thread = fork;
+            }
+            warn!(%thread, %fork, "the thread moved to another device; continuing here in a fork");
+        }
+        Ok(())
+    }
+
+    /// Starts a new thread in `from`'s family at `from`'s current head.
+    pub(crate) async fn fork_thread(&mut self, from: ThreadId) -> Result<ThreadId, CoreError> {
+        let source = self.threads[&from].clone();
+        let fork = ThreadId(uuid::Uuid::now_v7().as_u128());
+        let record = ThreadRecord {
+            id: fork,
+            created_ms: now_ms(),
+            ..source.clone()
+        };
+        self.store.create_thread(&record).await?;
+        self.register_thread(&record);
+        self.threads.insert(fork, record);
+        let family = self.families.get_mut(&source.family).expect("forked thread's family is loaded");
+        let delta = family.delta(self.actor, fork, Author::User, now_ms(), family.thread_head(from), Op::Fork { from });
+        family.apply(delta.clone(), &mut HashMap::new())?;
+        self.store.append_deltas(source.family, &[delta]).await?;
+        Ok(fork)
+    }
+}
+
 fn agent_author(session: &SessionRef) -> Author {
     Author::Agent {
         agent: session.agent.clone(),
@@ -835,7 +1051,7 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => None,
     }
 }
 

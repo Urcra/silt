@@ -11,15 +11,40 @@ use crate::protocol::{FileEdit, SearchResult, ShowLine, ThreadSummary};
 
 impl Core {
     pub(crate) fn thread_summaries(&self) -> Vec<ThreadSummary> {
+        let device = self.remote.as_ref().map(|remote| remote.config.device);
         let mut summaries: Vec<ThreadSummary> = self
             .thread_records()
             .values()
             .map(|record| {
-                let family = &self.families()[&record.family];
-                let conversation: Vec<&Delta> = family.conversation(record.id).collect();
+                let deltas: Vec<&Delta> = self
+                    .local_log(record.family)
+                    .iter()
+                    .filter(|delta| delta.thread == record.id)
+                    .collect();
+                let conversation: Vec<&Delta> = deltas
+                    .iter()
+                    .copied()
+                    .filter(|delta| matches!(delta.op, Op::Conv(_)))
+                    .collect();
+                let lease = deltas.iter().rev().find_map(|delta| match delta.op {
+                    Op::Lease { device, .. } => Some(device),
+                    _ => None,
+                });
+                let checked_out = self.checkouts.values().any(|checkout| checkout.record.thread == record.id);
+                let location = if lease.is_some_and(|holder| Some(holder) != device) {
+                    "moved"
+                } else if checked_out {
+                    "here"
+                } else {
+                    "remote"
+                };
                 ThreadSummary {
                     id: record.id.to_string(),
-                    repo: record.repo_root.clone(),
+                    repo: if record.repo.is_empty() {
+                        record.repo_root.display().to_string()
+                    } else {
+                        record.repo.clone()
+                    },
                     title: title(&conversation),
                     created_ms: record.created_ms,
                     messages: conversation
@@ -27,11 +52,12 @@ impl Core {
                         .flat_map(|delta| entries(delta))
                         .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
                         .count(),
-                    edits: family
-                        .log()
-                        .iter()
-                        .filter(|delta| delta.thread == record.id && matches!(delta.op, Op::Text { .. }))
-                        .count(),
+                    edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+                    location: location.into(),
+                    forked_from: deltas.iter().find_map(|delta| match delta.op {
+                        Op::Fork { from } => Some(from.to_string()),
+                        _ => None,
+                    }),
                 }
             })
             .collect();
@@ -42,10 +68,19 @@ impl Core {
     /// The thread's conversation across compactions, with the files each tool
     /// call changed listed after its result.
     pub(crate) fn show(&self, thread: ThreadId) -> Vec<ShowLine> {
-        let family = &self.families()[&self.thread_records()[&thread].family];
-        let edits = edits_by_tool(family, thread);
+        let family_id = self.thread_records()[&thread].family;
+        let edits = self
+            .families()
+            .get(&family_id)
+            .map(|family| edits_by_tool(family, thread))
+            .unwrap_or_default();
+        let conversation: Vec<&Delta> = self
+            .local_log(family_id)
+            .iter()
+            .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
+            .collect();
         let mut lines = Vec::new();
-        for delta in family.conversation(thread) {
+        for delta in conversation {
             match &delta.op {
                 Op::Conv(ConvOp::Turn { mark, .. }) => {
                     if let TurnMark::PromptSubmitted | TurnMark::Stopped = mark {
@@ -97,7 +132,10 @@ impl Core {
 
     /// A unified diff of the thread's changes, or of one turn's (1-based).
     pub(crate) fn diff(&self, thread: ThreadId, turn: Option<usize>) -> Result<String, CoreError> {
-        let family = &self.families()[&self.thread_records()[&thread].family];
+        let family = self
+            .families()
+            .get(&self.thread_records()[&thread].family)
+            .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
         let (from, to) = match turn {
             None => (imported_version(family, thread), family.thread_head(thread)),
             Some(turn) => {
@@ -111,7 +149,7 @@ impl Core {
             }
         };
         let mut out = String::new();
-        for (path, inode) in family.tree().paths() {
+        for (path, inode) in family.thread_view(thread).paths() {
             let Some(doc) = family.text_doc(inode) else {
                 continue;
             };
@@ -209,7 +247,14 @@ fn imported_version(family: &Family, thread: ThreadId) -> Frontier {
         .log()
         .iter()
         .rev()
-        .find(|delta| delta.thread == thread && delta.author == Author::Import && !matches!(delta.op, Op::Conv(_)))
+        .find(|delta| {
+            delta.thread == thread
+                && delta.author == Author::Import
+                && matches!(
+                    delta.op,
+                    Op::Create { .. } | Op::SetContent { .. } | Op::Text { .. } | Op::Move { .. } | Op::Delete { .. }
+                )
+        })
         .map_or_else(Frontier::root, |delta| Frontier::single(delta.span.last()))
 }
 

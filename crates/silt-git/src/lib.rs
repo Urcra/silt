@@ -1,6 +1,7 @@
 //! Reads repositories with gix and runs the `git` CLI for writes and for the
 //! cases gix doesn't cover, so behaviour matches the user's own git (ADR 0002).
 
+mod bundle;
 mod checkout;
 mod filters;
 mod remote;

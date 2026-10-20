@@ -14,6 +14,7 @@ workspace = true
 blake3 = "1.8.7"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+reqwest = { version = "0.13.5", features = ["json", "query"] }
 rustix = { version = "1.1.5", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -22,7 +23,10 @@ silt-checkout = { path = "../silt-checkout" }
 silt-crdt = { path = "../silt-crdt" }
 silt-git = { path = "../silt-git" }
 silt-log = { path = "../silt-log" }
+silt-proto = { path = "../silt-proto" }
+silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
+silt-sync = { path = "../silt-sync" }
 silt-types = { path = "../silt-types" }
 similar = "3.2.0"
 thiserror = "2.0.21"

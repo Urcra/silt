@@ -1,10 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
 use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, TextDoc, TextError, TextEvent,
     TreeError, TreeEvent, TreeOp,
 };
-use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, Frontier, GitOid, Lamport, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
 
 use crate::delta::{Author, Content, Delta, Op};
 
@@ -79,12 +80,58 @@ pub struct ThreadState {
     /// Indices into the family log of the thread's conversation deltas.
     pub conversation: Vec<usize>,
     pub title: Option<String>,
+    /// The device that may write to the thread, with the lease's epoch.
+    pub lease: Option<(DeviceId, u64)>,
+    /// The thread this one was forked from.
+    pub forked_from: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applied {
     New,
     AlreadyKnown,
+}
+
+/// One thread's view of its family: the files as of the thread's head,
+/// leaving out what other threads (forks) changed.
+#[derive(Debug, Clone)]
+pub struct ThreadView<'a> {
+    family: &'a Family,
+    version: Frontier,
+    tree: Cow<'a, FileTree>,
+    whole: bool,
+}
+
+impl ThreadView<'_> {
+    pub fn version(&self) -> &Frontier {
+        &self.version
+    }
+
+    pub fn tree(&self) -> &FileTree {
+        &self.tree
+    }
+
+    pub fn paths(&self) -> BTreeMap<String, InodeId> {
+        self.tree.paths()
+    }
+
+    pub fn file(&self, inode: InodeId) -> Option<FileView> {
+        if self.whole {
+            return self.family.file(inode);
+        }
+        self.tree.kind(inode)?;
+        match self.family.file(inode)? {
+            FileView::Text(_) => {
+                let doc = self.family.text_doc(inode)?;
+                Some(FileView::Text(doc.text_at(&self.family.graph, &self.version)))
+            }
+            other => Some(other),
+        }
+    }
+
+    pub fn is_executable(&self, inode: InodeId) -> bool {
+        self.family.is_executable(inode)
+    }
 }
 
 /// The state of a thread family, projected from its log: the file tree, each
@@ -124,7 +171,7 @@ impl Family {
         self.threads.iter()
     }
 
-    pub fn conversation(&self, thread: ThreadId) -> impl Iterator<Item = &Delta> {
+    pub fn conversation(&self, thread: ThreadId) -> impl DoubleEndedIterator<Item = &Delta> {
         self.threads
             .get(&thread)
             .into_iter()
@@ -169,6 +216,25 @@ impl Family {
             author,
             time_ms,
             op,
+        }
+    }
+
+    /// What `thread` sees: everything up to its head. When the family has
+    /// only this line of work, that is simply the current state.
+    pub fn thread_view(&self, thread: ThreadId) -> ThreadView<'_> {
+        let version = self.thread_head(thread);
+        let whole = self.threads.len() <= 1 || version == *self.graph.frontier();
+        let tree = if whole {
+            Cow::Borrowed(&self.tree)
+        } else {
+            let vv = self.graph.version_vector(&version);
+            Cow::Owned(self.tree.at(|id| vv.contains(id)))
+        };
+        ThreadView {
+            family: self,
+            version,
+            tree,
+            whole,
         }
     }
 
@@ -233,7 +299,7 @@ impl Family {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Conv(_) | Op::Git(_) => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => {}
         }
         Ok(false)
     }
@@ -300,7 +366,7 @@ impl Family {
                     state.executable_stamp = Stamp::from(id);
                 }
             }
-            Op::Conv(_) | Op::Git(_) => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => {}
         }
         Ok(())
     }
@@ -308,10 +374,22 @@ impl Family {
     fn record(&mut self, delta: Delta) {
         let index = self.log.len();
         let thread = self.threads.entry(delta.thread).or_default();
+        let parents_are_head = delta.parents.ids().iter().all(|parent| thread.head.contains(parent));
         for parent in delta.parents.ids() {
             thread.head.remove(parent);
         }
         thread.head.insert(delta.span.last());
+        if !parents_are_head && thread.head.len() > 1 {
+            thread.head = self.graph.minimize(thread.head.ids().iter().copied());
+        }
+        if let Op::Fork { from } = delta.op {
+            thread.forked_from = Some(from);
+        }
+        if let Op::Lease { device, epoch } = delta.op
+            && thread.lease.is_none_or(|(_, current)| epoch > current)
+        {
+            thread.lease = Some((device, epoch));
+        }
         if let Op::Conv(conv) = &delta.op {
             thread.conversation.push(index);
             if let crate::delta::ConvOp::Title(title) = conv {

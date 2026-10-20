@@ -27,8 +27,12 @@ struct Checkout {
 
 impl Checkout {
     fn new(actor: u128, family: &Family) -> Self {
+        Self::on_thread(actor, THREAD, family)
+    }
+
+    fn on_thread(actor: u128, thread: ThreadId, family: &Family) -> Self {
         let mut checkout = Self {
-            bridge: Bridge::new(ActorId(actor), THREAD, BTreeMap::new()),
+            bridge: Bridge::new(ActorId(actor), thread, BTreeMap::new()),
             disk: BTreeMap::new(),
         };
         let inodes = family.tree().inodes();
@@ -113,7 +117,7 @@ fn touched_inode(delta: &Delta) -> Option<silt_crdt::InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } => None,
     }
 }
 
@@ -231,4 +235,31 @@ fn edits_continue_after_many_rounds() {
         assert_eq!(reader.disk["README.md"], expected);
     }
     assert_eq!(family_text(&family, "README.md"), expected);
+}
+
+#[test]
+fn a_fork_sees_its_own_edits_and_the_source_does_not() {
+    let mut family = imported_family();
+    let mut source = Checkout::new(1, &family);
+    let fork = ThreadId(2);
+    let fork_delta = family.delta(
+        ActorId(100),
+        fork,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        silt_log::Op::Fork { from: THREAD },
+    );
+    family.apply(fork_delta, &mut bases()).expect("forks");
+    let mut forked = Checkout::on_thread(3, fork, &family);
+    assert_eq!(forked.disk["README.md"], "# readme\n");
+
+    let from_fork = forked.edit(&mut family, "README.md", Some("# readme\nfork work\n"));
+    source.sync(&family, &from_fork);
+    assert_eq!(source.disk["README.md"], "# readme\n", "the source thread doesn't see fork edits");
+
+    let from_source = source.edit(&mut family, "src/new.rs", Some("// source work\n"));
+    forked.sync(&family, &from_source);
+    assert!(!forked.disk.contains_key("src/new.rs"), "the fork doesn't see later source edits");
+    assert_eq!(family.thread_view(fork).file(family.tree().paths()["README.md"]), Some(FileView::Text("# readme\nfork work\n".into())));
 }

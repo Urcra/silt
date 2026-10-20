@@ -91,3 +91,35 @@ fn removing_a_checkout_cleans_up() {
     assert!(!checkout.path.exists() && !checkout.git_dir.exists());
     assert_eq!(stdout(git(repo.root(), &["for-each-ref", "refs/silt"])), "");
 }
+
+#[test]
+fn bundles_carry_commits_origin_does_not_have() {
+    let origin = source_repo();
+    let clone_dir = tempfile::tempdir().expect("temp dir");
+    let clone = clone_dir.path().join("a");
+    let other = clone_dir.path().join("b");
+    let status = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(origin.path())
+        .arg(&clone)
+        .status()
+        .expect("clone");
+    assert!(status.success());
+    std::process::Command::new("git").args(["clone", "-q"]).arg(origin.path()).arg(&other).status().expect("clone");
+
+    let repo = Repo::discover(&clone).expect("discovers");
+    let head = repo.head_commit().expect("head").expect("commit");
+    assert_eq!(repo.bundle(head).expect("bundle"), None, "origin already has HEAD");
+
+    fs::write(clone.join("local.txt"), "only here\n").expect("write");
+    git(&clone, &["add", "."]);
+    git(&clone, &["commit", "-q", "-m", "local only"]);
+    let local = repo.head_commit().expect("head").expect("commit");
+    let bundle = repo.bundle(local).expect("bundle").expect("not empty");
+
+    let other = Repo::discover(&other).expect("discovers");
+    assert!(!other.has_commit(local));
+    other.fetch_bundle(&bundle, "t9").expect("fetches");
+    assert!(other.has_commit(local));
+    assert_eq!(stdout(git(other.root(), &["rev-parse", "refs/silt/threads/t9"])), local.to_string());
+}

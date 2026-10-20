@@ -1,0 +1,15 @@
+[package]
+name = "silt-redact"
+description = "Secret redaction before deltas leave the machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silt-crdt = { path = "../silt-crdt" }
+silt-log = { path = "../silt-log" }

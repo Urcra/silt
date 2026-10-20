@@ -187,6 +187,29 @@ impl FileTree {
         Ok(())
     }
 
+    /// The tree as of the version containing exactly the ids for which
+    /// `contains` holds: the move log replayed without later operations.
+    pub fn at(&self, contains: impl Fn(DeltaId) -> bool) -> FileTree {
+        let mut tree = FileTree {
+            kinds: self
+                .kinds
+                .iter()
+                .filter(|(inode, _)| contains(inode.0))
+                .map(|(inode, kind)| (*inode, *kind))
+                .collect(),
+            placements: HashMap::new(),
+            log: Vec::new(),
+        };
+        for entry in &self.log {
+            let id = DeltaId::new(entry.stamp.1, entry.stamp.0);
+            if contains(id) && tree.kinds.contains_key(&entry.inode) {
+                let redone = tree.do_move(entry.stamp, entry.inode, entry.target.clone());
+                tree.log.push(redone);
+            }
+        }
+        tree
+    }
+
     /// Every live file, symlink and directory by path. Names claimed by more
     /// than one inode keep the name for the earliest placement; the others get
     /// a deterministic ` (conflict <inode id>)` suffix.
@@ -436,6 +459,21 @@ mod tests {
             tree.apply(&create(id(1, 0), InodeKind::File, Parent::Root, "a/b")),
             Err(TreeError::InvalidName("a/b".into()))
         );
+    }
+
+    #[test]
+    fn earlier_versions_leave_out_later_operations() {
+        let tree = apply_all(&[
+            create(id(1, 0), InodeKind::Dir, Parent::Root, "a"),
+            create(id(1, 1), InodeKind::File, Parent::Root, "f"),
+            mv(id(1, 2), id(1, 1), Parent::Dir(InodeId(id(1, 0))), "g"),
+            create(id(2, 3), InodeKind::File, Parent::Root, "late"),
+        ]);
+        assert_eq!(path_list(&tree), vec!["a", "a/g", "late"]);
+        let before_move = tree.at(|id| id.lamport.0 <= 1);
+        assert_eq!(path_list(&before_move), vec!["a", "f"]);
+        let without_actor_2 = tree.at(|id| id.actor == ActorId(1));
+        assert_eq!(path_list(&without_actor_2), vec!["a", "a/g"]);
     }
 
     #[test]

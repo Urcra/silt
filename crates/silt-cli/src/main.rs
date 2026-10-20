@@ -27,6 +27,21 @@ enum Command {
     },
     /// Start recording the most recent Claude Code session in this directory
     Track,
+    /// Continue a thread here: its code, its conversation and its agent session
+    Resume {
+        thread: String,
+        /// Use this clone instead of a managed checkout (needs a clean tree)
+        #[arg(long)]
+        here: bool,
+        /// Arguments passed on to `claude`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Connect this machine to a Silt server
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// List recorded threads
     Log,
     /// Show a thread's conversation and the files each tool call changed
@@ -76,6 +91,22 @@ enum DaemonCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum AuthCommand {
+    /// Log in with a code from `silt server pair`
+    Login {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        code: String,
+        /// This device's name; defaults to the host name
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Show which server this machine syncs with
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
 enum ServerCommand {
     /// Serve the sync API
     Run {
@@ -111,6 +142,11 @@ fn main() -> Result<(), Exn<CliError>> {
     match Cli::parse().command {
         Command::Claude { isolated, args } => commands::claude(isolated, &args),
         Command::Track => commands::track(),
+        Command::Resume { thread, here, args } => commands::resume(&thread, here, &args),
+        Command::Auth { command } => match command {
+            AuthCommand::Login { server, code, name } => commands::auth_login(&server, &code, name),
+            AuthCommand::Status => commands::auth_status(),
+        },
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn } => commands::diff(&thread, turn),

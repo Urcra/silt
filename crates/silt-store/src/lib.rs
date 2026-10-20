@@ -31,8 +31,20 @@ pub enum StoreError {
 pub struct ThreadRecord {
     pub id: ThreadId,
     pub family: FamilyId,
+    /// The local clone; empty for threads only known from the server.
     pub repo_root: PathBuf,
+    /// The repository's normalized origin URL.
+    pub repo: String,
     pub created_ms: i64,
+}
+
+/// How far a family has been synced with the server.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncState {
+    pub generation: Option<u64>,
+    pub pushed: u64,
+    pub pulled: u64,
+    pub last_pulled: Option<DeltaId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,10 +125,14 @@ impl Store {
             .bind(thread.created_ms)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO threads (id, family_id, repo_root, created_ms) VALUES (?, ?, ?, ?)")
+        sqlx::query(
+            "INSERT INTO threads (id, family_id, repo_root, repo, created_ms) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (id) DO UPDATE SET repo_root = excluded.repo_root WHERE excluded.repo_root != ''",
+        )
             .bind(id_bytes(thread.id.0))
             .bind(id_bytes(thread.family.0))
             .bind(path_text(&thread.repo_root))
+            .bind(&thread.repo)
             .bind(thread.created_ms)
             .execute(&mut *tx)
             .await?;
@@ -125,7 +141,7 @@ impl Store {
     }
 
     pub async fn threads(&self) -> Result<Vec<ThreadRecord>, StoreError> {
-        let rows = sqlx::query("SELECT id, family_id, repo_root, created_ms FROM threads ORDER BY created_ms")
+        let rows = sqlx::query("SELECT id, family_id, repo_root, repo, created_ms FROM threads ORDER BY created_ms")
             .fetch_all(&self.pool)
             .await?;
         rows.iter()
@@ -134,10 +150,50 @@ impl Store {
                     id: ThreadId(id_from(row.get("id"))?),
                     family: FamilyId(id_from(row.get("family_id"))?),
                     repo_root: PathBuf::from(row.get::<String, _>("repo_root")),
+                    repo: row.get("repo"),
                     created_ms: row.get("created_ms"),
                 })
             })
             .collect()
+    }
+
+    pub async fn sync_state(&self, family: FamilyId) -> Result<SyncState, StoreError> {
+        let row = sqlx::query("SELECT generation, pushed, pulled, last_pulled FROM sync_state WHERE family_id = ?")
+            .bind(id_bytes(family.0))
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(SyncState::default());
+        };
+        Ok(SyncState {
+            generation: row.get::<Option<i64>, _>("generation").map(|generation| generation as u64),
+            pushed: u64::try_from(row.get::<i64, _>("pushed")).unwrap_or_default(),
+            pulled: u64::try_from(row.get::<i64, _>("pulled")).unwrap_or_default(),
+            last_pulled: match row.get::<Option<&[u8]>, _>("last_pulled") {
+                Some(bytes) => Some(postcard::from_bytes(bytes)?),
+                None => None,
+            },
+        })
+    }
+
+    pub async fn set_sync_state(&self, family: FamilyId, state: &SyncState) -> Result<(), StoreError> {
+        let last_pulled = match state.last_pulled {
+            Some(id) => Some(postcard::to_allocvec(&id)?),
+            None => None,
+        };
+        sqlx::query(
+            "INSERT INTO sync_state (family_id, generation, pushed, pulled, last_pulled) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (family_id) DO UPDATE SET generation = excluded.generation, pushed = excluded.pushed,
+                 pulled = excluded.pulled, last_pulled = excluded.last_pulled",
+        )
+        .bind(id_bytes(family.0))
+        .bind(state.generation.map(|generation| generation as i64))
+        .bind(i64::try_from(state.pushed).unwrap_or(i64::MAX))
+        .bind(i64::try_from(state.pulled).unwrap_or(i64::MAX))
+        .bind(last_pulled)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn families(&self) -> Result<Vec<FamilyId>, StoreError> {
@@ -221,6 +277,24 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM disk_files WHERE checkout_id = ?")
+            .bind(checkout)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Points a checkout, and the sessions recorded in it, at another thread
+    /// of the same family, keeping what it knows about the disk.
+    pub async fn move_checkout(&self, checkout: i64, thread: ThreadId) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE checkouts SET thread_id = ? WHERE id = ?")
+            .bind(id_bytes(thread.0))
+            .bind(checkout)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?")
+            .bind(id_bytes(thread.0))
             .bind(checkout)
             .execute(&mut *tx)
             .await?;

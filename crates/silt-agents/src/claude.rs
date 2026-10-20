@@ -3,6 +3,8 @@
 //! `<id>/tool-results/` (docs/research/probes.md).
 
 use std::env;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -43,6 +45,40 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
         subagents: session_dir.join("subagents"),
         tool_results: session_dir.join("tool-results"),
     }
+}
+
+/// Writes a session's transcripts so `claude --resume <session_id>` run in
+/// `cwd` continues it, rewriting the original working directory `old_cwd`
+/// to `cwd` in every line (docs/research/probes.md). Returns the paths
+/// written, for tailing to continue after them.
+pub fn restore(
+    config_dir: &Path,
+    cwd: &Path,
+    session_id: &str,
+    old_cwd: &str,
+    main: &[String],
+    subagents: &[(String, Vec<String>)],
+) -> io::Result<SessionPaths> {
+    let paths = session_paths(config_dir, cwd, session_id);
+    let new_cwd = cwd.to_string_lossy();
+    let rewrite = |lines: &[String]| -> String {
+        lines
+            .iter()
+            .map(|line| {
+                let line = if old_cwd.is_empty() { line.clone() } else { line.replace(old_cwd, &new_cwd) };
+                line + "\n"
+            })
+            .collect()
+    };
+    fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
+    fs::write(&paths.transcript, rewrite(main))?;
+    if !subagents.is_empty() {
+        fs::create_dir_all(&paths.subagents)?;
+        for (name, lines) in subagents {
+            fs::write(paths.subagents.join(format!("{name}.jsonl")), rewrite(lines))?;
+        }
+    }
+    Ok(paths)
 }
 
 /// The conversation steps recorded in one transcript line.
@@ -229,6 +265,29 @@ mod tests {
             vec![Entry::Other {
                 kind: "file-history-snapshot".into()
             }]
+        );
+    }
+
+    #[test]
+    fn restore_relocates_the_session() {
+        let config = tempfile::tempdir().expect("temp dir");
+        let paths = restore(
+            config.path(),
+            Path::new("/home/b/repo"),
+            "abc",
+            "/home/a/repo",
+            &[r#"{"cwd":"/home/a/repo","type":"user"}"#.to_owned()],
+            &[("agent-1".to_owned(), vec![r#"{"cwd":"/home/a/repo/src"}"#.to_owned()])],
+        )
+        .expect("restores");
+        assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
+        assert_eq!(
+            fs::read_to_string(&paths.transcript).expect("transcript"),
+            "{\"cwd\":\"/home/b/repo\",\"type\":\"user\"}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(paths.subagents.join("agent-1.jsonl")).expect("subagent"),
+            "{\"cwd\":\"/home/b/repo/src\"}\n"
         );
     }
 

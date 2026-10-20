@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use silt_agents::claude;
 use silt_daemon::client;
 use silt_daemon::paths;
-use silt_daemon::protocol::{Request, Response, SearchResult, SessionStarted, ShowLine, ThreadSummary};
+use silt_daemon::protocol::{DaemonStatus, Request, Response, Resumed, SearchResult, SessionStarted, ShowLine, ThreadSummary};
 
 use crate::CliError;
 use crate::render;
@@ -117,15 +117,7 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     })?;
     eprintln!("silt: recording thread {} in {}", short(&started.thread), started.checkout.display());
 
-    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
-    let hook_command = format!("{} hook", shell_quote(&exe));
-    let claude_bin = env::var_os("SILT_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
-    let status = Command::new(&claude_bin)
-        .args(["--session-id", &session_id, "--settings", &claude::hook_settings(&hook_command)])
-        .args(args)
-        .current_dir(&started.agent_cwd)
-        .status()
-        .or_raise(|| CliError(format!("cannot run {}", claude_bin.to_string_lossy())))?;
+    let status = run_claude(&["--session-id", &session_id], args, &started.agent_cwd)?;
     call::<String>(&Request::EndSession {
         agent: claude::AGENT.into(),
         session_id,
@@ -133,6 +125,76 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+/// Runs Claude Code with Silt's hooks installed.
+fn run_claude(session_args: &[&str], args: &[String], cwd: &Path) -> Result<std::process::ExitStatus, Exn<CliError>> {
+    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
+    let hook_command = format!("{} hook", shell_quote(&exe));
+    let claude_bin = env::var_os("SILT_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
+    Command::new(&claude_bin)
+        .args(session_args)
+        .args(["--settings", &claude::hook_settings(&hook_command)])
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .or_raise(|| CliError(format!("cannot run {}", claude_bin.to_string_lossy())))
+}
+
+pub fn resume(thread: &str, here: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
+    let resumed: Resumed = call(&Request::Resume {
+        thread: thread.into(),
+        cwd,
+        here,
+    })?;
+    eprintln!("silt: thread {} is now here, in {}", short(&resumed.thread), resumed.checkout.display());
+    let Some(session_id) = resumed.session_id else {
+        eprintln!("silt: the thread has no agent session to continue");
+        return Ok(());
+    };
+    let status = run_claude(&["--resume", &session_id], args, &resumed.agent_cwd)?;
+    call::<String>(&Request::EndSession {
+        agent: claude::AGENT.into(),
+        session_id,
+    })?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+pub fn auth_login(server: &str, code: &str, name: Option<String>) -> Result<(), Exn<CliError>> {
+    let name = name
+        .or_else(|| fs::read_to_string("/etc/hostname").ok().map(|name| name.trim().to_owned()))
+        .unwrap_or_else(|| "device".into());
+    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
+    let config = runtime
+        .block_on(silt_daemon::remote::login(server, code, &name))
+        .or_raise(|| CliError(format!("could not log in to {server}")))?;
+    silt_daemon::remote::save_config(&paths::data_dir(), &config)
+        .or_raise(|| CliError("could not save the server settings".into()))?;
+    if is_running() {
+        call::<String>(&Request::Reload)?;
+    }
+    println!("logged in to {} as device {} ({name})", config.url, config.device);
+    Ok(())
+}
+
+pub fn auth_status() -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let status: DaemonStatus = call(&Request::Status)?;
+    match status.server {
+        Some(server) => {
+            println!("syncing with {server} as device {}", status.device.unwrap_or_default());
+            if let Some(error) = status.sync_error {
+                println!("last sync error: {error}");
+            }
+        }
+        None => println!("not connected to a server; use `silt auth login`"),
     }
     Ok(())
 }

@@ -33,7 +33,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let store = Store::open(data_dir).await?;
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
-    let mut core = Core::load(store, actor, events.clone()).await?;
+    let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
 
     if socket.exists() {
         fs::remove_file(socket)?;
@@ -70,6 +70,19 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Changed { checkout, paths } => core.changed(checkout, paths).await,
             Event::Tick => core.tick().await,
             Event::CloseTool { session_id, reply } => core.close_tool(&session_id, reply).await,
+            Event::Pushed {
+                family,
+                generation,
+                outcome,
+                error,
+            } => core.pushed(family, generation, outcome, error).await,
+            Event::Pulled {
+                family,
+                generation,
+                outcome,
+                error,
+            } => core.pulled(family, generation, outcome, error).await,
+            Event::Listed(listing) => core.listed(listing).await,
         }
     }
     let _ = fs::remove_file(socket);

@@ -123,7 +123,7 @@ impl Bridge {
             time_ms,
             deltas: Vec::new(),
         };
-        let paths = writer.family.tree().paths();
+        let paths = writer.family.thread_view(self.thread).paths();
         let existing = paths.get(path).copied();
         let Some(disk) = disk else {
             if let Some(inode) = existing {
@@ -153,9 +153,9 @@ impl Bridge {
         };
         let deltas = writer.deltas;
 
-        let version = family.graph().frontier().clone();
+        let version = family.thread_head(self.thread);
         let mut actions = Vec::new();
-        if let Some(content) = current_content(family, inode)
+        if let Some(content) = current_content(family, self.thread, inode)
             && content != disk.content
         {
             actions.push(DiskAction::Write {
@@ -187,16 +187,17 @@ impl Bridge {
         bases: &mut dyn BaseText,
         inodes: impl IntoIterator<Item = InodeId>,
     ) -> Vec<DiskAction> {
-        let paths = family.tree().paths();
+        let view = family.thread_view(self.thread);
+        let paths = view.paths();
         let by_inode: HashMap<InodeId, &String> =
             self.entries.iter().map(|(path, entry)| (entry.inode, path)).collect();
-        let version = family.graph().frontier();
+        let version = view.version().clone();
         let mut actions = Vec::new();
         for inode in inodes {
-            let live_path = family
+            let live_path = view
                 .tree()
                 .is_live(inode)
-                .then(|| family.tree().path_of(inode))
+                .then(|| view.tree().path_of(inode))
                 .flatten()
                 .filter(|path| paths.get(path) == Some(&inode));
             let old_path = by_inode.get(&inode).copied();
@@ -206,7 +207,7 @@ impl Bridge {
             let Some(path) = live_path else {
                 continue;
             };
-            let content = match family.file(inode) {
+            let content = match view.file(inode) {
                 Some(FileView::Text(text)) => DiskContent::Text(text),
                 Some(FileView::Blob(hash)) => DiskContent::Blob(hash),
                 Some(FileView::GitText(oid)) => match bases.text(oid) {
@@ -219,7 +220,7 @@ impl Bridge {
                 path,
                 inode,
                 content,
-                executable: family.is_executable(inode),
+                executable: view.is_executable(inode),
                 version: version.clone(),
             });
         }
@@ -246,8 +247,8 @@ pub fn file_actor(checkout: ActorId, inode: InodeId) -> ActorId {
     ActorId(state)
 }
 
-fn current_content(family: &Family, inode: InodeId) -> Option<DiskContent> {
-    match family.file(inode)? {
+fn current_content(family: &Family, thread: ThreadId, inode: InodeId) -> Option<DiskContent> {
+    match family.thread_view(thread).file(inode)? {
         FileView::Text(text) => Some(DiskContent::Text(text)),
         FileView::Blob(hash) => Some(DiskContent::Blob(hash)),
         FileView::GitText(_) => None,

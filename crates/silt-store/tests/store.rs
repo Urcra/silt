@@ -16,6 +16,7 @@ async fn store_with_thread() -> (tempfile::TempDir, Store) {
             id: THREAD,
             family: FAMILY,
             repo_root: PathBuf::from("/repo"),
+            repo: "github.com/u/repo".into(),
             created_ms: 1,
         })
         .await
@@ -140,4 +141,18 @@ async fn blobs_are_content_addressed() {
     assert_eq!(hash, BlobStore::hash(b"binary \0 data"));
     assert_eq!(blobs.put(b"binary \0 data").await.expect("put again"), hash);
     assert_eq!(blobs.get(hash).await.expect("get"), b"binary \0 data");
+}
+
+#[tokio::test]
+async fn sync_state_round_trips() {
+    let (_dir, store) = store_with_thread().await;
+    assert_eq!(store.sync_state(FAMILY).await.expect("default"), silt_store::SyncState::default());
+    let state = silt_store::SyncState {
+        generation: Some(u64::MAX - 3),
+        pushed: 10,
+        pulled: 7,
+        last_pulled: Some(DeltaId::new(ActorId(2), Lamport(5))),
+    };
+    store.set_sync_state(FAMILY, &state).await.expect("set");
+    assert_eq!(store.sync_state(FAMILY).await.expect("get"), state);
 }

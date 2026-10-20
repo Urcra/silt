@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
-use silt_types::{BlobHash, DeltaSpan, Frontier, GitOid, ThreadId};
+use silt_types::{BlobHash, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,11 @@ pub enum Op {
     },
     Conv(ConvOp),
     Git(GitOp),
+    /// The device that may write to the thread from now on (ADR 0009).
+    Lease { device: DeviceId, epoch: u64 },
+    /// The first delta of a thread forked from `from`; its parents are the
+    /// point it forked at, so it shares all history up to there.
+    Fork { from: ThreadId },
 }
 
 impl Op {
@@ -94,6 +99,13 @@ pub enum SessionFile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConvOp {
+    /// An agent session began in `cwd`, inside the checkout at
+    /// `checkout_root`; lets another machine relocate the session.
+    SessionStarted {
+        session: SessionRef,
+        cwd: String,
+        checkout_root: String,
+    },
     /// One verbatim line of the agent's own session file.
     Native {
         session: SessionRef,
@@ -126,4 +138,7 @@ pub enum GitOp {
     /// The family's files start as this commit's tree.
     Genesis { commit: GitOid, branch: Option<String> },
     Committed { commit: GitOid, branch: Option<String> },
+    /// A git bundle in the blob store holding `commits` and their history
+    /// that the origin remote doesn't have.
+    Bundle { commits: Vec<GitOid>, blob: BlobHash },
 }
