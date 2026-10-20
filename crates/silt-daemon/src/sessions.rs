@@ -33,6 +33,11 @@ const MARK_SETTLE: Duration = Duration::from_millis(1000);
 /// How often a session kept in a store rather than a file is read again.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(3);
 const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a started agent may take to write its session before Silt stops
+/// looking. Its CLI normally says when it exits; this covers one that was
+/// killed, which would otherwise be searched for, and credited with the
+/// person's edits, for good.
+const PENDING_TTL: Duration = Duration::from_secs(30 * 60);
 /// Most transcript bytes read per session and tick.
 const TAIL_CHUNK: u64 = 1 << 20;
 /// Agents stamp a new session's file a little after starting.
@@ -84,6 +89,7 @@ pub(crate) struct PendingSession {
     pub(crate) since_ms: i64,
     pub(crate) searching: bool,
     pub(crate) last_search: Option<Instant>,
+    pub(crate) started: Instant,
 }
 
 /// A thread just made for a clone.
@@ -301,6 +307,7 @@ impl Core {
             since_ms: now_ms() - DISCOVER_SLACK_MS,
             searching: false,
             last_search: None,
+            started: Instant::now(),
         });
     }
 
@@ -470,6 +477,13 @@ impl Core {
     /// Finds sessions waiting to be discovered and reads sessions kept in a
     /// store, both off the event loop.
     pub(crate) fn poll_sessions(&mut self) {
+        self.pending.retain(|pending| {
+            let alive = pending.searching || pending.started.elapsed() < PENDING_TTL;
+            if !alive {
+                warn!(thread = %pending.thread, agent = pending.agent.id(), "the agent never wrote its session; no longer looking for it");
+            }
+            alive
+        });
         let known: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
         for pending in &mut self.pending {
             if pending.searching || pending.last_search.is_some_and(|last| last.elapsed() < DISCOVER_INTERVAL) {
