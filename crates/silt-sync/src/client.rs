@@ -229,10 +229,13 @@ impl ClientSync {
         }
     }
 
+    /// A restarted server may have lost the delta this client collided
+    /// with, so pushing is tried again too.
     fn reset(&mut self) {
         self.pushed = 0;
         self.pulled = 0;
         self.last_pulled = None;
+        self.diverged = None;
     }
 }
 
@@ -251,6 +254,18 @@ mod tests {
         assert_eq!(sync.diverged(), Some(id));
         assert_eq!(sync.next_push(4), None);
         assert!(sync.next_pull().is_some());
+    }
+
+    #[test]
+    fn a_restarted_server_gets_pushes_again_after_a_conflict() {
+        let mut sync = ClientSync::default();
+        sync.next_push(3);
+        let id = DeltaId::new(ActorId(1), Lamport(0));
+        sync.on_push(Some(7), Outcome::Conflict(id));
+        sync.next_pull();
+        sync.on_pull(Some(8), Outcome::Pulled(Vec::new()));
+        assert_eq!(sync.diverged(), None, "the new server may not have the colliding delta");
+        assert_eq!(sync.next_push(3), Some(Push { from: 0, to: 3 }));
     }
 
     #[test]
