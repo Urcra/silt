@@ -93,11 +93,12 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
     }))
 }
 
-/// Writes atomically (temporary file, then rename), creating directories.
-/// Writes the file unless, checked right before the new content takes its
-/// place, `unchanged` says someone changed it meanwhile (it gets the
-/// current content's hash, `None` if there is no file). Returns `None` when
-/// it left the file alone.
+/// Writes the file atomically and durably (a synced temporary file, renamed
+/// into place), creating directories, unless, checked right before the new
+/// content takes its place, `unchanged` says someone changed it meanwhile
+/// (it gets the current content's hash, `None` if there is no file).
+/// Returns `None` when it left the file alone. A file keeps its permission
+/// bits; only whether it is executable follows the thread.
 pub fn replace(
     root: &Path,
     path: &str,
@@ -109,11 +110,17 @@ pub fn replace(
     let dir = full.parent().unwrap_or(root);
     let file_name = full.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let temporary = dir.join(format!(".{file_name}.silt-tmp"));
-    fs::write(&temporary, bytes)?;
-    let mut permissions = fs::metadata(&temporary)?.permissions();
-    let mode = permissions.mode();
-    permissions.set_mode(if executable { mode | 0o111 } else { mode & !0o111 });
-    fs::set_permissions(&temporary, permissions)?;
+    let mut file = fs::File::create(&temporary)?;
+    io::Write::write_all(&mut file, bytes)?;
+    let mode = match fs::metadata(&full) {
+        Ok(metadata) => metadata.permissions().mode(),
+        Err(_) => file.metadata()?.permissions().mode(),
+    };
+    // Executable where readable, as git checks out an executable file.
+    let mode = if executable { mode | ((mode & 0o444) >> 2) } else { mode & !0o111 };
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
+    file.sync_all()?;
+    drop(file);
     let current = match fs::read(&full) {
         Ok(current) => Some(*blake3::hash(&current).as_bytes()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -124,6 +131,7 @@ pub fn replace(
         return Ok(None);
     }
     fs::rename(&temporary, &full)?;
+    fs::File::open(dir)?.sync_all()?;
     let metadata = fs::metadata(&full)?;
     Ok(Some(RawFile {
         hash: *blake3::hash(bytes).as_bytes(),
@@ -159,6 +167,18 @@ mod tests {
 
     fn write(root: &Path, path: &str, bytes: &[u8], executable: bool) -> io::Result<RawFile> {
         Ok(replace(root, path, bytes, executable, |_| true)?.expect("an unconditional write happens"))
+    }
+
+    #[test]
+    fn a_rewritten_file_keeps_its_permissions() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write(dir.path(), "secret.env", b"a\n", false).expect("writes");
+        let path = dir.path().join("secret.env");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod");
+        write(dir.path(), "secret.env", b"b\n", false).expect("rewrites");
+        assert_eq!(fs::metadata(&path).expect("stat").permissions().mode() & 0o777, 0o600);
+        write(dir.path(), "secret.env", b"c\n", true).expect("makes executable");
+        assert_eq!(fs::metadata(&path).expect("stat").permissions().mode() & 0o777, 0o700, "executable only where readable");
     }
 
     #[test]
