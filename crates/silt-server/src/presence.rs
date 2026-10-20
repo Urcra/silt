@@ -13,6 +13,8 @@ use silt_types::{DeviceId, ThreadId};
 use crate::{ApiError, Caller, Server, not_found};
 
 const TTL: Duration = Duration::from_secs(15);
+/// Longest draft or other text one viewer's presence carries.
+const MAX_TEXT: usize = 8 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct Entry {
@@ -72,14 +74,20 @@ pub(crate) async fn update(
     if update.leaving {
         board.entries.remove(&(update.thread, caller.device));
     } else {
+        // Every viewer of the thread gets a copy on every heartbeat.
+        let clip = |text: String| text.chars().take(MAX_TEXT).collect::<String>();
         board.entries.insert(
             (update.thread, caller.device),
             Entry {
                 user,
-                file: update.file,
+                file: update.file.map(clip),
                 line: update.line,
-                draft: update.draft,
-                agent: update.agent,
+                draft: clip(update.draft),
+                agent: update.agent.map(|agent| silt_proto::AgentActivity {
+                    name: clip(agent.name),
+                    state: clip(agent.state),
+                    streaming: clip(agent.streaming),
+                }),
                 at: Instant::now(),
             },
         );

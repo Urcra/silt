@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path as UrlPath, Query, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, Path as UrlPath, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -59,7 +59,13 @@ const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
 /// Threads written to within this long are `active`.
 const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
 const SEARCH_LIMIT: u32 = 50;
-const MAX_BODY: usize = 1 << 30;
+/// Largest request body anywhere but the routes that carry work: sign-in
+/// pages and the like are reachable without an account (ADR 0016).
+const SMALL_BODY: usize = 1 << 20;
+/// Largest batch of deltas one push may send.
+const DELTAS_BODY: usize = 256 << 20;
+/// Largest blob or git pack one request may send.
+const LARGE_BODY: usize = 512 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -165,8 +171,14 @@ impl Server {
             .route("/v1/listing", get(listing))
             .route("/v1/threads", post(register_thread))
             .route("/v1/threads/{id}/lease", post(take_lease))
-            .route("/v1/families/{id}/deltas", post(push).get(pull))
-            .route("/v1/blobs/{hash}", put(put_blob).get(get_blob))
+            .route(
+                "/v1/families/{id}/deltas",
+                post(push).get(pull).layer(DefaultBodyLimit::max(DELTAS_BODY)),
+            )
+            .route(
+                "/v1/blobs/{hash}",
+                put(put_blob).get(get_blob).layer(DefaultBodyLimit::max(LARGE_BODY)),
+            )
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
@@ -181,7 +193,10 @@ impl Server {
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/orgs/change", post(orgs::change))
-            .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve))
+            .route(
+                "/git/{repo}/{*rest}",
+                get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)),
+            )
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -202,7 +217,7 @@ impl Server {
             .merge(api)
             .merge(pages)
             // Bundles and git pushes are bigger than axum's default limit.
-            .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
+            .layer(DefaultBodyLimit::max(SMALL_BODY))
             .with_state(self.clone())
     }
 

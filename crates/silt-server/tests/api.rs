@@ -210,6 +210,22 @@ async fn data_survives_a_restart_under_a_new_generation() {
 }
 
 #[tokio::test]
+async fn routes_without_an_account_take_only_small_bodies() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let huge = vec![b'x'; 2 << 20];
+    let response = reqwest::Client::new()
+        .post(format!("{base}/v1/login/password"))
+        .header(silt_proto::PROTOCOL_HEADER, silt_proto::PROTOCOL.to_string())
+        .header("content-type", "application/json")
+        .body(huge)
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn blobs_threads_and_leases() {
     let data = tempfile::tempdir().expect("temp dir");
     let base = start(data.path()).await;
