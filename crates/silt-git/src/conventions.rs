@@ -116,6 +116,23 @@ fn seed(from: &Path, target: &Path) -> io::Result<bool> {
 
 /// Ignores the links themselves: git sees a symlink as a file, so an ignore
 /// rule such as `node_modules/` that only matches directories misses it.
+/// A gitignore rule matching exactly `path` from the repository's root:
+/// wildcards, backslashes and trailing spaces in the name are escaped.
+fn ignore_rule(path: &str) -> String {
+    let mut rule = String::from("/");
+    for ch in path.chars() {
+        if matches!(ch, '*' | '?' | '[' | '\\') {
+            rule.push('\\');
+        }
+        rule.push(ch);
+    }
+    let kept = rule.trim_end_matches(' ').len();
+    let spaces = rule.len() - kept;
+    rule.truncate(kept);
+    rule.push_str(&"\\ ".repeat(spaces));
+    rule
+}
+
 fn exclude(checkout: &Repo, paths: &[String]) -> Result<(), GitError> {
     if paths.is_empty() {
         return Ok(());
@@ -127,7 +144,7 @@ fn exclude(checkout: &Repo, paths: &[String]) -> Result<(), GitError> {
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
     let missing: Vec<String> = paths
         .iter()
-        .map(|path| format!("/{path}"))
+        .map(|path| ignore_rule(path))
         .filter(|rule| !existing.lines().any(|line| line == rule))
         .collect();
     if missing.is_empty() {
@@ -177,5 +194,12 @@ mod tests {
     fn linked_files_list_relative_paths() {
         let text = "# shared between checkouts\nnode_modules/\n./target # build output\n\n/etc/passwd\n../up\nweb/node_modules\n";
         assert_eq!(parse_linked(text), vec!["node_modules", "target", "web/node_modules"]);
+    }
+
+    #[test]
+    fn ignore_rules_match_names_literally() {
+        assert_eq!(ignore_rule("node_modules"), "/node_modules");
+        assert_eq!(ignore_rule("a*b?[c]\\d"), "/a\\*b\\?\\[c]\\\\d");
+        assert_eq!(ignore_rule("trailing  "), "/trailing\\ \\ ");
     }
 }

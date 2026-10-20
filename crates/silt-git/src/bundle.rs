@@ -22,7 +22,7 @@ impl Repo {
     /// refs of its own, so without `known` every bundle would carry the
     /// whole history.
     pub fn bundle(&self, commit: GitOid, known: &[GitOid]) -> Result<Option<Vec<u8>>, GitError> {
-        let file = self.git_dir().join("silt-bundle.tmp");
+        let file = self.git_dir().join(unique_name("silt-bundle"));
         self.git(&["update-ref", BUNDLE_REF, &commit.to_string()], None)?;
         let known: Vec<String> = known.iter().filter(|known| self.has_commit(**known)).map(GitOid::to_string).collect();
         let path = file.to_string_lossy();
@@ -42,7 +42,7 @@ impl Repo {
     /// Fetches a bundle made by [`Repo::bundle`], keeping its commit
     /// reachable from `refs/silt/threads/<thread>`.
     pub fn fetch_bundle(&self, bytes: &[u8], thread: &str) -> Result<(), GitError> {
-        let file = self.git_dir().join("silt-fetch.bundle");
+        let file = self.git_dir().join(unique_name("silt-fetch"));
         fs::write(&file, bytes)?;
         let result = self.git(
             &["fetch", "-q", &file.to_string_lossy(), &format!("+{BUNDLE_REF}:refs/silt/threads/{thread}")],
@@ -69,6 +69,13 @@ impl Repo {
         )
         .map(|_| ())
     }
+}
+
+/// A file name no other bundle being made or fetched at the same time uses.
+fn unique_name(prefix: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{next}.bundle", std::process::id())
 }
 
 fn mirror_config(headers: &[String]) -> Vec<(&str, &str)> {
