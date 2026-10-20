@@ -271,6 +271,13 @@ pub struct TextDoc {
     deletes: BTreeMap<DeltaId, Vec<(CharId, u32)>>,
     applied: Vec<Applied>,
     prepare: Frontier,
+    /// The latest applied events, none an ancestor of another; `None` when
+    /// unknown, as after deserializing.
+    heads: Option<Vec<DeltaId>>,
+    /// Whether the prepare state includes every applied event. With `heads`
+    /// it lets the prepare version move to any descendant of all applied
+    /// events without retreating or advancing anything.
+    complete: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -290,6 +297,8 @@ impl From<TextDocState> for TextDoc {
             deletes: state.deletes,
             applied: state.applied,
             prepare: state.prepare,
+            heads: None,
+            complete: false,
         }
     }
 }
@@ -314,6 +323,8 @@ impl Default for TextDoc {
             deletes: BTreeMap::new(),
             applied: Vec::new(),
             prepare: Frontier::root(),
+            heads: Some(Vec::new()),
+            complete: true,
         }
     }
 }
@@ -360,6 +371,7 @@ impl TextDoc {
                 id: source,
                 kind: AppliedKind::Insert { start: key, len },
             });
+            doc.heads = Some(vec![source]);
         }
         doc.prepare = Frontier::single(source);
         doc
@@ -375,6 +387,12 @@ impl TextDoc {
 
     pub fn len(&self) -> usize {
         self.fragments.summary().visible
+    }
+
+    /// The latest applied events (none an ancestor of another), or nothing
+    /// when unknown.
+    pub fn heads(&self) -> &[DeltaId] {
+        self.heads.as_deref().unwrap_or_default()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -519,6 +537,10 @@ impl TextDoc {
             id: event.span.first(),
             kind,
         });
+        if let Some(heads) = &mut self.heads {
+            heads.retain(|head| !graph.is_ancestor(*head, &event.parents));
+            heads.push(event.span.last());
+        }
         self.prepare = Frontier::single(event.span.last());
         Ok(())
     }
@@ -549,6 +571,15 @@ impl TextDoc {
         if *target == self.prepare {
             return;
         }
+        let descends_from_all = |heads: &Option<Vec<DeltaId>>| {
+            heads
+                .as_ref()
+                .is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)))
+        };
+        if self.complete && descends_from_all(&self.heads) {
+            self.prepare = target.clone();
+            return;
+        }
         let in_prepare = graph.version_vector(&self.prepare);
         let in_target = graph.version_vector(target);
         let applied = std::mem::take(&mut self.applied);
@@ -564,6 +595,10 @@ impl TextDoc {
         }
         self.applied = applied;
         self.prepare = target.clone();
+        self.complete = self
+            .heads
+            .as_ref()
+            .is_some_and(|heads| heads.iter().all(|head| in_target.contains(*head)));
     }
 
     fn shift_prepare(&mut self, event: &Applied, step: i32) {

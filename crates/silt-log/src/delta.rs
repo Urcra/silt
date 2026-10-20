@@ -123,6 +123,10 @@ pub enum ConvOp {
         mark: TurnMark,
     },
     Title(String),
+    /// Where the agent kept the session's side files (subagent transcripts,
+    /// tool results) on the recording machine. Transcripts name them by
+    /// absolute path, so a restore rewrites `dir` to the new location.
+    SessionDir { session: SessionRef, dir: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

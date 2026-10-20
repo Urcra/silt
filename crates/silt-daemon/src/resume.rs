@@ -6,7 +6,7 @@ use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Family, GitOp, Op, SessionFile, SessionRef};
 use silt_store::{SessionFileOffset, SessionRecord, ThreadRecord};
-use silt_types::{ActorId, FamilyId, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, RepoBases, Session, now_ms};
@@ -260,10 +260,13 @@ impl Core {
         }) else {
             return Ok(None);
         };
-        let mut old_cwd = String::new();
+        let mut recorded = claude::RecordedSession {
+            id: session.id.clone(),
+            ..Default::default()
+        };
         let mut relative = PathBuf::new();
-        let mut main = Vec::new();
         let mut subagents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut attachments: BTreeMap<String, BlobHash> = BTreeMap::new();
         for delta in family.conversation(thread) {
             match &delta.op {
                 Op::Conv(ConvOp::SessionStarted {
@@ -271,19 +274,33 @@ impl Core {
                     cwd,
                     checkout_root,
                 }) if *started == session => {
-                    old_cwd.clone_from(cwd);
+                    recorded.cwd.clone_from(cwd);
                     relative = Path::new(cwd).strip_prefix(checkout_root).map(Path::to_path_buf).unwrap_or_default();
+                }
+                Op::Conv(ConvOp::SessionDir { session: from, dir }) if *from == session => {
+                    recorded.session_dir.clone_from(dir);
                 }
                 Op::Conv(ConvOp::Native {
                     session: from,
                     file,
                     line,
                 }) if *from == session => match file {
-                    SessionFile::Main => main.push(line.clone()),
+                    SessionFile::Main => recorded.main.push(line.clone()),
                     SessionFile::Subagent(name) => subagents.entry(name.clone()).or_default().push(line.clone()),
                 },
+                Op::Conv(ConvOp::Attachment {
+                    session: from,
+                    name,
+                    blob,
+                }) if *from == session => {
+                    attachments.insert(name.clone(), *blob);
+                }
                 _ => {}
             }
+        }
+        recorded.subagents = subagents.into_iter().collect();
+        for (name, blob) in attachments {
+            recorded.attachments.push((name, self.blob(blob).await?));
         }
         let agent_cwd = if relative.as_os_str().is_empty() {
             checkout.to_owned()
@@ -291,8 +308,7 @@ impl Core {
             checkout.join(relative)
         };
         let config = claude::config_dir().ok_or_else(|| CoreError::Invalid("HOME is not set".into()))?;
-        let subagents: Vec<(String, Vec<String>)> = subagents.into_iter().collect();
-        let paths = claude::restore(&config, &agent_cwd, &session.id, &old_cwd, &main, &subagents)?;
+        let paths = claude::restore(&config, &agent_cwd, &recorded)?;
 
         let checkout_id = self
             .checkouts
@@ -310,7 +326,8 @@ impl Core {
         let mut offsets = HashMap::new();
         let mut files = vec![("main".to_owned(), paths.transcript.clone())];
         files.extend(
-            subagents
+            recorded
+                .subagents
                 .iter()
                 .map(|(name, _)| (format!("subagent:{name}"), paths.subagents.join(format!("{name}.jsonl")))),
         );
@@ -330,6 +347,7 @@ impl Core {
             transcript: paths.transcript,
             offsets,
             open_tool: None,
+            attached: HashMap::new(),
         });
         let reference = SessionRef {
             agent: session.agent.clone(),

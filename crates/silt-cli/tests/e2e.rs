@@ -214,3 +214,17 @@ fn track_attaches_to_a_session_started_without_silt() {
     assert!(eventually(|| env.stdout(&["show", &thread]).contains("> Please add a farewell line to main")));
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
 }
+
+#[test]
+fn a_renamed_file_keeps_its_history() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    fs::rename(env.repo.join("src/main.rs"), env.repo.join("src/app.rs")).expect("rename");
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("rename to src/app.rs")));
+    let diff = env.stdout(&["diff", &thread]);
+    assert!(diff.contains("rename from src/main.rs"), "{diff}");
+    assert!(diff.contains("+++ b/src/app.rs"), "{diff}");
+    assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
+}

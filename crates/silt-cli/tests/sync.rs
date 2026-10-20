@@ -34,6 +34,9 @@ say() {
 if [ -n "$resume" ]; then
     grep -q "\"cwd\":\"$(pwd)\"" "$transcript" || { echo "transcript not restored for $(pwd)" >&2; exit 3; }
     grep -q "Please add a farewell line" "$transcript" || { echo "conversation missing" >&2; exit 3; }
+    saved=$(sed -n 's/.*saved to \([^"]*\)".*/\1/p' "$transcript" | head -n 1)
+    [ "$saved" = "$dir/$session/tool-results/t1.txt" ] || { echo "tool result path not rewritten: $saved" >&2; exit 4; }
+    grep -q "big output" "$saved" || { echo "tool result missing" >&2; exit 4; }
     say '{"type":"user","message":{"role":"user","content":"Continuing at home: add a home line"}}'
     hook UserPromptSubmit toolu_2
     say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"file_path":"src/main.rs"}}]}}'
@@ -52,7 +55,9 @@ say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_
 hook PreToolUse toolu_1
 printf 'fn farewell() {}\n' >> src/main.rs
 hook PostToolUse toolu_1
-say '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"edited","is_error":false}]}}'
+mkdir -p "$dir/$session/tool-results"
+printf 'big output\n' > "$dir/$session/tool-results/t1.txt"
+say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"saved to $dir/$session/tool-results/t1.txt\"}]}}"
 say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: farewell added. I used ghp_abcdefghijklmnopqrstuvwxyz0123 to fetch it."}]}}'
 hook Stop toolu_1
 "#;

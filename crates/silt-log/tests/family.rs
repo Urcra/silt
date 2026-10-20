@@ -229,3 +229,41 @@ fn replaying_the_log_reproduces_the_family() {
     let decoded: Vec<Delta> = postcard::from_bytes(&bytes).expect("deserializes");
     assert_eq!(decoded, family.log());
 }
+
+/// The daemon's usual shape: each text edit is based on the thread head,
+/// which is often a conversation delta by another actor. Kept large enough
+/// that walking the whole history on every edit would show.
+#[test]
+fn edits_interleaved_with_conversation_stay_fast() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let session = SessionRef {
+        agent: "claude-code".into(),
+        id: "s".into(),
+    };
+    let started = std::time::Instant::now();
+    for round in 0..4000 {
+        write_on_head(
+            &mut family,
+            CHECKOUT_A,
+            Op::Text {
+                inode: main,
+                op: TextOp::Insert {
+                    pos: round,
+                    content: "x".into(),
+                },
+            },
+        );
+        write_on_head(
+            &mut family,
+            DAEMON,
+            Op::Conv(ConvOp::Native {
+                session: session.clone(),
+                file: SessionFile::Main,
+                line: "{}".into(),
+            }),
+        );
+    }
+    assert!(text(&family, main).starts_with(&"x".repeat(4000)));
+    eprintln!("4000 interleaved edits took {:?}", started.elapsed());
+}

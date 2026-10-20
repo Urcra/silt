@@ -5,7 +5,7 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -33,6 +33,8 @@ pub fn project_slug(cwd: &Path) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPaths {
     pub transcript: PathBuf,
+    /// Holds the session's side files: `subagents/` and `tool-results/`.
+    pub session_dir: PathBuf,
     pub subagents: PathBuf,
     pub tool_results: PathBuf,
 }
@@ -42,41 +44,64 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
     let session_dir = project.join(session_id);
     SessionPaths {
         transcript: project.join(format!("{session_id}.jsonl")),
+        session_dir: session_dir.clone(),
         subagents: session_dir.join("subagents"),
         tool_results: session_dir.join("tool-results"),
     }
 }
 
-/// Writes a session's transcripts so `claude --resume <session_id>` run in
-/// `cwd` continues it, rewriting the original working directory `old_cwd`
-/// to `cwd` in every line (docs/research/probes.md). Returns the paths
+/// A session as recorded on another machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordedSession {
+    pub id: String,
+    /// The agent's working directory there.
+    pub cwd: String,
+    /// Its session side-file directory there.
+    pub session_dir: String,
+    pub main: Vec<String>,
+    pub subagents: Vec<(String, Vec<String>)>,
+    /// Side files by path relative to the session directory.
+    pub attachments: Vec<(String, Vec<u8>)>,
+}
+
+/// Writes a session's files so `claude --resume <id>` run in `cwd` continues
+/// it, rewriting the recorded session directory and working directory to the
+/// new ones in every line (docs/research/probes.md). Returns the paths
 /// written, for tailing to continue after them.
-pub fn restore(
-    config_dir: &Path,
-    cwd: &Path,
-    session_id: &str,
-    old_cwd: &str,
-    main: &[String],
-    subagents: &[(String, Vec<String>)],
-) -> io::Result<SessionPaths> {
-    let paths = session_paths(config_dir, cwd, session_id);
-    let new_cwd = cwd.to_string_lossy();
+pub fn restore(config_dir: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
+    let paths = session_paths(config_dir, cwd, &session.id);
+    let rewrites = [
+        (session.session_dir.as_str(), paths.session_dir.to_string_lossy().into_owned()),
+        (session.cwd.as_str(), cwd.to_string_lossy().into_owned()),
+    ];
     let rewrite = |lines: &[String]| -> String {
         lines
             .iter()
             .map(|line| {
-                let line = if old_cwd.is_empty() { line.clone() } else { line.replace(old_cwd, &new_cwd) };
+                let line = rewrites
+                    .iter()
+                    .filter(|(old, _)| !old.is_empty())
+                    .fold(line.clone(), |line, (old, new)| line.replace(old, new));
                 line + "\n"
             })
             .collect()
     };
     fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
-    fs::write(&paths.transcript, rewrite(main))?;
-    if !subagents.is_empty() {
+    fs::write(&paths.transcript, rewrite(&session.main))?;
+    if !session.subagents.is_empty() {
         fs::create_dir_all(&paths.subagents)?;
-        for (name, lines) in subagents {
+        for (name, lines) in &session.subagents {
             fs::write(paths.subagents.join(format!("{name}.jsonl")), rewrite(lines))?;
         }
+    }
+    for (name, bytes) in &session.attachments {
+        let relative = Path::new(name);
+        if !relative.components().all(|component| matches!(component, Component::Normal(_))) {
+            continue;
+        }
+        let path = paths.session_dir.join(relative);
+        fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
+        fs::write(path, bytes)?;
     }
     Ok(paths)
 }
@@ -271,20 +296,31 @@ mod tests {
     #[test]
     fn restore_relocates_the_session() {
         let config = tempfile::tempdir().expect("temp dir");
-        let paths = restore(
-            config.path(),
-            Path::new("/home/b/repo"),
-            "abc",
-            "/home/a/repo",
-            &[r#"{"cwd":"/home/a/repo","type":"user"}"#.to_owned()],
-            &[("agent-1".to_owned(), vec![r#"{"cwd":"/home/a/repo/src"}"#.to_owned()])],
-        )
-        .expect("restores");
+        let session = RecordedSession {
+            id: "abc".into(),
+            cwd: "/home/a/repo".into(),
+            session_dir: "/home/a/.claude/projects/-home-a-repo/abc".into(),
+            main: vec![
+                r#"{"cwd":"/home/a/repo","type":"user"}"#.to_owned(),
+                r#"{"result":"saved to /home/a/.claude/projects/-home-a-repo/abc/tool-results/t1.txt"}"#.to_owned(),
+            ],
+            subagents: vec![("agent-1".to_owned(), vec![r#"{"cwd":"/home/a/repo/src"}"#.to_owned()])],
+            attachments: vec![
+                ("tool-results/t1.txt".to_owned(), b"big output".to_vec()),
+                ("../escape.txt".to_owned(), b"no".to_vec()),
+            ],
+        };
+        let paths = restore(config.path(), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
-            "{\"cwd\":\"/home/b/repo\",\"type\":\"user\"}\n"
+            format!(
+                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\"}}\n{{\"result\":\"saved to {}\"}}\n",
+                paths.tool_results.join("t1.txt").display()
+            )
         );
+        assert_eq!(fs::read(paths.tool_results.join("t1.txt")).expect("attachment"), b"big output");
+        assert!(!config.path().join("projects/-home-b-repo/escape.txt").exists());
         assert_eq!(
             fs::read_to_string(paths.subagents.join("agent-1.jsonl")).expect("subagent"),
             "{\"cwd\":\"/home/b/repo/src\"}\n"

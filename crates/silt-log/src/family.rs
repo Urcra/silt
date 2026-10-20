@@ -309,7 +309,15 @@ impl Family {
         if matches!(state.content, FileContent::Blob(_)) {
             return Ok(false);
         }
-        Ok(self.graph.is_ancestor(state.content_source, parents))
+        // Every applied text event descends from the content source, so a
+        // recent one in the parents' history settles it without walking back
+        // to the (usually old) source.
+        let recent = match &state.content {
+            FileContent::Text(doc) => doc.heads(),
+            _ => &[],
+        };
+        Ok(recent.iter().any(|head| self.graph.is_ancestor(*head, parents))
+            || self.graph.is_ancestor(state.content_source, parents))
     }
 
     fn project(&mut self, delta: &Delta, applies_text: bool) -> Result<(), LogError> {

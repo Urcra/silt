@@ -1,12 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use silt_agents::{Entry, claude};
-use silt_crdt::InodeId;
-use silt_log::{Author, ConvOp, Delta, Family, Op, TurnMark};
+use silt_crdt::{InodeId, InodeKind};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, Op, TurnMark};
 use silt_types::{Frontier, ThreadId};
 use similar::TextDiff;
 
-use crate::core::{Core, CoreError, touched_inode};
+use crate::core::{Core, CoreError, RepoBases, touched_inode};
 use crate::protocol::{FileEdit, SearchResult, ShowLine, ThreadSummary};
 
 impl Core {
@@ -151,23 +151,65 @@ impl Core {
                 (start.clone(), end)
             }
         };
-        let mut out = String::new();
-        for (path, inode) in family.thread_view(thread).paths() {
-            let Some(doc) = family.text_doc(inode) else {
-                continue;
+        let repo = self.family_repo(self.thread_records()[&thread].family).ok();
+        let mut bases = repo.as_ref().map(RepoBases);
+        let files_at = |version: &Frontier| -> BTreeMap<InodeId, String> {
+            let vv = family.graph().version_vector(version);
+            let tree = family.tree().at(|id| vv.contains(id));
+            tree.paths()
+                .into_iter()
+                .filter(|(_, inode)| tree.kind(*inode) == Some(InodeKind::File))
+                .map(|(path, inode)| (inode, path))
+                .collect()
+        };
+        let (before_files, after_files) = (files_at(&from), files_at(&to));
+        let inodes: BTreeSet<InodeId> = before_files.keys().chain(after_files.keys()).copied().collect();
+        let mut changes: Vec<(String, String)> = Vec::new();
+        for inode in inodes {
+            let (old_path, new_path) = (before_files.get(&inode), after_files.get(&inode));
+            let mut content = |path: Option<&String>, version: &Frontier| -> String {
+                if path.is_none() {
+                    return String::new();
+                }
+                match (family.text_doc(inode), family.file(inode)) {
+                    (Some(doc), _) => doc.text_at(family.graph(), version),
+                    (None, Some(FileView::GitText(oid))) => {
+                        bases.as_mut().and_then(|bases| bases.text(oid)).unwrap_or_default()
+                    }
+                    _ => String::new(),
+                }
             };
-            let before = doc.text_at(family.graph(), &from);
-            let after = doc.text_at(family.graph(), &to);
-            if before == after {
+            let (before, after) = (content(old_path, &from), content(new_path, &to));
+            if before == after && old_path == new_path {
                 continue;
             }
-            let diff = TextDiff::from_lines(&before, &after);
-            out.push_str(
-                &diff
-                    .unified_diff()
-                    .header(&format!("a/{path}"), &format!("b/{path}"))
-                    .to_string(),
+            let shown = new_path.or(old_path).expect("the inode is in one of the versions");
+            let mut text = format!(
+                "diff --git a/{} b/{}\n",
+                old_path.unwrap_or(shown),
+                new_path.unwrap_or(shown)
             );
+            let (old_name, new_name) = match (old_path, new_path) {
+                (Some(old), Some(new)) => {
+                    if old != new {
+                        text.push_str(&format!("rename from {old}\nrename to {new}\n"));
+                    }
+                    (format!("a/{old}"), format!("b/{new}"))
+                }
+                (None, Some(new)) => ("/dev/null".to_owned(), format!("b/{new}")),
+                (Some(old), None) => (format!("a/{old}"), "/dev/null".to_owned()),
+                (None, None) => unreachable!("the inode is in one of the versions"),
+            };
+            if before != after {
+                let diff = TextDiff::from_lines(&before, &after);
+                text.push_str(&diff.unified_diff().header(&old_name, &new_name).to_string());
+            }
+            changes.push((shown.clone(), text));
+        }
+        changes.sort();
+        let mut out = String::new();
+        for (_, text) in changes {
+            out.push_str(&text);
         }
         Ok(out)
     }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier, Lamport};
 
@@ -127,9 +127,28 @@ impl CausalGraph {
         vv
     }
 
-    /// Whether `id` is `frontier` itself or one of its ancestors.
+    /// Whether `id` is `frontier` itself or one of its ancestors. Lamports
+    /// grow along every path, so only deltas at least as new as `id` are
+    /// visited, which keeps checks against recent ids cheap.
     pub fn is_ancestor(&self, id: DeltaId, frontier: &Frontier) -> bool {
-        frontier.contains(&id) || self.version_vector(frontier).contains(id)
+        let mut visited = HashSet::new();
+        let mut stack: Vec<DeltaId> = frontier.ids().to_vec();
+        while let Some(at) = stack.pop() {
+            if at.lamport < id.lamport {
+                continue;
+            }
+            let Some((run_index, _)) = self.find(at) else {
+                continue;
+            };
+            let span = self.runs[run_index].span;
+            if span.actor == id.actor && span.start <= id.lamport && id.lamport <= at.lamport {
+                return true;
+            }
+            if visited.insert(run_index) {
+                stack.extend(self.runs[run_index].parents.ids());
+            }
+        }
+        false
     }
 
     /// Spans that are in `to` but not in `from`, in topological order.
@@ -159,7 +178,7 @@ impl CausalGraph {
             ids.ids()
                 .iter()
                 .filter(|other| *other != id)
-                .any(|other| self.version_vector(&Frontier::single(*other)).contains(*id))
+                .any(|other| self.is_ancestor(*id, &Frontier::single(*other)))
         };
         ids.ids().iter().filter(|id| !dominated(id)).copied().collect()
     }
@@ -206,8 +225,7 @@ impl CausalGraph {
             }
         }
         if let Some(previous) = self.last_of_actor(span.actor) {
-            let descends = previous.lamport < span.start
-                && (parents.contains(&previous) || self.version_vector(parents).contains(previous));
+            let descends = previous.lamport < span.start && self.is_ancestor(previous, parents);
             if !descends {
                 return Err(CausalError::BrokenActorChain {
                     id: span.first(),

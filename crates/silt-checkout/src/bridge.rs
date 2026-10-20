@@ -123,8 +123,16 @@ impl Bridge {
             time_ms,
             deltas: Vec::new(),
         };
-        let paths = writer.family.thread_view(self.thread).paths();
-        let existing = paths.get(path).copied();
+        let view = writer.family.thread_view(self.thread);
+        let paths = view.paths();
+        // A file moved elsewhere since this checkout last saw it is still the
+        // same file here until the move reaches the disk.
+        let existing = paths.get(path).copied().or_else(|| {
+            self.entries
+                .get(path)
+                .map(|entry| entry.inode)
+                .filter(|inode| view.tree().is_live(*inode) && view.tree().kind(*inode) == Some(InodeKind::File))
+        });
         let Some(disk) = disk else {
             if let Some(inode) = existing {
                 writer.tree_op(self.actor, Op::Delete { inode })?;
@@ -227,6 +235,57 @@ impl Bridge {
         actions
     }
 
+    /// The file recorded at `from` is now at `to` with the same bytes:
+    /// records a move rather than a delete and a create, so the file keeps
+    /// its history. Returns `None` when `from` isn't a file of the thread or
+    /// `to` already is one.
+    #[expect(clippy::too_many_arguments, reason = "mirrors `ingest`, plus the source path")]
+    pub fn rename(
+        &mut self,
+        family: &mut Family,
+        bases: &mut dyn BaseText,
+        from: &str,
+        to: &str,
+        disk: &DiskFile,
+        author: &Author,
+        time_ms: i64,
+    ) -> Result<Option<Ingested>, BridgeError> {
+        let paths = family.thread_view(self.thread).paths();
+        let Some(inode) = paths.get(from).copied() else {
+            return Ok(None);
+        };
+        if paths.contains_key(to) || family.tree().kind(inode) != Some(InodeKind::File) {
+            return Ok(None);
+        }
+        let Some(entry) = self.entries.remove(from) else {
+            return Ok(None);
+        };
+        let mut writer = Writer {
+            family,
+            bases,
+            thread: self.thread,
+            author,
+            time_ms,
+            deltas: Vec::new(),
+        };
+        let (parent, name) = writer.parent_for(self.actor, &paths, to)?;
+        writer.tree_op(self.actor, Op::Move { inode, parent, name })?;
+        self.entries.insert(
+            to.to_owned(),
+            DiskEntry {
+                inode,
+                hash: disk.hash,
+                size: disk.size,
+                mtime_ns: disk.mtime_ns,
+                ..entry
+            },
+        );
+        Ok(Some(Ingested {
+            deltas: writer.deltas,
+            actions: Vec::new(),
+        }))
+    }
+
     pub fn record_written(&mut self, path: &str, entry: DiskEntry) {
         self.entries.insert(path.to_owned(), entry);
     }
@@ -287,6 +346,35 @@ impl Writer<'_> {
         path: &str,
         disk: &DiskFile,
     ) -> Result<InodeId, BridgeError> {
+        let (parent, name) = self.parent_for(actor, paths, path)?;
+        let content = match &disk.content {
+            DiskContent::Text(_) => Content::Empty,
+            DiskContent::Blob(hash) => Content::Blob(*hash),
+        };
+        let created = self.tree_op(
+            actor,
+            Op::Create {
+                kind: InodeKind::File,
+                parent,
+                name,
+                content,
+                executable: disk.executable,
+            },
+        )?;
+        let inode = InodeId(created.ids()[0]);
+        if let DiskContent::Text(text) = &disk.content {
+            self.edit_text(actor, inode, "", text, created)?;
+        }
+        Ok(inode)
+    }
+
+    /// The directory `path` goes in, creating missing ones, and its name.
+    fn parent_for(
+        &mut self,
+        actor: ActorId,
+        paths: &BTreeMap<String, InodeId>,
+        path: &str,
+    ) -> Result<(Parent, String), BridgeError> {
         let mut parent = Parent::Root;
         let mut prefix = String::new();
         let mut components: Vec<&str> = path.split('/').collect();
@@ -313,25 +401,7 @@ impl Writer<'_> {
                 }
             };
         }
-        let content = match &disk.content {
-            DiskContent::Text(_) => Content::Empty,
-            DiskContent::Blob(hash) => Content::Blob(*hash),
-        };
-        let created = self.tree_op(
-            actor,
-            Op::Create {
-                kind: InodeKind::File,
-                parent,
-                name: name.to_owned(),
-                content,
-                executable: disk.executable,
-            },
-        )?;
-        let inode = InodeId(created.ids()[0]);
-        if let DiskContent::Text(text) = &disk.content {
-            self.edit_text(actor, inode, "", text, created)?;
-        }
-        Ok(inode)
+        Ok((parent, name.to_owned()))
     }
 
     fn update(&mut self, actor: ActorId, inode: InodeId, disk: &DiskFile, version: Frontier) -> Result<(), BridgeError> {

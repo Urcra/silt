@@ -263,3 +263,30 @@ fn a_fork_sees_its_own_edits_and_the_source_does_not() {
     assert!(!forked.disk.contains_key("src/new.rs"), "the fork doesn't see later source edits");
     assert_eq!(family.thread_view(fork).file(family.tree().paths()["README.md"]), Some(FileView::Text("# readme\nfork work\n".into())));
 }
+
+#[test]
+fn a_rename_is_a_move_so_concurrent_edits_follow_the_file() {
+    let mut family = imported_family();
+    let mut a = Checkout::new(1, &family);
+    let mut b = Checkout::new(2, &family);
+    let inode = family.tree().paths()["src/main.rs"];
+
+    let text = a.disk.remove("src/main.rs").expect("materialized");
+    a.disk.insert("src/bin/app.rs".into(), text.clone());
+    let moved = a
+        .bridge
+        .rename(&mut family, &mut bases(), "src/main.rs", "src/bin/app.rs", &Checkout::file(&text), &Author::User, 0)
+        .expect("renames")
+        .expect("src/main.rs is a file of the thread");
+    assert!(moved.deltas.iter().any(|delta| matches!(delta.op, silt_log::Op::Move { .. })));
+    assert!(!moved.deltas.iter().any(|delta| matches!(delta.op, silt_log::Op::Delete { .. })));
+    assert_eq!(family.tree().paths()["src/bin/app.rs"], inode);
+
+    let edited = b.edit(&mut family, "src/main.rs", Some("// b\nfn main() {\n    println!(\"hi\");\n}\n"));
+    b.sync(&family, &moved.deltas);
+    a.sync(&family, &edited);
+    let merged = "// b\nfn main() {\n    println!(\"hi\");\n}\n";
+    assert_eq!(a.disk["src/bin/app.rs"], merged);
+    assert_eq!(b.disk.get("src/bin/app.rs").map(String::as_str), Some(merged));
+    assert!(!b.disk.contains_key("src/main.rs"));
+}

@@ -68,6 +68,8 @@ pub(crate) struct Session {
     pub(crate) transcript: PathBuf,
     pub(crate) offsets: HashMap<String, SessionFileOffset>,
     pub(crate) open_tool: Option<String>,
+    /// Size and mtime of each side file when it was last attached.
+    pub(crate) attached: HashMap<String, (u64, SystemTime)>,
 }
 
 pub struct Core {
@@ -206,6 +208,7 @@ impl Core {
                 transcript,
                 offsets,
                 open_tool: None,
+                attached: HashMap::new(),
             });
         }
         let ids: Vec<i64> = core.checkouts.keys().copied().collect();
@@ -406,6 +409,7 @@ impl Core {
             transcript,
             offsets: HashMap::from([("main".to_owned(), main)]),
             open_tool: None,
+            attached: HashMap::new(),
         });
         let reference = SessionRef {
             agent: agent.to_owned(),
@@ -484,6 +488,9 @@ impl Core {
         candidates.dedup();
         let ignored = self.checkout(checkout_id)?.repo.ignored(&candidates)?;
         let mut worklist: Vec<String> = candidates.into_iter().filter(|path| !ignored.contains(path)).collect();
+        for path in self.ingest_renames(checkout_id, &worklist).await? {
+            worklist.retain(|candidate| *candidate != path);
+        }
         let mut rounds = 0;
         while !worklist.is_empty() && rounds < 8 {
             rounds += 1;
@@ -494,6 +501,51 @@ impl Core {
             worklist = retry;
         }
         Ok(())
+    }
+
+    /// Records each vanished file whose exact bytes reappeared at a new path
+    /// in the same batch as a move. Returns the paths it handled.
+    async fn ingest_renames(&mut self, checkout_id: i64, paths: &[String]) -> Result<Vec<String>, CoreError> {
+        let root = self.checkout(checkout_id)?.record.path.clone();
+        let entries = self.checkout(checkout_id)?.bridge.entries().clone();
+        let mut vanished: BTreeMap<[u8; 32], Vec<&String>> = BTreeMap::new();
+        let mut appeared = Vec::new();
+        for path in paths {
+            match (entries.get(path), disk::read(&root, path)?) {
+                (Some(entry), None) => vanished.entry(entry.hash).or_default().push(path),
+                (None, Some(raw)) => appeared.push((path, raw)),
+                _ => {}
+            }
+        }
+        let mut handled = Vec::new();
+        for (to, raw) in appeared {
+            let Some(from) = vanished.get_mut(&raw.hash).and_then(Vec::pop) else {
+                continue;
+            };
+            let disk_file = self.disk_file(checkout_id, to, raw).await?;
+            let author = self.author_for(checkout_id);
+            let family_id = self.checkout(checkout_id)?.family;
+            let checkout = self.checkouts.get_mut(&checkout_id).expect("checked above");
+            let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
+            let Some(ingested) = checkout.bridge.rename(
+                family,
+                &mut RepoBases(&checkout.repo),
+                from,
+                to,
+                &disk_file,
+                &author,
+                now_ms(),
+            )?
+            else {
+                continue;
+            };
+            self.store.append_deltas(family_id, &ingested.deltas).await?;
+            self.persist_entry(checkout_id, from).await?;
+            self.persist_entry(checkout_id, to).await?;
+            self.propagate(checkout_id, &ingested.deltas).await?;
+            handled.extend([from.clone(), to.clone()]);
+        }
+        Ok(handled)
     }
 
     fn files_under(&self, checkout: i64, relative: &str) -> Result<Vec<String>, CoreError> {
@@ -807,6 +859,73 @@ impl Core {
         for (key, path) in files {
             self.tail_file(session_id, &key, &path).await?;
         }
+        self.attach_side_files(session_id).await
+    }
+
+    /// Records the session's tool-result files and subagent metadata as
+    /// attachments when they are new or changed, so a restored session is
+    /// complete.
+    async fn attach_side_files(&mut self, session_id: &str) -> Result<(), CoreError> {
+        let session = self.session(session_id).expect("caller checked");
+        let session_dir = session.transcript.with_extension("");
+        let mut changed = Vec::new();
+        for (dir, keep) in [
+            ("tool-results", (|_: &Path| true) as fn(&Path) -> bool),
+            ("subagents", |path: &Path| path.extension().is_none_or(|extension| extension != "jsonl")),
+        ] {
+            let Ok(entries) = fs::read_dir(session_dir.join(dir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if !metadata.is_file() || !keep(&path) {
+                    continue;
+                }
+                let name = format!("{dir}/{}", entry.file_name().to_string_lossy());
+                let stamp = (metadata.len(), metadata.modified()?);
+                if session.attached.get(&name) != Some(&stamp) {
+                    changed.push((name, path, stamp));
+                }
+            }
+        }
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let reference = SessionRef {
+            agent: session.record.agent.clone(),
+            id: session.record.session_id.clone(),
+        };
+        let (family, thread) = (session.family, session.record.thread);
+        for (name, path, stamp) in changed {
+            let bytes = fs::read(&path)?;
+            let bytes = match String::from_utf8(bytes) {
+                Ok(text) => self.redactor.replace(&text).into_bytes(),
+                Err(error) => error.into_bytes(),
+            };
+            let blob = self.store.blobs().put(&bytes).await?;
+            let known = self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
+                Op::Conv(ConvOp::Attachment {
+                    session,
+                    name: attached,
+                    blob,
+                }) if *session == reference && *attached == name => Some(*blob),
+                _ => None,
+            });
+            if known != Some(blob) {
+                let op = ConvOp::Attachment {
+                    session: reference.clone(),
+                    name: name.clone(),
+                    blob,
+                };
+                self.append_conv(family, thread, agent_author(&reference), op).await?;
+            }
+            if let Some(session) = self.session_mut(session_id) {
+                session.attached.insert(name, stamp);
+            }
+        }
         Ok(())
     }
 
@@ -923,10 +1042,17 @@ impl Core {
         checkout_root: &Path,
     ) -> Result<(), CoreError> {
         let author = agent_author(&session);
+        let config_dir = claude::config_dir().ok_or_else(|| CoreError::Invalid("HOME is not set".into()))?;
+        let dir = claude::session_paths(&config_dir, cwd, &session.id).session_dir;
         let op = ConvOp::SessionStarted {
-            session,
+            session: session.clone(),
             cwd: cwd.to_string_lossy().into_owned(),
             checkout_root: checkout_root.to_string_lossy().into_owned(),
+        };
+        self.append_conv(family, thread, author.clone(), op).await?;
+        let op = ConvOp::SessionDir {
+            session,
+            dir: dir.to_string_lossy().into_owned(),
         };
         self.append_conv(family, thread, author, op).await?;
         Ok(())
