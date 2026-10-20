@@ -1,0 +1,207 @@
+//! Reads repositories with gix and runs the `git` CLI for writes and for the
+//! cases gix doesn't cover, so behaviour matches the user's own git (ADR 0002).
+
+mod filters;
+mod remote;
+
+use std::collections::HashSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use gix::bstr::ByteSlice;
+use silt_types::GitOid;
+
+pub use filters::Filters;
+pub use remote::normalize_remote;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GitError {
+    #[error("{path} is not inside a git repository")]
+    NotARepository { path: PathBuf },
+    #[error("git operation failed: {0}")]
+    Gix(String),
+    #[error("`git {args}` failed: {stderr}")]
+    Command { args: String, stderr: String },
+    #[error("could not run git")]
+    Spawn(#[from] std::io::Error),
+}
+
+impl GitError {
+    fn gix(error: impl std::fmt::Display) -> Self {
+        Self::Gix(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileMode {
+    Regular,
+    Executable,
+    Symlink,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeFile {
+    pub path: String,
+    pub oid: GitOid,
+    pub mode: FileMode,
+}
+
+pub struct Repo {
+    root: PathBuf,
+    repo: gix::Repository,
+}
+
+impl Repo {
+    /// The repository containing `path`, which must have a worktree.
+    pub fn discover(path: &Path) -> Result<Self, GitError> {
+        let not_a_repo = || GitError::NotARepository { path: path.to_owned() };
+        let repo = gix::discover(path).map_err(|_| not_a_repo())?;
+        let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
+        let root = root.canonicalize().unwrap_or(root);
+        Ok(Self { root, repo })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn git_dir(&self) -> &Path {
+        self.repo.git_dir()
+    }
+
+    /// The commit HEAD points at, or `None` in a repository without commits.
+    pub fn head_commit(&self) -> Result<Option<GitOid>, GitError> {
+        match self.repo.head_id() {
+            Ok(id) => Ok(Some(oid(id.detach()))),
+            Err(_) if self.repo.head().map_err(GitError::gix)?.is_unborn() => Ok(None),
+            Err(error) => Err(GitError::gix(error)),
+        }
+    }
+
+    pub fn head_branch(&self) -> Result<Option<String>, GitError> {
+        let name = self.repo.head_name().map_err(GitError::gix)?;
+        Ok(name.map(|name| name.shorten().to_str_lossy().into_owned()))
+    }
+
+    pub fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
+        let Ok(remote) = self.repo.find_remote(name) else {
+            return Ok(None);
+        };
+        Ok(remote
+            .url(gix::remote::Direction::Fetch)
+            .map(|url| url.to_bstring().to_str_lossy().into_owned()))
+    }
+
+    /// Every file in `commit`'s tree. Submodules are skipped.
+    pub fn files_at(&self, commit: GitOid) -> Result<Vec<TreeFile>, GitError> {
+        let commit = self.repo.find_commit(object_id(commit)).map_err(GitError::gix)?;
+        let tree = commit.tree().map_err(GitError::gix)?;
+        let mut recorder = gix::traverse::tree::Recorder::default();
+        tree.traverse().breadthfirst(&mut recorder).map_err(GitError::gix)?;
+        Ok(recorder
+            .records
+            .into_iter()
+            .filter_map(|entry| {
+                let mode = if entry.mode.is_link() {
+                    FileMode::Symlink
+                } else if entry.mode.is_executable() {
+                    FileMode::Executable
+                } else if entry.mode.is_blob() {
+                    FileMode::Regular
+                } else {
+                    return None;
+                };
+                Some(TreeFile {
+                    path: entry.filepath.to_str_lossy().into_owned(),
+                    oid: oid(entry.oid),
+                    mode,
+                })
+            })
+            .collect())
+    }
+
+    pub fn blob(&self, oid: GitOid) -> Result<Vec<u8>, GitError> {
+        let blob = self.repo.find_blob(object_id(oid)).map_err(GitError::gix)?;
+        Ok(blob.data.clone())
+    }
+
+    /// Files in the worktree that Silt tracks: everything git tracks that
+    /// still exists, plus untracked files that aren't ignored.
+    pub fn worktree_files(&self) -> Result<Vec<String>, GitError> {
+        let output = self.git(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"], None)?;
+        let mut files: Vec<String> = output
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .filter(|path| self.root.join(path).symlink_metadata().is_ok())
+            .collect();
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+
+    /// Which of `paths` git ignores. Tracked files are never ignored, even
+    /// when they match an ignore rule.
+    pub fn ignored(&self, paths: &[String]) -> Result<HashSet<String>, GitError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut input = Vec::new();
+        for path in paths {
+            input.extend_from_slice(path.as_bytes());
+            input.push(0);
+        }
+        let output = match self.git(&["check-ignore", "-z", "--stdin"], Some(&input)) {
+            Ok(output) => output,
+            Err(GitError::Command { stderr, .. }) if stderr.is_empty() => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(output
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect())
+    }
+
+    pub fn filters(&self) -> Result<Filters<'_>, GitError> {
+        Filters::new(&self.repo, &self.root)
+    }
+
+    /// Runs `git` in the worktree, failing on a non-zero exit.
+    pub fn git(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {
+        run_git(&self.root, args, stdin)
+    }
+}
+
+pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(input) = stdin {
+        child.stdin.take().expect("stdin is piped").write_all(input)?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(GitError::Command {
+            args: args.join(" "),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(output.stdout)
+}
+
+fn oid(id: gix::ObjectId) -> GitOid {
+    let mut bytes = [0u8; 20];
+    bytes.copy_from_slice(id.as_bytes());
+    GitOid(bytes)
+}
+
+fn object_id(oid: GitOid) -> gix::ObjectId {
+    gix::ObjectId::from_bytes_or_panic(&oid.0)
+}
