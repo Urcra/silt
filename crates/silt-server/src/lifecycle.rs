@@ -157,9 +157,13 @@ impl Server {
         let db = self.db();
         let mut rooms = self.shared.rooms.lock().await;
         let mut purged = self.shared.purged.lock().await;
+        let mut now_purged = purged.clone();
+        now_purged.extend(threads.iter().map(|(thread, _)| *thread));
+        // What changes in memory is decided here and done only after the
+        // commit: `None` drops the family's room.
+        let mut rebuilt: Vec<(FamilyId, Option<Room>)> = Vec::new();
         let mut tx = db.begin().await?;
         for (thread, family) in threads {
-            purged.insert(*thread);
             sqlx::query("INSERT OR IGNORE INTO purged_threads (thread_id, family_id, purged_ms) VALUES (?, ?, ?)")
                 .bind(id_bytes(thread.0))
                 .bind(id_bytes(family.0))
@@ -181,40 +185,45 @@ impl Server {
                 .await?;
         }
         let families: HashSet<FamilyId> = threads.iter().map(|(_, family)| *family).collect();
+        let mut gone = Vec::new();
         for family in families {
             let remaining: i64 = sqlx::query("SELECT COUNT(*) AS remaining FROM threads WHERE family_id = ?")
                 .bind(id_bytes(family.0))
                 .fetch_one(&mut *tx)
                 .await?
                 .get("remaining");
+            // A fork whose device hasn't registered it yet still has deltas
+            // here, and keeps the family alive.
+            let kept: Vec<Delta> = rooms
+                .get(&family)
+                .map(|room| {
+                    room.deltas()
+                        .iter()
+                        .zip(kept_after_purge(room.deltas(), &now_purged))
+                        .filter(|(_, kept)| *kept)
+                        .map(|(delta, _)| delta.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
             sqlx::query("DELETE FROM deltas WHERE family_id = ?")
                 .bind(id_bytes(family.0))
                 .execute(&mut *tx)
                 .await?;
-            if remaining == 0 {
-                rooms.remove(&family);
+            if remaining == 0 && kept.is_empty() {
                 sqlx::query("DELETE FROM families WHERE id = ?")
                     .bind(id_bytes(family.0))
                     .execute(&mut *tx)
                     .await?;
-                let mirror = self.git_root().join(format!("{family}.git"));
-                if mirror.exists() {
-                    tokio::fs::remove_dir_all(mirror).await?;
-                }
+                rebuilt.push((family, None));
+                gone.push(family);
                 continue;
             }
-            let Some(room) = rooms.get(&family) else {
+            if !rooms.contains_key(&family) {
                 continue;
-            };
-            let deltas = room.deltas().to_vec();
-            let kept: Vec<Delta> = deltas
-                .into_iter()
-                .zip(kept_after_purge(room.deltas(), &purged))
-                .filter_map(|(delta, kept)| kept.then_some(delta))
-                .collect();
-            let mut rebuilt = Room::new(self.shared.generation);
+            }
+            let mut room = Room::new(self.shared.generation);
             if !kept.is_empty() {
-                rebuilt.push(kept.clone()).map_err(|error| std::io::Error::other(error.to_string()))?;
+                room.push(kept.clone()).map_err(|error| std::io::Error::other(error.to_string()))?;
             }
             for (seq, delta) in (1..).zip(&kept) {
                 sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, ?, ?)")
@@ -224,9 +233,16 @@ impl Server {
                     .execute(&mut *tx)
                     .await?;
             }
-            rooms.insert(family, rebuilt);
+            rebuilt.push((family, Some(room)));
         }
         tx.commit().await?;
+        *purged = now_purged;
+        for (family, room) in rebuilt {
+            match room {
+                Some(room) => rooms.insert(family, room),
+                None => rooms.remove(&family),
+            };
+        }
         let mut index = Index::default();
         let mut rows = Vec::new();
         let mut referenced = HashSet::new();
@@ -245,6 +261,12 @@ impl Server {
         drop(rooms);
         for family in threads.iter().map(|(_, family)| *family).collect::<HashSet<_>>() {
             self.wake_pulls(family);
+        }
+        for family in gone {
+            let mirror = self.git_root().join(format!("{family}.git"));
+            if mirror.exists() {
+                tokio::fs::remove_dir_all(mirror).await?;
+            }
         }
         let now = SystemTime::now();
         for (blob, written) in self.shared.blobs.list().await? {

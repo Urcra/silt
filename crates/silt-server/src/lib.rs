@@ -1,7 +1,7 @@
 //! The self-hostable sync server (ADR 0009): one SQLite database, a blob
 //! store and a [`Room`] per family, behind a small HTTP API.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -118,26 +118,37 @@ impl Server {
         tokio::fs::create_dir_all(data_dir).await?;
         let db = open_db(data_dir).await?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
-        let mut rooms: HashMap<FamilyId, Room> = HashMap::new();
-        let mut index = Index::default();
-        let mut index_rows = Vec::new();
+        let purged = lifecycle::load_purged(&db).await?;
+        let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
         let rows = sqlx::query("SELECT family_id, data FROM deltas ORDER BY family_id, seq")
             .fetch_all(&db)
             .await?;
         for row in rows {
             let family = FamilyId(id_from(row.get("family_id")));
-            let delta: Delta = postcard::from_bytes(row.get::<&[u8], _>("data"))?;
-            index_rows.extend(index.observe(family, &delta));
+            stored.entry(family).or_default().push(postcard::from_bytes(row.get::<&[u8], _>("data"))?);
+        }
+        let mut rooms: HashMap<FamilyId, Room> = HashMap::new();
+        let mut index = Index::default();
+        let mut index_rows = Vec::new();
+        for (family, deltas) in stored {
+            // Purged threads' deltas stay only where a kept one builds on
+            // them, as when they were purged.
+            let kept = silt_log::kept_after_purge(&deltas, &purged);
             let room = rooms.entry(family).or_insert_with(|| Room::new(generation));
-            if let Err(error) = room.push(vec![delta]) {
-                tracing::warn!(%error, "skipping a stored delta that no longer applies");
+            for (delta, kept) in deltas.into_iter().zip(kept) {
+                if !kept {
+                    continue;
+                }
+                index_rows.extend(index.observe(family, &delta));
+                if let Err(error) = room.push(vec![delta]) {
+                    tracing::warn!(%error, "skipping a stored delta that no longer applies");
+                }
             }
         }
         let mut tx = db.begin().await?;
         index::clear(&mut tx).await?;
         index::write(&mut tx, &index_rows).await?;
         tx.commit().await?;
-        let purged = lifecycle::load_purged(&db).await?;
         let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
         Ok(Self {
             shared: Arc::new(Shared {
@@ -577,8 +588,10 @@ async fn push(
 ) -> Result<Json<PushReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
     claim_family(&server, family, caller).await?;
-    let pushed = server.without_purged(body.deltas).await;
     let mut rooms = server.shared.rooms.lock().await;
+    // Under the rooms lock, so a purge can't finish between this filter
+    // and the push.
+    let pushed = server.without_purged(body.deltas).await;
     let room = rooms
         .entry(family)
         .or_insert_with(|| Room::new(server.shared.generation));

@@ -277,6 +277,22 @@ async fn a_repository_is_not_claimed_by_someone_without_threads_in_it() {
 }
 
 #[tokio::test]
+async fn purging_keeps_a_fork_that_is_not_registered_yet() {
+    let (_data, alice, _bob) = two_people().await;
+    let mut family = Family::new();
+    let shared = delta(&mut family, MAIN, file("shared"));
+    let forked = family.delta(ActorId(FORK.0), FORK, Author::User, 0, family.thread_head(MAIN), Op::Fork { from: MAIN });
+    family.apply(forked.clone(), &mut HashMap::new()).expect("applies");
+    let on_fork = delta(&mut family, FORK, file("fork"));
+    alice.register(MAIN).await;
+    alice.push(&[shared, forked, on_fork]).await;
+
+    assert_eq!(alice.status(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/delete")).await, StatusCode::NO_CONTENT);
+    assert_eq!(alice.status(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/purge")).await, StatusCode::NO_CONTENT);
+    assert_eq!(alice.pulled().await, vec![MAIN, FORK, FORK], "the fork's device registers it later; its work is still here");
+}
+
+#[tokio::test]
 async fn purged_threads_leave_what_forks_need_and_never_come_back() {
     let (_data, alice, bob) = two_people().await;
 
