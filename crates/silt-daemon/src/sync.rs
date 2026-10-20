@@ -227,7 +227,7 @@ impl Core {
         if fresh.is_empty() {
             return Ok(stopped);
         }
-        self.store.append_deltas(family_id, &fresh).await?;
+        self.persist(family_id, &fresh).await?;
         self.syncs
             .entry(family_id)
             .or_default()

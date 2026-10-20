@@ -222,24 +222,7 @@ impl Core {
             if !record.path.exists() {
                 continue;
             }
-            let entries = core
-                .store
-                .disk_files(record.id)
-                .await?
-                .into_iter()
-                .map(|(path, file)| {
-                    (
-                        path,
-                        DiskEntry {
-                            inode: InodeId(file.inode),
-                            hash: file.hash,
-                            size: file.size,
-                            mtime_ns: file.mtime_ns,
-                            version: file.version,
-                        },
-                    )
-                })
-                .collect();
+            let entries = stored_entries(&core.store, record.id).await?;
             core.start_checkout(record, entries)?;
         }
         core.load_sessions().await?;
@@ -522,7 +505,7 @@ impl Core {
             else {
                 continue;
             };
-            self.store.append_deltas(family_id, &ingested.deltas).await?;
+            self.persist(family_id, &ingested.deltas).await?;
             self.persist_entry(checkout_id, from).await?;
             self.persist_entry(checkout_id, to).await?;
             self.propagate(checkout_id, &ingested.deltas).await?;
@@ -589,7 +572,7 @@ impl Core {
             &author,
             now_ms(),
         )?;
-        self.store.append_deltas(family_id, &ingested.deltas).await?;
+        self.persist(family_id, &ingested.deltas).await?;
         self.persist_entry(checkout_id, path).await?;
         let mut again = self.perform(checkout_id, ingested.actions).await?;
         again.extend(self.propagate(checkout_id, &ingested.deltas).await?);
@@ -775,8 +758,50 @@ impl Core {
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.store.append_deltas(family_id, std::slice::from_ref(&delta)).await?;
+        self.persist(family_id, std::slice::from_ref(&delta)).await?;
         Ok(delta)
+    }
+
+    /// Stores deltas just applied to the family in memory. If the store
+    /// fails, the family and its checkouts' records of the disk are reloaded
+    /// from the store, so memory never holds what a restart would lose and
+    /// nothing builds on it; a later pull or rescan records it again.
+    pub(crate) async fn persist(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
+        let Err(error) = self.store.append_deltas(family_id, deltas).await else {
+            return Ok(());
+        };
+        if let Err(reload) = self.reload_family(family_id).await {
+            warn!(error = %reload, family = %family_id, "could not reload the family after a failed write");
+        }
+        Err(error.into())
+    }
+
+    async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
+        let deltas = self.store.deltas(family_id).await?;
+        if self.families.contains_key(&family_id) {
+            let repo = self.family_repo(family_id)?;
+            let mut family = Family::new();
+            for delta in deltas {
+                if let Err(error) = family.apply(delta, &mut RepoBases(&repo)) {
+                    warn!(%error, "skipping a delta that no longer applies");
+                }
+            }
+            self.families.insert(family_id, family);
+        } else {
+            self.raw.insert(family_id, deltas);
+        }
+        let ids: Vec<i64> = self
+            .checkouts
+            .iter()
+            .filter(|(_, checkout)| checkout.family == family_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            let entries = stored_entries(&self.store, id).await?;
+            let checkout = self.checkouts.get_mut(&id).expect("listed above");
+            checkout.bridge = Bridge::new(checkout.record.actor, checkout.record.thread, entries);
+        }
+        Ok(())
     }
 
     fn checkout(&self, id: i64) -> Result<&Checkout, CoreError> {
@@ -840,7 +865,7 @@ impl Core {
         });
         let delta = family.delta(actor, thread, Author::Import, now_ms(), family.thread_head(thread), op);
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.store.append_deltas(family_id, &[delta]).await?;
+        self.persist(family_id, &[delta]).await?;
         Ok(())
     }
 
@@ -864,7 +889,7 @@ impl Core {
             let op = Op::Git(GitOp::Committed { commit: head, branch });
             let delta = family.delta(actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
             family.apply(delta.clone(), &mut HashMap::new())?;
-            self.store.append_deltas(family_id, &[delta]).await?;
+            self.persist(family_id, &[delta]).await?;
             repo.protect(&thread.to_string(), head)?;
             self.record_bundle(family_id, thread, &repo, head).await?;
         }
@@ -1140,7 +1165,7 @@ impl Core {
         let parents = at.unwrap_or_else(|| family.thread_head(from));
         let delta = family.delta(actor, fork, Author::User, now_ms(), parents, Op::Fork { from });
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.store.append_deltas(source.family, &[delta]).await?;
+        self.persist(source.family, &[delta]).await?;
         Ok(fork)
     }
 }
@@ -1161,6 +1186,27 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Mr(_)
         | Op::Comment(_) => None,
     }
+}
+
+/// What the store says a checkout's files on disk were last recorded as.
+async fn stored_entries(store: &Store, checkout: i64) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
+    Ok(store
+        .disk_files(checkout)
+        .await?
+        .into_iter()
+        .map(|(path, file)| {
+            (
+                path,
+                DiskEntry {
+                    inode: InodeId(file.inode),
+                    hash: file.hash,
+                    size: file.size,
+                    mtime_ns: file.mtime_ns,
+                    version: file.version,
+                },
+            )
+        })
+        .collect())
 }
 
 /// Redacts the secrets in this process's environment and in the data

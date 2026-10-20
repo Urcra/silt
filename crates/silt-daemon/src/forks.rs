@@ -79,7 +79,7 @@ impl Core {
         let family = self.families.get_mut(&family_id).expect("caller loaded the family");
         let delta = family.delta(actor, thread, Author::User, crate::core::now_ms(), parents, op);
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.store.append_deltas(family_id, std::slice::from_ref(&delta)).await?;
+        self.persist(family_id, std::slice::from_ref(&delta)).await?;
         Ok(delta)
     }
 

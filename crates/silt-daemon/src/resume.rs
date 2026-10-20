@@ -294,7 +294,7 @@ impl Core {
             },
         );
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.store.append_deltas(family_id, &[delta]).await?;
+        self.persist(family_id, &[delta]).await?;
         Ok(())
     }
 

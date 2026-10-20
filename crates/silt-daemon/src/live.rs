@@ -64,7 +64,7 @@ impl Core {
             family.apply(delta.clone(), &mut RepoBases(&repo))?;
             applied.push(delta);
         }
-        self.store.append_deltas(family_id, &applied).await?;
+        self.persist(family_id, &applied).await?;
         self.update_checkouts(family_id, &applied).await?;
         Ok(applied.len())
     }
