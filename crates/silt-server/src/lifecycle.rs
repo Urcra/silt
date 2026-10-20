@@ -15,6 +15,7 @@ use silt_types::{BlobHash, FamilyId, ThreadId};
 use sqlx::Row;
 
 use crate::index::{self, Index};
+use crate::visibility::Viewer;
 use crate::{ApiError, Caller, Server, ServerError, bad_request, forbidden, id_bytes, id_from, not_found, now_ms};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -122,16 +123,28 @@ fn blob_of(delta: &Delta) -> Option<BlobHash> {
 }
 
 impl Server {
-    /// Thread ids deleted and purged, for listings.
-    pub(crate) async fn lifecycle(&self) -> Result<(Vec<ThreadId>, Vec<ThreadId>), sqlx::Error> {
-        let ids = |rows: Vec<sqlx::sqlite::SqliteRow>, column: &str| -> Vec<ThreadId> {
-            rows.iter().map(|row| ThreadId(id_from(row.get(column)))).collect()
-        };
-        let deleted = sqlx::query("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
+    /// Thread ids deleted and purged, for `viewer`'s listing: those in
+    /// families they see, and purged ones whose family is gone altogether,
+    /// so a device that had it still drops it.
+    pub(crate) async fn lifecycle(&self, viewer: &Viewer) -> Result<(Vec<ThreadId>, Vec<ThreadId>), sqlx::Error> {
+        let deleted = sqlx::query("SELECT id, family_id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(self.db())
-            .await?;
-        let purged = sqlx::query("SELECT thread_id FROM purged_threads").fetch_all(self.db()).await?;
-        Ok((ids(deleted, "id"), ids(purged, "thread_id")))
+            .await?
+            .iter()
+            .filter(|row| viewer.sees_family(id_from(row.get("family_id"))))
+            .map(|row| ThreadId(id_from(row.get("id"))))
+            .collect();
+        let purged = sqlx::query(
+            "SELECT p.thread_id, p.family_id, EXISTS (SELECT 1 FROM families f WHERE f.id = p.family_id) AS remains
+             FROM purged_threads p",
+        )
+        .fetch_all(self.db())
+        .await?
+        .iter()
+        .filter(|row| row.get::<i64, _>("remains") == 0 || viewer.sees_family(id_from(row.get("family_id"))))
+        .map(|row| ThreadId(id_from(row.get("thread_id"))))
+        .collect();
+        Ok((deleted, purged))
     }
 
     /// Removes threads for good: their metadata, the deltas no remaining

@@ -507,7 +507,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
             collaborators: shared.remove(&ThreadId(id_from(row.get("id")))).unwrap_or_default(),
         })
         .collect();
-    let (deleted, purged) = server.lifecycle().await?;
+    let (deleted, purged) = server.lifecycle(&viewer).await?;
     Ok(Json(Listing {
         families,
         threads,
