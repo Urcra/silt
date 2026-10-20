@@ -37,6 +37,34 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Fork a thread, yours or a teammate's, with its code and conversation
+    Fork {
+        thread: String,
+        /// Use this clone instead of a managed checkout (needs a clean tree)
+        #[arg(long)]
+        here: bool,
+        /// Arguments passed on to `claude`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Bring a fork's source's newer code and conversation into the fork
+    Pull {
+        /// The fork; defaults to the thread checked out here
+        thread: Option<String>,
+    },
+    /// Merge requests from forks back to their source threads
+    Mr {
+        #[command(subcommand)]
+        command: MrCommand,
+    },
+    /// Set who on the server can see this project's threads, or one thread family's
+    Visibility {
+        #[arg(value_enum)]
+        visibility: VisibilityArg,
+        /// Set it for this thread and its forks instead of the whole project
+        #[arg(long)]
+        thread: Option<String>,
+    },
     /// Connect this machine to a Silt server
     Auth {
         #[command(subcommand)]
@@ -88,6 +116,39 @@ enum DaemonCommand {
     Stop,
     /// Show whether the daemon is running
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum MrCommand {
+    /// Offer a fork's work to the thread it was forked from
+    Create {
+        /// The fork; defaults to the thread checked out here
+        #[arg(long)]
+        thread: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        /// Defaults to the changed files and the fork agent's last message
+        #[arg(long)]
+        summary: Option<String>,
+    },
+    /// List merge requests, all or those of one thread
+    List { thread: Option<String> },
+    /// Show a merge request: summary, conflict hints, diff and the fork's conversation
+    Show { mr: String },
+    /// Merge it into its target (on the device working on the target)
+    Approve { mr: String },
+    /// Decline it; both threads carry on
+    Decline {
+        mr: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum VisibilityArg {
+    Private,
+    Team,
 }
 
 #[derive(Debug, Subcommand)]
@@ -146,6 +207,22 @@ fn main() -> Result<(), Exn<CliError>> {
         Command::Claude { isolated, args } => commands::claude(isolated, &args),
         Command::Track => commands::track(),
         Command::Resume { thread, here, args } => commands::resume(&thread, here, &args),
+        Command::Fork { thread, here, args } => commands::fork(&thread, here, &args),
+        Command::Pull { thread } => commands::pull(thread),
+        Command::Mr { command } => match command {
+            MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
+            MrCommand::List { thread } => commands::mr_list(thread),
+            MrCommand::Show { mr } => commands::mr_show(&mr),
+            MrCommand::Approve { mr } => commands::mr_approve(&mr),
+            MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
+        },
+        Command::Visibility { visibility, thread } => commands::visibility(
+            match visibility {
+                VisibilityArg::Private => silt_proto::Visibility::Private,
+                VisibilityArg::Team => silt_proto::Visibility::Team,
+            },
+            thread,
+        ),
         Command::Auth { command } => match command {
             AuthCommand::Login { server, code, name } => commands::auth_login(&server, &code, name),
             AuthCommand::Status => commands::auth_status(),

@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
-use crate::protocol::{Request, Response, SessionStarted};
+use crate::protocol::{HookReply, Request, Response, SessionStarted};
 use crate::remote::{self, Remote};
 use crate::watch::{self, Watcher};
 
@@ -91,6 +91,8 @@ pub struct Core {
     pub(crate) sync_error: Option<String>,
     /// The HEAD commit each checkout was last seen at.
     pub(crate) heads: HashMap<i64, GitOid>,
+    /// Messages for each thread's agent, handed over on its next prompt.
+    pub(crate) notices: HashMap<ThreadId, Vec<String>>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -132,6 +134,7 @@ impl Core {
             last_listing: None,
             sync_error: None,
             heads: HashMap::new(),
+            notices: HashMap::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -270,6 +273,21 @@ impl Core {
                     .collect(),
             }),
             Request::Resume { thread, cwd, here } => to_response(self.resume(&thread, &cwd, here).await),
+            Request::Fork { thread, cwd, here } => to_response(self.fork(&thread, &cwd, here).await),
+            Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
+            Request::MrCreate {
+                thread,
+                cwd,
+                title,
+                summary,
+            } => to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await),
+            Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
+            Request::MrShow { mr } => to_response(self.mr_show(&mr)),
+            Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
+            Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
+            Request::SetVisibility { cwd, thread, visibility } => {
+                to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
+            }
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -777,16 +795,20 @@ impl Core {
             Err(error) => return Some((Response::error(error), reply)),
         };
         let session_id = input.session_id.clone();
-        if self.session(&session_id).is_none() {
-            return Some((Response::ok("not a recorded session"), reply));
-        }
+        let Some(thread) = self.session(&session_id).map(|session| session.record.thread) else {
+            return Some((Response::ok(HookReply::default()), reply));
+        };
         let result = match event {
             "UserPromptSubmit" => {
                 let tailed = self.tail_session(&session_id).await;
-                match tailed {
+                let recorded = match tailed {
                     Ok(()) => self.record_turn(&session_id, TurnMark::PromptSubmitted).await,
                     Err(error) => Err(error),
-                }
+                };
+                let reply_data = HookReply {
+                    additional_context: self.take_notices(thread),
+                };
+                return Some((to_response(recorded.map(|()| reply_data)), reply));
             }
             "PreToolUse" => {
                 let tool_use_id = input.tool_use_id.clone().unwrap_or_default();
@@ -816,7 +838,7 @@ impl Core {
             }
             _ => Ok(()),
         };
-        Some((to_response(result.map(|()| "ok")), reply))
+        Some((to_response(result.map(|()| HookReply::default())), reply))
     }
 
     async fn record_turn(&mut self, session_id: &str, mark: TurnMark) -> Result<(), CoreError> {

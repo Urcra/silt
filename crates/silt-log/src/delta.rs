@@ -150,6 +150,9 @@ pub enum ConvOp {
         title: String,
         summary: String,
     },
+    /// `session` continues `from` under a new id, as when a fork restores
+    /// its source's session; restoring `session` again needs both.
+    SessionContinued { session: SessionRef, from: SessionRef },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

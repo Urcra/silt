@@ -10,7 +10,10 @@ use serde::de::DeserializeOwned;
 use silt_agents::claude;
 use silt_daemon::client;
 use silt_daemon::paths;
-use silt_daemon::protocol::{DaemonStatus, Request, Response, Resumed, SearchResult, SessionStarted, ShowLine, ThreadSummary};
+use silt_daemon::protocol::{
+    DaemonStatus, HookReply, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchResult, SessionStarted,
+    ShowLine, ThreadSummary,
+};
 
 use crate::CliError;
 use crate::render;
@@ -145,13 +148,37 @@ fn run_claude(session_args: &[&str], args: &[String], cwd: &Path) -> Result<std:
 
 pub fn resume(thread: &str, here: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
     let resumed: Resumed = call(&Request::Resume {
         thread: thread.into(),
-        cwd,
+        cwd: current_dir()?,
         here,
     })?;
     eprintln!("silt: thread {} is now here, in {}", short(&resumed.thread), resumed.checkout.display());
+    continue_session(resumed, args)
+}
+
+pub fn fork(thread: &str, here: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let forked: Resumed = call(&Request::Fork {
+        thread: thread.into(),
+        cwd: current_dir()?,
+        here,
+    })?;
+    eprintln!(
+        "silt: forked {} as thread {}, in {}",
+        short(thread),
+        short(&forked.thread),
+        forked.checkout.display()
+    );
+    continue_session(forked, args)
+}
+
+fn current_dir() -> Result<PathBuf, Exn<CliError>> {
+    env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))
+}
+
+/// Runs the agent on a resumed or forked session, if the thread has one.
+fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliError>> {
     let Some(session_id) = resumed.session_id else {
         eprintln!("silt: the thread has no agent session to continue");
         return Ok(());
@@ -236,8 +263,9 @@ fn newest_transcript(project: &Path) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
-/// Forwards an agent hook to the daemon. Never fails, so a missing daemon
-/// can't break the agent session.
+/// Forwards an agent hook to the daemon, and prints any context the daemon
+/// has for the agent in Claude Code's hook output format. Never fails, so a
+/// missing daemon can't break the agent session.
 pub fn hook(event: &str) {
     let mut input = String::new();
     if io::stdin().read_to_string(&mut input).is_err() {
@@ -250,7 +278,92 @@ pub fn hook(event: &str) {
         event: event.to_owned(),
         input,
     };
-    let _ = client::send(&paths::socket_path(), &request, HOOK_TIMEOUT);
+    let Ok(Response::Ok { data }) = client::send(&paths::socket_path(), &request, HOOK_TIMEOUT) else {
+        return;
+    };
+    if let Ok(HookReply {
+        additional_context: Some(context),
+    }) = serde_json::from_value(data)
+    {
+        let output = serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": event, "additionalContext": context }
+        });
+        println!("{output}");
+    }
+}
+
+pub fn pull(thread: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let pulled: Pulled = call(&Request::Pull {
+        thread,
+        cwd: current_dir()?,
+    })?;
+    if pulled.messages == 0 && pulled.files.is_empty() {
+        println!("thread {} is up to date with {}", short(&pulled.thread), short(&pulled.from));
+    } else {
+        println!(
+            "pulled {} messages and {} changed files from {} into {}",
+            pulled.messages,
+            pulled.files.len(),
+            short(&pulled.from),
+            short(&pulled.thread)
+        );
+        for file in &pulled.files {
+            println!("  {file}");
+        }
+    }
+    Ok(())
+}
+
+pub fn mr_create(thread: Option<String>, title: Option<String>, summary: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let mr: MrSummary = call(&Request::MrCreate {
+        thread,
+        cwd: current_dir()?,
+        title,
+        summary,
+    })?;
+    println!("opened merge request {}: {} → {}", mr.id, short(&mr.fork), short(&mr.target));
+    Ok(())
+}
+
+pub fn mr_list(thread: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let requests: Vec<MrSummary> = call(&Request::MrList { thread })?;
+    print!("{}", render::merge_requests(&requests));
+    Ok(())
+}
+
+pub fn mr_show(mr: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let details: MrDetails = call(&Request::MrShow { mr: mr.into() })?;
+    print!("{}", render::merge_request(&details));
+    Ok(())
+}
+
+pub fn mr_approve(mr: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let approved: MrSummary = call(&Request::MrApprove { mr: mr.into() })?;
+    println!("merged {} into thread {}", approved.id, short(&approved.target));
+    Ok(())
+}
+
+pub fn mr_decline(mr: &str, reason: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let declined: MrSummary = call(&Request::MrDecline { mr: mr.into(), reason })?;
+    println!("declined {}; fork {} carries on", declined.id, short(&declined.fork));
+    Ok(())
+}
+
+pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let message: String = call(&Request::SetVisibility {
+        cwd: current_dir()?,
+        thread,
+        visibility,
+    })?;
+    println!("{message}");
+    Ok(())
 }
 
 pub fn log() -> Result<(), Exn<CliError>> {

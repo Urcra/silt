@@ -400,10 +400,14 @@ impl TextDoc {
     }
 
     pub fn text_at(&self, graph: &CausalGraph, version: &Frontier) -> String {
-        let vv = graph.version_vector(version);
+        self.text_at_vv(&graph.version_vector(version))
+    }
+
+    /// The text as of the version containing exactly the ids in `vv`.
+    pub fn text_at_vv(&self, vv: &VersionVector) -> String {
         let mut text = String::new();
         for fragment in self.fragments.iter() {
-            text.extend(&self.chars_of(fragment)[..fragment.visible_len_at(&vv)]);
+            text.extend(&self.chars_of(fragment)[..fragment.visible_len_at(vv)]);
         }
         text
     }

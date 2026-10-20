@@ -19,6 +19,16 @@ impl VersionVector {
         self.0.get(&actor).copied()
     }
 
+    /// The common ancestors of two versions, such as a merge base.
+    pub fn intersection(&self, other: &Self) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter_map(|(actor, max)| other.get(*actor).map(|other| (*actor, (*max).min(other))))
+                .collect(),
+        )
+    }
+
     fn include(&mut self, id: DeltaId) {
         let max = self.0.entry(id.actor).or_insert(id.lamport);
         if *max < id.lamport {
@@ -329,6 +339,20 @@ mod tests {
         assert_eq!(graph.parents_of(id(1, 7)), Some(frontier(&[id(1, 6)])));
         assert_eq!(graph.parents_of(id(2, 6)), Some(frontier(&[id(1, 5)])));
         assert_eq!(graph.parents_of(id(3, 0)), None);
+    }
+
+    #[test]
+    fn intersection_is_the_common_history() {
+        let mut graph = CausalGraph::new();
+        graph.add(span(1, 0, 3), &Frontier::root()).expect("base");
+        graph.add(span(2, 3, 2), &frontier(&[id(1, 2)])).expect("one side");
+        graph.add(span(3, 3, 4), &frontier(&[id(1, 1)])).expect("other side");
+        let common = graph
+            .version_vector(&frontier(&[id(2, 4)]))
+            .intersection(&graph.version_vector(&frontier(&[id(3, 6)])));
+        assert!(common.contains(id(1, 1)));
+        assert!(!common.contains(id(1, 2)));
+        assert!(!common.contains(id(2, 3)) && !common.contains(id(3, 3)));
     }
 
     #[test]

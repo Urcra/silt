@@ -26,6 +26,27 @@ pub enum Request {
     Status,
     /// Continues a thread on this machine (ADR 0009).
     Resume { thread: String, cwd: PathBuf, here: bool },
+    /// Starts a fork of a thread on this machine (ADR 0010).
+    Fork { thread: String, cwd: PathBuf, here: bool },
+    /// Merges a fork's source into it; `thread` defaults to the one checked
+    /// out at `cwd`.
+    Pull { thread: Option<String>, cwd: PathBuf },
+    MrCreate {
+        thread: Option<String>,
+        cwd: PathBuf,
+        title: Option<String>,
+        summary: Option<String>,
+    },
+    MrList { thread: Option<String> },
+    MrShow { mr: String },
+    MrApprove { mr: String },
+    MrDecline { mr: String, reason: Option<String> },
+    /// Sets the visibility of the project at `cwd`, or of `thread`'s family.
+    SetVisibility {
+        cwd: PathBuf,
+        thread: Option<String>,
+        visibility: silt_proto::Visibility,
+    },
     Shutdown,
 }
 
@@ -81,6 +102,10 @@ pub enum ShowLine {
     Edits { tool_use_id: Option<String>, files: Vec<FileEdit> },
     Compaction { summary: Option<String> },
     Turn { mark: String },
+    /// Where the history moves to another thread's part, or back.
+    Segment { label: String },
+    /// A pull or a merge.
+    Event { text: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,4 +140,43 @@ pub struct Resumed {
     pub agent_cwd: PathBuf,
     /// The agent session to continue, when the thread has one.
     pub session_id: Option<String>,
+}
+
+/// What a hook should hand back to the agent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookReply {
+    /// Context for the agent's next turn, such as work merged into its thread.
+    pub additional_context: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pulled {
+    pub thread: String,
+    pub from: String,
+    /// Conversation entries the pull brought in.
+    pub messages: usize,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MrSummary {
+    pub id: String,
+    pub fork: String,
+    pub target: String,
+    pub title: String,
+    pub summary: String,
+    /// `open`, `approved` or `declined: <reason>`.
+    pub status: String,
+    pub opened_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MrDetails {
+    pub mr: MrSummary,
+    /// The fork's changes since the merge base.
+    pub diff: String,
+    /// Places both the fork and the target changed since the merge base.
+    pub conflicts: Vec<String>,
+    /// The fork's conversation since it forked.
+    pub conversation: Vec<ShowLine>,
 }

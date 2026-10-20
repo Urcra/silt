@@ -50,14 +50,19 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
     }
 }
 
-/// A session as recorded on another machine.
+/// A session as recorded elsewhere, possibly continued across machines
+/// and forks, to be written back under one id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordedSession {
+    /// The id to restore it as.
     pub id: String,
-    /// The agent's working directory there.
-    pub cwd: String,
-    /// Its session side-file directory there.
-    pub session_dir: String,
+    /// Ids, working directories and session directories it was recorded
+    /// under; each is rewritten to the new one.
+    pub former_ids: Vec<String>,
+    pub former_cwds: Vec<String>,
+    /// Checkout roots, rewritten to the new checkout root after the cwds.
+    pub former_roots: Vec<String>,
+    pub former_dirs: Vec<String>,
     pub main: Vec<String>,
     pub subagents: Vec<(String, Vec<String>)>,
     /// Side files by path relative to the session directory.
@@ -65,26 +70,28 @@ pub struct RecordedSession {
 }
 
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
-/// it, rewriting the recorded session directory and working directory to the
-/// new ones in every line (docs/research/probes.md). Returns the paths
+/// it, rewriting every former session directory, working directory and
+/// session id to the new ones (docs/research/probes.md). Returns the paths
 /// written, for tailing to continue after them.
-pub fn restore(config_dir: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
+pub fn restore(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
     let paths = session_paths(config_dir, cwd, &session.id);
-    let rewrites = [
-        (session.session_dir.as_str(), paths.session_dir.to_string_lossy().into_owned()),
-        (session.cwd.as_str(), cwd.to_string_lossy().into_owned()),
-    ];
+    let new_dir = paths.session_dir.to_string_lossy().into_owned();
+    let new_cwd = cwd.to_string_lossy().into_owned();
+    let new_root = root.to_string_lossy().into_owned();
+    let mut rewrites: Vec<(&str, &str)> = Vec::new();
+    for (former, new) in [
+        (&session.former_dirs, new_dir.as_str()),
+        (&session.former_cwds, new_cwd.as_str()),
+        (&session.former_roots, new_root.as_str()),
+        (&session.former_ids, session.id.as_str()),
+    ] {
+        rewrites.extend(former.iter().filter(|old| !old.is_empty()).map(|old| (old.as_str(), new)));
+    }
+    // Longest first, so a path is never rewritten through a shorter path it
+    // starts with.
+    rewrites.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
     let rewrite = |lines: &[String]| -> String {
-        lines
-            .iter()
-            .map(|line| {
-                let line = rewrites
-                    .iter()
-                    .filter(|(old, _)| !old.is_empty())
-                    .fold(line.clone(), |line, (old, new)| line.replace(old, new));
-                line + "\n"
-            })
-            .collect()
+        lines.iter().map(|line| replace_once(line, &rewrites) + "\n").collect()
     };
     fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
     fs::write(&paths.transcript, rewrite(&session.main))?;
@@ -104,6 +111,26 @@ pub fn restore(config_dir: &Path, cwd: &Path, session: &RecordedSession) -> io::
         fs::write(path, bytes)?;
     }
     Ok(paths)
+}
+
+/// Replaces every occurrence of each `old` with its `new` in one pass, so
+/// replacements are never themselves rewritten. Earlier pairs win.
+fn replace_once(text: &str, rewrites: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(ch) = rest.chars().next() {
+        match rewrites.iter().find(|(old, _)| rest.starts_with(old)) {
+            Some((old, new)) => {
+                out.push_str(new);
+                rest = &rest[old.len()..];
+            }
+            None => {
+                out.push(ch);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+    }
+    out
 }
 
 /// The conversation steps recorded in one transcript line.
@@ -298,10 +325,13 @@ mod tests {
         let config = tempfile::tempdir().expect("temp dir");
         let session = RecordedSession {
             id: "abc".into(),
-            cwd: "/home/a/repo".into(),
-            session_dir: "/home/a/.claude/projects/-home-a-repo/abc".into(),
+            former_ids: vec!["old".into()],
+            former_cwds: vec!["/home/a/repo".into(), "/home/a/repo/.silt/checkouts/t".into()],
+            former_roots: vec!["/home/a/repo".into()],
+            former_dirs: vec!["/home/a/.claude/projects/-home-a-repo/abc".into()],
             main: vec![
-                r#"{"cwd":"/home/a/repo","type":"user"}"#.to_owned(),
+                r#"{"cwd":"/home/a/repo","type":"user","sessionId":"old"}"#.to_owned(),
+                r#"{"cwd":"/home/a/repo/.silt/checkouts/t/src"}"#.to_owned(),
                 r#"{"result":"saved to /home/a/.claude/projects/-home-a-repo/abc/tool-results/t1.txt"}"#.to_owned(),
             ],
             subagents: vec![("agent-1".to_owned(), vec![r#"{"cwd":"/home/a/repo/src"}"#.to_owned()])],
@@ -310,12 +340,12 @@ mod tests {
                 ("../escape.txt".to_owned(), b"no".to_vec()),
             ],
         };
-        let paths = restore(config.path(), Path::new("/home/b/repo"), &session).expect("restores");
+        let paths = restore(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
             format!(
-                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\"}}\n{{\"result\":\"saved to {}\"}}\n",
+                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\",\"sessionId\":\"abc\"}}\n{{\"cwd\":\"/home/b/repo/src\"}}\n{{\"result\":\"saved to {}\"}}\n",
                 paths.tool_results.join("t1.txt").display()
             )
         );
@@ -324,6 +354,15 @@ mod tests {
         assert_eq!(
             fs::read_to_string(paths.subagents.join("agent-1.jsonl")).expect("subagent"),
             "{\"cwd\":\"/home/b/repo/src\"}\n"
+        );
+    }
+
+    #[test]
+    fn rewrites_never_apply_to_their_own_output() {
+        let rewrites = [("/a/repo/old", "/a/repo/new"), ("/a/repo", "/a/repo/new")];
+        assert_eq!(
+            replace_once("cd /a/repo/old && cd /a/repo", &rewrites),
+            "cd /a/repo/new && cd /a/repo/new"
         );
     }
 

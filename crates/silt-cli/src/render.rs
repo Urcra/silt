@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use silt_daemon::protocol::{SearchResult, ShowLine, ThreadSummary};
+use silt_daemon::protocol::{MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
 
 /// The last 12 hex digits: UUIDv7 ids share their leading time digits.
 fn short(id: &str) -> &str {
@@ -68,6 +68,8 @@ pub fn show(lines: &[ShowLine]) -> String {
             },
             ShowLine::Turn { mark } if mark == "PromptSubmitted" => writeln!(out, "\n────────"),
             ShowLine::Turn { .. } => Ok(()),
+            ShowLine::Segment { label } => writeln!(out, "\n═══ {label} ═══"),
+            ShowLine::Event { text } => writeln!(out, "\n⇄ {text}"),
         };
     }
     out
@@ -81,6 +83,49 @@ pub fn search(hits: &[SearchResult]) -> String {
     for hit in hits {
         let _ = writeln!(out, "{}  {:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
     }
+    out
+}
+
+pub fn merge_requests(requests: &[MrSummary]) -> String {
+    let mut out = String::new();
+    if requests.is_empty() {
+        out.push_str("no merge requests\n");
+    }
+    for request in requests {
+        let _ = writeln!(
+            out,
+            "{}  {} → {}  {}  ({})",
+            request.id,
+            short(&request.fork),
+            short(&request.target),
+            request.title,
+            request.status
+        );
+    }
+    out
+}
+
+pub fn merge_request(details: &MrDetails) -> String {
+    let request = &details.mr;
+    let mut out = format!(
+        "merge request {} ({})\n{}\nfrom fork {} into {}\n\n{}\n",
+        request.id,
+        request.status,
+        request.title,
+        request.fork,
+        request.target,
+        request.summary.trim()
+    );
+    if !details.conflicts.is_empty() {
+        out.push_str("\nconflict hints (the merge keeps both sides; check these):\n");
+        for conflict in &details.conflicts {
+            let _ = writeln!(out, "  ! {conflict}");
+        }
+    }
+    out.push_str("\n── changes ──\n");
+    out.push_str(&details.diff);
+    out.push_str("\n── the fork's conversation ──\n");
+    out.push_str(&show(&details.conversation));
     out
 }
 

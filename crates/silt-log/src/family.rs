@@ -103,7 +103,8 @@ pub enum HistorySource {
     Own,
     /// From the thread's source chain, before the fork point.
     Inherited,
-    /// From the thread a pull brought in; listed just before that pull.
+    /// From the thread a pull brought in; listed just before that pull. Not
+    /// part of the thread's own agent session.
     Upstream,
 }
 
@@ -225,7 +226,11 @@ impl Family {
                     .into_iter()
                     .filter(|item| before.contains(item.delta.span.first()))
                     .map(|item| HistoryItem {
-                        source: HistorySource::Inherited,
+                        // What the source pulled in stays upstream progress.
+                        source: match item.source {
+                            HistorySource::Upstream => HistorySource::Upstream,
+                            HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
+                        },
                         ..item
                     }),
             );

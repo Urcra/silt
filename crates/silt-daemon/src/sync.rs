@@ -7,7 +7,7 @@ use silt_log::{Applied, Content, ConvOp, Delta, GitOp, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{SyncState, ThreadRecord};
 use silt_sync::{ClientSync, Effect, Outcome};
-use silt_types::{BlobHash, DeltaId, FamilyId};
+use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event, RepoBases, touched_inode};
@@ -290,19 +290,24 @@ impl Core {
         let Some(remote) = self.remote.clone() else {
             return;
         };
-        let info = ThreadInfo {
-            id: thread.id,
-            family: thread.family,
-            repo: thread.repo.clone(),
-            created_ms: thread.created_ms,
-            lease: None,
-            owner: String::new(),
-        };
+        let info = thread_info(thread);
         tokio::spawn(async move {
             if let Err(error) = remote.register_thread(&info).await {
                 warn!(%error, "could not register a thread with the server");
             }
         });
+    }
+
+    /// Registers the thread and waits for the server, for when the next step
+    /// needs the server to know it.
+    pub(crate) async fn register_thread_now(&self, thread: ThreadId) -> Result<(), CoreError> {
+        let Some(remote) = &self.remote else {
+            return Ok(());
+        };
+        remote
+            .register_thread(&thread_info(&self.threads[&thread]))
+            .await
+            .map_err(|error| CoreError::Invalid(format!("could not register the thread with the server: {error}")))
     }
 
     /// The blob's bytes, fetched from the server when not stored locally.
@@ -320,6 +325,17 @@ impl Core {
             .map_err(|error| CoreError::Invalid(format!("could not fetch blob {hash}: {error}")))?;
         self.store.blobs().put(&bytes).await?;
         Ok(bytes)
+    }
+}
+
+fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
+    ThreadInfo {
+        id: thread.id,
+        family: thread.family,
+        repo: thread.repo.clone(),
+        created_ms: thread.created_ms,
+        lease: None,
+        owner: String::new(),
     }
 }
 

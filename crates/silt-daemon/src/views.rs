@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use silt_agents::{Entry, claude};
-use silt_crdt::{InodeId, InodeKind};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, Op, TurnMark};
-use silt_types::{Frontier, ThreadId};
+use silt_crdt::{InodeId, InodeKind, VersionVector};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, HistoryItem, HistorySource, Op, TurnMark};
+use silt_types::{FamilyId, Frontier, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
@@ -72,19 +72,53 @@ impl Core {
     /// call changed listed after its result.
     pub(crate) fn show(&self, thread: ThreadId) -> Vec<ShowLine> {
         let family_id = self.thread_records()[&thread].family;
-        let edits = self
-            .families()
-            .get(&family_id)
-            .map(|family| edits_by_tool(family, thread))
-            .unwrap_or_default();
-        let conversation: Vec<&Delta> = self
+        if let Some(family) = self.families().get(&family_id) {
+            return self.show_items(family, thread, family.history(thread));
+        }
+        let conversation: Vec<HistoryItem<'_>> = self
             .local_log(family_id)
             .iter()
             .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
+            .map(|delta| HistoryItem {
+                delta,
+                source: HistorySource::Own,
+            })
             .collect();
+        self.show_lines(None, thread, conversation)
+    }
+
+    /// Lines for `items` of `thread`'s history, with headings where the
+    /// history moves between inherited, upstream and own parts.
+    pub(crate) fn show_items(&self, family: &Family, thread: ThreadId, items: Vec<HistoryItem<'_>>) -> Vec<ShowLine> {
+        self.show_lines(Some(family), thread, items)
+    }
+
+    fn show_lines(&self, family: Option<&Family>, thread: ThreadId, items: Vec<HistoryItem<'_>>) -> Vec<ShowLine> {
+        let edits = family.map(|family| edits_by_tool(family, thread)).unwrap_or_default();
         let mut lines = Vec::new();
-        for delta in conversation {
+        let mut segment = (HistorySource::Own, thread);
+        for item in items {
+            let delta = item.delta;
+            if (item.source, delta.thread) != segment && (item.source != HistorySource::Own || segment.0 != HistorySource::Own) {
+                let label = match item.source {
+                    HistorySource::Inherited => format!("from thread {} (before this fork)", short_id(delta.thread)),
+                    HistorySource::Upstream => format!("upstream progress in thread {}", short_id(delta.thread)),
+                    HistorySource::Own => format!("thread {}", short_id(thread)),
+                };
+                lines.push(ShowLine::Segment { label });
+            }
+            segment = (item.source, delta.thread);
             match &delta.op {
+                Op::Merge { from, mr: None } => lines.push(ShowLine::Event {
+                    text: format!("pulled newer work from thread {}", short_id(*from)),
+                }),
+                Op::Conv(ConvOp::Merged { from, title, summary, .. }) => lines.push(ShowLine::Event {
+                    text: format!(
+                        "merged \"{title}\" from fork {} (read it with `silt show {}`): {summary}",
+                        short_id(*from),
+                        short_id(*from)
+                    ),
+                }),
                 Op::Conv(ConvOp::Turn { mark, .. }) => {
                     if let TurnMark::PromptSubmitted | TurnMark::Stopped = mark {
                         lines.push(ShowLine::Turn {
@@ -133,11 +167,11 @@ impl Core {
         lines
     }
 
-    /// A unified diff of the thread's changes, or of one turn's (1-based).
     pub(crate) fn diff(&self, thread: ThreadId, turn: Option<usize>) -> Result<String, CoreError> {
+        let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
-            .get(&self.thread_records()[&thread].family)
+            .get(&family_id)
             .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
         let (from, to) = match turn {
             None => (imported_version(family, thread), family.thread_head(thread)),
@@ -151,10 +185,19 @@ impl Core {
                 (start.clone(), end)
             }
         };
-        let repo = self.family_repo(self.thread_records()[&thread].family).ok();
+        let graph = family.graph();
+        let changes = self.changes(family_id, &graph.version_vector(&from), &graph.version_vector(&to));
+        Ok(render_diff(&changes))
+    }
+
+    /// How the family's files differ between two versions.
+    pub(crate) fn changes(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Vec<FileChange> {
+        let Some(family) = self.families().get(&family_id) else {
+            return Vec::new();
+        };
+        let repo = self.family_repo(family_id).ok();
         let mut bases = repo.as_ref().map(RepoBases);
-        let files_at = |version: &Frontier| -> BTreeMap<InodeId, String> {
-            let vv = family.graph().version_vector(version);
+        let files_at = |vv: &VersionVector| -> BTreeMap<InodeId, String> {
             let tree = family.tree().at(|id| vv.contains(id));
             tree.paths()
                 .into_iter()
@@ -162,56 +205,36 @@ impl Core {
                 .map(|(path, inode)| (inode, path))
                 .collect()
         };
-        let (before_files, after_files) = (files_at(&from), files_at(&to));
+        let (before_files, after_files) = (files_at(before), files_at(after));
         let inodes: BTreeSet<InodeId> = before_files.keys().chain(after_files.keys()).copied().collect();
-        let mut changes: Vec<(String, String)> = Vec::new();
+        let mut changes = Vec::new();
         for inode in inodes {
-            let (old_path, new_path) = (before_files.get(&inode), after_files.get(&inode));
-            let mut content = |path: Option<&String>, version: &Frontier| -> String {
-                if path.is_none() {
+            let (old_path, new_path) = (before_files.get(&inode).cloned(), after_files.get(&inode).cloned());
+            let mut content = |present: bool, vv: &VersionVector| -> String {
+                if !present {
                     return String::new();
                 }
                 match (family.text_doc(inode), family.file(inode)) {
-                    (Some(doc), _) => doc.text_at(family.graph(), version),
+                    (Some(doc), _) => doc.text_at_vv(vv),
                     (None, Some(FileView::GitText(oid))) => {
                         bases.as_mut().and_then(|bases| bases.text(oid)).unwrap_or_default()
                     }
                     _ => String::new(),
                 }
             };
-            let (before, after) = (content(old_path, &from), content(new_path, &to));
-            if before == after && old_path == new_path {
-                continue;
+            let (old_text, new_text) = (content(old_path.is_some(), before), content(new_path.is_some(), after));
+            if old_text != new_text || old_path != new_path {
+                changes.push(FileChange {
+                    inode,
+                    old_path,
+                    new_path,
+                    old_text,
+                    new_text,
+                });
             }
-            let shown = new_path.or(old_path).expect("the inode is in one of the versions");
-            let mut text = format!(
-                "diff --git a/{} b/{}\n",
-                old_path.unwrap_or(shown),
-                new_path.unwrap_or(shown)
-            );
-            let (old_name, new_name) = match (old_path, new_path) {
-                (Some(old), Some(new)) => {
-                    if old != new {
-                        text.push_str(&format!("rename from {old}\nrename to {new}\n"));
-                    }
-                    (format!("a/{old}"), format!("b/{new}"))
-                }
-                (None, Some(new)) => ("/dev/null".to_owned(), format!("b/{new}")),
-                (Some(old), None) => (format!("a/{old}"), "/dev/null".to_owned()),
-                (None, None) => unreachable!("the inode is in one of the versions"),
-            };
-            if before != after {
-                let diff = TextDiff::from_lines(&before, &after);
-                text.push_str(&diff.unified_diff().header(&old_name, &new_name).to_string());
-            }
-            changes.push((shown.clone(), text));
         }
-        changes.sort();
-        let mut out = String::new();
-        for (_, text) in changes {
-            out.push_str(&text);
-        }
-        Ok(out)
+        changes.sort_by(|a, b| a.path().cmp(b.path()));
+        changes
     }
 
     pub(crate) async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, CoreError> {
@@ -286,6 +309,47 @@ fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<Option<String>, 
         .collect()
 }
 
+/// One file's change between two versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileChange {
+    pub(crate) inode: InodeId,
+    pub(crate) old_path: Option<String>,
+    pub(crate) new_path: Option<String>,
+    pub(crate) old_text: String,
+    pub(crate) new_text: String,
+}
+
+impl FileChange {
+    pub(crate) fn path(&self) -> &str {
+        self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or_default()
+    }
+}
+
+/// Changes as a git-style unified diff, with renames.
+pub(crate) fn render_diff(changes: &[FileChange]) -> String {
+    let mut out = String::new();
+    for change in changes {
+        let shown = change.path();
+        let (old, new) = (
+            change.old_path.as_deref().unwrap_or(shown),
+            change.new_path.as_deref().unwrap_or(shown),
+        );
+        out.push_str(&format!("diff --git a/{old} b/{new}\n"));
+        if let (Some(old), Some(new)) = (&change.old_path, &change.new_path)
+            && old != new
+        {
+            out.push_str(&format!("rename from {old}\nrename to {new}\n"));
+        }
+        if change.old_text != change.new_text {
+            let old_name = change.old_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("a/{path}"));
+            let new_name = change.new_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("b/{path}"));
+            let diff = TextDiff::from_lines(&change.old_text, &change.new_text);
+            out.push_str(&diff.unified_diff().header(&old_name, &new_name).to_string());
+        }
+    }
+    out
+}
+
 /// The version right after the thread's files were imported.
 fn imported_version(family: &Family, thread: ThreadId) -> Frontier {
     family
@@ -318,4 +382,9 @@ fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
         })
         .map(|delta| Frontier::single(delta.span.first()))
         .collect()
+}
+
+fn short_id(thread: ThreadId) -> String {
+    let id = thread.to_string();
+    id[id.len().saturating_sub(12)..].to_owned()
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use silt_agents::claude;
 use silt_crdt::InodeKind;
 use silt_git::Repo;
-use silt_log::{Author, ConvOp, Family, GitOp, Op, SessionFile, SessionRef};
+use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, Op, SessionFile, SessionRef};
 use silt_store::{SessionFileOffset, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, BlobHash, FamilyId, GitOid, ThreadId};
 use tracing::warn;
@@ -19,6 +19,27 @@ impl Core {
     /// session there.
     pub(crate) async fn resume(&mut self, selector: &str, cwd: &Path, here: bool) -> Result<Resumed, CoreError> {
         let thread = self.find_thread(selector)?;
+        let (repo, base) = self.prepare_thread(thread, cwd, here).await?;
+        self.take_lease(thread).await?;
+        self.check_out(thread, &repo, base, here, false).await
+    }
+
+    /// Starts a fork of a thread on this machine (ADR 0010), with the
+    /// source's code and conversation as of now and its agent session
+    /// restored under a new id.
+    pub(crate) async fn fork(&mut self, selector: &str, cwd: &Path, here: bool) -> Result<Resumed, CoreError> {
+        let source = self.find_thread(selector)?;
+        let (repo, base) = self.prepare_thread(source, cwd, here).await?;
+        let fork = self.fork_thread(source).await?;
+        self.register_thread_now(fork).await?;
+        self.take_lease(fork).await?;
+        self.check_out(fork, &repo, base, here, true).await
+    }
+
+    /// Gets a thread's family ready in the clone at `cwd`: everything from
+    /// the server, the base commit and a projection. Returns the clone and
+    /// the base commit.
+    async fn prepare_thread(&mut self, thread: ThreadId, cwd: &Path, here: bool) -> Result<(Repo, Option<GitOid>), CoreError> {
         let record = self.threads[&thread].clone();
         let cwd = cwd.canonicalize()?;
         let repo = Repo::discover(&cwd)?;
@@ -32,7 +53,6 @@ impl Core {
                 record.repo
             )));
         }
-
         if here && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
             return Err(CoreError::Invalid("--here needs a clean working tree".into()));
         }
@@ -43,14 +63,29 @@ impl Core {
             self.ensure_commit(&repo, record.family, thread, base).await?;
         }
         self.project_family(record.family, &repo)?;
-        let updated = ThreadRecord {
-            repo_root: repo.root().to_owned(),
-            ..record.clone()
-        };
-        self.store.create_thread(&updated).await?;
-        self.threads.insert(thread, updated);
-        self.take_lease(thread).await?;
+        if record.repo_root.as_os_str().is_empty() {
+            let updated = ThreadRecord {
+                repo_root: repo.root().to_owned(),
+                ..record
+            };
+            self.store.create_thread(&updated).await?;
+            self.threads.insert(thread, updated);
+        }
+        Ok((repo, base))
+    }
 
+    /// Materializes `thread` in a managed checkout, or in the clone itself
+    /// with `here`, and restores its agent session there; `as_fork` gives
+    /// the session a new id.
+    async fn check_out(
+        &mut self,
+        thread: ThreadId,
+        repo: &Repo,
+        base: Option<GitOid>,
+        here: bool,
+        as_fork: bool,
+    ) -> Result<Resumed, CoreError> {
+        let family = self.threads[&thread].family;
         let checkout_path = if here {
             if let Some(base) = base {
                 repo.git(&["checkout", "-q", "--detach", &base.to_string()], None)?;
@@ -68,7 +103,7 @@ impl Core {
         let checkout_id = self.attach_checkout(thread, &checkout_path, !here).await?;
         self.materialize(checkout_id).await?;
 
-        let (session_id, agent_cwd) = match self.restore_session(thread, record.family, &checkout_path).await? {
+        let (session_id, agent_cwd) = match self.restore_session(thread, family, &checkout_path, as_fork).await? {
             Some((session_id, agent_cwd)) => (Some(session_id), agent_cwd),
             None => (None, checkout_path.clone()),
         };
@@ -219,16 +254,16 @@ impl Core {
         let checkout = &self.checkouts[&checkout_id];
         let family_id = checkout.family;
         let family = &self.families[&family_id];
-        let files: Vec<_> = family
-            .tree()
-            .inodes()
-            .into_iter()
-            .filter(|inode| family.tree().kind(*inode) != Some(InodeKind::Dir))
+        let view = family.thread_view(checkout.record.thread);
+        let paths = view.paths();
+        let files: Vec<_> = paths
+            .values()
+            .copied()
+            .filter(|inode| view.tree().kind(*inode) != Some(InodeKind::Dir))
             .collect();
         let actions = checkout
             .bridge
             .reconcile(family, &mut RepoBases(&checkout.repo), files);
-        let paths = family.tree().paths();
         let root = checkout.record.path.clone();
         let stale: Vec<String> = checkout
             .repo
@@ -247,57 +282,75 @@ impl Core {
     }
 
     /// Restores the thread's latest agent session in the checkout and starts
-    /// tailing it after the restored lines.
+    /// tailing it after the restored lines. A fork gets the session under a
+    /// new id, linked to the one it continues.
     async fn restore_session(
         &mut self,
         thread: ThreadId,
         family_id: FamilyId,
         checkout: &Path,
+        as_fork: bool,
     ) -> Result<Option<(String, PathBuf)>, CoreError> {
         let family = &self.families[&family_id];
-        let Some(session) = family.conversation(thread).rev().find_map(|delta| match &delta.op {
+        let history: Vec<&Delta> = family
+            .history(thread)
+            .into_iter()
+            .filter(|item| item.source != HistorySource::Upstream)
+            .map(|item| item.delta)
+            .collect();
+        let Some(session) = history.iter().rev().find_map(|delta| match &delta.op {
             Op::Conv(ConvOp::Native { session, .. }) => Some(session.clone()),
             _ => None,
         }) else {
             return Ok(None);
         };
+        let lineage = session_lineage(&history, &session);
+        let new_id = if as_fork { uuid::Uuid::new_v4().to_string() } else { session.id.clone() };
         let mut recorded = claude::RecordedSession {
-            id: session.id.clone(),
+            id: new_id.clone(),
+            former_ids: lineage.iter().map(|session| session.id.clone()).collect(),
             ..Default::default()
         };
         let mut relative = PathBuf::new();
         let mut subagents: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut attachments: BTreeMap<String, BlobHash> = BTreeMap::new();
-        for delta in family.conversation(thread) {
-            match &delta.op {
-                Op::Conv(ConvOp::SessionStarted {
-                    session: started,
-                    cwd,
-                    checkout_root,
-                }) if *started == session => {
-                    recorded.cwd.clone_from(cwd);
-                    relative = Path::new(cwd).strip_prefix(checkout_root).map(Path::to_path_buf).unwrap_or_default();
+        for part in &lineage {
+            for delta in &history {
+                match &delta.op {
+                    Op::Conv(ConvOp::SessionStarted {
+                        session: started,
+                        cwd,
+                        checkout_root,
+                    }) if started == part => {
+                        recorded.former_cwds.push(cwd.clone());
+                        recorded.former_roots.push(checkout_root.clone());
+                        relative = Path::new(cwd).strip_prefix(checkout_root).map(Path::to_path_buf).unwrap_or_default();
+                    }
+                    Op::Conv(ConvOp::SessionDir { session: from, dir }) if from == part => {
+                        recorded.former_dirs.push(dir.clone());
+                    }
+                    Op::Conv(ConvOp::Native {
+                        session: from,
+                        file,
+                        line,
+                    }) if from == part => match file {
+                        SessionFile::Main => recorded.main.push(line.clone()),
+                        SessionFile::Subagent(name) => subagents.entry(name.clone()).or_default().push(line.clone()),
+                    },
+                    Op::Conv(ConvOp::Attachment {
+                        session: from,
+                        name,
+                        blob,
+                    }) if from == part => {
+                        attachments.insert(name.clone(), *blob);
+                    }
+                    _ => {}
                 }
-                Op::Conv(ConvOp::SessionDir { session: from, dir }) if *from == session => {
-                    recorded.session_dir.clone_from(dir);
-                }
-                Op::Conv(ConvOp::Native {
-                    session: from,
-                    file,
-                    line,
-                }) if *from == session => match file {
-                    SessionFile::Main => recorded.main.push(line.clone()),
-                    SessionFile::Subagent(name) => subagents.entry(name.clone()).or_default().push(line.clone()),
-                },
-                Op::Conv(ConvOp::Attachment {
-                    session: from,
-                    name,
-                    blob,
-                }) if *from == session => {
-                    attachments.insert(name.clone(), *blob);
-                }
-                _ => {}
             }
+        }
+        for former in [&mut recorded.former_cwds, &mut recorded.former_roots] {
+            former.sort();
+            former.dedup();
         }
         recorded.subagents = subagents.into_iter().collect();
         for (name, blob) in attachments {
@@ -309,7 +362,7 @@ impl Core {
             checkout.join(relative)
         };
         let config = claude::config_dir().ok_or_else(|| CoreError::Invalid("HOME is not set".into()))?;
-        let paths = claude::restore(&config, &agent_cwd, &recorded)?;
+        let paths = claude::restore(&config, checkout, &agent_cwd, &recorded)?;
 
         let checkout_id = self
             .checkouts
@@ -319,7 +372,7 @@ impl Core {
             .expect("attached above");
         let record = SessionRecord {
             agent: session.agent.clone(),
-            session_id: session.id.clone(),
+            session_id: new_id.clone(),
             thread,
             checkout_id,
         };
@@ -338,10 +391,10 @@ impl Core {
                 offset: std::fs::metadata(&path).map_or(0, |metadata| metadata.len()),
                 path,
             };
-            self.store.set_session_offset(&session.agent, &session.id, &offset).await?;
+            self.store.set_session_offset(&session.agent, &new_id, &offset).await?;
             offsets.insert(key, offset);
         }
-        self.sessions.retain(|existing| existing.record.session_id != session.id);
+        self.sessions.retain(|existing| existing.record.session_id != new_id);
         self.sessions.push(Session {
             record,
             family: family_id,
@@ -352,9 +405,32 @@ impl Core {
         });
         let reference = SessionRef {
             agent: session.agent.clone(),
-            id: session.id.clone(),
+            id: new_id.clone(),
         };
-        self.append_session_started(family_id, thread, reference, &agent_cwd, checkout).await?;
-        Ok(Some((session.id, agent_cwd)))
+        self.append_session_started(family_id, thread, reference.clone(), &agent_cwd, checkout)
+            .await?;
+        if as_fork {
+            let op = ConvOp::SessionContinued {
+                session: reference,
+                from: session,
+            };
+            self.append_conv(family_id, thread, Author::User, op).await?;
+        }
+        Ok(Some((new_id, agent_cwd)))
     }
+}
+
+/// The sessions `session` continues, oldest first, ending with itself.
+fn session_lineage(history: &[&Delta], session: &SessionRef) -> Vec<SessionRef> {
+    let mut lineage = vec![session.clone()];
+    while let Some(from) = history.iter().find_map(|delta| match &delta.op {
+        Op::Conv(ConvOp::SessionContinued { session, from }) if *session == lineage[0] => Some(from.clone()),
+        _ => None,
+    }) {
+        if lineage.contains(&from) {
+            break;
+        }
+        lineage.insert(0, from);
+    }
+    lineage
 }
