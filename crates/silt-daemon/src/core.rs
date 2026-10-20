@@ -94,6 +94,9 @@ pub struct Core {
     /// Clones this machine knows by repository, for projecting families
     /// that started elsewhere.
     pub(crate) clones: HashMap<String, PathBuf>,
+    /// Families whose next pull waits until then, after a delta that
+    /// couldn't apply yet.
+    pub(crate) pull_paused: HashMap<FamilyId, Instant>,
     /// Agents the web UI started, by thread.
     pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
@@ -155,6 +158,7 @@ impl Core {
             trash_changed: HashMap::new(),
             collaborators: HashMap::new(),
             clones: HashMap::new(),
+            pull_paused: HashMap::new(),
             acp: HashMap::new(),
             events,
             data_dir: data_dir.to_owned(),

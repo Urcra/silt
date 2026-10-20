@@ -9,7 +9,16 @@ use crate::{DeltaId, GitOid};
 /// an ancestor of another) depends on the causal graph, which this type cannot
 /// see; the causal graph is responsible for producing minimal frontiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(from = "SmallVec<[DeltaId; 2]>")]
 pub struct Frontier(SmallVec<[DeltaId; 2]>);
+
+/// Frontiers arrive from other people too, so a received one is sorted and
+/// deduplicated like any other.
+impl From<SmallVec<[DeltaId; 2]>> for Frontier {
+    fn from(ids: SmallVec<[DeltaId; 2]>) -> Self {
+        ids.into_iter().collect()
+    }
+}
 
 impl Frontier {
     /// The version before any delta.

@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use silt_crdt::InodeId;
-use silt_log::{Applied, Content, ConvOp, Delta, GitOp, Op};
+use silt_log::{Applied, Content, ConvOp, Delta, GitOp, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{SyncState, ThreadRecord};
-use silt_sync::{ClientSync, Effect, Outcome};
+use silt_sync::{Effect, Outcome};
 use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
@@ -13,6 +13,9 @@ use crate::core::{Core, CoreError, Event, RepoBases, touched_inode};
 
 const LISTING_INTERVAL: Duration = Duration::from_secs(3);
 const PULL_WAIT: Duration = Duration::from_secs(20);
+/// How long a family waits before pulling a delta again that couldn't
+/// apply yet.
+const PULL_RETRY: Duration = Duration::from_secs(30);
 
 impl Core {
     /// Every delta of the family in local order, projected or not.
@@ -76,6 +79,9 @@ impl Core {
                     });
                 });
             }
+            if self.pull_paused.get(&family).is_some_and(|until| Instant::now() < *until) {
+                continue;
+            }
             let sync = self.syncs.get_mut(&family).expect("inserted above");
             if let Some(pull) = sync.next_pull() {
                 let (events, remote) = (self.events.clone(), remote.clone());
@@ -119,10 +125,23 @@ impl Core {
     async fn handle_effects(&mut self, family: FamilyId, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::Apply(deltas) => {
-                    if let Err(error) = self.apply_remote(family, deltas).await {
-                        warn!(%error, %family, "could not apply deltas from the server; syncing the family again");
-                        self.syncs.insert(family, ClientSync::default());
+                Effect::Apply { after, deltas } => {
+                    let positions: Vec<(u64, DeltaId)> = deltas.iter().map(|(seq, delta)| (*seq, delta.span.first())).collect();
+                    let stopped = match self.apply_remote(family, deltas.into_iter().map(|(_, delta)| delta).collect()).await {
+                        Ok(stopped) => stopped,
+                        Err(error) => {
+                            warn!(%error, %family, "could not take in deltas from the server; pulling them again shortly");
+                            Some(0)
+                        }
+                    };
+                    // Coming back to the delta that couldn't apply, after a
+                    // pause rather than in a loop.
+                    if let Some(index) = stopped {
+                        let (seq, last) = index
+                            .checked_sub(1)
+                            .map_or(after, |previous| (positions[previous].0, Some(positions[previous].1)));
+                        self.syncs.entry(family).or_default().rewind_pull(seq, last);
+                        self.pull_paused.insert(family, Instant::now() + PULL_RETRY);
                     }
                 }
                 Effect::Diverged(id) => {
@@ -154,14 +173,19 @@ impl Core {
     /// Applies deltas fetched outside the sync loop, deduplicating against
     /// what is already here.
     pub(crate) async fn apply_pulled(&mut self, family: FamilyId, deltas: Vec<Delta>) -> Result<(), CoreError> {
-        self.apply_remote(family, deltas).await
+        self.apply_remote(family, deltas).await.map(|_| ())
     }
 
     /// Applies deltas from the server and brings checkouts up to date.
-    async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<(), CoreError> {
+    /// Deltas come from other people (ADR 0016): one that can't apply here is
+    /// skipped, and so are its descendants, rather than stopping the family's
+    /// sync. A delta that needs a git blob this clone lacks stops the batch;
+    /// its index is returned so the pull can come back to it.
+    async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
         let deltas: Vec<Delta> = deltas.into_iter().map(|delta| self.overlay.reveal_delta(delta)).collect();
         let at = self.local_log(family_id).len() as u64;
         let mut fresh = Vec::new();
+        let mut stopped = None;
         let mut heads_before = HashMap::new();
         if self.families.contains_key(&family_id) {
             let repo = self.family_repo(family_id)?;
@@ -169,15 +193,28 @@ impl Core {
             for checkout in self.checkouts.values().filter(|checkout| checkout.family == family_id) {
                 heads_before.insert(checkout.record.thread, family.thread_head(checkout.record.thread));
             }
-            for delta in deltas {
-                if family.apply(delta.clone(), &mut RepoBases(&repo))? == Applied::New {
-                    fresh.push(delta);
+            for (index, delta) in deltas.into_iter().enumerate() {
+                match family.apply(delta.clone(), &mut RepoBases(&repo)) {
+                    Ok(Applied::New) => fresh.push(delta),
+                    Ok(Applied::AlreadyKnown) => {}
+                    Err(LogError::MissingBase(oid)) => {
+                        warn!(%oid, family = %family_id, "a delta from the server needs a git blob this clone doesn't have yet");
+                        stopped = Some(index);
+                        break;
+                    }
+                    Err(error) => {
+                        warn!(%error, id = %delta.span.first(), "skipping a delta from the server that can't apply here");
+                    }
                 }
             }
         } else {
             let raw = self.raw.entry(family_id).or_default();
             let known: HashSet<DeltaId> = raw.iter().map(|delta| delta.span.first()).collect();
             for delta in deltas {
+                if let Err(error) = delta.check_shape() {
+                    warn!(%error, id = %delta.span.first(), "skipping a malformed delta from the server");
+                    continue;
+                }
                 if !known.contains(&delta.span.first()) {
                     raw.push(delta.clone());
                     fresh.push(delta);
@@ -185,7 +222,7 @@ impl Core {
             }
         }
         if fresh.is_empty() {
-            return Ok(());
+            return Ok(stopped);
         }
         self.store.append_deltas(family_id, &fresh).await?;
         self.syncs
@@ -206,7 +243,7 @@ impl Core {
             self.update_checkouts(family_id, &fresh).await?;
             self.announce_requests(&fresh);
         }
-        Ok(())
+        Ok(stopped)
     }
 
     /// Tells the agent of a thread here about merge requests opened on it

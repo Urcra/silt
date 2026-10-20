@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use silt_crdt::{Anchor, InodeId, InodeKind, Parent, TextOp};
+use silt_crdt::{Anchor, InodeId, InodeKind, Parent, TextOp, is_valid_name};
 use silt_types::{BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
@@ -104,6 +104,50 @@ impl Op {
         match self {
             Self::Text { op, .. } => op.units(),
             _ => 1,
+        }
+    }
+}
+
+/// Why a delta is malformed regardless of what it applies to.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ShapeError {
+    #[error("span of {span_len} ids does not match an operation of {units} units")]
+    SpanLengthMismatch { span_len: u64, units: usize },
+    #[error("the span is empty or leaves the lamport clock")]
+    SpanOutOfRange,
+    #[error("a text edit's range overflows")]
+    TextRange,
+    #[error("{0:?} is not a valid file name")]
+    InvalidName(String),
+    #[error("a thread can't fork from or merge itself")]
+    SelfReference,
+}
+
+impl Delta {
+    /// Checks what can be checked without the family: the delta's own
+    /// fields. Deltas come from other people (ADR 0016), so the server runs
+    /// this before accepting one and every replica before applying one.
+    pub fn check_shape(&self) -> Result<(), ShapeError> {
+        let units = self.op.units();
+        if self.span.len != units as u64 {
+            return Err(ShapeError::SpanLengthMismatch {
+                span_len: self.span.len,
+                units,
+            });
+        }
+        if !self.span.is_in_range() {
+            return Err(ShapeError::SpanOutOfRange);
+        }
+        match &self.op {
+            Op::Text {
+                op: TextOp::Delete { pos, len },
+                ..
+            } if pos.checked_add(*len).is_none() => Err(ShapeError::TextRange),
+            Op::Create { name, .. } | Op::Move { name, parent: Parent::Root | Parent::Dir(_), .. } if !is_valid_name(name) => {
+                Err(ShapeError::InvalidName(name.clone()))
+            }
+            Op::Fork { from } | Op::Merge { from, .. } if *from == self.thread => Err(ShapeError::SelfReference),
+            _ => Ok(()),
         }
     }
 }

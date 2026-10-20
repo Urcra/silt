@@ -534,7 +534,7 @@ impl TextDoc {
         let len = self.fragments.summary().prepare_visible;
         let fits = match event.op {
             TextOp::Insert { pos, .. } => pos <= len,
-            TextOp::Delete { pos, len: count } => pos + count <= len,
+            TextOp::Delete { pos, len: count } => pos.checked_add(count).is_some_and(|end| end <= len),
         };
         if !fits {
             return Err(TextError::OutOfBounds {

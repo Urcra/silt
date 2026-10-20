@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use silt_crdt::{CausalError, CausalGraph};
+use silt_crdt::{Added, CausalError, CausalGraph};
 use silt_log::Delta;
 use silt_types::DeltaId;
 
@@ -91,7 +91,13 @@ impl Room {
             if fresh.iter().any(|known: &Delta| known.span.first() == id) {
                 continue;
             }
-            graph.add(delta.span, &delta.parents).map_err(|error| match error {
+            // Every replica would refuse a malformed delta, so storing it
+            // would only wedge their sync (ADR 0016).
+            delta.check_shape().map_err(|error| PushError::Invalid {
+                id,
+                reason: error.to_string(),
+            })?;
+            let added = graph.add(delta.span, &delta.parents).map_err(|error| match error {
                 CausalError::UnknownParent(_) => PushError::MissingParents(id),
                 CausalError::ConflictingSpan { .. } => PushError::Conflict(id),
                 other => PushError::Invalid {
@@ -99,6 +105,11 @@ impl Room {
                     reason: other.to_string(),
                 },
             })?;
+            // A delta that only partly covers ids stored under other deltas
+            // would be dropped by clients, which index deltas by first id.
+            if added != Added::New(delta.span) {
+                return Err(PushError::Conflict(id));
+            }
             fresh.push(delta);
         }
         let accepted = fresh.len();

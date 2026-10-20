@@ -33,8 +33,10 @@ pub enum Outcome {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// Apply these deltas from the server, in order.
-    Apply(Vec<Delta>),
+    /// Apply these deltas from the server, in order, each with its `seq`.
+    /// `after` is where the pull started, to come back to with
+    /// [`ClientSync::rewind_pull`].
+    Apply { after: (u64, Option<DeltaId>), deltas: Vec<(u64, Delta)> },
     /// This client's deltas collide with different ones on the server.
     Diverged(DeltaId),
 }
@@ -175,15 +177,15 @@ impl ClientSync {
             // longer builds on, so its deltas may lack parents here.
             Outcome::Pulled(_) if pull.after != self.pulled => Vec::new(),
             Outcome::Pulled(deltas) => {
+                let after = (self.pulled, self.last_pulled);
                 if let Some((seq, delta)) = deltas.last() {
                     self.pulled = *seq;
                     self.last_pulled = Some(delta.span.first());
                 }
-                let deltas: Vec<Delta> = deltas.into_iter().map(|(_, delta)| delta).collect();
                 if deltas.is_empty() {
                     Vec::new()
                 } else {
-                    vec![Effect::Apply(deltas)]
+                    vec![Effect::Apply { after, deltas }]
                 }
             }
             Outcome::UnknownCursor => {
@@ -191,6 +193,15 @@ impl ClientSync {
                 Vec::new()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Pulls again from the server `seq` `after`, whose delta was `last`:
+    /// what came after it couldn't be applied yet.
+    pub fn rewind_pull(&mut self, after: u64, last: Option<DeltaId>) {
+        if after < self.pulled {
+            self.pulled = after;
+            self.last_pulled = last;
         }
     }
 

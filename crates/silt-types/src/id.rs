@@ -48,13 +48,18 @@ impl FromStr for ActorId {
 )]
 pub struct Lamport(pub u64);
 
+/// The highest lamport a delta may reach. Stores keep lamports as signed
+/// 64-bit integers, and deltas come from other people, so the clock is
+/// bounded rather than allowed to wrap.
+pub const MAX_LAMPORT: u64 = i64::MAX as u64;
+
 impl Lamport {
     pub fn next(self) -> Self {
-        Self(self.0 + 1)
+        Self(self.0.saturating_add(1))
     }
 
     pub fn offset(self, by: u64) -> Self {
-        Self(self.0 + by)
+        Self(self.0.saturating_add(by))
     }
 }
 
@@ -117,7 +122,12 @@ impl DeltaSpan {
     /// The last id in the span. Spans are never empty when this is called.
     pub fn last(&self) -> DeltaId {
         debug_assert!(self.len > 0, "empty span has no last id");
-        DeltaId::new(self.actor, self.start.offset(self.len - 1))
+        DeltaId::new(self.actor, self.start.offset(self.len.saturating_sub(1)))
+    }
+
+    /// Whether the span is non-empty and ends within the lamport clock.
+    pub fn is_in_range(&self) -> bool {
+        self.len > 0 && self.start.0.checked_add(self.len).is_some_and(|end| end <= MAX_LAMPORT)
     }
 
     /// One past the last lamport in the span.

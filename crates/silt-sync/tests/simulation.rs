@@ -50,8 +50,8 @@ impl Client {
     fn apply(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::Apply(deltas) => {
-                    for delta in deltas {
+                Effect::Apply { deltas, .. } => {
+                    for (_, delta) in deltas {
                         let at = self.log.len() as u64;
                         let applied = self.family.apply(delta.clone(), &mut HashMap::new()).expect("server deltas apply");
                         if applied == Applied::New {

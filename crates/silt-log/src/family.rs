@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_crdt::{
-    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, TextDoc, TextError, TextEvent,
+    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, TextDoc, TextError, TextEvent,
     TreeError, TreeEvent, TreeOp,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
@@ -35,6 +35,14 @@ pub enum LogError {
     MissingBase(GitOid),
     #[error("inode {0:?} is not a file")]
     NotAFile(InodeId),
+    #[error(transparent)]
+    Shape(#[from] crate::delta::ShapeError),
+    #[error("{0} must be the first delta of a new thread, forked from a known one")]
+    MisplacedFork(DeltaId),
+    #[error("{0} merges a thread this family doesn't have")]
+    UnknownMergeSource(DeltaId),
+    #[error("{0} refers to a file or directory outside its own history")]
+    NotInHistory(DeltaId),
 }
 
 /// What a file currently holds.
@@ -225,14 +233,23 @@ impl Family {
     /// for a fork, the source chain's conversation up to the fork point, then
     /// its own, with what each pull brought in from upstream just before it.
     pub fn history(&self, thread: ThreadId) -> Vec<HistoryItem<'_>> {
+        self.history_within(thread, &mut HashSet::new())
+    }
+
+    /// `history`, skipping threads already being expanded: threads may pull
+    /// from each other both ways.
+    fn history_within(&self, thread: ThreadId, expanding: &mut HashSet<ThreadId>) -> Vec<HistoryItem<'_>> {
         let Some(state) = self.threads.get(&thread) else {
             return Vec::new();
         };
+        if !expanding.insert(thread) {
+            return Vec::new();
+        }
         let mut items = Vec::new();
         if let (Some(source), Some(point)) = (state.forked_from, &state.fork_point) {
             let before = self.graph.version_vector(point);
             items.extend(
-                self.history(source)
+                self.history_within(source, expanding)
                     .into_iter()
                     .filter(|item| before.contains(item.delta.span.first()))
                     .map(|item| HistoryItem {
@@ -253,7 +270,7 @@ impl Family {
             let delta = &self.log[index];
             if let Op::Merge { from, mr: None } = delta.op {
                 let merged = self.graph.version_vector(&delta.parents);
-                for item in self.history(from) {
+                for item in self.history_within(from, expanding) {
                     let id = item.delta.span.first();
                     if merged.contains(id) && seen.insert(id) {
                         items.push(HistoryItem {
@@ -269,6 +286,7 @@ impl Family {
                 source: HistorySource::Own,
             });
         }
+        expanding.remove(&thread);
         items
     }
 
@@ -414,13 +432,7 @@ impl Family {
         if self.graph.contains(delta.span.first()) {
             return Ok(Applied::AlreadyKnown);
         }
-        let units = delta.op.units();
-        if delta.span.len != units as u64 {
-            return Err(LogError::SpanLengthMismatch {
-                span_len: delta.span.len,
-                units,
-            });
-        }
+        delta.check_shape()?;
         if let Some(parent) = delta.parents.ids().iter().find(|id| !self.graph.contains(**id)) {
             return Err(CausalError::UnknownParent(*parent).into());
         }
@@ -434,13 +446,42 @@ impl Family {
         Ok(Applied::New)
     }
 
+    /// A tree operation may only use files and directories its author had
+    /// seen: otherwise replicas that received the deltas in a different
+    /// order would place the file differently.
+    fn check_tree_history(&self, delta: &Delta) -> Result<(), LogError> {
+        let seen = |inode: InodeId| self.graph.is_ancestor(inode.0, &delta.parents);
+        let parent_ok = |parent: &Parent| match parent {
+            Parent::Dir(dir) => self.tree.kind(*dir) == Some(InodeKind::Dir) && seen(*dir),
+            Parent::Root | Parent::Trash => true,
+        };
+        let ok = match &delta.op {
+            Op::Create { parent, .. } => parent_ok(parent),
+            Op::Move { inode, parent, .. } => seen(*inode) && parent_ok(parent),
+            Op::Delete { inode } => seen(*inode),
+            _ => true,
+        };
+        if ok { Ok(()) } else { Err(LogError::NotInHistory(delta.span.first())) }
+    }
+
     /// Validates `delta` against the current state. Returns whether a text
     /// edit applies to the file's current content.
     fn check(&mut self, delta: &Delta, bases: &mut dyn BaseText) -> Result<bool, LogError> {
         let id = delta.span.first();
         match &delta.op {
             Op::Create { .. } | Op::Move { .. } | Op::Delete { .. } => {
+                self.check_tree_history(delta)?;
                 self.tree.check(&tree_event(id, &delta.op))?;
+            }
+            Op::Fork { from } => {
+                if self.threads.contains_key(&delta.thread) || !self.threads.contains_key(from) {
+                    return Err(LogError::MisplacedFork(id));
+                }
+            }
+            Op::Merge { from, .. } => {
+                if !self.threads.contains_key(from) {
+                    return Err(LogError::UnknownMergeSource(id));
+                }
             }
             Op::Text { inode, op } => {
                 if !self.based_on_current_content(*inode, &delta.parents)? {
@@ -473,8 +514,6 @@ impl Family {
             Op::Conv(_)
             | Op::Git(_)
             | Op::Lease { .. }
-            | Op::Fork { .. }
-            | Op::Merge { .. }
             | Op::Mr(_)
             | Op::Comment(_) => {}
         }

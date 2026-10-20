@@ -49,7 +49,18 @@ pub enum CausalError {
     BrokenActorChain { id: DeltaId, previous: DeltaId },
     #[error("{id} overlaps deltas already in the graph with different history")]
     ConflictingSpan { id: DeltaId },
+    #[error("{id} claims {len} ids, more than a delta may have")]
+    SpanTooLong { id: DeltaId, len: u64 },
+    #[error("{id} lies outside the lamport clock or too far ahead of it")]
+    LamportOutOfRange { id: DeltaId },
 }
+
+/// Most ids one delta may claim; more than any text edit Silt makes.
+pub const MAX_SPAN_LEN: u64 = 1 << 32;
+/// How far ahead of everything known a delta may start. Deltas from threads
+/// this replica can't see push the clock ahead legitimately, but a peer must
+/// not be able to use the clock up.
+pub const MAX_CLOCK_SKEW: u64 = 1 << 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Added {
@@ -111,6 +122,15 @@ impl CausalGraph {
     pub fn add(&mut self, span: DeltaSpan, parents: &Frontier) -> Result<Added, CausalError> {
         if span.len == 0 {
             return Err(CausalError::EmptySpan);
+        }
+        if span.len > MAX_SPAN_LEN {
+            return Err(CausalError::SpanTooLong {
+                id: span.first(),
+                len: span.len,
+            });
+        }
+        if !span.is_in_range() || span.start.0 > self.next_lamport().0.saturating_add(MAX_CLOCK_SKEW) {
+            return Err(CausalError::LamportOutOfRange { id: span.first() });
         }
         let Some((span, parents)) = self.unknown_suffix(span, parents)? else {
             return Ok(Added::AlreadyKnown);
@@ -201,24 +221,41 @@ impl CausalGraph {
         span.contains(id).then(|| (run_index, id.lamport.0 - span.start.0))
     }
 
+    /// Whether any id of `actor` in `[start, end)` is known. The actor's
+    /// runs are in lamport order, so one search finds the only candidate.
+    fn overlaps(&self, actor: ActorId, start: Lamport, end: Lamport) -> bool {
+        let Some(runs) = self.by_actor.get(&actor) else {
+            return false;
+        };
+        let before_end = runs.partition_point(|index| self.runs[*index].span.start < end);
+        before_end
+            .checked_sub(1)
+            .is_some_and(|position| self.runs[runs[position]].span.end() > start)
+    }
+
+    /// The part of `span` not in the graph yet, with its parents. A span
+    /// that starts at a known id must repeat that id's parents: the same id
+    /// with a different history is a conflict, not a duplicate.
     fn unknown_suffix(
         &self,
         span: DeltaSpan,
         parents: &Frontier,
     ) -> Result<Option<(DeltaSpan, Frontier)>, CausalError> {
         let Some((run_index, _)) = self.find(span.first()) else {
-            let any_known = (1..span.len).any(|offset| self.contains(span.id_at(offset)));
-            if any_known {
+            if self.overlaps(span.actor, span.start, span.end()) {
                 return Err(CausalError::ConflictingSpan { id: span.first() });
             }
             return Ok(Some((span, parents.clone())));
         };
+        if self.parents_of(span.first()).as_ref() != Some(parents) {
+            return Err(CausalError::ConflictingSpan { id: span.first() });
+        }
         let known_end = self.runs[run_index].span.end();
         if known_end >= span.end() {
             return Ok(None);
         }
         let remainder = DeltaSpan::new(span.actor, known_end, span.end().0 - known_end.0);
-        if (0..remainder.len).any(|offset| self.contains(remainder.id_at(offset))) {
+        if self.overlaps(remainder.actor, remainder.start, remainder.end()) {
             return Err(CausalError::ConflictingSpan { id: remainder.first() });
         }
         let previous = DeltaId::new(span.actor, Lamport(known_end.0 - 1));

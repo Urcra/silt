@@ -347,7 +347,9 @@ impl FileTree {
 /// Each directory's entries by name, with every inode claiming the name.
 type Children<'a> = HashMap<Parent, BTreeMap<&'a str, Vec<(Stamp, InodeId)>>>;
 
-fn is_valid_name(name: &str) -> bool {
+/// Whether `name` may name a file or directory: no separators, no `.` or
+/// `..`, nothing git would treat as its own directory.
+pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0']) && !is_git_dir_name(name)
 }
 
