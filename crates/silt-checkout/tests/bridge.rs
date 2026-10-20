@@ -84,8 +84,13 @@ impl Checkout {
                     inode,
                     content: DiskContent::Text(text),
                     version,
+                    moved_from,
                     ..
                 } => {
+                    if let Some(old) = moved_from {
+                        self.bridge.record_removed(&old);
+                        self.disk.remove(&old);
+                    }
                     self.bridge.record_written(
                         &path,
                         DiskEntry {
@@ -289,6 +294,53 @@ fn an_edit_without_a_record_of_the_disk_does_not_take_in_a_forks_work() {
     );
     let readme = family.tree().paths()["README.md"];
     assert_eq!(family.thread_view(THREAD).file(readme), Some(FileView::Text("# readme\nsource work\n".into())));
+}
+
+#[test]
+fn a_binary_file_moved_elsewhere_is_written_before_it_leaves_its_old_path() {
+    let mut family = Family::new();
+    let logo = ImportFile {
+        path: "logo.png".into(),
+        oid: oid(3),
+        executable: false,
+    };
+    import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[logo], 0).expect("imports");
+    let inode = family.tree().paths()["logo.png"];
+    let entry = DiskEntry {
+        inode,
+        hash: [3; 32],
+        size: 3,
+        mtime_ns: 0,
+        version: family.thread_head(THREAD),
+    };
+    let bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::from([("logo.png".to_owned(), entry)]));
+    let moved = family.delta(
+        ActorId(2),
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        silt_log::Op::Move { inode, parent: silt_crdt::Parent::Root, name: "icon.png".into() },
+    );
+    family.apply(moved, &mut bases()).expect("moves");
+
+    let actions = bridge.reconcile(&family, &mut bases(), [inode]);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert!(
+        matches!(&actions[0], DiskAction::Write { path, content: DiskContent::GitBlob(blob), moved_from: Some(old), .. }
+            if path == "icon.png" && *blob == oid(3) && old == "logo.png"),
+        "{actions:?}"
+    );
+}
+
+#[test]
+fn a_file_never_written_here_is_missing_not_deleted() {
+    let mut family = imported_family();
+    let mut checkout = Checkout::new(1, &family);
+    checkout.bridge.record_removed("README.md");
+    let deltas = checkout.edit(&mut family, "README.md", None);
+    assert!(deltas.is_empty(), "{deltas:?}");
+    assert!(family.tree().paths().contains_key("README.md"));
 }
 
 #[test]

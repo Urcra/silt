@@ -666,6 +666,7 @@ impl Core {
                 content,
                 executable,
                 version,
+                moved_from,
             } => {
                 let current = disk::read(&root, &path)?;
                 let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
@@ -678,6 +679,10 @@ impl Core {
                 let bytes = match content {
                     DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
                     DiskContent::Blob(hash) => self.blob(hash).await?,
+                    DiskContent::GitBlob(oid) => {
+                        let repo = &self.checkout(checkout_id)?.repo;
+                        repo.filters()?.to_worktree(&path, &repo.blob(oid)?)?
+                    }
                 };
                 let written = match current {
                     Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && current.executable == executable => current,
@@ -696,22 +701,30 @@ impl Core {
                     .bridge
                     .record_written(&path, entry);
                 self.persist_entry(checkout_id, &path).await?;
-            }
-            DiskAction::Remove { path } => {
-                let current = disk::read(&root, &path)?;
-                let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
-                if current.as_ref().is_some_and(|current| Some(current.hash) != recorded) {
-                    return Ok(Some(path));
+                if let Some(old) = moved_from {
+                    return self.remove_from_disk(checkout_id, &root, old).await;
                 }
-                disk::remove(&root, &path)?;
-                self.checkouts
-                    .get_mut(&checkout_id)
-                    .expect("checked above")
-                    .bridge
-                    .record_removed(&path);
-                self.store.remove_disk_file(checkout_id, &path).await?;
             }
+            DiskAction::Remove { path } => return self.remove_from_disk(checkout_id, &root, path).await,
         }
+        Ok(None)
+    }
+
+    /// Removes a file the thread no longer has there, unless it changed on
+    /// disk since it was recorded; then returns its path.
+    async fn remove_from_disk(&mut self, checkout_id: i64, root: &Path, path: String) -> Result<Option<String>, CoreError> {
+        let current = disk::read(root, &path)?;
+        let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
+        if current.as_ref().is_some_and(|current| Some(current.hash) != recorded) {
+            return Ok(Some(path));
+        }
+        disk::remove(root, &path)?;
+        self.checkouts
+            .get_mut(&checkout_id)
+            .expect("checked above")
+            .bridge
+            .record_removed(&path);
+        self.store.remove_disk_file(checkout_id, &path).await?;
         Ok(None)
     }
 

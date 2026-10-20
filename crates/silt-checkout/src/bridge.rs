@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{Author, BaseText, Content, Delta, Family, FileView, LogError, Op};
-use silt_types::{ActorId, BlobHash, Frontier, ThreadId};
+use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
 
 use crate::diff::text_edits;
 
@@ -34,6 +34,8 @@ pub enum DiskContent {
     Text(String),
     /// Content kept whole, already put in the blob store.
     Blob(BlobHash),
+    /// A git blob that isn't text, written byte for byte.
+    GitBlob(GitOid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +46,9 @@ pub enum DiskAction {
         content: DiskContent,
         executable: bool,
         version: Frontier,
+        /// Where the file was before it moved, removed only once it is
+        /// written at `path`, so a failed write never loses it.
+        moved_from: Option<String>,
     },
     Remove {
         path: String,
@@ -134,7 +139,10 @@ impl Bridge {
                 .filter(|inode| view.tree().is_live(*inode) && view.tree().kind(*inode) == Some(InodeKind::File))
         });
         let Some(disk) = disk else {
-            if let Some(inode) = existing {
+            // Only a file this checkout had on disk was deleted here; one it
+            // never wrote is just missing.
+            let had = |inode: &InodeId| self.entries.get(path).is_some_and(|entry| entry.inode == *inode);
+            if let Some(inode) = existing.filter(had) {
                 writer.tree_op(self.actor, Op::Delete { inode })?;
             }
             self.entries.remove(path);
@@ -172,6 +180,7 @@ impl Bridge {
                 content,
                 executable: family.thread_view(self.thread).is_executable(inode),
                 version: version.clone(),
+                moved_from: None,
             });
         }
         self.entries.insert(
@@ -208,20 +217,20 @@ impl Bridge {
                 .then(|| view.tree().path_of(inode))
                 .flatten()
                 .filter(|path| paths.get(path) == Some(&inode));
-            let old_path = by_inode.get(&inode).copied();
-            if let Some(old) = old_path.filter(|old| Some(*old) != live_path.as_ref()) {
-                actions.push(DiskAction::Remove { path: old.clone() });
-            }
+            let moved_from = by_inode
+                .get(&inode)
+                .filter(|old| Some(**old) != live_path.as_ref())
+                .map(|old| (*old).clone());
             let Some(path) = live_path else {
+                actions.extend(moved_from.map(|path| DiskAction::Remove { path }));
                 continue;
             };
+            // Without content to write, the file stays where it was rather
+            // than being removed from there.
             let content = match view.file(inode) {
                 Some(FileView::Text(text)) => DiskContent::Text(text),
                 Some(FileView::Blob(hash)) => DiskContent::Blob(hash),
-                Some(FileView::GitText(oid)) => match bases.text(oid) {
-                    Some(text) => DiskContent::Text(text),
-                    None => continue,
-                },
+                Some(FileView::GitText(oid)) => bases.text(oid).map_or(DiskContent::GitBlob(oid), DiskContent::Text),
                 None => continue,
             };
             actions.push(DiskAction::Write {
@@ -230,6 +239,7 @@ impl Bridge {
                 content,
                 executable: view.is_executable(inode),
                 version: version.clone(),
+                moved_from,
             });
         }
         actions.retain(|action| match action {
@@ -347,6 +357,7 @@ impl Writer<'_> {
         let content = match &disk.content {
             DiskContent::Text(_) => Content::Empty,
             DiskContent::Blob(hash) => Content::Blob(*hash),
+            DiskContent::GitBlob(oid) => Content::GitText(*oid),
         };
         let created = self.tree_op(
             actor,
@@ -424,6 +435,16 @@ impl Writer<'_> {
                     Op::SetContent {
                         inode,
                         content: Content::Blob(*hash),
+                    },
+                )?;
+            }
+            (DiskContent::GitBlob(oid), Some(FileView::GitText(current))) if *oid == current => {}
+            (DiskContent::GitBlob(oid), _) => {
+                self.tree_op(
+                    actor,
+                    Op::SetContent {
+                        inode,
+                        content: Content::GitText(*oid),
                     },
                 )?;
             }
