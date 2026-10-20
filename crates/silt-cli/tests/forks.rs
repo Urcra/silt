@@ -192,7 +192,8 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
 
 #[test]
 fn a_private_project_stays_invisible_to_teammates() {
-    let Team { alice, bob, .. } = &team();
+    let Team { alice, bob, _server: server, .. } = &team();
+    server.admin(&["user", "admin", "alice"]);
     let set = alice.stdout(&["visibility", "private"]);
     assert!(set.contains("is now private"), "{set}");
     alice.silt(&["claude"]);
@@ -203,7 +204,7 @@ fn a_private_project_stays_invisible_to_teammates() {
     let refused = bob.run(&["fork", &thread]);
     assert!(!refused.status.success());
 
-    alice.silt(&["visibility", "team", "--thread", &thread]);
+    alice.silt(&["visibility", "org", "--thread", &thread]);
     assert!(eventually(|| bob.log_line(&thread).is_some()), "the thread's own setting opens it up");
 }
 

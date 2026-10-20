@@ -1,5 +1,7 @@
-//! Who sees what (ADR 0010). Visibility is per thread: the thread's own
-//! setting, else its source's for a fork, else its project's, else `team`.
+//! Who sees what (ADR 0010, ADR 0013). Visibility is per thread: the
+//! thread's own setting, else its source's for a fork, else its project's,
+//! else the default of the org the project belongs to. Only members of
+//! that org see anything of it, and only the owner sees a private thread.
 //! A delta of a hidden thread still reaches a user when a thread they see
 //! builds on it (a pull or a merge) or when it is offered to such a thread
 //! in a merge request, since that is how private work gets shared.
@@ -7,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use silt_log::{MrOp, Op};
+use silt_proto::Visibility;
 use silt_sync::Room;
 use silt_types::{Frontier, ThreadId};
 use sqlx::Row;
@@ -17,9 +20,14 @@ use crate::id_from;
 struct ThreadRow {
     owner: i64,
     family: u128,
-    setting: Option<String>,
+    setting: Option<Visibility>,
     forked_from: Option<ThreadId>,
     repo: String,
+}
+
+struct Project {
+    org: Option<i64>,
+    setting: Option<Visibility>,
 }
 
 /// What one user can see.
@@ -33,6 +41,10 @@ pub(crate) struct Viewer {
     known_threads: HashSet<ThreadId>,
 }
 
+fn level(text: Option<String>) -> Option<Visibility> {
+    text.and_then(|text| text.parse().ok())
+}
+
 impl Viewer {
     /// `forks` maps each fork to its source.
     pub(crate) async fn load(
@@ -40,14 +52,44 @@ impl Viewer {
         user: i64,
         forks: &HashMap<ThreadId, ThreadId>,
     ) -> Result<Self, sqlx::Error> {
-        let projects: HashMap<String, String> = sqlx::query("SELECT repo, visibility FROM projects")
+        let projects: HashMap<String, Project> = sqlx::query("SELECT repo, org_id, visibility FROM projects")
             .fetch_all(db)
             .await?
-            .iter()
-            .map(|row| (row.get("repo"), row.get("visibility")))
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("repo"),
+                    Project {
+                        org: row.get("org_id"),
+                        setting: level(row.get("visibility")),
+                    },
+                )
+            })
             .collect();
+        let defaults: HashMap<i64, Visibility> = sqlx::query("SELECT id, default_visibility FROM orgs")
+            .fetch_all(db)
+            .await?
+            .into_iter()
+            .map(|row| (row.get("id"), level(row.get("default_visibility")).unwrap_or(Visibility::Org)))
+            .collect();
+        let orgs: HashSet<i64> = sqlx::query("SELECT org_id FROM org_members WHERE user_id = ?")
+            .bind(user)
+            .fetch_all(db)
+            .await?
+            .into_iter()
+            .map(|row| row.get("org_id"))
+            .collect();
+        let teams: HashSet<(i64, String)> = sqlx::query(
+            "SELECT t.org_id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ?",
+        )
+        .bind(user)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.get("org_id"), row.get("name")))
+        .collect();
         let threads: HashMap<ThreadId, ThreadRow> =
-            sqlx::query("SELECT id, family_id, owner_id, visibility, repo FROM threads")
+            sqlx::query("SELECT id, family_id, owner_id, visibility, repo FROM threads WHERE deleted_ms IS NULL")
                 .fetch_all(db)
                 .await?
                 .iter()
@@ -58,28 +100,36 @@ impl Viewer {
                         ThreadRow {
                             owner: row.get("owner_id"),
                             family: id_from(row.get("family_id")),
-                            setting: row.get("visibility"),
+                            setting: level(row.get("visibility")),
                             forked_from: forks.get(&id).copied(),
                             repo: row.get("repo"),
                         },
                     )
                 })
                 .collect();
-        let effective = |mut thread: ThreadId| -> String {
+        let effective = |mut thread: ThreadId| -> (Option<i64>, Visibility) {
+            let org = threads.get(&thread).and_then(|row| projects.get(&row.repo)).and_then(|project| project.org);
+            let fallback = |repo: &str| {
+                let project = projects.get(repo);
+                project
+                    .and_then(|project| project.setting.clone())
+                    .or_else(|| project.and_then(|project| project.org).and_then(|org| defaults.get(&org).cloned()))
+                    .unwrap_or(Visibility::Org)
+            };
             // Fork chains are short and acyclic, but stay safe against bad data.
             for _ in 0..64 {
                 let Some(row) = threads.get(&thread) else {
                     break;
                 };
                 if let Some(setting) = &row.setting {
-                    return setting.clone();
+                    return (org, setting.clone());
                 }
                 match row.forked_from {
                     Some(source) if threads.contains_key(&source) => thread = source,
-                    _ => return projects.get(&row.repo).cloned().unwrap_or_else(|| "team".into()),
+                    _ => return (org, fallback(&row.repo)),
                 }
             }
-            "team".into()
+            (org, Visibility::Private)
         };
         let mut viewer = Self {
             owned: sqlx::query("SELECT id FROM families WHERE owner_id = ?")
@@ -93,7 +143,16 @@ impl Viewer {
             ..Self::default()
         };
         for (id, row) in &threads {
-            if row.owner == user || effective(*id) == "team" {
+            let visible = row.owner == user
+                || match effective(*id) {
+                    (Some(org), visibility) if orgs.contains(&org) => match visibility {
+                        Visibility::Private => false,
+                        Visibility::Org => true,
+                        Visibility::Team(team) => teams.contains(&(org, team)),
+                    },
+                    _ => false,
+                };
+            if visible {
                 viewer.threads.insert(*id);
                 viewer.families.insert(row.family);
             }

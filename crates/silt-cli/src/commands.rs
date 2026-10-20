@@ -28,7 +28,7 @@ fn fail(message: impl Into<String>) -> Exn<CliError> {
 }
 
 /// Sends a request to the running daemon and decodes its answer.
-fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliError>> {
+pub(crate) fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliError>> {
     let response = client::send(&paths::socket_path(), request, REQUEST_TIMEOUT)
         .or_raise(|| CliError("the Silt daemon is not answering; try `silt daemon start`".into()))?;
     match response {
@@ -39,7 +39,7 @@ fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliError>> {
     }
 }
 
-fn is_running() -> bool {
+pub(crate) fn is_running() -> bool {
     client::send(&paths::socket_path(), &Request::Ping, Duration::from_secs(2)).is_ok()
 }
 
@@ -319,25 +319,6 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     exit_like(status)
 }
 
-pub fn auth_login(server: &str, code: &str, name: Option<String>) -> Result<(), Exn<CliError>> {
-    let name = name
-        .or_else(|| fs::read_to_string("/etc/hostname").ok().map(|name| name.trim().to_owned()))
-        .unwrap_or_else(|| "device".into());
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
-    let config = runtime
-        .block_on(silt_daemon::remote::login(server, code, &name))
-        .or_raise(|| CliError(format!("could not log in to {server}")))?;
-    silt_daemon::remote::save_config(&paths::data_dir(), &config)
-        .or_raise(|| CliError("could not save the server settings".into()))?;
-    if is_running() {
-        call::<String>(&Request::Reload)?;
-    }
-    println!(
-        "logged in to {} as {}, device {} ({name})",
-        config.url, config.user, config.device
-    );
-    Ok(())
-}
 
 pub fn auth_status() -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
@@ -665,39 +646,8 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
-fn server_data(data: Option<PathBuf>) -> PathBuf {
-    data.unwrap_or_else(|| paths::data_dir().join("server"))
-}
 
-pub fn server_run(listen: &str, data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()))
-        .with_writer(io::stderr)
-        .init();
-    let data = server_data(data);
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
-    runtime.block_on(async {
-        let server = silt_server::Server::open(&data)
-            .await
-            .or_raise(|| CliError(format!("cannot open server data in {}", data.display())))?;
-        let listener = tokio::net::TcpListener::bind(listen)
-            .await
-            .or_raise(|| CliError(format!("cannot listen on {listen}")))?;
-        eprintln!("silt server listening on {listen}, data in {}", data.display());
-        server.serve(listener).await.or_raise(|| CliError("the server stopped".into()))
-    })
-}
 
-pub fn server_pair(data: Option<PathBuf>, user: &str) -> Result<(), Exn<CliError>> {
-    let data = server_data(data);
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
-    let code = runtime
-        .block_on(silt_server::create_pairing_code(&data, user))
-        .or_raise(|| CliError("cannot create a pairing code".into()))?;
-    println!("{code}");
-    eprintln!("valid for 15 minutes; on the device run: silt auth login --server <url> --code {code}");
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

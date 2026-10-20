@@ -355,15 +355,14 @@ impl Core {
             .remote
             .clone()
             .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
-        let refused = |error: crate::remote::RemoteError| CoreError::Invalid(format!("the server refused: {error}"));
+        let refused = |error: crate::remote::RemoteError| CoreError::Invalid(error.to_string());
         match selector {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;
-                remote.set_visibility(None, Some(thread), visibility).await.map_err(refused)?;
+                remote.set_visibility(None, Some(thread), visibility.clone()).await.map_err(refused)?;
                 Ok(format!(
-                    "thread {} is now {}; forks without a setting of their own follow it",
+                    "thread {} is now {visibility}; forks without a setting of their own follow it",
                     short(thread),
-                    format!("{visibility:?}").to_lowercase()
                 ))
             }
             None => {
@@ -373,10 +372,10 @@ impl Core {
                     .map(|url| silt_git::normalize_remote(&url))
                     .ok_or_else(|| CoreError::Invalid("this clone has no origin remote".into()))?;
                 remote
-                    .set_visibility(Some(identity.clone()), None, visibility)
+                    .set_visibility(Some(identity.clone()), None, visibility.clone())
                     .await
                     .map_err(refused)?;
-                Ok(format!("project {identity} is now {}", format!("{visibility:?}").to_lowercase()))
+                Ok(format!("project {identity} is now {visibility}"))
             }
         }
     }

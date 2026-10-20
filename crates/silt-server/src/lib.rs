@@ -12,14 +12,15 @@ use axum::extract::{Extension, Path as UrlPath, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use silt_log::Delta;
 use silt_proto::{
-    ErrorReply, FamilyInfo, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
+    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, FamilyInfo, GENERATION_HEADER, Lease,
+    Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, InFlightThread, PullReply, PushReply, PushRequest, SearchHit, SearchQuery, SearchReply,
-    ThreadInfo, Visibility, VisibilityRequest,
+    ThreadInfo, VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -29,9 +30,17 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 
+pub mod accounts;
+pub mod config;
 mod git;
 mod index;
+mod orgs;
+mod pages;
+mod sign_in;
 mod visibility;
+
+pub use accounts::{AccountError, Admin, User};
+pub use config::{Config, ConfigError};
 
 use index::Index;
 use visibility::Viewer;
@@ -57,6 +66,8 @@ pub enum ServerError {
     Decode(#[from] postcard::Error),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
 }
 
 struct Shared {
@@ -68,6 +79,8 @@ struct Shared {
     /// Locked after `rooms` when both are needed.
     index: Mutex<Index>,
     data_dir: std::path::PathBuf,
+    config: Config,
+    http: reqwest::Client,
 }
 
 #[derive(Clone)]
@@ -79,6 +92,11 @@ impl Server {
     /// Opens the server's data in `data_dir` and loads every family. Each
     /// start gets a new generation, so clients re-check what they synced.
     pub async fn open(data_dir: &Path) -> Result<Self, ServerError> {
+        let config = Config::load(data_dir)?;
+        Self::open_with(data_dir, config).await
+    }
+
+    pub async fn open_with(data_dir: &Path, config: Config) -> Result<Self, ServerError> {
         tokio::fs::create_dir_all(data_dir).await?;
         let db = open_db(data_dir).await?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
@@ -110,8 +128,25 @@ impl Server {
                 waiters: Mutex::new(HashMap::new()),
                 index: Mutex::new(index),
                 data_dir: data_dir.to_owned(),
+                config,
+                http: reqwest::Client::builder()
+                    .timeout(Duration::from_secs(20))
+                    .build()
+                    .expect("the HTTP client builds"),
             }),
         })
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.shared.config
+    }
+
+    pub(crate) fn db(&self) -> &SqlitePool {
+        &self.shared.db
+    }
+
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.shared.http
     }
 
     pub fn router(&self) -> Router {
@@ -124,12 +159,29 @@ impl Server {
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
+            .route("/v1/device", delete(logout_device))
+            .route("/v1/orgs", get(orgs::list))
+            .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
-        Router::new()
+        let api = Router::new()
             .route("/v1/login", post(login))
+            .route("/v1/login/password", post(password_login))
+            .route("/v1/device/start", post(device_start))
+            .route("/v1/device/poll", post(device_poll))
             .merge(authed)
-            .layer(middleware::from_fn_with_state(self.clone(), protocol))
+            .layer(middleware::from_fn_with_state(self.clone(), protocol));
+        let pages = Router::new()
+            .route("/", get(pages::home))
+            .route("/login", get(pages::login_page).post(pages::login))
+            .route("/logout", post(pages::logout))
+            .route("/device", get(pages::device_page).post(pages::device))
+            .route("/signup", get(pages::signup_page).post(pages::signup))
+            .route("/auth/{provider}/start", get(pages::provider_start))
+            .route("/auth/{provider}/callback", get(pages::provider_callback));
+        Router::new()
+            .merge(api)
+            .merge(pages)
             // Bundles and git pushes are bigger than axum's default limit.
             .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
             .with_state(self.clone())
@@ -142,13 +194,22 @@ impl Server {
 
 /// Creates a one-time code that lets a device of `user` log in, valid for
 /// 15 minutes. The user is created if it doesn't exist.
-pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, ServerError> {
-    tokio::fs::create_dir_all(data_dir).await?;
+pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, AccountError> {
+    tokio::fs::create_dir_all(data_dir).await.map_err(ServerError::from)?;
     let db = open_db(data_dir).await?;
-    sqlx::query("INSERT OR IGNORE INTO users (name) VALUES (?)")
-        .bind(user)
-        .execute(&db)
+    if accounts::user_by_name(&db, user).await?.is_none() {
+        accounts::create_user(
+            &db,
+            &accounts::NewUser {
+                name: user,
+                display_name: None,
+                email: None,
+                password: None,
+                admin: false,
+            },
+        )
         .await?;
+    }
     let code: String = uuid::Uuid::new_v4().simple().to_string()[..10].to_owned();
     sqlx::query(
         "INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?",
@@ -161,7 +222,7 @@ pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, 
     Ok(code)
 }
 
-async fn open_db(data_dir: &Path) -> Result<SqlitePool, ServerError> {
+pub(crate) async fn open_db(data_dir: &Path) -> Result<SqlitePool, ServerError> {
     let options = SqliteConnectOptions::from_str("sqlite://")?
         .filename(data_dir.join("server.sqlite"))
         .create_if_missing(true)
@@ -202,7 +263,7 @@ pub(crate) fn bad_request(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, ErrorReply::Invalid { message: message.into() })
 }
 
-fn forbidden(message: impl Into<String>) -> ApiError {
+pub(crate) fn forbidden(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::FORBIDDEN, ErrorReply::Forbidden { message: message.into() })
 }
 
@@ -321,26 +382,42 @@ async fn login(State(server): State<Server>, Json(body): Json<LoginRequest>) -> 
         return Err(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized));
     };
     let user: i64 = code.get("user_id");
-    let device = DeviceId(uuid::Uuid::new_v4().as_u128());
-    let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, user_id) VALUES (?, ?, ?, ?, ?)")
-        .bind(id_bytes(device.0))
-        .bind(&body.name)
-        .bind(hash(&token).to_vec())
-        .bind(now_ms())
-        .bind(user)
-        .execute(db)
-        .await?;
-    let name = sqlx::query("SELECT name FROM users WHERE id = ?")
-        .bind(user)
-        .fetch_one(db)
+    Ok(Json(accounts::issue_device(db, user, &body.name).await?))
+}
+
+async fn password_login(
+    State(server): State<Server>,
+    Json(body): Json<PasswordLoginRequest>,
+) -> Result<Json<LoginReply>, ApiError> {
+    if !server.config().auth.passwords {
+        return Err(forbidden("passwords are turned off on this server; use `silt auth login` without --user"));
+    }
+    let user = accounts::check_password(server.db(), body.user.trim(), &body.password)
         .await?
-        .get("name");
-    Ok(Json(LoginReply {
-        device,
-        token,
-        user: name,
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized))?;
+    Ok(Json(accounts::issue_device(server.db(), user.id, &body.name).await?))
+}
+
+async fn device_start(State(server): State<Server>, Json(body): Json<DeviceStartRequest>) -> Result<Json<DeviceStartReply>, ApiError> {
+    let (device_code, user_code) = accounts::start_device(server.db(), &body.name).await?;
+    Ok(Json(DeviceStartReply {
+        verification_url: format!("{}/device?code={user_code}", server.config().public_url()),
+        device_code,
+        user_code,
+        interval_secs: 2,
+        expires_in_secs: u64::try_from(accounts::DEVICE_REQUEST_TTL_MS / 1000).unwrap_or(900),
     }))
+}
+
+async fn device_poll(State(server): State<Server>, Json(body): Json<DevicePollRequest>) -> Result<Json<DevicePollReply>, ApiError> {
+    Ok(Json(accounts::poll_device(server.db(), &body.device_code).await?))
+}
+
+/// Signs the calling device out: its token stops working and its leases
+/// are released.
+async fn logout_device(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<StatusCode, ApiError> {
+    accounts::revoke_device(server.db(), caller.device).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn listing(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<Listing>, ApiError> {
@@ -406,6 +483,7 @@ async fn register_thread(
         .bind(caller.user)
         .execute(db)
         .await?;
+    orgs::place_project(db, &thread.repo, caller.user).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -556,27 +634,25 @@ async fn set_visibility(
     Json(body): Json<VisibilityRequest>,
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
-    let visibility = match body.visibility {
-        Visibility::Private => "private",
-        Visibility::Team => "team",
-    };
+    let visibility = body.visibility.to_string();
     match (body.repo, body.thread) {
         (Some(repo), None) => {
-            sqlx::query(
-                "INSERT INTO projects (repo, visibility) VALUES (?, ?)
-                 ON CONFLICT (repo) DO UPDATE SET visibility = excluded.visibility",
-            )
-            .bind(repo)
-            .bind(visibility)
-            .execute(db)
-            .await?;
+            orgs::place_project(db, &repo, caller.user).await?;
+            if !orgs::may_set_project(db, &repo, caller.user).await? {
+                return Err(forbidden("only the project's org owners and server admins can change its visibility"));
+            }
+            sqlx::query("UPDATE projects SET visibility = ? WHERE repo = ?")
+                .bind(&visibility)
+                .bind(repo)
+                .execute(db)
+                .await?;
         }
         (None, Some(thread)) => {
             if !server.viewer(caller.user).await?.sees_thread(thread) {
                 return Err(not_found());
             }
             let updated = sqlx::query("UPDATE threads SET visibility = ? WHERE id = ? AND owner_id = ?")
-                .bind(visibility)
+                .bind(&visibility)
                 .bind(id_bytes(thread.0))
                 .bind(caller.user)
                 .execute(db)
@@ -764,7 +840,7 @@ fn parse_blob_hash(hex: &str) -> Option<BlobHash> {
     Some(BlobHash(bytes))
 }
 
-fn hash(text: &str) -> [u8; 32] {
+pub(crate) fn hash(text: &str) -> [u8; 32] {
     *blake3::hash(text.as_bytes()).as_bytes()
 }
 
@@ -778,7 +854,7 @@ pub(crate) fn id_from(bytes: &[u8]) -> u128 {
     u128::from_be_bytes(buffer)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))

@@ -1,0 +1,14 @@
+# Keeps Silt's daemon syncing while you are logged in, rather than only
+# after the first `silt` command. Install with:
+#   cp silt-daemon.service ~/.config/systemd/user/ && systemctl --user enable --now silt-daemon
+[Unit]
+Description=Silt daemon
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/silt daemon run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

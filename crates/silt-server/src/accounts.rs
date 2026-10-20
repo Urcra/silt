@@ -1,0 +1,536 @@
+//! Accounts (ADR 0013): users with optional passwords and linked sign-in
+//! identities, browser sessions, devices and the requests that sign them
+//! in, and invites. Every secret is stored as a hash.
+
+use std::path::Path;
+
+use argon2::Argon2;
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use silt_proto::{DevicePollReply, LoginReply};
+use silt_types::DeviceId;
+use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
+
+use crate::{ServerError, hash, id_bytes, now_ms, open_db};
+
+const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+pub(crate) const DEVICE_REQUEST_TTL_MS: i64 = 15 * 60 * 1000;
+const SIGN_IN_TTL_MS: i64 = 10 * 60 * 1000;
+/// Letters that can't be misread for each other, for codes people type.
+const CODE_LETTERS: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
+
+#[derive(Debug, thiserror::Error)]
+pub enum AccountError {
+    #[error("user names are 1 to 39 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit")]
+    BadName,
+    #[error("a user named {0} already exists")]
+    Taken(String),
+    #[error("no user named {0}")]
+    NoUser(String),
+    #[error("passwords need at least 10 characters")]
+    WeakPassword,
+    #[error(transparent)]
+    Server(#[from] ServerError),
+}
+
+impl From<sqlx::Error> for AccountError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Server(error.into())
+    }
+}
+
+pub(crate) fn random_token() -> String {
+    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
+pub(crate) fn hash_password(password: &str) -> String {
+    Argon2::default()
+        .hash_password(password.as_bytes())
+        .expect("hashing with a generated salt succeeds")
+        .to_string()
+}
+
+pub(crate) fn verify_password(stored: &str, password: &str) -> bool {
+    PasswordHash::new(stored).is_ok_and(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+}
+
+pub fn valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 39
+        && chars.next().is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_'))
+}
+
+/// A user's name made valid: lowercased, other characters dropped.
+pub(crate) fn name_from(text: &str) -> String {
+    let name: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_'))
+        .skip_while(|ch| !ch.is_ascii_alphanumeric())
+        .take(39)
+        .collect();
+    if name.is_empty() { "user".into() } else { name }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct User {
+    pub id: i64,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub admin: bool,
+    pub has_password: bool,
+}
+
+fn user_from(row: &sqlx::sqlite::SqliteRow) -> User {
+    User {
+        id: row.get("id"),
+        name: row.get("name"),
+        display_name: row.get("display_name"),
+        email: row.get("email"),
+        admin: row.get::<i64, _>("admin") != 0,
+        has_password: row.get::<Option<String>, _>("password_hash").is_some(),
+    }
+}
+
+/// A static query selecting the columns `user_from` reads.
+macro_rules! users_query {
+    ($rest:literal) => {
+        concat!("SELECT id, name, display_name, email, admin, password_hash FROM users ", $rest)
+    };
+}
+
+pub(crate) async fn user_by_id(db: &SqlitePool, id: i64) -> Result<Option<User>, sqlx::Error> {
+    Ok(sqlx::query(users_query!("WHERE id = ?"))
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .as_ref()
+        .map(user_from))
+}
+
+pub(crate) async fn user_by_name(db: &SqlitePool, name: &str) -> Result<Option<User>, sqlx::Error> {
+    Ok(sqlx::query(users_query!("WHERE name = ?"))
+        .bind(name)
+        .fetch_optional(db)
+        .await?
+        .as_ref()
+        .map(user_from))
+}
+
+pub(crate) async fn user_by_email(db: &SqlitePool, email: &str) -> Result<Option<User>, sqlx::Error> {
+    Ok(sqlx::query(users_query!("WHERE lower(email) = lower(?)"))
+        .bind(email)
+        .fetch_optional(db)
+        .await?
+        .as_ref()
+        .map(user_from))
+}
+
+pub(crate) struct NewUser<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) display_name: Option<&'a str>,
+    pub(crate) email: Option<&'a str>,
+    pub(crate) password: Option<&'a str>,
+    pub(crate) admin: bool,
+}
+
+pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<i64, AccountError> {
+    if !valid_name(new.name) {
+        return Err(AccountError::BadName);
+    }
+    if new.password.is_some_and(|password| password.chars().count() < 10) {
+        return Err(AccountError::WeakPassword);
+    }
+    let inserted = sqlx::query(
+        "INSERT INTO users (name, display_name, email, password_hash, admin, created_ms) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (name) DO NOTHING RETURNING id",
+    )
+    .bind(new.name)
+    .bind(new.display_name)
+    .bind(new.email)
+    .bind(new.password.map(hash_password))
+    .bind(i64::from(new.admin))
+    .bind(now_ms())
+    .fetch_optional(db)
+    .await?;
+    let id: i64 = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?.get("id");
+    crate::orgs::join_default_org(db, id).await?;
+    Ok(id)
+}
+
+/// A free name based on `wanted`, adding a number when it is taken.
+pub(crate) async fn free_name(db: &SqlitePool, wanted: &str) -> Result<String, sqlx::Error> {
+    let base = name_from(wanted);
+    for n in 0..1000 {
+        let candidate = if n == 0 { base.clone() } else { format!("{base}-{n}") };
+        if user_by_name(db, &candidate).await?.is_none() {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base}-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]))
+}
+
+pub(crate) async fn check_password(db: &SqlitePool, name: &str, password: &str) -> Result<Option<User>, sqlx::Error> {
+    let row = sqlx::query(users_query!("WHERE name = ?"))
+        .bind(name)
+        .fetch_optional(db)
+        .await?;
+    let Some(row) = row else {
+        // Spends the same time as a real check, so names can't be probed.
+        let _ = verify_password("$argon2id$v=19$m=19456,t=2,p=1$c2lsdHNhbHRzYWx0$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", password);
+        return Ok(None);
+    };
+    let stored: Option<String> = row.get("password_hash");
+    Ok(stored
+        .filter(|stored| verify_password(stored, password))
+        .map(|_| user_from(&row)))
+}
+
+/// Registers a device of `user` and returns its token, shown only now.
+pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Result<LoginReply, sqlx::Error> {
+    let device = DeviceId(uuid::Uuid::new_v4().as_u128());
+    let token = random_token();
+    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, user_id) VALUES (?, ?, ?, ?, ?)")
+        .bind(id_bytes(device.0))
+        .bind(name)
+        .bind(hash(&token).to_vec())
+        .bind(now_ms())
+        .bind(user)
+        .execute(db)
+        .await?;
+    let name = sqlx::query("SELECT name FROM users WHERE id = ?")
+        .bind(user)
+        .fetch_one(db)
+        .await?
+        .get("name");
+    Ok(LoginReply {
+        device,
+        token,
+        user: name,
+    })
+}
+
+pub(crate) async fn revoke_device(db: &SqlitePool, device: DeviceId) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM leases WHERE device_id = ?")
+        .bind(id_bytes(device.0))
+        .execute(db)
+        .await?;
+    sqlx::query("DELETE FROM devices WHERE id = ?")
+        .bind(id_bytes(device.0))
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn create_session(db: &SqlitePool, user: i64) -> Result<String, sqlx::Error> {
+    let token = random_token();
+    sqlx::query("INSERT INTO web_sessions (token_hash, user_id, expires_ms) VALUES (?, ?, ?)")
+        .bind(hash(&token).to_vec())
+        .bind(user)
+        .bind(now_ms() + SESSION_TTL_MS)
+        .execute(db)
+        .await?;
+    Ok(token)
+}
+
+pub(crate) async fn session_user(db: &SqlitePool, token: &str) -> Result<Option<User>, sqlx::Error> {
+    let row = sqlx::query("SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_ms > ?")
+        .bind(hash(token).to_vec())
+        .bind(now_ms())
+        .fetch_optional(db)
+        .await?;
+    match row {
+        Some(row) => user_by_id(db, row.get("user_id")).await,
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn end_session(db: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM web_sessions WHERE token_hash = ?")
+        .bind(hash(token).to_vec())
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+fn user_code() -> String {
+    let bytes = uuid::Uuid::new_v4().into_bytes();
+    let letters: String = bytes[..8]
+        .iter()
+        .map(|byte| char::from(CODE_LETTERS[usize::from(*byte) % CODE_LETTERS.len()]))
+        .collect();
+    format!("{}-{}", &letters[..4], &letters[4..])
+}
+
+pub(crate) fn normalize_user_code(code: &str) -> String {
+    let letters: String = code.chars().filter(char::is_ascii_alphanumeric).map(|ch| ch.to_ascii_uppercase()).collect();
+    if letters.len() == 8 {
+        format!("{}-{}", &letters[..4], &letters[4..])
+    } else {
+        letters
+    }
+}
+
+/// Starts a device sign-in; returns the device's secret and the code the
+/// person sees.
+pub(crate) async fn start_device(db: &SqlitePool, name: &str) -> Result<(String, String), sqlx::Error> {
+    let device_code = random_token();
+    let user_code = user_code();
+    sqlx::query("INSERT INTO device_requests (code_hash, user_code, name, expires_ms) VALUES (?, ?, ?, ?)")
+        .bind(hash(&device_code).to_vec())
+        .bind(&user_code)
+        .bind(name)
+        .bind(now_ms() + DEVICE_REQUEST_TTL_MS)
+        .execute(db)
+        .await?;
+    Ok((device_code, user_code))
+}
+
+/// The device name waiting under `user_code`, if the request is current.
+pub(crate) async fn device_request(db: &SqlitePool, user_code: &str) -> Result<Option<String>, sqlx::Error> {
+    Ok(sqlx::query("SELECT name FROM device_requests WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
+        .bind(normalize_user_code(user_code))
+        .bind(now_ms())
+        .fetch_optional(db)
+        .await?
+        .map(|row| row.get("name")))
+}
+
+pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: i64) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query("UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
+        .bind(user)
+        .bind(normalize_user_code(user_code))
+        .bind(now_ms())
+        .execute(db)
+        .await?
+        .rows_affected();
+    Ok(updated == 1)
+}
+
+pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM device_requests WHERE user_code = ?")
+        .bind(normalize_user_code(user_code))
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn poll_device(db: &SqlitePool, device_code: &str) -> Result<DevicePollReply, sqlx::Error> {
+    let row = sqlx::query("SELECT name, user_id, expires_ms FROM device_requests WHERE code_hash = ?")
+        .bind(hash(device_code).to_vec())
+        .fetch_optional(db)
+        .await?;
+    let Some(row) = row else {
+        return Ok(DevicePollReply::Gone);
+    };
+    let user: Option<i64> = row.get("user_id");
+    match user {
+        Some(user) => {
+            sqlx::query("DELETE FROM device_requests WHERE code_hash = ?")
+                .bind(hash(device_code).to_vec())
+                .execute(db)
+                .await?;
+            let name: String = row.get("name");
+            Ok(DevicePollReply::Approved {
+                login: issue_device(db, user, &name).await?,
+            })
+        }
+        None if row.get::<i64, _>("expires_ms") <= now_ms() => Ok(DevicePollReply::Gone),
+        None => Ok(DevicePollReply::Pending),
+    }
+}
+
+pub(crate) async fn create_invite(db: &SqlitePool, by: Option<i64>, org: Option<&str>, days: u32) -> Result<String, sqlx::Error> {
+    let token = random_token();
+    sqlx::query("INSERT INTO invites (token_hash, created_by, org, expires_ms) VALUES (?, ?, ?, ?)")
+        .bind(hash(&token).to_vec())
+        .bind(by)
+        .bind(org)
+        .bind(now_ms() + i64::from(days) * 24 * 60 * 60 * 1000)
+        .execute(db)
+        .await?;
+    Ok(token)
+}
+
+/// An unused, current invite: `Some(org)` with the org it joins, if any.
+pub(crate) async fn invite(db: &SqlitePool, token: &str) -> Result<Option<Option<String>>, sqlx::Error> {
+    Ok(sqlx::query("SELECT org FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
+        .bind(hash(token).to_vec())
+        .bind(now_ms())
+        .fetch_optional(db)
+        .await?
+        .map(|row| row.get("org")))
+}
+
+/// Marks the invite used by `user` and puts them in its org.
+pub(crate) async fn use_invite(db: &SqlitePool, token: &str, user: i64) -> Result<bool, sqlx::Error> {
+    let Some(org) = invite(db, token).await? else {
+        return Ok(false);
+    };
+    sqlx::query("UPDATE invites SET used_by = ? WHERE token_hash = ?")
+        .bind(user)
+        .bind(hash(token).to_vec())
+        .execute(db)
+        .await?;
+    if let Some(org) = org {
+        crate::orgs::add_member(db, &org, user, false).await?;
+    }
+    Ok(true)
+}
+
+pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str) -> Result<Option<i64>, sqlx::Error> {
+    Ok(sqlx::query("SELECT user_id FROM identities WHERE provider = ? AND subject = ?")
+        .bind(provider)
+        .bind(subject)
+        .fetch_optional(db)
+        .await?
+        .map(|row| row.get("user_id")))
+}
+
+pub(crate) async fn link_identity(db: &SqlitePool, provider: &str, subject: &str, user: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT OR REPLACE INTO identities (provider, subject, user_id) VALUES (?, ?, ?)")
+        .bind(provider)
+        .bind(subject)
+        .bind(user)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// A sign-in sent to a provider: its state's PKCE verifier, invite and
+/// where to go afterwards.
+pub(crate) struct SignInState {
+    pub(crate) verifier: String,
+    pub(crate) invite: Option<String>,
+    pub(crate) next: String,
+}
+
+pub(crate) async fn save_sign_in(db: &SqlitePool, provider: &str, state: &str, saved: &SignInState) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO sign_in_states (state_hash, provider, verifier, invite, next, expires_ms) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(hash(state).to_vec())
+        .bind(provider)
+        .bind(&saved.verifier)
+        .bind(&saved.invite)
+        .bind(&saved.next)
+        .bind(now_ms() + SIGN_IN_TTL_MS)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// The sign-in `state` names, used up by reading it.
+pub(crate) async fn take_sign_in(db: &SqlitePool, provider: &str, state: &str) -> Result<Option<SignInState>, sqlx::Error> {
+    Ok(sqlx::query(
+        "DELETE FROM sign_in_states WHERE state_hash = ? AND provider = ? AND expires_ms > ? RETURNING verifier, invite, next",
+    )
+    .bind(hash(state).to_vec())
+    .bind(provider)
+    .bind(now_ms())
+    .fetch_optional(db)
+    .await?
+    .map(|row| SignInState {
+        verifier: row.get("verifier"),
+        invite: row.get("invite"),
+        next: row.get("next"),
+    }))
+}
+
+/// Account administration on the server's host, without the server
+/// running: `silt server user|invite`.
+pub struct Admin {
+    db: SqlitePool,
+}
+
+impl Admin {
+    pub async fn open(data_dir: &Path) -> Result<Self, ServerError> {
+        tokio::fs::create_dir_all(data_dir).await?;
+        Ok(Self {
+            db: open_db(data_dir).await?,
+        })
+    }
+
+    pub async fn add_user(&self, name: &str, password: Option<&str>, admin: bool) -> Result<(), AccountError> {
+        create_user(
+            &self.db,
+            &NewUser {
+                name,
+                display_name: None,
+                email: None,
+                password,
+                admin,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn users(&self) -> Result<Vec<User>, AccountError> {
+        Ok(sqlx::query(users_query!("ORDER BY name"))
+            .fetch_all(&self.db)
+            .await?
+            .iter()
+            .map(user_from)
+            .collect())
+    }
+
+    pub async fn set_password(&self, name: &str, password: &str) -> Result<(), AccountError> {
+        if password.chars().count() < 10 {
+            return Err(AccountError::WeakPassword);
+        }
+        let updated = sqlx::query("UPDATE users SET password_hash = ? WHERE name = ?")
+            .bind(hash_password(password))
+            .bind(name)
+            .execute(&self.db)
+            .await?
+            .rows_affected();
+        if updated == 0 {
+            return Err(AccountError::NoUser(name.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub async fn set_admin(&self, name: &str, admin: bool) -> Result<(), AccountError> {
+        let updated = sqlx::query("UPDATE users SET admin = ? WHERE name = ?")
+            .bind(i64::from(admin))
+            .bind(name)
+            .execute(&self.db)
+            .await?
+            .rows_affected();
+        if updated == 0 {
+            return Err(AccountError::NoUser(name.to_owned()));
+        }
+        Ok(())
+    }
+
+    /// An invite token for the sign-up page, optionally into `org`.
+    pub async fn invite(&self, org: Option<&str>, days: u32) -> Result<String, AccountError> {
+        Ok(create_invite(&self.db, None, org, days).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passwords_hash_and_verify() {
+        let stored = hash_password("correct horse battery");
+        assert!(stored.starts_with("$argon2id$"));
+        assert!(verify_password(&stored, "correct horse battery"));
+        assert!(!verify_password(&stored, "wrong horse battery"));
+        assert!(!verify_password("garbage", "x"));
+    }
+
+    #[test]
+    fn names_and_codes_are_normalized() {
+        assert!(valid_name("alice") && valid_name("a.b-c_9") && !valid_name("Alice") && !valid_name("-x") && !valid_name(""));
+        assert_eq!(name_from("Ada Lovelace!"), "adalovelace");
+        assert_eq!(name_from("__"), "user");
+        let code = user_code();
+        assert_eq!(code.len(), 9);
+        assert_eq!(normalize_user_code(&code.to_lowercase().replace('-', " ")), code);
+    }
+}

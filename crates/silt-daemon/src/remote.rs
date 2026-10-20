@@ -6,7 +6,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
-    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
+    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
+    LoginReply, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
     InFlightQuery, InFlightReply, PullReply, PushRequest, SearchQuery, SearchReply, ThreadInfo, Visibility,
     VisibilityRequest,
 };
@@ -31,7 +32,7 @@ pub enum RemoteError {
     Http(#[from] reqwest::Error),
     #[error("the server speaks protocol {supported:?}, this daemon speaks {PROTOCOL}; update one of them")]
     ProtocolMismatch { supported: Vec<u32> },
-    #[error("the server refused: {0:?}")]
+    #[error("the server refused: {0}")]
     Refused(ErrorReply),
     #[error("could not save the server settings")]
     Io(#[from] io::Error),
@@ -53,26 +54,63 @@ pub fn save_config(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteE
     Ok(())
 }
 
-/// Exchanges a pairing code for a device token.
-pub async fn login(url: &str, code: &str, name: &str) -> Result<RemoteConfig, RemoteError> {
-    let url = url.trim_end_matches('/').to_owned();
-    let response = reqwest::Client::new()
-        .post(format!("{url}/v1/login"))
+fn post(url: &str, path: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .post(format!("{}{path}", url.trim_end_matches('/')))
         .header(PROTOCOL_HEADER, PROTOCOL.to_string())
-        .json(&LoginRequest {
-            code: code.to_owned(),
-            name: name.to_owned(),
-        })
-        .send()
-        .await?;
-    let reply: LoginReply = checked(response).await?.json().await?;
-    Ok(RemoteConfig {
-        url,
+}
+
+fn signed_in(url: &str, name: &str, reply: LoginReply) -> RemoteConfig {
+    RemoteConfig {
+        url: url.trim_end_matches('/').to_owned(),
         token: reply.token,
         device: reply.device,
         name: name.to_owned(),
         user: reply.user,
-    })
+    }
+}
+
+/// Exchanges a pairing code for a device token.
+pub async fn login(url: &str, code: &str, name: &str) -> Result<RemoteConfig, RemoteError> {
+    let request = LoginRequest {
+        code: code.to_owned(),
+        name: name.to_owned(),
+    };
+    let reply: LoginReply = checked(post(url, "/v1/login").json(&request).send().await?).await?.json().await?;
+    Ok(signed_in(url, name, reply))
+}
+
+/// Signs the device in with a local account's password.
+pub async fn login_password(url: &str, user: &str, password: &str, name: &str) -> Result<RemoteConfig, RemoteError> {
+    let request = PasswordLoginRequest {
+        user: user.to_owned(),
+        password: password.to_owned(),
+        name: name.to_owned(),
+    };
+    let reply: LoginReply = checked(post(url, "/v1/login/password").json(&request).send().await?).await?.json().await?;
+    Ok(signed_in(url, name, reply))
+}
+
+/// Starts signing the device in through the browser (ADR 0013).
+pub async fn device_start(url: &str, name: &str) -> Result<DeviceStartReply, RemoteError> {
+    let request = DeviceStartRequest { name: name.to_owned() };
+    Ok(checked(post(url, "/v1/device/start").json(&request).send().await?).await?.json().await?)
+}
+
+/// Waits until the person approves the device in the browser, polling
+/// every `interval`; `None` when the request expired or was denied.
+pub async fn device_wait(url: &str, name: &str, device_code: &str, interval: Duration) -> Result<Option<RemoteConfig>, RemoteError> {
+    let request = DevicePollRequest {
+        device_code: device_code.to_owned(),
+    };
+    loop {
+        let reply: DevicePollReply = checked(post(url, "/v1/device/poll").json(&request).send().await?).await?.json().await?;
+        match reply {
+            DevicePollReply::Pending => tokio::time::sleep(interval).await,
+            DevicePollReply::Approved { login } => return Ok(Some(signed_in(url, name, login))),
+            DevicePollReply::Gone => return Ok(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +163,21 @@ impl Remote {
             .send()
             .await?;
         Ok(checked(response).await?.json().await?)
+    }
+
+    /// Signs this device out on the server.
+    pub async fn logout(&self) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::DELETE, "/v1/device").send().await?).await?;
+        Ok(())
+    }
+
+    pub async fn orgs(&self) -> Result<OrgsReply, RemoteError> {
+        Ok(checked(self.request(reqwest::Method::GET, "/v1/orgs").send().await?).await?.json().await?)
+    }
+
+    pub async fn org_change(&self, change: &OrgChange) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::POST, "/v1/orgs/change").json(change).send().await?).await?;
+        Ok(())
     }
 
     pub async fn set_visibility(

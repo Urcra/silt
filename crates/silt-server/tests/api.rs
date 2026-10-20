@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Delta, Family, Op};
 use silt_proto::{
-    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL_HEADER, PullReply,
+    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PullReply,
     PushReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_server::{Server, create_pairing_code};
@@ -40,7 +40,7 @@ impl Client {
         let http = reqwest::Client::new();
         let reply: LoginReply = http
             .post(format!("{base}/v1/login"))
-            .header(PROTOCOL_HEADER, "1")
+            .header(PROTOCOL_HEADER, PROTOCOL.to_string())
             .json(&LoginRequest {
                 code,
                 name: "laptop".into(),
@@ -65,7 +65,7 @@ impl Client {
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         self.http
             .request(method, format!("{}{path}", self.base))
-            .header(PROTOCOL_HEADER, "1")
+            .header(PROTOCOL_HEADER, PROTOCOL.to_string())
             .bearer_auth(&self.token)
     }
 
@@ -118,11 +118,11 @@ async fn rejects_other_protocol_versions_and_unknown_devices() {
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
     assert!(response.headers().contains_key(GENERATION_HEADER));
     let reply: ErrorReply = response.json().await.expect("error body");
-    assert_eq!(reply, ErrorReply::ProtocolMismatch { supported: vec![1] });
+    assert_eq!(reply, ErrorReply::ProtocolMismatch { supported: vec![PROTOCOL] });
 
     let response = http
         .get(format!("{base}/v1/listing"))
-        .header(PROTOCOL_HEADER, "1")
+        .header(PROTOCOL_HEADER, PROTOCOL.to_string())
         .bearer_auth("not-a-token")
         .send()
         .await
@@ -131,7 +131,7 @@ async fn rejects_other_protocol_versions_and_unknown_devices() {
 
     let response = http
         .post(format!("{base}/v1/login"))
-        .header(PROTOCOL_HEADER, "1")
+        .header(PROTOCOL_HEADER, PROTOCOL.to_string())
         .json(&LoginRequest {
             code: "wrong".into(),
             name: "x".into(),
@@ -352,7 +352,7 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
     assert_eq!(alice.listing().await.threads.len(), 1);
 
     let team_family = VisibilityRequest {
-        visibility: Visibility::Team,
+        visibility: Visibility::Org,
         ..private_family
     };
     assert_eq!(alice.set_visibility(&team_family).await, StatusCode::NO_CONTENT);
@@ -361,7 +361,13 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
         thread: None,
         visibility: Visibility::Private,
     };
-    assert_eq!(bob.set_visibility(&private_project).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        bob.set_visibility(&private_project).await,
+        StatusCode::FORBIDDEN,
+        "only the project's org owners change its visibility"
+    );
+    let (admin, _) = Client::login(data.path(), &base).await;
+    assert_eq!(admin.set_visibility(&private_project).await, StatusCode::NO_CONTENT);
     assert_eq!(bob.listing().await.threads.len(), 1, "the thread's own setting wins over its project's");
 }
 

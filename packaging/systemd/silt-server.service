@@ -1,0 +1,40 @@
+# The Silt server as a system service. `silt server init --systemd <path>`
+# fills in @SILT@ (the binary), @DATA@ (the data dir) and @USER@.
+[Unit]
+Description=Silt server
+Documentation=https://github.com/Urcra/silt/blob/main/docs/self-hosting.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+ExecStart=@SILT@ server run --data @DATA@
+Restart=on-failure
+RestartSec=2
+Environment=SILT_LOG=info
+UMask=0077
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@DATA@
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

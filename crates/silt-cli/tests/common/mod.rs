@@ -163,6 +163,19 @@ impl Server {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
+
+    /// Runs `silt server <args> --data <this server's data>` on the host.
+    pub fn admin(&self, args: &[&str]) -> String {
+        let output = silt_command()
+            .arg("server")
+            .args(args)
+            .arg("--data")
+            .arg(&self.data)
+            .output()
+            .expect("silt server runs");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
 }
 
 impl Drop for Server {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -21,6 +21,47 @@ pub struct LoginReply {
     pub token: String,
     /// The user the device belongs to.
     pub user: String,
+}
+
+/// Signs a device in with a local account's password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasswordLoginRequest {
+    pub user: String,
+    pub password: String,
+    pub name: String,
+}
+
+/// Starts signing a device in through the browser (ADR 0013).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceStartRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceStartReply {
+    /// Secret the device polls with.
+    pub device_code: String,
+    /// What the person checks in the browser matches this device.
+    pub user_code: String,
+    /// Where the person approves the device, with the code filled in.
+    pub verification_url: String,
+    pub interval_secs: u64,
+    pub expires_in_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevicePollRequest {
+    pub device_code: String,
+}
+
+/// A plain enum: serde's tagged enums can't carry the `u128` device id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DevicePollReply {
+    Pending,
+    Approved { login: LoginReply },
+    /// Expired, denied or unknown; start again.
+    Gone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,13 +115,56 @@ pub struct PullReply {
     pub deltas: Vec<(u64, Delta)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Who sees a thread or a project's threads (ADR 0013). Written as
+/// `private`, `org` or `team:<name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub enum Visibility {
-    /// Only the owner's devices see it.
+    /// Only its owner, and what merge requests offer to others.
     Private,
-    /// Every user of the server sees it.
-    Team,
+    /// Members of this team of the project's org.
+    Team(String),
+    /// Every member of the project's org.
+    Org,
+}
+
+impl std::fmt::Display for Visibility {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Private => formatter.write_str("private"),
+            Self::Org => formatter.write_str("org"),
+            Self::Team(team) => write!(formatter, "team:{team}"),
+        }
+    }
+}
+
+impl std::str::FromStr for Visibility {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "private" => Ok(Self::Private),
+            "org" => Ok(Self::Org),
+            _ => match text.strip_prefix("team:") {
+                Some(team) if !team.is_empty() => Ok(Self::Team(team.to_owned())),
+                _ => Err(format!("visibility is private, org or team:<name>, not {text:?}")),
+            },
+        }
+    }
+}
+
+impl TryFrom<String> for Visibility {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
+}
+
+impl From<Visibility> for String {
+    fn from(visibility: Visibility) -> Self {
+        visibility.to_string()
+    }
 }
 
 /// Sets a project's visibility (`repo`) or a thread's own (`thread`, owner
@@ -109,6 +193,20 @@ pub enum ErrorReply {
     Forbidden { message: String },
     NotFound,
     ProtocolMismatch { supported: Vec<u32> },
+}
+
+impl std::fmt::Display for ErrorReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownCursor => formatter.write_str("the server no longer has the history this device synced"),
+            Self::MissingParents { delta } => write!(formatter, "the server lacks what {delta} builds on"),
+            Self::Conflict { delta } => write!(formatter, "the server holds a different {delta}"),
+            Self::Invalid { message } | Self::Forbidden { message } => formatter.write_str(message),
+            Self::Unauthorized => formatter.write_str("not signed in, or the sign-in was revoked; run `silt auth login`"),
+            Self::NotFound => formatter.write_str("not found"),
+            Self::ProtocolMismatch { supported } => write!(formatter, "the server speaks protocol {supported:?}"),
+        }
+    }
 }
 
 /// Filters for `GET /v1/search`; every one is optional except `q`.
@@ -200,4 +298,51 @@ mod tests {
         let json = serde_json::to_string(&reply).expect("serializes");
         assert_eq!(serde_json::from_str::<ErrorReply>(&json).expect("deserializes"), reply);
     }
+}
+
+/// An org as one of its members sees it (ADR 0013).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgInfo {
+    pub name: String,
+    /// The caller's role: `owner`, `member`, or `admin` for a server admin
+    /// outside the org.
+    pub role: String,
+    pub default_visibility: Visibility,
+    pub members: Vec<OrgMember>,
+    pub teams: Vec<TeamInfo>,
+    pub projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgMember {
+    pub user: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamInfo {
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgsReply {
+    pub orgs: Vec<OrgInfo>,
+}
+
+/// A change to orgs, teams or projects; the caller must own the org or
+/// administer the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "change", rename_all = "snake_case")]
+pub enum OrgChange {
+    Create { org: String },
+    AddMember { org: String, user: String, owner: bool },
+    RemoveMember { org: String, user: String },
+    CreateTeam { org: String, team: String },
+    RemoveTeam { org: String, team: String },
+    AddToTeam { org: String, team: String, user: String },
+    RemoveFromTeam { org: String, team: String, user: String },
+    DefaultVisibility { org: String, visibility: Visibility },
+    /// Moves the project (a normalized remote) into `org`.
+    MoveProject { repo: String, org: String },
 }

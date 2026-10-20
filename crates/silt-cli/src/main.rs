@@ -1,3 +1,4 @@
+mod admin;
 mod commands;
 mod dev_status;
 mod mcp;
@@ -8,6 +9,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use exn::Exn;
 use silt_daemon::protocol::SearchFilters;
+use silt_proto::OrgChange;
 
 #[derive(Debug, Parser)]
 #[command(name = "silt", version, about = "Resume, fork and search your agent sessions")]
@@ -62,10 +64,11 @@ enum Command {
         #[command(subcommand)]
         command: MrCommand,
     },
-    /// Set who on the server can see this project's threads, or one thread family's
+    /// Set who on the server sees this project's threads, or one thread's:
+    /// `private`, `org`, or `team:<name>`
     Visibility {
-        #[arg(value_enum)]
-        visibility: VisibilityArg,
+        #[arg(value_parser = admin::parse_visibility)]
+        visibility: silt_proto::Visibility,
         /// Set it for one thread (and its forks that have no setting of their own)
         #[arg(long)]
         thread: Option<String>,
@@ -74,6 +77,21 @@ enum Command {
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
+    },
+    /// Orgs on the server: who is in them and what they default to
+    Org {
+        #[command(subcommand)]
+        command: OrgCommand,
+    },
+    /// Teams within an org, for `team:<name>` visibility
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
+    },
+    /// The project (repository) this clone belongs to
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
     },
     /// List recorded threads
     Log,
@@ -228,46 +246,160 @@ enum MrCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum VisibilityArg {
-    Private,
-    Team,
-}
-
 #[derive(Debug, Subcommand)]
 enum AuthCommand {
-    /// Log in with a code from `silt server pair`
+    /// Sign this machine in: by approving it in the browser, with a
+    /// password (`--user`), or with a code from `silt server pair`
     Login {
         #[arg(long)]
         server: String,
+        /// A pairing code from `silt server pair`
+        #[arg(long, conflicts_with = "user")]
+        code: Option<String>,
+        /// Sign in as this local account, asking for its password
         #[arg(long)]
-        code: String,
+        user: Option<String>,
+        /// Read the password from standard input
+        #[arg(long, requires = "user")]
+        password_stdin: bool,
         /// This device's name; defaults to the host name
         #[arg(long)]
         name: Option<String>,
+        /// Only print the sign-in link
+        #[arg(long)]
+        no_browser: bool,
     },
+    /// Sign this machine out of its server
+    Logout,
     /// Show which server this machine syncs with
     Status,
 }
 
 #[derive(Debug, Subcommand)]
+enum OrgCommand {
+    /// List your orgs with their members, teams and projects
+    List,
+    /// Create an org (server admins)
+    Create { org: String },
+    /// Add a user to an org, or change their role
+    Add {
+        org: String,
+        user: String,
+        /// Make them an owner, who manages the org
+        #[arg(long)]
+        owner: bool,
+    },
+    /// Remove a user from an org
+    Remove { org: String, user: String },
+    /// What new projects of the org default to: `private`, `org` or `team:<name>`
+    Default {
+        org: String,
+        #[arg(value_parser = admin::parse_visibility)]
+        visibility: silt_proto::Visibility,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TeamCommand {
+    Create { org: String, team: String },
+    Delete { org: String, team: String },
+    Add { org: String, team: String, user: String },
+    Remove { org: String, team: String, user: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectCommand {
+    /// Move this clone's project into an org
+    Move { org: String },
+}
+
+#[derive(Debug, Subcommand)]
 enum ServerCommand {
-    /// Serve the sync API
-    Run {
+    /// Write the server's config and create its first admin
+    Init {
+        /// Server data directory; defaults to `server` in the Silt data directory
+        #[arg(long)]
+        data: Option<PathBuf>,
         /// Address to listen on
-        #[arg(long, default_value = "127.0.0.1:7450")]
-        listen: String,
+        #[arg(long)]
+        listen: Option<String>,
+        /// The URL people and devices reach the server at, such as https://silt.example.com
+        #[arg(long)]
+        public_url: Option<String>,
+        /// The first admin's user name
+        #[arg(long, default_value = "admin")]
+        admin: String,
+        /// Read the admin's password from standard input instead of generating one
+        #[arg(long)]
+        password_stdin: bool,
+        /// Also write a systemd unit for the server to this path
+        #[arg(long)]
+        systemd: Option<PathBuf>,
+        /// The system user the unit runs the server as
+        #[arg(long, default_value = "silt")]
+        service_user: String,
+        /// Replace an existing config
+        #[arg(long)]
+        force: bool,
+    },
+    /// Serve the sync API and the sign-in pages
+    Run {
+        /// Address to listen on; overrides `listen` in server.toml
+        #[arg(long)]
+        listen: Option<String>,
         /// Server data directory; defaults to `server` in the Silt data directory
         #[arg(long)]
         data: Option<PathBuf>,
     },
-    /// Print a one-time code a device uses with `silt auth login`
+    /// Print a one-time code a device uses with `silt auth login --code`
     Pair {
         #[arg(long)]
         data: Option<PathBuf>,
         /// The user the device will belong to; created if missing
         #[arg(long, default_value = "owner")]
         user: String,
+    },
+    /// Manage local accounts
+    User {
+        #[arg(long, global = true)]
+        data: Option<PathBuf>,
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+    /// Print a sign-up link for one person
+    Invite {
+        #[arg(long)]
+        data: Option<PathBuf>,
+        /// Org the person joins
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum UserCommand {
+    /// Add a local account; prints a generated password unless one is given
+    Add {
+        name: String,
+        #[arg(long)]
+        admin: bool,
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    List,
+    /// Set a user's password
+    Passwd {
+        name: String,
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    /// Make a user a server admin, or `--revoke` it
+    Admin {
+        name: String,
+        #[arg(long)]
+        revoke: bool,
     },
 }
 
@@ -332,17 +464,42 @@ fn main() -> Result<(), Exn<CliError>> {
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
         },
-        Command::Visibility { visibility, thread } => commands::visibility(
-            match visibility {
-                VisibilityArg::Private => silt_proto::Visibility::Private,
-                VisibilityArg::Team => silt_proto::Visibility::Team,
-            },
-            thread,
-        ),
+        Command::Visibility { visibility, thread } => commands::visibility(visibility, thread),
         Command::Auth { command } => match command {
-            AuthCommand::Login { server, code, name } => commands::auth_login(&server, &code, name),
+            AuthCommand::Login {
+                server,
+                code,
+                user,
+                password_stdin,
+                name,
+                no_browser,
+            } => admin::auth_login(admin::LoginOptions {
+                server,
+                code,
+                user,
+                password_stdin,
+                name,
+                no_browser,
+            }),
+            AuthCommand::Logout => admin::auth_logout(),
             AuthCommand::Status => commands::auth_status(),
         },
+        Command::Org { command } => match command {
+            OrgCommand::List => admin::orgs(),
+            OrgCommand::Create { org } => admin::org_change(OrgChange::Create { org }),
+            OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
+            OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
+            OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
+        },
+        Command::Team { command } => admin::org_change(match command {
+            TeamCommand::Create { org, team } => OrgChange::CreateTeam { org, team },
+            TeamCommand::Delete { org, team } => OrgChange::RemoveTeam { org, team },
+            TeamCommand::Add { org, team, user } => OrgChange::AddToTeam { org, team, user },
+            TeamCommand::Remove { org, team, user } => OrgChange::RemoveFromTeam { org, team, user },
+        }),
+        Command::Project {
+            command: ProjectCommand::Move { org },
+        } => admin::project_here().and_then(|repo| admin::org_change(OrgChange::MoveProject { repo, org })),
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
@@ -379,8 +536,34 @@ fn main() -> Result<(), Exn<CliError>> {
         } => commands::comment(&thread, file, lines.as_deref(), entry, &text.join(" ")),
         Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
         Command::Server { command } => match command {
-            ServerCommand::Run { listen, data } => commands::server_run(&listen, data),
-            ServerCommand::Pair { data, user } => commands::server_pair(data, &user),
+            ServerCommand::Init {
+                data,
+                listen,
+                public_url,
+                admin,
+                password_stdin,
+                systemd,
+                service_user,
+                force,
+            } => admin::server_init(admin::InitOptions {
+                data,
+                listen,
+                public_url,
+                admin,
+                password_stdin,
+                systemd,
+                service_user,
+                force,
+            }),
+            ServerCommand::Run { listen, data } => admin::server_run(listen, data),
+            ServerCommand::Pair { data, user } => admin::server_pair(data, &user),
+            ServerCommand::User { data, command } => match command {
+                UserCommand::Add { name, admin: is_admin, password_stdin } => admin::user_add(data, &name, is_admin, password_stdin),
+                UserCommand::List => admin::user_list(data),
+                UserCommand::Passwd { name, password_stdin } => admin::user_passwd(data, &name, password_stdin),
+                UserCommand::Admin { name, revoke } => admin::user_admin(data, &name, revoke),
+            },
+            ServerCommand::Invite { data, org, days } => admin::invite(data, org, days),
         },
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),

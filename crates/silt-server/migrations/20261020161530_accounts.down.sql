@@ -1,0 +1,10 @@
+DROP TABLE sign_in_states;
+DROP TABLE invites;
+DROP TABLE device_requests;
+DROP TABLE web_sessions;
+DROP TABLE identities;
+ALTER TABLE users DROP COLUMN created_ms;
+ALTER TABLE users DROP COLUMN admin;
+ALTER TABLE users DROP COLUMN password_hash;
+ALTER TABLE users DROP COLUMN email;
+ALTER TABLE users DROP COLUMN display_name;
