@@ -205,13 +205,23 @@ fn isolated_sessions_work_in_a_managed_checkout() {
 #[test]
 fn track_attaches_to_a_session_started_without_silt() {
     let env = Env::new();
-    let output = Command::new(&env.fake)
-        .args(["--session-id", "11111111-2222-4333-8444-555555555555"])
+    let mut fake = Command::new(&env.fake);
+    fake.args(["--session-id", "11111111-2222-4333-8444-555555555555"])
         .current_dir(&env.repo)
         .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
         .env("SILT_HOME", &env.silt_home)
-        .env("SILT_HOOK", "true")
-        .output()
+        .env("SILT_HOOK", "true");
+    // Another test forking while this script was being written can hold it
+    // open for a moment.
+    let output = (0..50)
+        .find_map(|_| match fake.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                None
+            }
+            other => Some(other),
+        })
+        .expect("the script was released")
         .expect("fake claude runs");
     assert!(output.status.success());
 

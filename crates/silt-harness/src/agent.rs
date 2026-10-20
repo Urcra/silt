@@ -141,8 +141,11 @@ impl Harness {
         self.overlay.lock().expect("lock").reveal(text)
     }
 
-    fn saved_path(&self, id: &str) -> PathBuf {
-        self.config.state_dir.join(format!("{id}.json"))
+    /// Where session `id` is saved. Ids to load come from the thread's log,
+    /// so only ids this harness could have made are accepted.
+    fn saved_path(&self, id: &str) -> Option<PathBuf> {
+        let ours = id.len() == 32 && id.chars().all(|char| char.is_ascii_hexdigit());
+        ours.then(|| self.config.state_dir.join(format!("{id}.json")))
     }
 
     fn save(&self, id: &str, session: &Session) {
@@ -150,9 +153,9 @@ impl Harness {
             cwd: session.cwd.clone(),
             messages: session.messages.clone(),
         };
-        if let Ok(text) = serde_json::to_string(&saved) {
+        if let (Ok(text), Some(path)) = (serde_json::to_string(&saved), self.saved_path(id)) {
             let _ = std::fs::create_dir_all(&self.config.state_dir);
-            let _ = std::fs::write(self.saved_path(id), text);
+            let _ = std::fs::write(path, text);
         }
     }
 
@@ -373,7 +376,10 @@ pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
         .on_receive_request(
             async move |request: LoadSessionRequest, responder, connection| {
                 let id = request.session_id.to_string();
-                let stored = std::fs::read_to_string(loading.saved_path(&id)).map_err(|_| failed(format!("no saved session {id}")))?;
+                let stored = loading
+                    .saved_path(&id)
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .ok_or_else(|| failed(format!("no saved session {id}")))?;
                 let saved: Saved = serde_json::from_str(&stored).map_err(failed)?;
                 for message in &saved.messages {
                     for part in &message.parts {

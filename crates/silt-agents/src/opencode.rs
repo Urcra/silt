@@ -204,6 +204,8 @@ const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 /// random tail derived from the fork's session id.
 fn forked_id(id: &str, salt: &str) -> String {
     let keep = id.len().saturating_sub(ID_TAIL);
+    // Ids come from recorded lines, so possibly not ASCII.
+    let keep = (0..=keep).rev().find(|at| id.is_char_boundary(*at)).unwrap_or(0);
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut tail = String::new();
     for byte in id.bytes().chain(salt.bytes()) {

@@ -359,7 +359,7 @@ impl Core {
                     session: started,
                     cwd,
                     checkout_root,
-                }) if *started == session => Some(Path::new(cwd).strip_prefix(checkout_root).map(Path::to_path_buf).unwrap_or_default()),
+                }) if *started == session => Some(relative_cwd(cwd, checkout_root)),
                 _ => None,
             })
             .unwrap_or_default();
@@ -376,6 +376,7 @@ impl Core {
             .expect("attached above");
         if target.id() == source.id() {
             let recorded = self.recorded_session(&history, &session, as_fork, target).await?;
+            recorded.check()?;
             let transcript = target.restore(checkout, &agent_cwd, &recorded)?;
             let new_id = recorded.id.clone();
             self.register_session(NewSession {
@@ -582,6 +583,18 @@ impl Core {
     }
 }
 
+/// Where in the checkout a session ran, from its recorded cwd. It comes
+/// from the log, so anything but plain directory names is ignored rather
+/// than followed out of the checkout.
+fn relative_cwd(cwd: &str, checkout_root: &str) -> PathBuf {
+    let relative = Path::new(cwd).strip_prefix(checkout_root).unwrap_or(Path::new(""));
+    if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+        relative.to_owned()
+    } else {
+        PathBuf::new()
+    }
+}
+
 fn managed_checkout_path(repo: &Repo, thread: ThreadId, base: Option<GitOid>) -> Result<PathBuf, CoreError> {
     let base = base.ok_or_else(|| CoreError::Invalid("the thread has no base commit".into()))?;
     let path = repo.managed_checkout_path(&thread.to_string());
@@ -625,4 +638,16 @@ fn session_lineage(history: &[&Delta], session: &SessionRef) -> Vec<SessionRef> 
         lineage.insert(0, from);
     }
     lineage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recorded_cwd_never_leads_out_of_the_checkout() {
+        assert_eq!(relative_cwd("/c/src/app", "/c"), PathBuf::from("src/app"));
+        assert_eq!(relative_cwd("/c/../../etc", "/c"), PathBuf::new());
+        assert_eq!(relative_cwd("/elsewhere", "/c"), PathBuf::new());
+    }
 }

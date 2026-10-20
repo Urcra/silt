@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use entry::Entry;
 pub use render::{Role, render_transcript, translated_text};
-pub use rewrite::{RecordedSession, Rewrites};
+pub use rewrite::{RecordedSession, Rewrites, is_safe_id};
 pub use tail::{complete_lines, complete_lines_ending};
 
 use conventions::NativeConventions;
