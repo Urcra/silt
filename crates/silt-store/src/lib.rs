@@ -525,17 +525,26 @@ impl Store {
         session_id: &str,
         file: &SessionFileOffset,
     ) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO session_files (agent, session_id, file, path, offset) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (agent, session_id, file) DO UPDATE SET path = excluded.path, offset = excluded.offset",
-        )
-        .bind(agent)
-        .bind(session_id)
-        .bind(&file.file)
-        .bind(path_text(&file.path))
-        .bind(i64::try_from(file.offset).unwrap_or(i64::MAX))
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.write_transaction().await?;
+        set_session_offset_in(&mut tx, agent, session_id, file).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Appends deltas recorded from a session file together with how far
+    /// the file has been read, so each line is recorded once.
+    pub async fn append_deltas_read_to(
+        &self,
+        family: FamilyId,
+        deltas: &[Delta],
+        agent: &str,
+        session_id: &str,
+        file: &SessionFileOffset,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.write_transaction().await?;
+        append_deltas_in(&mut tx, family, deltas).await?;
+        set_session_offset_in(&mut tx, agent, session_id, file).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -598,6 +607,26 @@ async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, del
             .execute(&mut *tx)
             .await?;
     }
+    Ok(())
+}
+
+async fn set_session_offset_in(
+    tx: &mut sqlx::SqliteConnection,
+    agent: &str,
+    session_id: &str,
+    file: &SessionFileOffset,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "INSERT INTO session_files (agent, session_id, file, path, offset) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (agent, session_id, file) DO UPDATE SET path = excluded.path, offset = excluded.offset",
+    )
+    .bind(agent)
+    .bind(session_id)
+    .bind(&file.file)
+    .bind(path_text(&file.path))
+    .bind(i64::try_from(file.offset).unwrap_or(i64::MAX))
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 

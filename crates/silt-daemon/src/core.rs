@@ -6,7 +6,7 @@ use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
-use silt_store::{CheckoutRecord, Store, ThreadRecord};
+use silt_store::{CheckoutRecord, SessionFileOffset, Store, StoreError, ThreadRecord};
 use silt_types::{ActorId, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
 use silt_redact::{Overlay, Redactor};
@@ -770,11 +770,29 @@ impl Core {
     }
 
     pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
+        self.append_conv_read(family_id, thread, author, op, None).await
+    }
+
+    /// Like `append_conv`, also saving with the delta how far the session
+    /// file it came from has been read.
+    pub(crate) async fn append_conv_read(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        author: Author,
+        op: ConvOp,
+        read: Option<(&str, &str, &SessionFileOffset)>,
+    ) -> Result<Delta, CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
-        self.persist(family_id, std::slice::from_ref(&delta)).await?;
+        let deltas = std::slice::from_ref(&delta);
+        let stored = match read {
+            Some((agent, session_id, offset)) => self.store.append_deltas_read_to(family_id, deltas, agent, session_id, offset).await,
+            None => self.store.append_deltas(family_id, deltas).await,
+        };
+        self.stored(family_id, stored).await?;
         Ok(delta)
     }
 
@@ -783,7 +801,12 @@ impl Core {
     /// from the store, so memory never holds what a restart would lose and
     /// nothing builds on it; a later pull or rescan records it again.
     pub(crate) async fn persist(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
-        let Err(error) = self.store.append_deltas(family_id, deltas).await else {
+        let stored = self.store.append_deltas(family_id, deltas).await;
+        self.stored(family_id, stored).await
+    }
+
+    async fn stored(&mut self, family_id: FamilyId, stored: Result<(), StoreError>) -> Result<(), CoreError> {
+        let Err(error) = stored else {
             return Ok(());
         };
         if let Err(reload) = self.reload_family(family_id).await {

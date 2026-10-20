@@ -391,7 +391,7 @@ impl Core {
         let Some(session) = self.acp.get(&thread).and_then(|run| run.session.clone()) else {
             return Ok(());
         };
-        self.record_line(&session, "main", line.to_owned()).await
+        self.record_line(&session, "main", line.to_owned(), None).await
     }
 }
 

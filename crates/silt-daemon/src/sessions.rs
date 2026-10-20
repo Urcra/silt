@@ -590,7 +590,7 @@ impl Core {
             {
                 session.recorded.insert(key);
             }
-            self.record_line(session_id, "main", line).await?;
+            self.record_line(session_id, "main", line, None).await?;
         }
         Ok(())
     }
@@ -745,59 +745,59 @@ impl Core {
         if consumed == 0 {
             return Ok(());
         }
-        let mut reached = offset;
-        let mut recorded = Ok(());
+        let read_to = |end: usize| SessionFileOffset {
+            file: key.to_owned(),
+            path: path.to_owned(),
+            offset: offset + end as u64,
+        };
         for (line, end) in lines {
-            if let Err(error) = self.record_line(session_id, key, line).await {
-                recorded = Err(error);
-                break;
-            }
-            reached = offset + end as u64;
+            self.record_line(session_id, key, line, Some(read_to(end))).await?;
         }
-        if recorded.is_ok() {
-            reached = offset + consumed as u64;
-        }
-        if reached > offset {
-            let advanced = SessionFileOffset {
-                file: key.to_owned(),
-                path: path.to_owned(),
-                offset: reached,
-            };
+        // Lines that recorded nothing still count as read.
+        let read = read_to(consumed);
+        if self.session(session_id).and_then(|session| session.offsets.get(key)) != Some(&read) {
             let agent = self.session(session_id).expect("caller checked").record.agent.clone();
-            self.store.set_session_offset(&agent, session_id, &advanced).await?;
+            self.store.set_session_offset(&agent, session_id, &read).await?;
             if let Some(session) = self.session_mut(session_id) {
-                session.offsets.insert(key.to_owned(), advanced);
+                session.offsets.insert(key.to_owned(), read);
             }
         }
-        recorded
+        Ok(())
     }
 
     /// Stores one transcript record, indexes its text, and applies the turn
-    /// marks it carries for agents without Silt's hooks.
-    pub(crate) async fn record_line(&mut self, session_id: &str, key: &str, line: String) -> Result<(), CoreError> {
+    /// marks it carries for agents without Silt's hooks. `read` is how far
+    /// its file has been read with this line; it is saved with the record,
+    /// so nothing that fails afterwards records the line again.
+    pub(crate) async fn record_line(&mut self, session_id: &str, key: &str, line: String, read: Option<SessionFileOffset>) -> Result<(), CoreError> {
         let session = self.session_mut(session_id).expect("caller checked");
         let agent = session.agent;
-        let read = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);
-        let (family, thread, reference) = (session.family, session.record.thread, session.reference());
+        let parsed = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);
+        let (family, thread, reference, agent_name) = (session.family, session.record.thread, session.reference(), session.record.agent.clone());
+        let op = ConvOp::Native {
+            session: reference.clone(),
+            file: source_of(key),
+            line,
+        };
         let delta = self
-            .append_conv(
+            .append_conv_read(
                 family,
                 thread,
                 agent_author(&reference),
-                ConvOp::Native {
-                    session: reference.clone(),
-                    file: source_of(key),
-                    line,
-                },
+                op,
+                read.as_ref().map(|read| (agent_name.as_str(), session_id, read)),
             )
             .await?;
-        for entry in read.entries {
+        if let (Some(read), Some(session)) = (read, self.session_mut(session_id)) {
+            session.offsets.insert(key.to_owned(), read);
+        }
+        for entry in parsed.entries {
             if let Some(text) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
                 self.store.index(thread, delta.span.first(), entry.kind(), &text).await?;
             }
         }
         if !agent.hooks() && key == "main" {
-            for mark in read.marks {
+            for mark in parsed.marks {
                 self.apply_mark(session_id, mark).await?;
             }
         }
