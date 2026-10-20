@@ -197,6 +197,9 @@ impl Core {
         self.remember_clone(&cwd).await;
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
         let head = repo.head_commit()?;
+        if isolated && head.is_none() {
+            return Err(CoreError::Invalid("an isolated checkout needs at least one commit".into()));
+        }
         let files: Vec<ImportFile> = match head {
             Some(commit) => repo
                 .files_at(commit)?
@@ -233,11 +236,9 @@ impl Core {
         self.store.append_deltas(family_id, &deltas).await?;
         self.families.insert(family_id, family);
 
-        let checkout_path = if isolated {
-            let commit = head.ok_or_else(|| CoreError::Invalid("an isolated checkout needs at least one commit".into()))?;
-            repo.create_managed_checkout(&thread.to_string(), commit, None)?.path
-        } else {
-            repo.root().to_owned()
+        let checkout_path = match head {
+            Some(commit) if isolated => repo.create_managed_checkout(&thread.to_string(), commit, None)?.path,
+            _ => repo.root().to_owned(),
         };
         let checkout_actor = ActorId(uuid::Uuid::new_v4().as_u128());
         let existing = self
