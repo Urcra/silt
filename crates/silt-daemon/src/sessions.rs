@@ -12,7 +12,7 @@ use silt_agents::{Agent, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
-use silt_store::{SessionFileOffset, SessionRecord, ThreadRecord};
+use silt_store::{SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, FamilyId, ThreadId};
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -779,22 +779,22 @@ impl Core {
             file: source_of(key),
             line,
         };
-        let delta = self
-            .append_conv_read(
-                family,
-                thread,
-                agent_author(&reference),
-                op,
-                read.as_ref().map(|read| (agent_name.as_str(), session_id, read)),
-            )
-            .await?;
+        let texts: Vec<(String, String)> = parsed
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let text = entry.searchable_text().filter(|text| !text.trim().is_empty())?;
+                Some((entry.kind().to_owned(), text))
+            })
+            .collect();
+        let read_to = read.as_ref().map(|offset| SessionRead {
+            agent: &agent_name,
+            session_id,
+            offset,
+        });
+        self.append_conv_with(family, thread, agent_author(&reference), op, texts, read_to).await?;
         if let (Some(read), Some(session)) = (read, self.session_mut(session_id)) {
             session.offsets.insert(key.to_owned(), read);
-        }
-        for entry in parsed.entries {
-            if let Some(text) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
-                self.store.index(thread, delta.span.first(), entry.kind(), &text).await?;
-            }
         }
         if !agent.hooks() && key == "main" {
             for mark in parsed.marks {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
-use silt_store::{BlobStore, DiskFile, SearchHit, SessionFileOffset, SessionRecord, Store, ThreadRecord};
+use silt_store::{BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Store, ThreadRecord};
 use silt_types::{ActorId, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
 const THREAD: ThreadId = ThreadId(11);
@@ -151,11 +151,17 @@ async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
 async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
     let (_dir, store) = store_with_thread().await;
     let delta = DeltaId::new(ActorId(1), Lamport(4));
-    store
-        .index(THREAD, delta, "assistant", "Refactored the tokenizer to handle unicode escapes")
-        .await
-        .expect("index");
-    store.index(THREAD, DeltaId::new(ActorId(1), Lamport(9)), "user", "fix the parser").await.expect("index");
+    let row = |delta, kind: &str, body: &str| SearchRow {
+        thread: THREAD,
+        delta,
+        kind: kind.into(),
+        body: body.into(),
+    };
+    let rows = [
+        row(delta, "assistant", "Refactored the tokenizer to handle unicode escapes"),
+        row(DeltaId::new(ActorId(1), Lamport(9)), "user", "fix the parser"),
+    ];
+    store.append_deltas_with(FAMILY, &[], &rows, None).await.expect("index");
 
     let hits = store.search("tokeni unicode", 10).await.expect("search");
     assert_eq!(hits.len(), 1);
@@ -165,6 +171,9 @@ async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
 
     assert!(store.search("\"unbalanced AND (", 10).await.expect("search").is_empty());
     assert!(store.search("   ", 10).await.expect("search").is_empty());
+
+    store.replace_deltas(FAMILY, &[]).await.expect("replaces");
+    assert!(store.search("parser", 10).await.expect("search").is_empty(), "a family read again is indexed again, not twice");
 }
 
 #[tokio::test]

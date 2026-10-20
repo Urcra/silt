@@ -6,7 +6,7 @@ use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
-use silt_store::{CheckoutRecord, SessionFileOffset, Store, StoreError, ThreadRecord};
+use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
 use silt_redact::{Overlay, Redactor};
@@ -794,29 +794,34 @@ impl Core {
     }
 
     pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
-        self.append_conv_read(family_id, thread, author, op, None).await
+        self.append_conv_with(family_id, thread, author, op, Vec::new(), None).await
     }
 
-    /// Like `append_conv`, also saving with the delta how far the session
-    /// file it came from has been read.
-    pub(crate) async fn append_conv_read(
+    /// Like `append_conv`, storing with the delta its searchable texts, as
+    /// `(kind, body)`, and how far the session file it came from was read.
+    pub(crate) async fn append_conv_with(
         &mut self,
         family_id: FamilyId,
         thread: ThreadId,
         author: Author,
         op: ConvOp,
-        read: Option<(&str, &str, &SessionFileOffset)>,
+        texts: Vec<(String, String)>,
+        read: Option<SessionRead<'_>>,
     ) -> Result<Delta, CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
-        let deltas = std::slice::from_ref(&delta);
-        let stored = match read {
-            Some((agent, session_id, offset)) => self.store.append_deltas_read_to(family_id, deltas, agent, session_id, offset).await,
-            None => self.store.append_deltas(family_id, deltas).await,
-        };
-        self.stored(family_id, stored).await?;
+        let rows: Vec<SearchRow> = texts
+            .into_iter()
+            .map(|(kind, body)| SearchRow {
+                thread,
+                delta: delta.span.first(),
+                kind,
+                body,
+            })
+            .collect();
+        self.persist_with(family_id, std::slice::from_ref(&delta), &rows, read).await?;
         Ok(delta)
     }
 
@@ -825,12 +830,18 @@ impl Core {
     /// from the store, so memory never holds what a restart would lose and
     /// nothing builds on it; a later pull or rescan records it again.
     pub(crate) async fn persist(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
-        let stored = self.store.append_deltas(family_id, deltas).await;
-        self.stored(family_id, stored).await
+        self.persist_with(family_id, deltas, &[], None).await
     }
 
-    async fn stored(&mut self, family_id: FamilyId, stored: Result<(), StoreError>) -> Result<(), CoreError> {
-        let Err(error) = stored else {
+    /// `persist`, with the deltas' search rows and session progress.
+    pub(crate) async fn persist_with(
+        &mut self,
+        family_id: FamilyId,
+        deltas: &[Delta],
+        rows: &[SearchRow],
+        read: Option<SessionRead<'_>>,
+    ) -> Result<(), CoreError> {
+        let Err(error) = self.store.append_deltas_with(family_id, deltas, rows, read).await else {
             return Ok(());
         };
         if let Err(reload) = self.reload_family(family_id).await {

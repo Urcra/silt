@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use silt_crdt::InodeId;
 use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
-use silt_store::{Store, SyncState, ThreadRecord};
+use silt_store::{SearchRow, Store, SyncState, ThreadRecord};
 use silt_sync::{Effect, Outcome};
 use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
@@ -235,20 +235,26 @@ impl Core {
         if fresh.is_empty() {
             return Ok(stopped);
         }
-        self.persist(family_id, &fresh).await?;
-        self.syncs
-            .entry(family_id)
-            .or_default()
-            .appended_from_server(at, fresh.len() as u64);
+        let mut rows = Vec::new();
         for delta in &fresh {
             if let Op::Conv(ConvOp::Native { .. }) = &delta.op {
                 for entry in crate::transcripts::native_entries(&mut self.index_transcripts, delta) {
-                    if let Some(text) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
-                        self.store.index(delta.thread, delta.span.first(), entry.kind(), &text).await?;
+                    if let Some(body) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
+                        rows.push(SearchRow {
+                            thread: delta.thread,
+                            delta: delta.span.first(),
+                            kind: entry.kind().to_owned(),
+                            body,
+                        });
                     }
                 }
             }
         }
+        self.persist_with(family_id, &fresh, &rows, None).await?;
+        self.syncs
+            .entry(family_id)
+            .or_default()
+            .appended_from_server(at, fresh.len() as u64);
         if self.families.contains_key(&family_id) {
             self.lease_changes(&fresh, &heads_before).await?;
             self.update_checkouts(family_id, &fresh).await?;

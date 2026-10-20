@@ -86,6 +86,23 @@ pub struct SessionFileOffset {
     pub offset: u64,
 }
 
+/// Text of a delta to find by full-text search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRow {
+    pub thread: ThreadId,
+    pub delta: DeltaId,
+    pub kind: String,
+    pub body: String,
+}
+
+/// How far a session file has been read with the deltas stored alongside.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionRead<'a> {
+    pub agent: &'a str,
+    pub session_id: &'a str,
+    pub offset: &'a SessionFileOffset,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHit {
     pub thread: ThreadId,
@@ -321,7 +338,8 @@ impl Store {
             "DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
             "DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
             "DELETE FROM checkouts WHERE thread_id = ?1",
-            "DELETE FROM search WHERE thread_id = ?1",
+            "DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads WHERE thread_id = ?1)",
+            "DELETE FROM search_threads WHERE thread_id = ?1",
             "DELETE FROM threads WHERE id = ?1",
         ] {
             sqlx::query(statement).bind(&id).execute(&mut *tx).await?;
@@ -531,32 +549,37 @@ impl Store {
         Ok(())
     }
 
-    /// Appends deltas recorded from a session file together with how far
-    /// the file has been read, so each line is recorded once.
-    pub async fn append_deltas_read_to(
+    /// Appends deltas with their search rows and, for deltas recorded from
+    /// a session file, how far the file has been read: all of it or none,
+    /// so nothing is indexed or recorded twice.
+    pub async fn append_deltas_with(
         &self,
         family: FamilyId,
         deltas: &[Delta],
-        agent: &str,
-        session_id: &str,
-        file: &SessionFileOffset,
+        rows: &[SearchRow],
+        read: Option<SessionRead<'_>>,
     ) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         append_deltas_in(&mut tx, family, deltas).await?;
-        set_session_offset_in(&mut tx, agent, session_id, file).await?;
+        for row in rows {
+            let inserted = sqlx::query("INSERT INTO search (body, thread_id, actor, lamport, kind) VALUES (?, ?, ?, ?, ?)")
+                .bind(&row.body)
+                .bind(id_bytes(row.thread.0))
+                .bind(id_bytes(row.delta.actor.0))
+                .bind(lamport_i64(row.delta.lamport))
+                .bind(&row.kind)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO search_threads (row_id, thread_id) VALUES (?, ?)")
+                .bind(inserted.last_insert_rowid())
+                .bind(id_bytes(row.thread.0))
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(read) = read {
+            set_session_offset_in(&mut tx, read.agent, read.session_id, read.offset).await?;
+        }
         tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn index(&self, thread: ThreadId, delta: DeltaId, kind: &str, body: &str) -> Result<(), StoreError> {
-        sqlx::query("INSERT INTO search (body, thread_id, actor, lamport, kind) VALUES (?, ?, ?, ?, ?)")
-            .bind(body)
-            .bind(id_bytes(thread.0))
-            .bind(id_bytes(delta.actor.0))
-            .bind(lamport_i64(delta.lamport))
-            .bind(kind)
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 
@@ -630,8 +653,16 @@ async fn set_session_offset_in(
     Ok(())
 }
 
+/// Also forgets the family's search rows: the deltas they came from are
+/// indexed again when they come back.
 async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> Result<(), StoreError> {
-    for statement in ["DELETE FROM deltas WHERE family_id = ?", "DELETE FROM sync_state WHERE family_id = ?"] {
+    for statement in [
+        "DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads
+         WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1))",
+        "DELETE FROM search_threads WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1)",
+        "DELETE FROM deltas WHERE family_id = ?1",
+        "DELETE FROM sync_state WHERE family_id = ?1",
+    ] {
         sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
     }
     Ok(())
