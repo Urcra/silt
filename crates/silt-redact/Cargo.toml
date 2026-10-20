@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 silt-crdt = { path = "../silt-crdt" }
 silt-log = { path = "../silt-log" }
+sha2 = "0.11.1"

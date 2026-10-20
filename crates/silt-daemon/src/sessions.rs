@@ -831,7 +831,11 @@ impl Core {
         for (name, path, stamp) in changed {
             let bytes = fs::read(&path)?;
             let bytes = match String::from_utf8(bytes) {
-                Ok(text) => self.redactor.replace(&text).into_bytes(),
+                Ok(text) => {
+                    let (redacted, found) = self.redactor.replace_found(&text);
+                    self.learn_secrets(found);
+                    redacted.into_bytes()
+                }
                 Err(error) => error.into_bytes(),
             };
             let blob = self.store.blobs().put(&bytes).await?;

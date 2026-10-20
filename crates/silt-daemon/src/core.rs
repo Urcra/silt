@@ -9,7 +9,7 @@ use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
 use silt_store::{CheckoutRecord, Store, ThreadRecord};
 use silt_types::{ActorId, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::Listing;
-use silt_redact::Redactor;
+use silt_redact::{Overlay, Redactor};
 use silt_sync::{ClientSync, Outcome};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
@@ -101,6 +101,9 @@ pub struct Core {
     pub(crate) remote: Option<Remote>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     pub(crate) redactor: Redactor,
+    /// The secrets this machine knows, put back into what arrives redacted
+    /// (ADR 0015).
+    pub(crate) overlay: Overlay,
     pub(crate) last_listing: Option<Instant>,
     pub(crate) sync_error: Option<String>,
     /// The HEAD commit each checkout was last seen at.
@@ -157,7 +160,8 @@ impl Core {
             data_dir: data_dir.to_owned(),
             remote: remote::load_config(data_dir).map(Remote::new),
             syncs: HashMap::new(),
-            redactor: Redactor::from_env(),
+            redactor: redactor(data_dir),
+            overlay: Overlay::default(),
             last_listing: None,
             sync_error: None,
             heads: HashMap::new(),
@@ -169,6 +173,7 @@ impl Core {
             core.threads.insert(thread.id, thread);
         }
         core.deleted = core.store.deleted_threads().await?.into_iter().collect();
+        core.overlay = Overlay::new(core.store.secrets().await?.into_iter().chain(core.redactor.secrets().iter().cloned()));
         core.clones = core
             .store
             .clones()
@@ -266,6 +271,10 @@ impl Core {
             Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {
                 self.remote = remote::load_config(&self.data_dir).map(Remote::new);
+                self.redactor = redactor(&self.data_dir);
+                for secret in self.redactor.secrets().to_vec() {
+                    self.overlay.learn(secret);
+                }
                 self.syncs.clear();
                 for family in self.families.keys().chain(self.raw.keys()).copied().collect::<Vec<_>>() {
                     let state = self.store.sync_state(family).await.unwrap_or_default();
@@ -924,12 +933,12 @@ impl Core {
             thread,
             file,
             line,
-            draft,
+            draft: self.redactor.replace(&draft),
             leaving,
             agent: self.agent_status(thread).filter(|status| status.state != "exited").map(|status| silt_proto::AgentActivity {
                 name: status.agent,
                 state: status.state,
-                streaming: status.streaming,
+                streaming: self.redactor.replace(&status.streaming),
             }),
         };
         remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
@@ -945,6 +954,20 @@ impl Core {
             .map(|(user, draft)| format!("- {user}: {draft}"))
             .collect();
         (!drafts.is_empty()).then(|| format!("Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}", drafts.join("\n")))
+    }
+
+    /// Adds secrets just redacted to the overlay, here and in the store.
+    pub(crate) fn learn_secrets(&mut self, found: Vec<String>) {
+        let new: Vec<String> = found.into_iter().filter(|secret| self.overlay.learn(secret.clone())).collect();
+        if new.is_empty() {
+            return;
+        }
+        let store = self.store.clone();
+        tokio::spawn(async move {
+            if let Err(error) = store.learn_secrets(&new).await {
+                warn!(%error, "could not remember redacted secrets");
+            }
+        });
     }
 
     /// Who else is drafting a prompt for the thread, and what.
@@ -1079,6 +1102,12 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Mr(_)
         | Op::Comment(_) => None,
     }
+}
+
+/// Redacts the secrets in this process's environment and in the data
+/// directory's `secrets` file.
+fn redactor(data_dir: &Path) -> Redactor {
+    Redactor::from_env().with(silt_redact::read_secrets_file(&data_dir.join("secrets")))
 }
 
 pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {

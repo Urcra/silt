@@ -706,6 +706,7 @@ pub fn harness() -> Result<(), Exn<CliError>> {
         silt: env::current_exe().or_raise(|| CliError("cannot find the silt binary".into()))?,
         state_dir: paths::data_dir().join("harness"),
         unsandboxed: env::var_os("SILT_HARNESS_UNSANDBOXED").is_some_and(|value| value == "1"),
+        secrets_file: Some(paths::data_dir().join("secrets")),
     };
     let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the runtime".into()))?;
     runtime

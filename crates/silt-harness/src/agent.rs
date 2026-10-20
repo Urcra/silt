@@ -17,6 +17,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use silt_redact::{Overlay, Redactor};
 
 use crate::model::{Backend, Message, Part, Role};
 use crate::tools::{self, Outcome, Workspace};
@@ -35,6 +36,8 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// Run commands without the sandbox; only when the user asked.
     pub unsandboxed: bool,
+    /// More secrets to keep from the model, one per line (ADR 0015).
+    pub secrets_file: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,6 +62,20 @@ struct Harness {
     config: Config,
     sessions: Sessions,
     http: reqwest::Client,
+    /// What reaches the model is redacted; what it writes back has the
+    /// secrets put back before it is used.
+    redactor: Redactor,
+    overlay: Mutex<Overlay>,
+}
+
+/// `value` with the secrets in every string put back.
+fn reveal_json(overlay: &Overlay, value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(overlay.reveal(text)),
+        Value::Array(items) => Value::Array(items.iter().map(|item| reveal_json(overlay, item)).collect()),
+        Value::Object(fields) => Value::Object(fields.iter().map(|(key, item)| (key.clone(), reveal_json(overlay, item))).collect()),
+        other => other.clone(),
+    }
 }
 
 fn text(content: impl Into<String>) -> ContentChunk {
@@ -110,6 +127,20 @@ fn kind(name: &str) -> ToolKind {
 }
 
 impl Harness {
+    /// `text` as the model may see it.
+    fn redact(&self, text: &str) -> String {
+        let (redacted, found) = self.redactor.replace_found(text);
+        let mut overlay = self.overlay.lock().expect("lock");
+        for secret in found {
+            overlay.learn(secret);
+        }
+        redacted
+    }
+
+    fn reveal(&self, text: &str) -> String {
+        self.overlay.lock().expect("lock").reveal(text)
+    }
+
     fn saved_path(&self, id: &str) -> PathBuf {
         self.config.state_dir.join(format!("{id}.json"))
     }
@@ -157,9 +188,9 @@ impl Harness {
         session.cancelled.store(false, Ordering::SeqCst);
         session.messages.push(Message {
             role: Role::User,
-            parts: vec![Part::Text { text: prompt }],
+            parts: vec![Part::Text { text: self.redact(&prompt) }],
         });
-        let system = system_prompt(session.workspace.root());
+        let system = self.redact(&system_prompt(session.workspace.root()));
         let specs = tools::specs();
         let notify = |update| connection.send_notification(SessionNotification::new(id.clone(), update));
         for _ in 0..MAX_STEPS {
@@ -170,7 +201,7 @@ impl Harness {
             let reply = backend.complete(&self.http, &system, &session.messages, &specs).await.map_err(failed)?;
             for part in &reply.parts {
                 if let Part::Text { text: said } = part {
-                    notify(SessionUpdate::AgentMessageChunk(text(said.clone())))?;
+                    notify(SessionUpdate::AgentMessageChunk(text(self.reveal(said))))?;
                 }
             }
             session.messages.push(Message {
@@ -195,7 +226,8 @@ impl Harness {
                 let outcome = if session.cancelled.load(Ordering::SeqCst) {
                     Err("cancelled".to_owned())
                 } else {
-                    self.use_tool(connection, id, &mut session, &call, &name, &input).await?
+                    let revealed = reveal_json(&self.overlay.lock().expect("lock"), &input);
+                    self.use_tool(connection, id, &mut session, &call, &name, &revealed).await?
                 };
                 let (status, output, is_error) = match outcome {
                     Ok(output) => (ToolCallStatus::Completed, output, false),
@@ -204,7 +236,11 @@ impl Harness {
                 let shown = ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(output.clone()))));
                 let finished = ToolCallUpdate::new(call.clone(), ToolCallUpdateFields::new().status(status).content(vec![shown]));
                 notify(SessionUpdate::ToolCallUpdate(finished))?;
-                results.push(Part::ToolResult { id: call, output, is_error });
+                results.push(Part::ToolResult {
+                    id: call,
+                    output: self.redact(&output),
+                    is_error,
+                });
             }
             session.messages.push(Message {
                 role: Role::User,
@@ -303,10 +339,14 @@ fn prompt_text(request: &PromptRequest) -> String {
 
 /// Serves the harness over ACP on stdin and stdout until the client leaves.
 pub async fn serve(config: Config) -> agent_client_protocol::Result<()> {
+    let redactor = Redactor::from_env().with(config.secrets_file.as_deref().map(silt_redact::read_secrets_file).unwrap_or_default());
+    let overlay = Mutex::new(Overlay::new(redactor.secrets().iter().cloned()));
     let harness = Arc::new(Harness {
         config,
         sessions: Sessions::default(),
         http: reqwest::Client::new(),
+        redactor,
+        overlay,
     });
     let (created, loading, prompted, cancelling) = (harness.clone(), harness.clone(), harness.clone(), harness);
     Agent

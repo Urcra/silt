@@ -131,3 +131,74 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
     assert!(!Path::new("/etc/silt-harness-test").exists());
     agent.send(Command::Stop);
 }
+
+/// Copies the redacted token it was shown into another file, and says so.
+async fn copying(State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(request): Json<Value>) -> Json<Value> {
+    let call = {
+        let mut requests = requests.lock().expect("lock");
+        requests.push(request.clone());
+        requests.len()
+    };
+    let shown = last_tool_result(&request)["content"].as_str().unwrap_or_default().to_owned();
+    let hidden = shown.split_whitespace().find(|word| word.starts_with("[REDACTED:")).unwrap_or_default().to_owned();
+    Json(match call {
+        1 => tool("t1", "read_file", json!({"path": "config.txt"})),
+        2 => tool("t2", "write_file", json!({"path": "copy.txt", "content": format!("copied {hidden}\n")})),
+        _ => {
+            let earlier = requests.lock().expect("lock")[1].clone();
+            let hidden = last_tool_result(&earlier)["content"].as_str().unwrap_or_default().split_whitespace().last().unwrap_or_default().to_owned();
+            json!({"content": [{"type": "text", "text": format!("Copied {hidden}.")}], "stop_reason": "end_turn"})
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn secrets_never_reach_the_model_but_its_edits_keep_them() {
+    let token = "ghp_abcdefghijklmnopqrstuvwxyz0123";
+    let checkout = tempfile::tempdir().expect("tempdir");
+    std::fs::write(checkout.path().join("config.txt"), format!("token {token}\n")).expect("file");
+    let requests: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("address");
+    let app = axum::Router::new().route("/v1/messages", post(copying)).with_state(requests.clone());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let home = tempfile::tempdir().expect("tempdir");
+    let (events, mut received) = mpsc::unbounded_channel();
+    let agent = start(
+        Start {
+            program: env!("CARGO_BIN_EXE_silt").to_owned(),
+            args: vec!["harness".to_owned()],
+            env: vec![
+                ("ANTHROPIC_API_KEY".to_owned(), "test-key".to_owned()),
+                ("ANTHROPIC_BASE_URL".to_owned(), format!("http://{address}")),
+                ("SILT_HOME".to_owned(), home.path().to_string_lossy().into_owned()),
+            ],
+            cwd: checkout.path().to_owned(),
+            mcp: None,
+            load: None,
+        },
+        events,
+    );
+    let mut said = String::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(30), received.recv()).await.expect("in time").expect("an event") {
+            Event::Ready { .. } => {
+                agent.send(Command::Prompt(format!("copy the token, it is {token}")));
+            }
+            Event::Update(Update::AgentText(text)) => said.push_str(&text),
+            Event::TurnEnded { .. } => break,
+            Event::Failed(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+    let sent = serde_json::to_string(&*requests.lock().expect("lock")).expect("json");
+    assert!(!sent.contains(token), "the model saw the token: {sent}");
+    assert!(sent.contains(&silt_redact::placeholder(token)));
+    assert_eq!(
+        std::fs::read_to_string(checkout.path().join("copy.txt")).expect("written"),
+        format!("copied {token}\n")
+    );
+    assert_eq!(said, format!("Copied {token}."));
+    agent.send(Command::Stop);
+}

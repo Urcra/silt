@@ -265,6 +265,26 @@ impl Store {
         Ok(())
     }
 
+    /// Adds secrets to this machine's overlay (ADR 0015).
+    pub async fn learn_secrets(&self, secrets: &[String]) -> Result<(), StoreError> {
+        for secret in secrets {
+            sqlx::query("INSERT INTO secret_overlay (secret) VALUES (?) ON CONFLICT DO NOTHING")
+                .bind(secret)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn secrets(&self) -> Result<Vec<String>, StoreError> {
+        Ok(sqlx::query("SELECT secret FROM secret_overlay")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|row| row.get("secret"))
+            .collect())
+    }
+
     pub async fn remember_clone(&self, repo: &str, path: &Path) -> Result<(), StoreError> {
         sqlx::query("INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path")
             .bind(repo)

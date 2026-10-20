@@ -49,10 +49,16 @@ impl Core {
             let local_len = self.local_log(family).len() as u64;
             let sync = self.syncs.entry(family).or_default();
             if let Some(push) = sync.next_push(local_len) {
+                let mut found = Vec::new();
                 let batch: Vec<Delta> = self.local_log(family)[push.from as usize..push.to as usize]
                     .iter()
-                    .map(|delta| self.redactor.redact_delta(delta))
+                    .map(|delta| {
+                        let redacted = self.redactor.redact_delta(delta);
+                        found.extend(redacted.found);
+                        redacted.delta
+                    })
                     .collect();
+                self.learn_secrets(found);
                 let blobs = referenced_blobs(&batch);
                 let (events, remote, store) = (self.events.clone(), remote.clone(), self.store.clone());
                 tokio::spawn(async move {
@@ -153,6 +159,7 @@ impl Core {
 
     /// Applies deltas from the server and brings checkouts up to date.
     async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<(), CoreError> {
+        let deltas: Vec<Delta> = deltas.into_iter().map(|delta| self.overlay.reveal_delta(delta)).collect();
         let at = self.local_log(family_id).len() as u64;
         let mut fresh = Vec::new();
         let mut heads_before = HashMap::new();

@@ -4177,6 +4177,7 @@ dependencies = [
  "silt-harness",
  "silt-mcp",
  "silt-proto",
+ "silt-redact",
  "silt-sandbox",
  "silt-server",
  "tempfile",
@@ -4269,6 +4270,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "silt-redact",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4307,6 +4309,7 @@ dependencies = [
 name = "silt-redact"
 version = "0.0.1"
 dependencies = [
+ "sha2 0.11.1",
  "silt-crdt",
  "silt-log",
 ]

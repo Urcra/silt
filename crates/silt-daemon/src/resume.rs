@@ -420,7 +420,9 @@ impl Core {
             };
             let transcript = target.restore(checkout, &agent_cwd, &recorded)?;
             // Blobs reach the server as they are, so secrets go first.
-            let blob = self.store.blobs().put(self.redactor.replace(&lines.join("\n")).as_bytes()).await?;
+            let (redacted, found) = self.redactor.replace_found(&lines.join("\n"));
+            self.learn_secrets(found);
+            let blob = self.store.blobs().put(redacted.as_bytes()).await?;
             self.register_session(NewSession {
                 agent: target,
                 id: new_id.clone(),
@@ -543,7 +545,7 @@ impl Core {
                         recorded.former_dirs.push(dir.clone());
                     }
                     Op::Conv(ConvOp::SessionTranslated { session: from, lines }) if from == part => {
-                        let text = String::from_utf8_lossy(&self.blob(*lines).await?).into_owned();
+                        let text = self.overlay.reveal(&String::from_utf8_lossy(&self.blob(*lines).await?));
                         recorded.main.extend(text.lines().map(str::to_owned));
                     }
                     Op::Conv(ConvOp::Native {
@@ -571,7 +573,12 @@ impl Core {
         }
         recorded.subagents = subagents.into_iter().collect();
         for (name, blob) in attachments {
-            recorded.attachments.push((name, self.blob(blob).await?));
+            let bytes = self.blob(blob).await?;
+            let bytes = match String::from_utf8(bytes) {
+                Ok(text) => self.overlay.reveal(&text).into_bytes(),
+                Err(error) => error.into_bytes(),
+            };
+            recorded.attachments.push((name, bytes));
         }
         Ok(recorded)
     }
