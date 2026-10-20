@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
 use silt_types::{DeltaId, DeltaSpan, Frontier};
 
 use crate::causal::{CausalGraph, VersionVector};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextOp {
     Insert { pos: usize, content: String },
     Delete { pos: usize, len: usize },
@@ -19,7 +20,7 @@ impl TextOp {
 }
 
 /// A positional edit, interpreted against the document as of `parents`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextEvent {
     pub span: DeltaSpan,
     pub parents: Frontier,
@@ -32,7 +33,7 @@ pub struct TextEvent {
 /// inserted them. Characters that came from a git blob are named by the delta
 /// that introduced the blob plus their offset in it, so every replica derives
 /// the same ids without spending lamports on unedited content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CharId {
     Base { source: DeltaId, offset: u32 },
     Delta(DeltaId),
@@ -48,7 +49,7 @@ impl CharId {
 }
 
 /// Which side of a position an anchor sticks to when text is inserted there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Bias {
     /// Stays after the character to its left.
     Left,
@@ -58,13 +59,13 @@ pub enum Bias {
 
 /// A position that survives edits: it follows the character it is attached
 /// to, or the start or end of the document when there is none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Anchor {
     pub char_id: Option<CharId>,
     pub bias: Bias,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedAnchor {
     pub pos: usize,
     /// The character the anchor was attached to is not visible any more.
@@ -85,7 +86,7 @@ pub enum TextError {
     UnknownAnchor(CharId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Item {
     id: CharId,
     origin_left: Option<CharId>,
@@ -118,7 +119,7 @@ impl Item {
 ///
 /// Concurrent insertions are ordered with the YjsMod rules used by
 /// diamond-types, so the two can be checked against each other.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TextDoc {
     items: Vec<Item>,
 }

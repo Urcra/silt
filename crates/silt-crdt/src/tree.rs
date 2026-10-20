@@ -1,26 +1,27 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use silt_types::{ActorId, DeltaId, Lamport};
 
 /// A file or directory, named by the delta that created it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct InodeId(pub DeltaId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InodeKind {
     Dir,
     File,
     Symlink,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Parent {
     Root,
     Trash,
     Dir(InodeId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TreeOp {
     Create {
         kind: InodeKind,
@@ -38,7 +39,7 @@ pub enum TreeOp {
 }
 
 /// One tree operation. A `Create` makes the inode `InodeId(id)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeEvent {
     pub id: DeltaId,
     pub op: TreeOp,
@@ -55,7 +56,7 @@ pub enum TreeError {
 /// Total order on operations that agrees with causality: a later operation
 /// always has a higher lamport, and the actor breaks ties between concurrent
 /// ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct Stamp(Lamport, ActorId);
 
 impl From<DeltaId> for Stamp {
@@ -64,14 +65,14 @@ impl From<DeltaId> for Stamp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Placement {
     parent: Parent,
     name: String,
     placed_by: Stamp,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LogEntry {
     stamp: Stamp,
     inode: InodeId,
@@ -86,7 +87,7 @@ struct LogEntry {
 /// undoing and redoing later ones when an earlier one arrives late, and a move
 /// that would put a directory inside itself is skipped. Deleting is a move to
 /// the trash, so a concurrent edit or move never loses an inode.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileTree {
     kinds: HashMap<InodeId, InodeKind>,
     placements: HashMap<InodeId, Placement>,

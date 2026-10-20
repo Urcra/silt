@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier, Lamport};
@@ -6,7 +7,7 @@ use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier, Lamport};
 ///
 /// Because every actor's deltas form a chain (each one has the previous as an
 /// ancestor), this exactly describes the set of ancestors of a version.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VersionVector(BTreeMap<ActorId, Lamport>);
 
 impl VersionVector {
@@ -40,13 +41,13 @@ pub enum CausalError {
     ConflictingSpan { id: DeltaId },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Added {
     New(DeltaSpan),
     AlreadyKnown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub span: DeltaSpan,
     pub parents: Frontier,
@@ -54,7 +55,7 @@ pub struct Run {
 
 /// Every delta's identity and parents, stored as run-length-encoded runs in a
 /// topological order.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CausalGraph {
     runs: Vec<Run>,
     by_actor: BTreeMap<ActorId, Vec<usize>>,
