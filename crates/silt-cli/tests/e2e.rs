@@ -15,6 +15,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --session-id) session="$2"; shift 2 ;;
         --settings) shift 2 ;;
+        --mcp-config) printf '%s' "$2" > "$CLAUDE_CONFIG_DIR/mcp-config.json"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -34,6 +35,7 @@ printf 'fn farewell() {}\n' >> src/main.rs
 hook PostToolUse
 printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"edited","is_error":false}]}}' >> "$transcript"
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: farewell added."}]}}' >> "$transcript"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Decision: farewell stays in main.rs instead of its own module, to keep the binary single-file."}]}}' >> "$transcript"
 printf '%s\n' '{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}' >> "$transcript"
 printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: farewell was added to main."}}' >> "$transcript"
 hook Stop
@@ -227,4 +229,116 @@ fn a_renamed_file_keeps_its_history() {
     assert!(diff.contains("rename from src/main.rs"), "{diff}");
     assert!(diff.contains("+++ b/src/app.rs"), "{diff}");
     assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
+}
+
+/// Talks to the MCP server Silt configured for the session, the way
+/// Claude Code would.
+struct McpClient {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    next_id: u64,
+}
+
+impl McpClient {
+    fn start(env: &Env) -> Self {
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(env.claude_dir.join("mcp-config.json")).expect("mcp config"))
+                .expect("json");
+        let server = &config["mcpServers"]["silt"];
+        let args: Vec<String> = server["args"]
+            .as_array()
+            .expect("args")
+            .iter()
+            .map(|arg| arg.as_str().expect("string").to_owned())
+            .collect();
+        let mut child = Command::new(server["command"].as_str().expect("command"))
+            .args(args)
+            .current_dir(&env.repo)
+            .env("SILT_HOME", &env.silt_home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("mcp server starts");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+        let mut client = Self {
+            child,
+            stdin,
+            stdout,
+            next_id: 0,
+        };
+        client.request("initialize", serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {}}));
+        client
+    }
+
+    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, Write};
+        self.next_id += 1;
+        let message = serde_json::json!({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params});
+        writeln!(self.stdin, "{message}").expect("send");
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).expect("reply");
+        serde_json::from_str(&line).expect("json reply")
+    }
+
+    fn tool(&mut self, name: &str, arguments: serde_json::Value) -> String {
+        let reply = self.request("tools/call", serde_json::json!({"name": name, "arguments": arguments}));
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        reply["result"]["content"][0]["text"].as_str().expect("text").to_owned()
+    }
+}
+
+impl Drop for McpClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn an_agent_reads_what_was_decided_before_compaction() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["show", &thread]).contains("context compacted")));
+
+    let mut mcp = McpClient::start(&env);
+    let found = mcp.tool("silt_history_search", serde_json::json!({"query": "farewell module"}));
+    let index: usize = found
+        .lines()
+        .find(|line| line.contains("[module]"))
+        .and_then(|line| line.strip_prefix('['))
+        .and_then(|line| line.split(']').next())
+        .and_then(|index| index.parse().ok())
+        .unwrap_or_else(|| panic!("the decision is found: {found}"));
+    let page = mcp.tool("silt_history_read", serde_json::json!({"offset": index, "limit": 3}));
+    assert!(page.contains("farewell stays in main.rs instead of its own module"), "{page}");
+    let whole = mcp.tool("silt_history_read", serde_json::json!({}));
+    let decision = whole.find("Decision:").expect("decision listed");
+    let compaction = whole.find("compaction").expect("compaction listed");
+    assert!(decision < compaction, "the decision came before the compaction: {whole}");
+
+    let history = mcp.tool("silt_file_history", serde_json::json!({"path": "src/main.rs"}));
+    assert!(history.contains("tool call toolu_1") && history.contains("Please add a farewell line"), "{history}");
+
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["hook", "SessionStart"])
+        .env("SILT_HOME", &env.silt_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("hook runs");
+    let session = env
+        .transcript()
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .expect("session id");
+    std::io::Write::write_all(
+        &mut hook.stdin.take().expect("stdin"),
+        format!(r#"{{"session_id":"{session}","hook_event_name":"SessionStart","source":"compact"}}"#).as_bytes(),
+    )
+    .expect("hook input");
+    let output = String::from_utf8_lossy(&hook.wait_with_output().expect("hook ends").stdout).into_owned();
+    assert!(output.contains("silt_history_search") && output.contains("additionalContext"), "{output}");
 }

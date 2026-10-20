@@ -228,6 +228,9 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// For `SessionStart`: `startup`, `resume`, `clear` or `compact`.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// Hook events Silt listens to.

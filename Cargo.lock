@@ -4028,6 +4028,7 @@ dependencies = [
  "serde_json",
  "silt-agents",
  "silt-daemon",
+ "silt-mcp",
  "silt-proto",
  "silt-server",
  "tempfile",
@@ -4070,6 +4071,7 @@ dependencies = [
  "silt-crdt",
  "silt-git",
  "silt-log",
+ "silt-mcp",
  "silt-proto",
  "silt-redact",
  "silt-store",
@@ -4106,6 +4108,13 @@ dependencies = [
  "silt-crdt",
  "silt-types",
  "thiserror",
+]
+
+[[package]]
+name = "silt-mcp"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

@@ -41,6 +41,14 @@ pub enum Request {
     MrShow { mr: String },
     MrApprove { mr: String },
     MrDecline { mr: String, reason: Option<String> },
+    /// A page of a thread's full history, across compactions and forks.
+    HistoryRead { thread: String, offset: usize, limit: usize },
+    /// Search within a thread's history and the threads it came from.
+    HistorySearch { thread: String, query: String, limit: u32 },
+    /// The turns that changed a file of the thread.
+    FileHistory { thread: String, path: String },
+    /// Other threads of the repository at `cwd` that changed `path`.
+    InFlight { cwd: PathBuf, path: String },
     /// Sets the visibility of the project at `cwd`, or of `thread`'s family.
     SetVisibility {
         cwd: PathBuf,
@@ -179,4 +187,55 @@ pub struct MrDetails {
     pub conflicts: Vec<String>,
     /// The fork's conversation since it forked.
     pub conversation: Vec<ShowLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub index: usize,
+    /// The thread the entry was recorded in.
+    pub thread: String,
+    /// `own`, `inherited` (before the fork) or `upstream` (brought in by a pull).
+    pub origin: String,
+    /// `user`, `assistant`, `thinking`, `tool_call`, `tool_result`,
+    /// `compaction`, `merge` or `pull`.
+    pub kind: String,
+    pub text: String,
+    pub time_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub thread: String,
+    pub total: usize,
+    pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryHit {
+    /// The entry's index in the thread's history.
+    pub index: usize,
+    pub kind: String,
+    pub snippet: String,
+}
+
+/// Edits to one file in one turn, by one tool call or outside tool calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileTouch {
+    pub thread: String,
+    /// The prompt of the turn the edits were made in.
+    pub prompt: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub by_agent: bool,
+    /// Characters inserted and deleted.
+    pub inserted: usize,
+    pub deleted: usize,
+    pub time_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlight {
+    pub thread: String,
+    pub owner: String,
+    pub files: Vec<String>,
+    pub last_ms: i64,
 }

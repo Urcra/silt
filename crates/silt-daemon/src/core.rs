@@ -285,6 +285,17 @@ impl Core {
             Request::MrShow { mr } => to_response(self.mr_show(&mr)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
+            Request::HistoryRead { thread, offset, limit } => {
+                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
+            }
+            Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
+                Err(error) => Response::error(error),
+            },
+            Request::FileHistory { thread, path } => {
+                to_response(self.find_thread(&thread).and_then(|thread| self.file_history(thread, &path)))
+            }
+            Request::InFlight { cwd, path } => to_response(self.in_flight_at(&cwd, &path)),
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }
@@ -828,6 +839,16 @@ impl Core {
                     let _ = events.send(Event::CloseTool { session_id, reply });
                 });
                 return None;
+            }
+            "SessionStart" if input.source.as_deref() == Some("compact") => {
+                let tailed = self.tail_session(&session_id).await;
+                let reply_data = HookReply {
+                    additional_context: Some(format!(
+                        "{} This session's thread is {thread}.",
+                        silt_mcp::INSTRUCTIONS
+                    )),
+                };
+                return Some((to_response(tailed.map(|()| reply_data)), reply));
             }
             "Stop" => {
                 let tailed = self.tail_session(&session_id).await;

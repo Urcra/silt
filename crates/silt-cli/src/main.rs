@@ -1,5 +1,6 @@
 mod commands;
 mod dev_status;
+mod mcp;
 mod render;
 
 use std::path::PathBuf;
@@ -99,6 +100,12 @@ enum Command {
     /// Called by agent hooks; reads the hook input on stdin
     #[command(hide = true)]
     Hook { event: String },
+    /// Serve Silt's history tools to an agent over MCP on stdio
+    #[command(hide = true)]
+    Mcp {
+        #[arg(long)]
+        thread: String,
+    },
     /// Commands for working on Silt itself
     Dev {
         #[command(subcommand)]
@@ -241,6 +248,7 @@ fn main() -> Result<(), Exn<CliError>> {
             DaemonCommand::Stop => commands::daemon_stop(),
             DaemonCommand::Status => commands::daemon_status(),
         },
+        Command::Mcp { thread } => mcp::serve(&thread),
         Command::Hook { event } => {
             commands::hook(&event);
             Ok(())

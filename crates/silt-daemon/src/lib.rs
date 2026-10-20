@@ -2,6 +2,7 @@ pub mod client;
 mod core;
 mod disk;
 mod forks;
+mod history;
 pub mod remote;
 pub mod paths;
 pub mod protocol;

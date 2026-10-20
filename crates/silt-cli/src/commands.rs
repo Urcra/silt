@@ -120,7 +120,7 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     })?;
     eprintln!("silt: recording thread {} in {}", short(&started.thread), started.checkout.display());
 
-    let status = run_claude(&["--session-id", &session_id], args, &started.agent_cwd)?;
+    let status = run_claude(&["--session-id", &session_id], args, &started.agent_cwd, &started.thread)?;
     call::<String>(&Request::EndSession {
         agent: claude::AGENT.into(),
         session_id,
@@ -132,13 +132,22 @@ pub fn claude(isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-/// Runs Claude Code with Silt's hooks installed.
-fn run_claude(session_args: &[&str], args: &[String], cwd: &Path) -> Result<std::process::ExitStatus, Exn<CliError>> {
+/// Runs Claude Code with Silt's hooks and history tools installed.
+fn run_claude(
+    session_args: &[&str],
+    args: &[String],
+    cwd: &Path,
+    thread: &str,
+) -> Result<std::process::ExitStatus, Exn<CliError>> {
     let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
     let hook_command = format!("{} hook", shell_quote(&exe));
+    let mcp_config = serde_json::json!({
+        "mcpServers": { "silt": { "command": exe, "args": ["mcp", "--thread", thread] } }
+    });
     let claude_bin = env::var_os("SILT_CLAUDE_BIN").unwrap_or_else(|| "claude".into());
     Command::new(&claude_bin)
         .args(session_args)
+        .args(["--mcp-config", &mcp_config.to_string()])
         .args(["--settings", &claude::hook_settings(&hook_command)])
         .args(args)
         .current_dir(cwd)
@@ -183,7 +192,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
         eprintln!("silt: the thread has no agent session to continue");
         return Ok(());
     };
-    let status = run_claude(&["--resume", &session_id], args, &resumed.agent_cwd)?;
+    let status = run_claude(&["--resume", &session_id], args, &resumed.agent_cwd, &resumed.thread)?;
     call::<String>(&Request::EndSession {
         agent: claude::AGENT.into(),
         session_id,
