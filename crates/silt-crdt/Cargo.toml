@@ -13,3 +13,7 @@ workspace = true
 [dependencies]
 silt-types = { path = "../silt-types" }
 thiserror = "2.0.21"
+
+[dev-dependencies]
+diamond-types = { git = "https://github.com/josephg/diamond-types", rev = "89ae3a0" }
+proptest = "1.12.0"

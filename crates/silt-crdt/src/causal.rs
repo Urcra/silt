@@ -111,16 +111,17 @@ impl CausalGraph {
 
     pub fn version_vector(&self, frontier: &Frontier) -> VersionVector {
         let mut vv = VersionVector::default();
+        let mut visited = vec![false; self.runs.len()];
         let mut stack: Vec<DeltaId> = frontier.ids().to_vec();
         while let Some(id) = stack.pop() {
-            if vv.contains(id) {
-                continue;
-            }
             let Some((run_index, _)) = self.find(id) else {
                 continue;
             };
             vv.include(id);
-            stack.extend_from_slice(self.runs[run_index].parents.ids());
+            if !visited[run_index] {
+                visited[run_index] = true;
+                stack.extend_from_slice(self.runs[run_index].parents.ids());
+            }
         }
         vv
     }
@@ -321,6 +322,20 @@ mod tests {
         assert!(graph.is_ancestor(id(1, 3), &frontier(&[id(1, 8)])));
         assert!(!graph.is_ancestor(id(2, 6), &frontier(&[id(1, 8)])));
         assert!(graph.is_ancestor(id(2, 6), &frontier(&[id(1, 9)])));
+    }
+
+    #[test]
+    fn version_vector_follows_parents_of_earlier_runs_of_the_same_actor() {
+        let mut graph = CausalGraph::new();
+        graph.add(span(1, 0, 2), &Frontier::root()).expect("a");
+        graph.add(span(2, 2, 1), &frontier(&[id(1, 1)])).expect("b after a");
+        graph.add(span(3, 0, 1), &Frontier::root()).expect("c");
+        graph
+            .add(span(2, 3, 1), &frontier(&[id(2, 2), id(3, 0)]))
+            .expect("b merges c");
+        let vv = graph.version_vector(&frontier(&[id(2, 3)]));
+        assert!(vv.contains(id(1, 1)), "reached only through b's earlier run");
+        assert!(vv.contains(id(3, 0)));
     }
 
     #[test]

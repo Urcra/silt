@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 310578cc94e84ab0288be83a7368cfe81e8d9323558349a7ebf00730f1850d9a # shrinks to (replicas, actions) = (3, [Insert { replica: 0, pos: 0, text: "aa" }, Insert { replica: 0, pos: 0, text: "a" }, Insert { replica: 2, pos: 0, text: "a" }, Deliver { from: 0, to: 1, fraction: 128 }, Insert { replica: 2, pos: 0, text: "a" }, Insert { replica: 1, pos: 0, text: "a" }, Deliver { from: 2, to: 1, fraction: 128 }, Insert { replica: 1, pos: 0, text: "e" }])
