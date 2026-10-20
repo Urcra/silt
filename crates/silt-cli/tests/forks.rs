@@ -436,8 +436,9 @@ fn mirror_git(machine: &Machine, server: &Server, args: &[&str]) -> std::process
     let family = mirrored_family(server).expect("the mirror exists");
     let url = format!("{}/git/{}", server.url, family.to_string_lossy());
     let header = format!("http.extraHeader=Authorization: Bearer {}", config["token"].as_str().expect("token"));
+    let protocol = format!("http.extraHeader=silt-protocol: {}", silt_proto::PROTOCOL);
     let mut command = Command::new("git");
-    command.args(["-c", &header, "-c", "http.extraHeader=silt-protocol: 2"]).current_dir(&machine.repo);
+    command.args(["-c", &header, "-c", &protocol]).current_dir(&machine.repo);
     for arg in args {
         command.arg(if *arg == "URL" { url.as_str() } else { arg });
     }

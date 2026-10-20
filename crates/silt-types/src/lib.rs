@@ -5,6 +5,8 @@
 //! Lamport timestamp from the history-wide clock. An event touching `n` units
 //! occupies the contiguous span `[lamport, lamport + n)` of its actor.
 
+mod hex_serde;
+
 mod entity;
 mod frontier;
 mod id;

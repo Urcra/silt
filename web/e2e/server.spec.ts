@@ -130,7 +130,7 @@ test('a device is approved in the browser', async ({ page }) => {
   const api = (path: string, body: unknown) =>
     fetch(`${base}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'silt-protocol': '2' },
+      headers: { 'content-type': 'application/json', 'silt-protocol': '3' },
       body: JSON.stringify(body),
     }).then((response) => response.json())
   const started = await api('/v1/device/start', { name: 'build-box' })

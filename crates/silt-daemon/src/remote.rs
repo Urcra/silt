@@ -45,7 +45,34 @@ pub fn config_path(data_dir: &Path) -> PathBuf {
 }
 
 pub fn load_config(data_dir: &Path) -> Option<RemoteConfig> {
-    serde_json::from_str(&fs::read_to_string(config_path(data_dir)).ok()?).ok()
+    let text = fs::read_to_string(config_path(data_dir)).ok()?;
+    serde_json::from_str(&text)
+        .ok()
+        .or_else(|| serde_json::from_str::<LegacyConfig>(&text).ok().map(RemoteConfig::from))
+}
+
+/// Settings saved before ids were written as hex, with the device as a
+/// number.
+#[derive(Deserialize)]
+struct LegacyConfig {
+    url: String,
+    token: String,
+    device: u128,
+    name: String,
+    #[serde(default)]
+    user: String,
+}
+
+impl From<LegacyConfig> for RemoteConfig {
+    fn from(legacy: LegacyConfig) -> Self {
+        Self {
+            url: legacy.url,
+            token: legacy.token,
+            device: DeviceId(legacy.device),
+            name: legacy.name,
+            user: legacy.user,
+        }
+    }
 }
 
 pub fn save_config(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteError> {
@@ -351,4 +378,21 @@ async fn checked(response: reqwest::Response) -> Result<reqwest::Response, Remot
         ErrorReply::ProtocolMismatch { supported } => RemoteError::ProtocolMismatch { supported },
         other => RemoteError::Refused(other),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_saved_with_a_numeric_device_still_load() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let device = u128::MAX - 5;
+        let legacy = format!(r#"{{"url":"https://silt.example","token":"t","device":{device},"name":"laptop"}}"#);
+        fs::write(config_path(dir.path()), legacy).expect("writes");
+        assert_eq!(load_config(dir.path()).expect("loads").device, DeviceId(device));
+        save_config(dir.path(), &load_config(dir.path()).expect("loads")).expect("saves");
+        assert!(fs::read_to_string(config_path(dir.path())).expect("reads").contains(&format!("\"{device:032x}\"")));
+        assert_eq!(load_config(dir.path()).expect("loads").device, DeviceId(device));
+    }
 }

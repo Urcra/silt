@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// A replica that produces deltas: one checkout, daemon or server writer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ActorId(pub u128);
+
+crate::hex_serde::hex_serde!(ActorId);
 
 impl ActorId {
     /// A distinct actor for one part of this replica's work, such as one
@@ -160,6 +162,17 @@ mod tests {
         let actor = ActorId(0xab);
         assert_eq!(actor.to_string(), "000000000000000000000000000000ab");
         assert_eq!(actor.to_string().parse::<ActorId>(), Ok(actor));
+    }
+
+    #[test]
+    fn ids_are_hex_in_json_and_numbers_in_postcard() {
+        let id = DeltaId::new(ActorId(u128::MAX - 1), Lamport(3));
+        let json = serde_json::to_string(&id).expect("encodes");
+        assert_eq!(json, r#"{"actor":"fffffffffffffffffffffffffffffffe","lamport":3}"#);
+        assert_eq!(serde_json::from_str::<DeltaId>(&json).expect("decodes"), id);
+        let binary = postcard::to_allocvec(&ActorId(7)).expect("encodes");
+        assert_eq!(binary, postcard::to_allocvec(&7u128).expect("encodes"), "stored data keeps its encoding");
+        assert_eq!(postcard::from_bytes::<ActorId>(&binary).expect("decodes"), ActorId(7));
     }
 
     #[test]

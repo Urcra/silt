@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
