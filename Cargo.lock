@@ -18,6 +18,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "async-io",
  "async-process",
+ "blocking",
  "futures",
  "futures-concurrency",
  "rustc-hash",
@@ -1313,6 +1314,7 @@ checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-io",
  "futures-sink",
  "futures-task",
@@ -4121,7 +4123,14 @@ name = "silt-acp"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4228,6 +4237,13 @@ dependencies = [
 [[package]]
 name = "silt-fake-agent"
 version = "0.0.1"
+dependencies = [
+ "agent-client-protocol",
+ "serde_json",
+ "silt-acp",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "silt-git"
@@ -4894,6 +4910,7 @@ checksum = "e464cf451ba96ebfc6f9b6542f17ee8b8956e33f1e40d9690624e59d7a7f8a4b"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",

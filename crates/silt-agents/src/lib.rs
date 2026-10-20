@@ -4,6 +4,7 @@
 //! writes them back on another machine, and turns one agent's conversation
 //! into another's.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod conventions;
@@ -208,9 +209,13 @@ pub const AGENTS: [&dyn Agent; 5] = [
     &copilot::Copilot,
 ];
 
-/// The agent recorded as `name`, or run as the command `name`.
+/// The agent recorded as `name`, or run as the command `name`, including
+/// the sessions Silt records itself for agents the web UI starts.
 pub fn agent(name: &str) -> Option<&'static dyn Agent> {
-    AGENTS.into_iter().find(|agent| agent.id() == name || agent.command() == name)
+    AGENTS
+        .into_iter()
+        .find(|agent| agent.id() == name || agent.command() == name)
+        .or_else(|| (name == acp::AGENT).then_some(&acp::Acp as &dyn Agent))
 }
 
 /// The reader for an agent's transcripts; unknown agents' records are kept

@@ -84,6 +84,17 @@ pub(crate) struct PendingSession {
     pub(crate) last_search: Option<Instant>,
 }
 
+/// A thread just made for a clone.
+pub(crate) struct CreatedThread {
+    pub(crate) thread: ThreadId,
+    pub(crate) family: FamilyId,
+    pub(crate) checkout_id: i64,
+    pub(crate) checkout: PathBuf,
+    pub(crate) agent_cwd: PathBuf,
+    pub(crate) repo: Repo,
+    pub(crate) head: Option<silt_types::GitOid>,
+}
+
 /// Where a session to register came from.
 pub(crate) struct NewSession {
     pub(crate) agent: &'static dyn Agent,
@@ -139,6 +150,40 @@ impl Core {
         already_ran: bool,
     ) -> Result<SessionStarted, CoreError> {
         let agent = resolve_agent(agent)?;
+        let created = self.create_thread(cwd, isolated, already_ran).await?;
+        match session_id {
+            Some(id) => {
+                let new = NewSession {
+                    agent,
+                    id: id.to_owned(),
+                    thread: created.thread,
+                    family: created.family,
+                    checkout_id: created.checkout_id,
+                    transcript: agent.transcript(&created.agent_cwd, id),
+                    agent_cwd: created.agent_cwd.clone(),
+                    checkout_root: created.checkout.clone(),
+                    restored: Vec::new(),
+                    restored_side: Vec::new(),
+                };
+                self.register_session(new).await?;
+            }
+            None => self.await_session(agent, created.thread, created.family, created.checkout_id, &created.agent_cwd, &created.checkout),
+        }
+        if let Some(commit) = created.head {
+            self.record_bundle(created.family, created.thread, &created.repo, commit).await?;
+        }
+        Ok(SessionStarted {
+            thread: created.thread.to_string(),
+            session_id: session_id.map(str::to_owned),
+            mount: isolated.then(|| self.mount(&created.repo)),
+            checkout: created.checkout,
+            agent_cwd: created.agent_cwd,
+        })
+    }
+
+    /// A new thread for the clone at `cwd`: its family imported from the
+    /// clone's HEAD and a checkout, managed when `isolated`, being watched.
+    pub(crate) async fn create_thread(&mut self, cwd: &Path, isolated: bool, already_ran: bool) -> Result<CreatedThread, CoreError> {
         let cwd = cwd.canonicalize()?;
         let repo = Repo::discover(&cwd)?;
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
@@ -220,33 +265,14 @@ impl Core {
         } else {
             checkout_path.join(&relative)
         };
-        match session_id {
-            Some(id) => {
-                let new = NewSession {
-                    agent,
-                    id: id.to_owned(),
-                    thread,
-                    family: family_id,
-                    checkout_id,
-                    transcript: agent.transcript(&agent_cwd, id),
-                    agent_cwd: agent_cwd.clone(),
-                    checkout_root: checkout_path.clone(),
-                    restored: Vec::new(),
-                    restored_side: Vec::new(),
-                };
-                self.register_session(new).await?;
-            }
-            None => self.await_session(agent, thread, family_id, checkout_id, &agent_cwd, &checkout_path),
-        }
-        if let Some(commit) = head {
-            self.record_bundle(family_id, thread, &repo, commit).await?;
-        }
-        Ok(SessionStarted {
-            thread: thread.to_string(),
-            session_id: session_id.map(str::to_owned),
-            mount: isolated.then(|| self.mount(&repo)),
+        Ok(CreatedThread {
+            thread,
+            family: family_id,
+            checkout_id,
             checkout: checkout_path,
             agent_cwd,
+            repo,
+            head,
         })
     }
 
