@@ -48,6 +48,9 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     if is_running() {
         return Ok(false);
     }
+    if silt_daemon::holds_lock(&paths::data_dir()) {
+        return wait_for_busy_daemon().map(|()| false);
+    }
     fs::create_dir_all(paths::data_dir()).or_raise(|| CliError("cannot create the Silt data directory".into()))?;
     let log = OpenOptions::new()
         .create(true)
@@ -80,6 +83,25 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     )))
 }
 
+/// How long to wait for a daemon that runs but doesn't answer yet, say
+/// while it records a long transcript.
+const BUSY_DAEMON_WAIT: Duration = Duration::from_secs(60);
+
+fn wait_for_busy_daemon() -> Result<(), Exn<CliError>> {
+    eprintln!("the Silt daemon is busy; waiting for it");
+    let deadline = Instant::now() + BUSY_DAEMON_WAIT;
+    while Instant::now() < deadline {
+        if is_running() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(fail(format!(
+        "the Silt daemon runs but does not answer; see {}",
+        paths::log_path().display()
+    )))
+}
+
 pub fn daemon_run() -> Result<(), Exn<CliError>> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()))
@@ -92,6 +114,9 @@ pub fn daemon_run() -> Result<(), Exn<CliError>> {
 }
 
 pub fn daemon_stop() -> Result<(), Exn<CliError>> {
+    if !is_running() && silt_daemon::holds_lock(&paths::data_dir()) {
+        wait_for_busy_daemon()?;
+    }
     if !is_running() {
         println!("not running");
         return Ok(());
@@ -104,6 +129,8 @@ pub fn daemon_stop() -> Result<(), Exn<CliError>> {
 pub fn daemon_status() -> Result<(), Exn<CliError>> {
     if is_running() {
         println!("running ({})", paths::socket_path().display());
+    } else if silt_daemon::holds_lock(&paths::data_dir()) {
+        println!("running, but busy");
     } else {
         println!("not running");
     }

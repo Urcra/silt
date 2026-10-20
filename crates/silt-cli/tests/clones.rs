@@ -34,3 +34,16 @@ fn clones_are_remembered_across_restarts() {
     laptop.silt(&["log"]);
     assert_eq!(known_clones(&laptop), vec![laptop.repo.clone()], "a restarted daemon still knows the clone");
 }
+
+#[test]
+fn only_one_daemon_runs_per_data_directory() {
+    let root = tempfile::Builder::new().prefix("silt-one-daemon").tempdir_in("/tmp").expect("temp dir");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    laptop.silt(&["log"]);
+    let second = laptop.run(&["daemon", "run"]);
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("another Silt daemon already runs"));
+    assert!(laptop.stdout(&["daemon", "status"]).starts_with("running"), "the first one is untouched");
+}

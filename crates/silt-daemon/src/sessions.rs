@@ -8,7 +8,7 @@ use std::io::{Read as _, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use silt_agents::{Agent, Found, Mark, Reader, complete_lines};
+use silt_agents::{Agent, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
@@ -33,6 +33,8 @@ const MARK_SETTLE: Duration = Duration::from_millis(1000);
 /// How often a session kept in a store rather than a file is read again.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(3);
 const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
+/// Most transcript bytes read per session and tick.
+const TAIL_CHUNK: u64 = 1 << 20;
 /// Agents stamp a new session's file a little after starting.
 const DISCOVER_SLACK_MS: i64 = 5_000;
 
@@ -646,7 +648,7 @@ impl Core {
                         Err(error) => warn!(%error, "could not read the session"),
                     }
                 }
-                None => self.tail_session(&id).await?,
+                None => self.tail_session_up_to(&id, u64::MAX).await?,
             }
             for checkout in &checkouts {
                 if self.checkouts.contains_key(checkout) {
@@ -662,8 +664,13 @@ impl Core {
         Ok("ended")
     }
 
-    /// Records new lines of a session's transcripts.
+    /// Records new lines of a session's transcripts, a chunk at a time so a
+    /// long backlog doesn't hold up the daemon; the next tick goes on.
     pub(crate) async fn tail_session(&mut self, session_id: &str) -> Result<(), CoreError> {
+        self.tail_session_up_to(session_id, TAIL_CHUNK).await
+    }
+
+    async fn tail_session_up_to(&mut self, session_id: &str, limit: u64) -> Result<(), CoreError> {
         let Some(session) = self.session(session_id) else {
             return Ok(());
         };
@@ -705,12 +712,15 @@ impl Core {
                 .map(|(name, path)| (format!("subagent:{name}"), path)),
         );
         for (key, path) in files {
-            self.tail_file(session_id, &key, &path).await?;
+            self.tail_file(session_id, &key, &path, limit).await?;
         }
         self.attach_side_files(session_id, &transcript).await
     }
 
-    async fn tail_file(&mut self, session_id: &str, key: &str, path: &Path) -> Result<(), CoreError> {
+    /// Records the transcript's new complete lines, at most about `limit`
+    /// bytes of them. The offset moves past each line as it is recorded, so
+    /// a failure part way never records a line twice.
+    async fn tail_file(&mut self, session_id: &str, key: &str, path: &Path, limit: u64) -> Result<(), CoreError> {
         let session = self.session(session_id).expect("caller checked");
         let mut offset = session.offsets.get(key).map_or(0, |offset| offset.offset);
         let Ok(mut file) = fs::File::open(path) else {
@@ -726,25 +736,40 @@ impl Core {
         }
         file.seek(SeekFrom::Start(offset))?;
         let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
-        let (lines, consumed) = complete_lines(&buffer);
-        if lines.is_empty() {
+        (&mut file).take(limit).read_to_end(&mut buffer)?;
+        if !buffer.contains(&b'\n') {
+            // One line longer than the chunk.
+            file.read_to_end(&mut buffer)?;
+        }
+        let (lines, consumed) = complete_lines_ending(&buffer);
+        if consumed == 0 {
             return Ok(());
         }
-        for line in lines {
-            self.record_line(session_id, key, line).await?;
+        let mut reached = offset;
+        let mut recorded = Ok(());
+        for (line, end) in lines {
+            if let Err(error) = self.record_line(session_id, key, line).await {
+                recorded = Err(error);
+                break;
+            }
+            reached = offset + end as u64;
         }
-        let advanced = SessionFileOffset {
-            file: key.to_owned(),
-            path: path.to_owned(),
-            offset: offset + consumed as u64,
-        };
-        let agent = self.session(session_id).expect("caller checked").record.agent.clone();
-        self.store.set_session_offset(&agent, session_id, &advanced).await?;
-        if let Some(session) = self.session_mut(session_id) {
-            session.offsets.insert(key.to_owned(), advanced);
+        if recorded.is_ok() {
+            reached = offset + consumed as u64;
         }
-        Ok(())
+        if reached > offset {
+            let advanced = SessionFileOffset {
+                file: key.to_owned(),
+                path: path.to_owned(),
+                offset: reached,
+            };
+            let agent = self.session(session_id).expect("caller checked").record.agent.clone();
+            self.store.set_session_offset(&agent, session_id, &advanced).await?;
+            if let Some(session) = self.session_mut(session_id) {
+                session.offsets.insert(key.to_owned(), advanced);
+            }
+        }
+        recorded
     }
 
     /// Stores one transcript record, indexes its text, and applies the turn

@@ -1,15 +1,22 @@
 /// The complete (newline-terminated) lines at the start of `buffer`, and how
 /// many bytes they span. A trailing partial line is left for the next read.
 pub fn complete_lines(buffer: &[u8]) -> (Vec<String>, usize) {
+    let (lines, consumed) = complete_lines_ending(buffer);
+    (lines.into_iter().map(|(line, _)| line).collect(), consumed)
+}
+
+/// Like [`complete_lines`], with where each line's newline ends, so a
+/// reader can stop after any line and know how far it got.
+pub fn complete_lines_ending(buffer: &[u8]) -> (Vec<(String, usize)>, usize) {
     let mut lines = Vec::new();
     let mut consumed = 0;
     while let Some(end) = buffer[consumed..].iter().position(|byte| *byte == b'\n') {
         let line = &buffer[consumed..consumed + end];
         let line = line.strip_suffix(b"\r").unwrap_or(line);
-        if !line.is_empty() {
-            lines.push(String::from_utf8_lossy(line).into_owned());
-        }
         consumed += end + 1;
+        if !line.is_empty() {
+            lines.push((String::from_utf8_lossy(line).into_owned(), consumed));
+        }
     }
     (lines, consumed)
 }
@@ -26,6 +33,13 @@ mod tests {
         let (lines, consumed) = complete_lines(b"partial");
         assert!(lines.is_empty());
         assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn tells_where_each_line_ends() {
+        let (lines, consumed) = complete_lines_ending(b"{}\n\n[]\r\nx");
+        assert_eq!(lines, vec![("{}".to_owned(), 3), ("[]".to_owned(), 8)]);
+        assert_eq!(consumed, 8);
     }
 
     #[test]

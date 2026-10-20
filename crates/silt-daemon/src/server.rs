@@ -27,11 +27,36 @@ pub enum RunError {
     Listen { path: String, source: io::Error },
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error("another Silt daemon already runs for {0}")]
+    AlreadyRunning(String),
+}
+
+fn lock_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("daemon.lock")
+}
+
+/// Whether a daemon runs for `data_dir`, answering or not.
+pub fn holds_lock(data_dir: &Path) -> bool {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path(data_dir))
+        .is_ok_and(|file| matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock)))
 }
 
 /// Runs the daemon for the data in `data_dir` until asked to shut down.
 pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     fs::create_dir_all(data_dir)?;
+    // One daemon per data directory: a second would take over the socket
+    // and fight the first over the store.
+    let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(lock_path(data_dir))?;
+    if let Err(error) = lock.try_lock() {
+        return match error {
+            fs::TryLockError::WouldBlock => Err(RunError::AlreadyRunning(data_dir.display().to_string())),
+            fs::TryLockError::Error(error) => Err(error.into()),
+        };
+    }
     let store = Store::open(data_dir).await?;
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();

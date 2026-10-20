@@ -20,4 +20,4 @@ mod views;
 mod watch;
 mod web;
 
-pub use server::{RunError, run};
+pub use server::{RunError, holds_lock, run};
