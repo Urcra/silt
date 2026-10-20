@@ -9,6 +9,9 @@ use smallvec::{SmallVec, smallvec};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct Locator(SmallVec<[u64; 4]>);
 
+/// The largest step between two fragments.
+const STEP: u64 = 1 << 32;
+
 impl Locator {
     pub fn min() -> Self {
         Self(smallvec![u64::MIN])
@@ -25,11 +28,12 @@ impl Locator {
         let appending = *rhs == Self::max();
         let mut digits = SmallVec::new();
         for (low, high) in lhs_digits.zip(rhs_digits) {
-            // Appends at the end take a small step so repeated appends stay
-            // short; anything between two fragments takes the midpoint so
-            // repeated splits of the same gap stay short too.
+            // Steps from the left stay small, so text typed on, each piece
+            // after the last one, fits many times in one gap: appends at the
+            // end step by a sliver of the gap, inserts between fragments by
+            // at most `STEP`. Halving instead would add a digit every 64.
             let gap = high.saturating_sub(low);
-            let digit = low + if appending { gap >> 48 } else { gap / 2 };
+            let digit = low + if appending { gap >> 48 } else { (gap / 2).min(STEP) };
             digits.push(digit);
             if digit > low {
                 break;
@@ -61,6 +65,16 @@ mod tests {
             assert!(low < middle && middle < high);
             high = middle;
         }
+    }
+
+    #[test]
+    fn typing_on_before_a_fixed_neighbour_keeps_locators_short() {
+        let after = Locator::between(&Locator::min(), &Locator::max());
+        let mut last = Locator::min();
+        for _ in 0..100_000 {
+            last = Locator::between(&last, &after);
+        }
+        assert!(last.0.len() <= 2, "{} digits", last.0.len());
     }
 
     #[test]
