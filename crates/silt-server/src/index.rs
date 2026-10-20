@@ -24,6 +24,8 @@ pub(crate) struct Index {
     placements: HashMap<FamilyId, HashMap<InodeId, Placement>>,
     /// Each merge request's fork, by the request's id.
     requests: HashMap<DeltaId, ThreadId>,
+    /// Each fork's source.
+    forks: HashMap<ThreadId, ThreadId>,
 }
 
 /// A row to write for a delta.
@@ -97,6 +99,10 @@ impl Index {
                 }
                 None
             }
+            Op::Fork { from } => {
+                self.forks.insert(thread, *from);
+                None
+            }
             Op::Mr(MrOp::Approved { mr }) => {
                 if let Some(fork) = self.requests.get(mr) {
                     rows.push(Row::Merged { thread: *fork });
@@ -123,6 +129,10 @@ impl Index {
             rows.push(Row::Touch { thread, path, time_ms });
         }
         rows
+    }
+
+    pub(crate) fn forks(&self) -> &HashMap<ThreadId, ThreadId> {
+        &self.forks
     }
 
     fn path(&self, family: FamilyId, inode: InodeId) -> Option<String> {

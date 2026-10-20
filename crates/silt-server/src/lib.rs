@@ -30,8 +30,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 
 mod index;
+mod visibility;
 
 use index::Index;
+use visibility::Viewer;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -208,52 +210,38 @@ struct Caller {
     user: i64,
 }
 
-/// Families a user may see (ADR 0010): their own, and those whose
-/// effective visibility is `team`. Expects the families table as `f` and
-/// binds the user's id. A macro, so queries stay static strings.
-macro_rules! visible_to_user {
-    () => {
-        "(f.owner_id = ?
-          OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')"
-    };
-}
-
 enum FamilyAccess {
     /// No device has registered or pushed it yet.
     Unknown,
-    Visible { owner: i64 },
+    Visible,
     Hidden,
 }
 
-async fn family_access(db: &SqlitePool, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
-    let row = sqlx::query(concat!(
-        "SELECT f.owner_id, ",
-        visible_to_user!(),
-        " AS visible FROM families f WHERE f.id = ?"
-    ))
-    .bind(user)
-    .bind(id_bytes(family.0))
-    .fetch_optional(db)
-    .await?;
-    Ok(match row {
-        None => FamilyAccess::Unknown,
-        Some(row) if row.get::<bool, _>("visible") => FamilyAccess::Visible {
-            owner: row.get("owner_id"),
-        },
-        Some(_) => FamilyAccess::Hidden,
+async fn family_access(server: &Server, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
+    let row = sqlx::query("SELECT owner_id FROM families WHERE id = ?")
+        .bind(id_bytes(family.0))
+        .fetch_optional(&server.shared.db)
+        .await?;
+    if row.is_none() {
+        return Ok(FamilyAccess::Unknown);
+    }
+    Ok(if server.viewer(user).await?.sees_family(family.0) {
+        FamilyAccess::Visible
+    } else {
+        FamilyAccess::Hidden
     })
 }
 
 /// Lets `caller` read or write the family, claiming it when it's new.
-async fn claim_family(db: &SqlitePool, family: FamilyId, caller: Caller) -> Result<(), ApiError> {
-    match family_access(db, family, caller.user).await? {
-        FamilyAccess::Visible { .. } => Ok(()),
+async fn claim_family(server: &Server, family: FamilyId, caller: Caller) -> Result<(), ApiError> {
+    match family_access(server, family, caller.user).await? {
+        FamilyAccess::Visible => Ok(()),
         FamilyAccess::Hidden => Err(not_found()),
         FamilyAccess::Unknown => {
             sqlx::query("INSERT OR IGNORE INTO families (id, owner_id) VALUES (?, ?)")
                 .bind(id_bytes(family.0))
                 .bind(caller.user)
-                .execute(db)
+                .execute(&server.shared.db)
                 .await?;
             Ok(())
         }
@@ -349,38 +337,32 @@ async fn login(State(server): State<Server>, Json(body): Json<LoginRequest>) -> 
 }
 
 async fn listing(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<Listing>, ApiError> {
-    let visible: std::collections::HashSet<FamilyId> =
-        sqlx::query(concat!("SELECT f.id FROM families f WHERE ", visible_to_user!()))
-            .bind(caller.user)
-            .fetch_all(&server.shared.db)
-            .await?
-            .iter()
-            .map(|row| FamilyId(id_from(row.get("id"))))
-            .collect();
+    let viewer = server.viewer(caller.user).await?;
     let families = server
         .shared
         .rooms
         .lock()
         .await
         .iter()
-        .filter(|(id, _)| visible.contains(id))
-        .map(|(id, room)| FamilyInfo { id: *id, seq: room.seq() })
+        .filter(|(id, _)| viewer.sees_family(id.0))
+        .map(|(id, room)| FamilyInfo {
+            id: *id,
+            seq: room.seq(),
+            view: viewer.view_of(id.0, room),
+        })
         .collect();
-    let rows = sqlx::query(concat!(
+    let rows = sqlx::query(
         "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id, l.epoch, u.name AS owner
          FROM threads t
-         JOIN families f ON f.id = t.family_id
          JOIN users u ON u.id = t.owner_id
          LEFT JOIN leases l ON l.thread_id = t.id
-         WHERE ",
-        visible_to_user!(),
-        " ORDER BY t.created_ms"
-    ))
-    .bind(caller.user)
+         ORDER BY t.created_ms",
+    )
     .fetch_all(&server.shared.db)
     .await?;
     let threads = rows
         .iter()
+        .filter(|row| viewer.sees_thread(ThreadId(id_from(row.get("id")))))
         .map(|row| ThreadInfo {
             id: ThreadId(id_from(row.get("id"))),
             family: FamilyId(id_from(row.get("family_id"))),
@@ -402,7 +384,7 @@ async fn register_thread(
     Json(thread): Json<ThreadInfo>,
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
-    claim_family(db, thread.family, caller).await?;
+    claim_family(&server, thread.family, caller).await?;
     sqlx::query("UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL")
         .bind(id_bytes(thread.id.0))
         .bind(&thread.repo)
@@ -433,8 +415,7 @@ async fn take_lease(
         .fetch_optional(&server.shared.db)
         .await?
         .ok_or_else(not_found)?;
-    let family = FamilyId(id_from(row.get("family_id")));
-    if !matches!(family_access(&server.shared.db, family, caller.user).await?, FamilyAccess::Visible { .. }) {
+    if !server.viewer(caller.user).await?.sees_thread(thread) {
         return Err(not_found());
     }
     if row.get::<i64, _>("owner_id") != caller.user {
@@ -462,7 +443,7 @@ async fn push(
     Json(body): Json<PushRequest>,
 ) -> Result<Json<PushReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
-    claim_family(&server.shared.db, family, caller).await?;
+    claim_family(&server, family, caller).await?;
     let mut rooms = server.shared.rooms.lock().await;
     let room = rooms
         .entry(family)
@@ -520,9 +501,10 @@ async fn pull(
     Query(query): Query<PullQuery>,
 ) -> Result<Json<PullReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
-    if let FamilyAccess::Hidden = family_access(&server.shared.db, family, caller.user).await? {
+    if let FamilyAccess::Hidden = family_access(&server, family, caller.user).await? {
         return Err(not_found());
     }
+    let viewer = server.viewer(caller.user).await?;
     let last = match &query.last {
         Some(last) => Some(DeltaId::from_str(last).map_err(|_| bad_request("invalid cursor"))?),
         None => None,
@@ -537,9 +519,19 @@ async fn pull(
         let deltas = {
             let rooms = server.shared.rooms.lock().await;
             match rooms.get(&family) {
-                Some(room) => room.pull(query.after, last, PULL_LIMIT).map_err(|error| match error {
-                    PullError::UnknownCursor { .. } => ApiError(StatusCode::CONFLICT, ErrorReply::UnknownCursor),
-                })?,
+                Some(room) => {
+                    let readable = viewer.readable(family.0, room);
+                    room.pull(query.after, last, usize::MAX)
+                        .map_err(|error| match error {
+                            PullError::UnknownCursor { .. } => ApiError(StatusCode::CONFLICT, ErrorReply::UnknownCursor),
+                        })?
+                        .into_iter()
+                        .filter(|(seq, _)| {
+                            usize::try_from(*seq - 1).is_ok_and(|index| readable.get(index).copied().unwrap_or(false))
+                        })
+                        .take(PULL_LIMIT)
+                        .collect()
+                }
                 None if query.after == 0 => Vec::new(),
                 None => return Err(ApiError(StatusCode::CONFLICT, ErrorReply::UnknownCursor)),
             }
@@ -561,7 +553,7 @@ async fn set_visibility(
         Visibility::Private => "private",
         Visibility::Team => "team",
     };
-    match (body.repo, body.family) {
+    match (body.repo, body.thread) {
         (Some(repo), None) => {
             sqlx::query(
                 "INSERT INTO projects (repo, visibility) VALUES (?, ?)
@@ -572,18 +564,22 @@ async fn set_visibility(
             .execute(db)
             .await?;
         }
-        (None, Some(family)) => match family_access(db, family, caller.user).await? {
-            FamilyAccess::Visible { owner } if owner == caller.user => {
-                sqlx::query("UPDATE families SET visibility = ? WHERE id = ?")
-                    .bind(visibility)
-                    .bind(id_bytes(family.0))
-                    .execute(db)
-                    .await?;
+        (None, Some(thread)) => {
+            if !server.viewer(caller.user).await?.sees_thread(thread) {
+                return Err(not_found());
             }
-            FamilyAccess::Visible { .. } => return Err(forbidden("only the thread's owner can change its visibility")),
-            FamilyAccess::Hidden | FamilyAccess::Unknown => return Err(not_found()),
-        },
-        _ => return Err(bad_request("give either a repository or a family")),
+            let updated = sqlx::query("UPDATE threads SET visibility = ? WHERE id = ? AND owner_id = ?")
+                .bind(visibility)
+                .bind(id_bytes(thread.0))
+                .bind(caller.user)
+                .execute(db)
+                .await?
+                .rows_affected();
+            if updated == 0 {
+                return Err(forbidden("only the thread's owner can change its visibility"));
+            }
+        }
+        _ => return Err(bad_request("give either a repository or a thread")),
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -610,22 +606,18 @@ async fn search(
          JOIN users u ON u.id = t.owner_id
          LEFT JOIN thread_activity a ON a.thread_id = t.id
          WHERE search MATCH ?2
-           AND (f.owner_id = ?3
-                OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')
-           AND (?4 IS NULL OR t.repo = ?4)
-           AND (?5 IS NULL OR u.name = ?5)
-           AND (?6 IS NULL OR a.branch = ?6)
-           AND (?7 IS NULL OR CAST(s.time_ms AS INTEGER) >= ?7)
-           AND (?8 IS NULL OR CAST(s.time_ms AS INTEGER) <= ?8)
-           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM touches th
-                                      WHERE th.thread_id = t.id AND (th.path = ?9 OR th.path LIKE ?9 || '/%')))
-           AND (?10 IS NULL OR status = ?10)
-         ORDER BY rank
-         LIMIT ?11",
+           AND (?3 IS NULL OR t.repo = ?3)
+           AND (?4 IS NULL OR u.name = ?4)
+           AND (?5 IS NULL OR a.branch = ?5)
+           AND (?6 IS NULL OR CAST(s.time_ms AS INTEGER) >= ?6)
+           AND (?7 IS NULL OR CAST(s.time_ms AS INTEGER) <= ?7)
+           AND (?8 IS NULL OR EXISTS (SELECT 1 FROM touches th
+                                      WHERE th.thread_id = t.id AND (th.path = ?8 OR th.path LIKE ?8 || '/%')))
+           AND (?9 IS NULL OR status = ?9)
+         ORDER BY rank",
     )
     .bind(now_ms() - ACTIVE_MS)
     .bind(terms)
-    .bind(caller.user)
     .bind(&query.repo)
     .bind(&query.author)
     .bind(&query.branch)
@@ -633,11 +625,14 @@ async fn search(
     .bind(query.until)
     .bind(query.file.as_deref().map(|file| file.trim_end_matches('/')))
     .bind(&query.status)
-    .bind(query.limit.unwrap_or(SEARCH_LIMIT).min(500))
     .fetch_all(&server.shared.db)
     .await?;
+    let viewer = server.viewer(caller.user).await?;
+    let limit = usize::try_from(query.limit.unwrap_or(SEARCH_LIMIT).min(500)).unwrap_or(50);
     let hits = rows
         .iter()
+        .filter(|row| viewer.sees_thread(ThreadId(id_from(row.get("thread_id")))))
+        .take(limit)
         .map(|row| SearchHit {
             thread: ThreadId(id_from(row.get("thread_id"))),
             repo: row.get("repo"),
@@ -671,19 +666,20 @@ async fn in_flight(
          LEFT JOIN thread_activity a ON a.thread_id = t.id
          WHERE t.repo = ?2
            AND (?3 = '' OR th.path = ?3 OR th.path LIKE ?3 || '/%')
-           AND (f.owner_id = ?4
-                OR COALESCE(f.visibility, (SELECT p.visibility FROM projects p WHERE p.repo = f.repo), 'team') = 'team')
          ORDER BY th.last_ms DESC",
     )
     .bind(now_ms() - ACTIVE_MS)
     .bind(&query.repo)
     .bind(path)
-    .bind(caller.user)
     .fetch_all(&server.shared.db)
     .await?;
+    let viewer = server.viewer(caller.user).await?;
     let mut threads: Vec<InFlightThread> = Vec::new();
     for row in &rows {
         let thread = ThreadId(id_from(row.get("id")));
+        if !viewer.sees_thread(thread) {
+            continue;
+        }
         let path: String = row.get("path");
         match threads.iter_mut().find(|found| found.thread == thread) {
             Some(found) => found.paths.push(path),
@@ -733,6 +729,12 @@ async fn get_blob(State(server): State<Server>, UrlPath(hash_hex): UrlPath<Strin
 }
 
 impl Server {
+    /// What `user` can see right now.
+    async fn viewer(&self, user: i64) -> Result<Viewer, sqlx::Error> {
+        let forks = self.shared.index.lock().await.forks().clone();
+        Viewer::load(&self.shared.db, user, &forks).await
+    }
+
     async fn waiter(&self, family: FamilyId) -> Arc<Notify> {
         self.shared
             .waiters
@@ -763,7 +765,7 @@ pub(crate) fn id_bytes(id: u128) -> Vec<u8> {
     id.to_be_bytes().to_vec()
 }
 
-fn id_from(bytes: &[u8]) -> u128 {
+pub(crate) fn id_from(bytes: &[u8]) -> u128 {
     let mut buffer = [0u8; 16];
     buffer.copy_from_slice(&bytes[..16.min(bytes.len())]);
     u128::from_be_bytes(buffer)

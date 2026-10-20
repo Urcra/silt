@@ -166,7 +166,7 @@ impl Core {
             let state = core.store.sync_state(family_id).await?;
             core.syncs.insert(
                 family_id,
-                ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled),
+                ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view),
             );
         }
         for record in core.store.checkouts().await? {
@@ -256,7 +256,7 @@ impl Core {
                     let state = self.store.sync_state(family).await.unwrap_or_default();
                     self.syncs.insert(
                         family,
-                        ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled),
+                        ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view),
                     );
                 }
                 self.drive_sync();

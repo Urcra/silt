@@ -340,7 +340,7 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
 
     let private_family = VisibilityRequest {
         repo: None,
-        family: Some(FAMILY),
+        thread: Some(THREAD),
         visibility: Visibility::Private,
     };
     assert_eq!(bob.set_visibility(&private_family).await, StatusCode::FORBIDDEN);
@@ -358,11 +358,11 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
     assert_eq!(alice.set_visibility(&team_family).await, StatusCode::NO_CONTENT);
     let private_project = VisibilityRequest {
         repo: Some("github.com/u/r".into()),
-        family: None,
+        thread: None,
         visibility: Visibility::Private,
     };
     assert_eq!(bob.set_visibility(&private_project).await, StatusCode::NO_CONTENT);
-    assert_eq!(bob.listing().await.threads.len(), 1, "the family's own setting wins over its project's");
+    assert_eq!(bob.listing().await.threads.len(), 1, "the thread's own setting wins over its project's");
 }
 
 /// A thread that edits `src/lexer.rs` on branch `main` and talks about it.
@@ -473,7 +473,7 @@ async fn search_filters_and_in_flight_respect_visibility() {
     alice
         .set_visibility(&VisibilityRequest {
             repo: None,
-            family: Some(FAMILY),
+            thread: Some(THREAD),
             visibility: Visibility::Private,
         })
         .await;
@@ -483,4 +483,74 @@ async fn search_filters_and_in_flight_respect_visibility() {
     assert!(flight.threads.is_empty());
     let found: SearchReply = alice.get_json("/v1/search?q=lexer").await;
     assert_eq!(found.hits.len(), 1);
+}
+
+#[tokio::test]
+async fn a_private_fork_stays_hidden_until_offered_back() {
+    use silt_log::MrOp;
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (alice, _) = Client::login_as(data.path(), &base, "alice").await;
+    let (bob, _) = Client::login_as(data.path(), &base, "bob").await;
+    alice.register("github.com/u/r").await;
+    let mut family = Family::new();
+    let write = |family: &mut Family, actor: u128, thread: ThreadId, parents: silt_types::Frontier, op: Op| {
+        let delta = family.delta(ActorId(actor), thread, Author::User, 0, parents, op);
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        delta
+    };
+    let file = |name: &str| Op::Create {
+        kind: InodeKind::File,
+        parent: Parent::Root,
+        name: name.into(),
+        content: Content::Empty,
+        executable: false,
+    };
+    let source = write(&mut family, 1, THREAD, silt_types::Frontier::root(), file("a.rs"));
+    assert_eq!(alice.push(vec![source.clone()]).await.status(), StatusCode::OK);
+
+    const FORK: ThreadId = ThreadId(77);
+    let forked = write(&mut family, 2, FORK, silt_types::Frontier::single(source.span.last()), Op::Fork { from: THREAD });
+    let secret = write(&mut family, 2, FORK, silt_types::Frontier::single(forked.span.last()), file("secret.rs"));
+    let fork_info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: "github.com/u/r".into(),
+        created_ms: 2,
+        lease: None,
+        owner: String::new(),
+    };
+    let status = bob.request(reqwest::Method::POST, "/v1/threads").json(&fork_info).send().await.expect("sends").status();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let private_fork = VisibilityRequest {
+        repo: None,
+        thread: Some(FORK),
+        visibility: Visibility::Private,
+    };
+    assert_eq!(bob.set_visibility(&private_fork).await, StatusCode::NO_CONTENT);
+    assert_eq!(bob.push(vec![forked.clone(), secret.clone()]).await.status(), StatusCode::OK);
+
+    let pulled: PullReply = alice.pull("after=0").await.json().await.expect("pull");
+    assert_eq!(pulled.deltas.len(), 1, "the private fork is withheld from the source's owner");
+    let listing = alice.listing().await;
+    assert!(listing.threads.iter().all(|thread| thread.id != FORK));
+    let view_before = listing.families[0].view;
+    let pulled: PullReply = bob.pull("after=0").await.json().await.expect("pull");
+    assert_eq!(pulled.deltas.len(), 3, "the fork's owner reads everything");
+
+    let opened = write(
+        &mut family,
+        2,
+        FORK,
+        silt_types::Frontier::single(secret.span.last()),
+        Op::Mr(MrOp::Opened {
+            target: THREAD,
+            title: "secret".into(),
+            summary: String::new(),
+        }),
+    );
+    assert_eq!(bob.push(vec![opened]).await.status(), StatusCode::OK);
+    let pulled: PullReply = alice.pull("after=0").await.json().await.expect("pull");
+    assert_eq!(pulled.deltas.len(), 4, "a merge request shares the fork's work with the target");
+    assert_ne!(alice.listing().await.families[0].view, view_before, "clients learn to read the family again");
 }

@@ -46,6 +46,10 @@ pub struct Lease {
 pub struct FamilyInfo {
     pub id: FamilyId,
     pub seq: u64,
+    /// Changes when what this user may see of the family changes; the client
+    /// then reads the family again from the start.
+    #[serde(default)]
+    pub view: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,12 +83,12 @@ pub enum Visibility {
     Team,
 }
 
-/// Sets a project's visibility (`repo`) or a family's override (`family`,
-/// owner only); exactly one of them is given.
+/// Sets a project's visibility (`repo`) or a thread's own (`thread`, owner
+/// only); exactly one of them is given.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisibilityRequest {
     pub repo: Option<String>,
-    pub family: Option<FamilyId>,
+    pub thread: Option<ThreadId>,
     pub visibility: Visibility,
 }
 

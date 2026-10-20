@@ -153,6 +153,7 @@ async fn sync_state_round_trips() {
         pushed: 10,
         pulled: 7,
         last_pulled: Some(DeltaId::new(ActorId(2), Lamport(5))),
+        view: u64::MAX - 9,
     };
     store.set_sync_state(FAMILY, &state).await.expect("set");
     assert_eq!(store.sync_state(FAMILY).await.expect("get"), state);

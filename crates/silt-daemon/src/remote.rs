@@ -118,14 +118,14 @@ impl Remote {
     pub async fn set_visibility(
         &self,
         repo: Option<String>,
-        family: Option<FamilyId>,
+        thread: Option<ThreadId>,
         visibility: Visibility,
     ) -> Result<(), RemoteError> {
         let response = self
             .request(reqwest::Method::PUT, "/v1/visibility")
             .json(&VisibilityRequest {
                 repo,
-                family,
+                thread,
                 visibility,
             })
             .send()

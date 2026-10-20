@@ -357,9 +357,12 @@ impl Core {
         match selector {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;
-                let family = self.threads[&thread].family;
-                remote.set_visibility(None, Some(family), visibility).await.map_err(refused)?;
-                Ok(format!("thread {} and its forks are now {visibility:?}", short(thread)).to_lowercase())
+                remote.set_visibility(None, Some(thread), visibility).await.map_err(refused)?;
+                Ok(format!(
+                    "thread {} is now {}; forks without a setting of their own follow it",
+                    short(thread),
+                    format!("{visibility:?}").to_lowercase()
+                ))
             }
             None => {
                 let repo = silt_git::Repo::discover(&cwd.canonicalize()?)?;

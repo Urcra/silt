@@ -47,6 +47,8 @@ pub struct SyncState {
     pub pushed: u64,
     pub pulled: u64,
     pub last_pulled: Option<DeltaId>,
+    /// The server's fingerprint of what this user may see of the family.
+    pub view: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +166,7 @@ impl Store {
     }
 
     pub async fn sync_state(&self, family: FamilyId) -> Result<SyncState, StoreError> {
-        let row = sqlx::query("SELECT generation, pushed, pulled, last_pulled FROM sync_state WHERE family_id = ?")
+        let row = sqlx::query("SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?")
             .bind(id_bytes(family.0))
             .fetch_optional(&self.pool)
             .await?;
@@ -179,6 +181,7 @@ impl Store {
                 Some(bytes) => Some(postcard::from_bytes(bytes)?),
                 None => None,
             },
+            view: row.get::<i64, _>("view") as u64,
         })
     }
 
@@ -188,15 +191,16 @@ impl Store {
             None => None,
         };
         sqlx::query(
-            "INSERT INTO sync_state (family_id, generation, pushed, pulled, last_pulled) VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO sync_state (family_id, generation, pushed, pulled, last_pulled, view) VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (family_id) DO UPDATE SET generation = excluded.generation, pushed = excluded.pushed,
-                 pulled = excluded.pulled, last_pulled = excluded.last_pulled",
+                 pulled = excluded.pulled, last_pulled = excluded.last_pulled, view = excluded.view",
         )
         .bind(id_bytes(family.0))
         .bind(state.generation.map(|generation| generation as i64))
         .bind(i64::try_from(state.pushed).unwrap_or(i64::MAX))
         .bind(i64::try_from(state.pulled).unwrap_or(i64::MAX))
         .bind(last_pulled)
+        .bind(state.view as i64)
         .execute(&self.pool)
         .await?;
         Ok(())

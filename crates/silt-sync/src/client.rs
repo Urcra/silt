@@ -55,15 +55,18 @@ pub struct ClientSync {
     /// Set once the server holds a different delta under one of ours. Later
     /// local deltas build on it, so pushing them could only fail.
     diverged: Option<DeltaId>,
+    /// The server's fingerprint of what this client may read of the family.
+    view: u64,
 }
 
 impl ClientSync {
-    pub fn new(generation: Option<u64>, pushed: u64, pulled: u64, last_pulled: Option<DeltaId>) -> Self {
+    pub fn new(generation: Option<u64>, pushed: u64, pulled: u64, last_pulled: Option<DeltaId>, view: u64) -> Self {
         Self {
             generation,
             pushed,
             pulled,
             last_pulled,
+            view,
             ..Self::default()
         }
     }
@@ -86,6 +89,25 @@ impl ClientSync {
 
     pub fn diverged(&self) -> Option<DeltaId> {
         self.diverged
+    }
+
+    pub fn view(&self) -> u64 {
+        self.view
+    }
+
+    /// Takes the server's current view fingerprint. When it changed, deltas
+    /// skipped earlier may be readable now, so pulling starts over.
+    pub fn observe_view(&mut self, view: u64) -> bool {
+        if view == self.view {
+            return false;
+        }
+        let changed = self.view != 0;
+        self.view = view;
+        if changed {
+            self.pulled = 0;
+            self.last_pulled = None;
+        }
+        changed
     }
 
     /// The next push, given how many deltas the local log has.
@@ -218,5 +240,15 @@ mod tests {
         assert_eq!(sync.diverged(), Some(id));
         assert_eq!(sync.next_push(4), None);
         assert!(sync.next_pull().is_some());
+    }
+
+    #[test]
+    fn a_new_view_pulls_again_from_the_start() {
+        let mut sync = ClientSync::new(Some(1), 4, 9, Some(DeltaId::new(ActorId(1), Lamport(3))), 0);
+        assert!(!sync.observe_view(7), "the first view is just remembered");
+        assert_eq!(sync.pulled(), 9);
+        assert!(!sync.observe_view(7));
+        assert!(sync.observe_view(8));
+        assert_eq!((sync.pulled(), sync.last_pulled(), sync.pushed()), (0, None, 4));
     }
 }

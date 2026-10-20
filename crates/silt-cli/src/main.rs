@@ -63,7 +63,7 @@ enum Command {
     Visibility {
         #[arg(value_enum)]
         visibility: VisibilityArg,
-        /// Set it for this thread and its forks instead of the whole project
+        /// Set it for one thread (and its forks that have no setting of their own)
         #[arg(long)]
         thread: Option<String>,
     },

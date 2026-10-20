@@ -135,6 +135,7 @@ impl Core {
             pushed: sync.pushed(),
             pulled: sync.pulled(),
             last_pulled: sync.last_pulled(),
+            view: sync.view(),
         };
         if let Err(error) = self.store.set_sync_state(family, &state).await {
             warn!(%error, "could not save sync progress");
@@ -243,6 +244,16 @@ impl Core {
                 return;
             }
         };
+        for family in &listing.families {
+            let sync = self.syncs.entry(family.id).or_default();
+            let before = sync.view();
+            if sync.observe_view(family.view) {
+                tracing::info!(family = %family.id, "what this user may see changed; reading the family again");
+            }
+            if before != family.view {
+                self.save_sync(family.id).await;
+            }
+        }
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
         for info in listing.threads {
             if let Some(known) = self.threads.get(&info.id) {

@@ -261,3 +261,41 @@ fn comments_follow_their_lines_and_sync_between_users() {
         .any(|line| line.starts_with(&bobs) && line.contains("[resolved]"))));
     assert!(alice.stdout(&["comments", &thread]).contains(&id));
 }
+
+#[test]
+fn a_private_fork_is_shared_only_through_its_merge_request() {
+    let Team { alice, bob, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    assert!(eventually(|| bob.log_line(&thread).is_some_and(|line| line.contains("2 msgs"))));
+    let forked = bob.silt_with(
+        &["fork", &thread],
+        &[("FAKE_SAY", "Bob tries something quietly"), ("FAKE_LINE", "fn quiet() {}")],
+    );
+    let fork_checkout = checkout_from(&forked.stderr);
+    let fork = bob
+        .stdout(&["log"])
+        .lines()
+        .find(|line| line.contains(&format!("fork of {thread}")))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("the fork is listed")
+        .to_owned();
+    let set = bob.stdout(&["visibility", "private", "--thread", &fork]);
+    assert!(set.contains("is now private"), "{set}");
+    let fork_main = fork_checkout.join("src/main.rs");
+    fs::write(&fork_main, read(&fork_main) + "fn quieter() {}\n").expect("Bob keeps working");
+    assert!(eventually(|| bob.stdout(&["diff", &fork]).contains("+fn quieter() {}")));
+
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(alice.log_line(&fork).is_none(), "{}", alice.stdout(&["log"]));
+    assert!(alice.stdout(&["search", "quietly"]).contains("no matches"));
+
+    let opened = bob.silt(&["mr", "create", "--thread", &fork, "--title", "Quiet work"]);
+    let mr = mr_id(&opened.stdout);
+    assert!(eventually(|| alice.try_stdout(&["mr", "list"]).contains(&mr)), "the merge request shares the fork");
+    let details = alice.stdout(&["mr", "show", &mr]);
+    assert!(details.contains("+fn quieter() {}") && details.contains("Bob tries something quietly"), "{details}");
+    alice.silt(&["mr", "approve", &mr]);
+    assert!(eventually(|| read(&alice.repo.join("src/main.rs")).contains("fn quieter() {}")));
+    assert!(alice.log_line(&fork).is_none(), "the fork itself stays private");
+}

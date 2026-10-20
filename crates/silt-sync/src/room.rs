@@ -67,6 +67,10 @@ impl Room {
         self.deltas.len() as u64
     }
 
+    pub fn graph(&self) -> &CausalGraph {
+        &self.graph
+    }
+
     pub fn deltas(&self) -> &[Delta] {
         &self.deltas
     }
