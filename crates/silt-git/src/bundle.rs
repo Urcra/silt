@@ -16,12 +16,19 @@ impl Repo {
         let _ = self.git(&["fetch", "-q", "origin"], None);
     }
 
-    /// A git bundle with `commit` and the history origin's remote-tracking
-    /// refs don't reach, or `None` when origin already has all of it.
-    pub fn bundle(&self, commit: GitOid) -> Result<Option<Vec<u8>>, GitError> {
+    /// A git bundle with `commit` and the history that neither origin's
+    /// remote-tracking refs nor `known` (commits bundled before) reach, or
+    /// `None` when nothing is left. A managed checkout has no remote-tracking
+    /// refs of its own, so without `known` every bundle would carry the
+    /// whole history.
+    pub fn bundle(&self, commit: GitOid, known: &[GitOid]) -> Result<Option<Vec<u8>>, GitError> {
         let file = self.git_dir().join("silt-bundle.tmp");
         self.git(&["update-ref", BUNDLE_REF, &commit.to_string()], None)?;
-        let created = self.git(&["bundle", "create", "-q", &file.to_string_lossy(), BUNDLE_REF, "--not", "--remotes"], None);
+        let known: Vec<String> = known.iter().filter(|known| self.has_commit(**known)).map(GitOid::to_string).collect();
+        let path = file.to_string_lossy();
+        let mut args = vec!["bundle", "create", "-q", path.as_ref(), BUNDLE_REF, "--not", "--remotes"];
+        args.extend(known.iter().map(String::as_str));
+        let created = self.git(&args, None);
         let _ = self.git(&["update-ref", "-d", BUNDLE_REF], None);
         let bytes = match created {
             Ok(_) => Some(fs::read(&file)?),

@@ -917,16 +917,18 @@ impl Core {
 }
 
 impl Core {
-    /// Stores a bundle of `commit` and its history that origin lacks, so
-    /// another machine can get it from the server (ADR 0009).
+    /// Stores a bundle of `commit` and its history that origin lacks and
+    /// that `known` (commits bundled before) doesn't reach, so another
+    /// machine can get it from the server (ADR 0009).
     pub(crate) async fn record_bundle(
         &mut self,
         family_id: FamilyId,
         thread: ThreadId,
         repo: &Repo,
         commit: GitOid,
+        known: &[GitOid],
     ) -> Result<(), CoreError> {
-        let Some(bytes) = repo.bundle(commit)? else {
+        let Some(bytes) = repo.bundle(commit, known)? else {
             return Ok(());
         };
         self.push_to_mirror(family_id, thread, repo, commit);
@@ -981,7 +983,7 @@ impl Core {
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.persist(family_id, &[delta]).await?;
         repo.protect(&thread.to_string(), head)?;
-        self.record_bundle(family_id, thread, &repo, head).await?;
+        self.record_bundle(family_id, thread, &repo, head, known.as_slice()).await?;
         self.heads.insert(id, head);
         Ok(())
     }

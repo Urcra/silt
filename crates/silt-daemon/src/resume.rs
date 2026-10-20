@@ -241,7 +241,9 @@ impl Core {
                 _ => None,
             })
             .collect();
-        for (commits, blob) in bundles.into_iter().rev() {
+        // In log order: a bundle holds only what came since the one before
+        // it, so it needs that one first.
+        for (commits, blob) in bundles {
             let bytes = self.blob(blob).await?;
             if let Err(error) = repo.fetch_bundle(&bytes, &thread.to_string()) {
                 warn!(%error, "could not fetch a bundle");

@@ -109,19 +109,28 @@ fn bundles_carry_commits_origin_does_not_have() {
 
     let repo = Repo::discover(&clone).expect("discovers");
     let head = repo.head_commit().expect("head").expect("commit");
-    assert_eq!(repo.bundle(head).expect("bundle"), None, "origin already has HEAD");
+    assert_eq!(repo.bundle(head, &[]).expect("bundle"), None, "origin already has HEAD");
 
     fs::write(clone.join("local.txt"), "only here\n").expect("write");
     git(&clone, &["add", "."]);
     git(&clone, &["commit", "-q", "-m", "local only"]);
     let local = repo.head_commit().expect("head").expect("commit");
-    let bundle = repo.bundle(local).expect("bundle").expect("not empty");
+    let bundle = repo.bundle(local, &[]).expect("bundle").expect("not empty");
 
     let other = Repo::discover(&other).expect("discovers");
     assert!(!other.has_commit(local));
     other.fetch_bundle(&bundle, "t9").expect("fetches");
     assert!(other.has_commit(local));
     assert_eq!(stdout(git(other.root(), &["rev-parse", "refs/silt/threads/t9"])), local.to_string());
+
+    assert_eq!(repo.bundle(local, &[local]).expect("bundle"), None, "a known commit isn't bundled again");
+    fs::write(clone.join("local.txt"), "and more\n").expect("write");
+    git(&clone, &["commit", "-q", "-am", "more"]);
+    let next = repo.head_commit().expect("head").expect("commit");
+    let increment = repo.bundle(next, &[local]).expect("bundle").expect("not empty");
+    assert!(increment.len() < bundle.len() + 200, "only what came since: {} vs {}", increment.len(), bundle.len());
+    other.fetch_bundle(&increment, "t9").expect("fetches on top of the first");
+    assert!(other.has_commit(next));
 }
 
 #[test]

@@ -172,7 +172,7 @@ impl Core {
             None => self.await_session(agent, created.thread, created.family, created.checkout_id, &created.agent_cwd, &created.checkout),
         }
         if let Some(commit) = created.head {
-            self.record_bundle(created.family, created.thread, &created.repo, commit).await?;
+            self.record_bundle(created.family, created.thread, &created.repo, commit, &[]).await?;
         }
         Ok(SessionStarted {
             thread: created.thread.to_string(),

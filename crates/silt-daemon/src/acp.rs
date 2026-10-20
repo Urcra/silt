@@ -89,7 +89,7 @@ impl Core {
             (None, Some(clone)) => {
                 let created = self.create_thread(clone, true, false).await?;
                 if let Some(commit) = created.head {
-                    self.record_bundle(created.family, created.thread, &created.repo, commit).await?;
+                    self.record_bundle(created.family, created.thread, &created.repo, commit, &[]).await?;
                 }
                 (created.thread, created.checkout_id, created.checkout)
             }
