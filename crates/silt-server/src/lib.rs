@@ -79,6 +79,8 @@ pub enum ServerError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Config(#[from] ConfigError),
+    #[error("could not set up the HTTP client for sign-in providers")]
+    HttpClient(#[from] reqwest::Error),
 }
 
 struct Shared {
@@ -136,6 +138,7 @@ impl Server {
         index::write(&mut tx, &index_rows).await?;
         tx.commit().await?;
         let purged = lifecycle::load_purged(&db).await?;
+        let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
         Ok(Self {
             shared: Arc::new(Shared {
                 db,
@@ -149,10 +152,7 @@ impl Server {
                 presence: Mutex::new(presence::Board::default()),
                 passwords: accounts::PasswordChecks::default(),
                 config,
-                http: reqwest::Client::builder()
-                    .timeout(Duration::from_secs(20))
-                    .build()
-                    .expect("the HTTP client builds"),
+                http,
             }),
         })
     }
