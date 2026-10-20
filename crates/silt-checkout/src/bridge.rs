@@ -392,9 +392,15 @@ impl Writer<'_> {
                 prefix.push('/');
             }
             prefix.push_str(component);
-            parent = match paths.get(&prefix) {
-                Some(dir) => Parent::Dir(*dir),
-                None => {
+            let existing = paths.get(&prefix).copied();
+            parent = match existing {
+                Some(dir) if self.family.tree().kind(dir) == Some(InodeKind::Dir) => Parent::Dir(dir),
+                _ => {
+                    // A file where the disk now has a directory was replaced
+                    // by it.
+                    if let Some(file) = existing {
+                        self.tree_op(actor, Op::Delete { inode: file })?;
+                    }
                     let created = self.tree_op(
                         actor,
                         Op::Create {

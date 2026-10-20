@@ -334,6 +334,17 @@ fn a_binary_file_moved_elsewhere_is_written_before_it_leaves_its_old_path() {
 }
 
 #[test]
+fn a_file_replaced_by_a_directory_keeps_the_directorys_files() {
+    let mut family = imported_family();
+    let mut checkout = Checkout::new(1, &family);
+    checkout.disk.remove("README.md");
+    checkout.edit(&mut family, "README.md/notes.md", Some("notes\n"));
+    let paths = family.tree().paths();
+    assert_eq!(family.tree().kind(paths["README.md"]), Some(silt_crdt::InodeKind::Dir));
+    assert_eq!(family_text(&family, "README.md/notes.md"), "notes\n");
+}
+
+#[test]
 fn a_file_never_written_here_is_missing_not_deleted() {
     let mut family = imported_family();
     let mut checkout = Checkout::new(1, &family);
