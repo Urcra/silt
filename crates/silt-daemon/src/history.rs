@@ -22,18 +22,20 @@ impl Core {
     /// from. Works for threads only known from the server too.
     pub(crate) fn history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
         let family_id = self.threads[&thread].family;
-        let items: Vec<(&Delta, HistorySource)> = match self.families.get(&family_id) {
-            Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source)).collect(),
-            None => self
-                .local_log(family_id)
-                .iter()
-                .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
-                .map(|delta| (delta, HistorySource::Own))
-                .collect(),
+        let items: Vec<(&Delta, HistorySource, bool)> = match self.families.get(&family_id) {
+            Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source, item.rewound)).collect(),
+            None => {
+                let log = self.local_log(family_id);
+                let rewound = silt_log::rewound_in(log, thread);
+                log.iter()
+                    .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
+                    .map(|delta| (delta, HistorySource::Own, rewound.contains(&delta.span.first())))
+                    .collect()
+            }
         };
         let mut entries = Vec::new();
         let mut transcripts = Transcripts::default();
-        for (delta, source) in items {
+        for (delta, source, rewound) in items {
             let origin = match source {
                 HistorySource::Own => "own",
                 HistorySource::Inherited => "inherited",
@@ -50,6 +52,7 @@ impl Core {
                         kind,
                         text,
                         time_ms: delta.time_ms,
+                        rewound,
                     },
                 ));
             }
@@ -229,12 +232,19 @@ impl Core {
             .collect()
     }
 
-    /// Where the thread's turn `turn` ended (ADR 0029), knowing its prompts
-    /// from its transcripts.
+    /// Where the thread's turn `turn` ended (ADR 0029).
     pub(crate) fn turn_point(&self, thread: ThreadId, turn: usize) -> Option<silt_types::Frontier> {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
+        let end = self.turn_end(thread, turn)?;
+        Some(silt_log::thread_head_in(&family.log()[..end], family.graph(), thread))
+    }
+
+    /// How much of the family's log the thread's turn `turn` ended with,
+    /// knowing its prompts from its transcripts.
+    pub(crate) fn turn_end(&self, thread: ThreadId, turn: usize) -> Option<usize> {
+        let family = self.families.get(&self.threads.get(&thread)?.family)?;
         let mut transcripts = Transcripts::default();
-        silt_log::turn_point_by(family.log(), family.graph(), thread, turn, |delta| {
+        silt_log::turn_end_by(family.log(), thread, turn, |delta| {
             entry_texts(&mut transcripts, delta).iter().any(|(kind, _)| kind == "user")
         })
     }

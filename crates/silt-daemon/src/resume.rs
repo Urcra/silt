@@ -172,13 +172,7 @@ impl Core {
     /// start from, if it has one.
     pub(crate) fn primer(&self, thread: ThreadId) -> Option<String> {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
-        let history: Vec<&Delta> = family
-            .history(thread)
-            .into_iter()
-            .filter(|item| item.source != HistorySource::Upstream)
-            .map(|item| item.delta)
-            .collect();
-        let entries = conversation(&history);
+        let entries = conversation(&kept_history(family, thread));
         (!entries.is_empty()).then(|| render_transcript(&entries, &thread.to_string(), "an earlier agent", PRIMED_BUDGET))
     }
 
@@ -377,13 +371,7 @@ impl Core {
         as_fork: bool,
         target: Option<&'static dyn Agent>,
     ) -> Result<Option<Restored>, CoreError> {
-        let family = &self.families[&family_id];
-        let history: Vec<&Delta> = family
-            .history(thread)
-            .into_iter()
-            .filter(|item| item.source != HistorySource::Upstream)
-            .map(|item| item.delta)
-            .collect();
+        let history = kept_history(&self.families[&family_id], thread);
         let Some(session) = history.iter().rev().find_map(|delta| match &delta.op {
             Op::Conv(ConvOp::Native { session, .. }) => Some(session.clone()),
             _ => None,
@@ -635,6 +623,17 @@ pub(crate) struct Restored {
 /// The prompt is one command-line argument, which Linux caps at 128 KiB, and
 /// a character takes up to four bytes.
 const PRIMED_BUDGET: usize = 24_000;
+
+/// The thread's history a resumed session continues: neither upstream
+/// progress nor the turns a revert rewound.
+fn kept_history(family: &Family, thread: ThreadId) -> Vec<&Delta> {
+    family
+        .history(thread)
+        .into_iter()
+        .filter(|item| item.source != HistorySource::Upstream && !item.rewound)
+        .map(|item| item.delta)
+        .collect()
+}
 
 /// The conversation recorded in `history`, by any agents.
 fn conversation(history: &[&Delta]) -> Vec<Entry> {

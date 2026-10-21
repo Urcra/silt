@@ -49,7 +49,7 @@ impl Core {
 
     /// Fails unless the thread is this user's and this device holds its
     /// lease, or nobody does.
-    fn ensure_writer(&self, thread: ThreadId) -> Result<(), CoreError> {
+    pub(crate) fn ensure_writer(&self, thread: ThreadId) -> Result<(), CoreError> {
         let owner = &self.threads[&thread].owner;
         let user = self.own_user();
         if !owner.is_empty() && !user.is_empty() && *owner != user {

@@ -13,7 +13,7 @@ use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
     AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled,
-    Request, Response, Resumed, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
+    Request, Response, Resumed, Reverted, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 
@@ -576,6 +576,21 @@ pub fn sync_once(thread: Option<&str>) -> Result<(), Exn<CliError>> {
         .block_on(silt_daemon::sync_once(&paths::data_dir(), thread))
         .or_raise(|| CliError("could not sync with the server".into()))?;
     println!("pushed {} deltas of {} thread families", synced.deltas, synced.families);
+    Ok(())
+}
+
+pub fn revert(thread: Option<String>, turn: usize) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let reverted: Reverted = call(&Request::Revert { thread, cwd: current_dir()?, turn })?;
+    println!(
+        "reverted thread {} to turn {}: {} files written back; the later turns are kept, marked rewound",
+        short(&reverted.thread),
+        reverted.turn,
+        reverted.files.len()
+    );
+    for file in &reverted.files {
+        println!("  {file}");
+    }
     Ok(())
 }
 

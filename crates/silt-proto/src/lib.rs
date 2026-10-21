@@ -7,8 +7,9 @@ use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 pub mod view;
 
-/// 4: comment replies and requested changes (ADR 0025).
-pub const PROTOCOL: u32 = 4;
+/// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
+/// rewound turns (ADR 0029).
+pub const PROTOCOL: u32 = 5;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

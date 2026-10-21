@@ -223,6 +223,7 @@ body {{ font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 2rem au
 h1 {{ font-size: 1.35rem; margin-bottom: .2rem; }} .meta {{ color: #59636e; font-size: .85rem; }}
 .entry {{ margin: .7rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }} .user {{ font-weight: 600; }}
 .tool, .compaction {{ color: #59636e; font-size: .85rem; }} .turn {{ margin-top: 1.4rem; color: #59636e; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }}
+.rewound {{ opacity: .5; }}
 @media (prefers-color-scheme: dark) {{ body {{ background: #0d1117; color: #e6edf3; }} .meta, .tool, .compaction, .turn {{ color: #9198a1; }} }}
 </style></head><body>{body}</body></html>"#,
         title = escape(title),
@@ -304,17 +305,19 @@ fn render(log: &[Delta], thread: ThreadId, owner: &str, frozen_at: Option<i64>) 
     }
     let mut turn = 0;
     for (_, entry) in &entries {
+        let rewound = if entry.rewound { " rewound" } else { "" };
         let class = match entry.kind.as_str() {
             "user" => {
                 turn += 1;
-                body.push_str(&format!("<div class=\"turn\">Turn {turn}</div>"));
+                let note = if entry.rewound { " · rewound by a revert" } else { "" };
+                body.push_str(&format!("<div class=\"turn{rewound}\">Turn {turn}{note}</div>"));
                 "user"
             }
             "tool_call" => "tool",
             "compaction" => "compaction",
             _ => "assistant",
         };
-        body.push_str(&format!("<div class=\"entry {class}\">{}</div>", escape(&entry.text)));
+        body.push_str(&format!("<div class=\"entry {class}{rewound}\">{}</div>", escape(&entry.text)));
     }
     if entries.is_empty() {
         body.push_str("<p class=\"meta\">Nothing was said in this thread yet.</p>");

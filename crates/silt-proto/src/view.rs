@@ -270,6 +270,9 @@ pub struct HistoryEntry {
     pub kind: String,
     pub text: String,
     pub time_ms: i64,
+    /// A revert rewound it (ADR 0029).
+    #[serde(default)]
+    pub rewound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

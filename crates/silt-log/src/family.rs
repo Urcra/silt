@@ -159,6 +159,9 @@ impl ThreadState {
 pub struct HistoryItem<'a> {
     pub delta: &'a Delta,
     pub source: HistorySource,
+    /// A revert rewound it (ADR 0029): still history, no longer the
+    /// conversation.
+    pub rewound: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -421,13 +424,14 @@ impl Family {
                 for item in upstream.iter() {
                     let id = item.delta.span.first();
                     if merged.contains(id) && seen.insert(id) {
-                        items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream });
+                        items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream, rewound: item.rewound });
                     }
                 }
             }
             seen.insert(delta.span.first());
-            items.push(HistoryItem { delta, source: HistorySource::Own });
+            items.push(HistoryItem { delta, source: HistorySource::Own, rewound: false });
         }
+        mark_rewound(&mut items);
         expansion.open.remove(&thread);
         let items: Rc<[HistoryItem<'a>]> = items.into();
         if whole {
@@ -518,6 +522,37 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
     comments
 }
 
+/// Marks what each revert in `items` rewound: everything after the delta it
+/// names and before the revert itself (ADR 0029).
+fn mark_rewound(items: &mut [HistoryItem<'_>]) {
+    for at in 0..items.len() {
+        let Op::Conv(crate::delta::ConvOp::Rewound { to }) = items[at].delta.op else {
+            continue;
+        };
+        if let Some(from) = items[..at].iter().position(|item| item.delta.span.contains(to)) {
+            for item in &mut items[from + 1..at] {
+                item.rewound = true;
+            }
+        }
+    }
+}
+
+/// The thread's own conversation deltas a revert rewound, from the log
+/// alone, as a server sees it.
+pub fn rewound_in(log: &[Delta], thread: ThreadId) -> HashSet<DeltaId> {
+    let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_))).collect();
+    let mut rewound = HashSet::new();
+    for (at, delta) in own.iter().enumerate() {
+        let Op::Conv(crate::delta::ConvOp::Rewound { to }) = delta.op else {
+            continue;
+        };
+        if let Some(from) = own[..at].iter().position(|earlier| earlier.span.contains(to)) {
+            rewound.extend(own[from + 1..at].iter().map(|earlier| earlier.span.first()));
+        }
+    }
+    rewound
+}
+
 /// Moves a thread's `head` past `delta`, one of the thread's own.
 fn advance_head(head: &mut Frontier, delta: &Delta, graph: &CausalGraph) {
     let parents_are_head = delta.parents.ids().iter().all(|parent| head.contains(parent));
@@ -557,8 +592,15 @@ pub fn turn_point_by(
     graph: &CausalGraph,
     thread: ThreadId,
     turn: usize,
-    mut is_prompt: impl FnMut(&Delta) -> bool,
+    is_prompt: impl FnMut(&Delta) -> bool,
 ) -> Option<Frontier> {
+    let end = turn_end_by(log, thread, turn, is_prompt)?;
+    Some(thread_head_in(&log[..end], graph, thread))
+}
+
+/// How much of the log turn `turn` ended with: the index where the next
+/// turn began, or the log's length for the last one. See [`turn_point_by`].
+pub fn turn_end_by(log: &[Delta], thread: ThreadId, turn: usize, mut is_prompt: impl FnMut(&Delta) -> bool) -> Option<usize> {
     let (mut marks, mut prompts) = (Vec::new(), Vec::new());
     for (index, delta) in log.iter().enumerate().filter(|(_, delta)| delta.thread == thread) {
         if matches!(delta.op, Op::Conv(crate::delta::ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })) {
@@ -571,8 +613,7 @@ pub fn turn_point_by(
     if turn == 0 || turn > marks.len() {
         return None;
     }
-    let next = [marks.get(turn), prompts.get(turn)].into_iter().flatten().min();
-    Some(thread_head_in(next.map_or(log, |next| &log[..*next]), graph, thread))
+    Some([marks.get(turn), prompts.get(turn)].into_iter().flatten().min().copied().unwrap_or(log.len()))
 }
 
 /// [`turn_point_by`] where turns begin at their marks alone.

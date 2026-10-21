@@ -65,6 +65,15 @@ enum Command {
         /// The fork; defaults to the thread checked out here
         thread: Option<String>,
     },
+    /// Take a thread's files back to how a turn left them; later turns stay
+    /// in its history, marked rewound
+    Revert {
+        /// The thread; defaults to the one checked out here
+        thread: Option<String>,
+        /// The turn to go back to, as the thread's page numbers them
+        #[arg(long)]
+        turn: usize,
+    },
     /// Merge requests from forks back to their source threads
     Mr {
         #[command(subcommand)]
@@ -595,6 +604,7 @@ fn run() -> Result<(), Exn<CliError>> {
             commands::fork(&thread, private, turn, continued.here, continued.agent.as_deref(), &continued.args)
         }
         Command::Pull { thread } => commands::pull(thread),
+        Command::Revert { thread, turn } => commands::revert(thread, turn),
         Command::Mr { command } => match command {
             MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
             MrCommand::List { thread } => commands::mr_list(thread),

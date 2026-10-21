@@ -117,7 +117,8 @@ pub fn history(page: &HistoryPage) -> String {
             "own" => String::new(),
             other => format!(" ({other} from {})", short(&entry.thread)),
         };
-        let _ = writeln!(out, "[{}] {}{origin}: {}", entry.index, entry.kind, clip(entry.text.trim(), 200));
+        let rewound = if entry.rewound { " (rewound)" } else { "" };
+        let _ = writeln!(out, "[{}] {}{origin}{rewound}: {}", entry.index, entry.kind, clip(entry.text.trim(), 200));
     }
     out
 }

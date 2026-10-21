@@ -477,6 +477,7 @@ impl Core {
                 to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private, turn).await)
             }
             Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
+            Request::Revert { thread, cwd, turn } => to_response(self.revert(thread.as_deref(), &cwd, turn).await),
             Request::MrCreate { thread, cwd, title, summary } => {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }

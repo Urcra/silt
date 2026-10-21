@@ -241,7 +241,7 @@ impl Core {
         Ok(silt_git::Repo::discover(clone)?.branches()?)
     }
 
-    async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
+    pub(crate) async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
         if let Some(checkout) = self.checkouts.values().find(|checkout| checkout.record.thread == thread) {
             return Ok((checkout.record.id, checkout.record.path.clone()));
         }
@@ -258,15 +258,22 @@ impl Core {
     }
 
     /// The last session `agent` recorded in the thread: Silt's id for it and
-    /// the agent's own.
+    /// the agent's own. A session a revert rewound past is none, as the agent
+    /// would load it with the rewound turns.
     fn earlier_session(&self, thread: ThreadId, agent: &str) -> Option<(String, String)> {
         let family = self.threads.get(&thread)?.family;
-        self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
-            Op::Conv(ConvOp::Native { session, line, .. }) if delta.thread == thread && session.agent == acp::AGENT => {
-                acp::session_of(line).filter(|(id, _)| id == agent).map(|(_, native)| (session.id.clone(), native))
-            }
-            _ => None,
-        })
+        self.local_log(family)
+            .iter()
+            .rev()
+            .filter(|delta| delta.thread == thread)
+            .find_map(|delta| match &delta.op {
+                Op::Conv(ConvOp::Rewound { .. }) => Some(None),
+                Op::Conv(ConvOp::Native { session, line, .. }) if session.agent == acp::AGENT => {
+                    acp::session_of(line).filter(|(id, _)| id == agent).map(|(_, native)| Some((session.id.clone(), native)))
+                }
+                _ => None,
+            })
+            .flatten()
     }
 
     /// Sends `text` to the thread's agent when it's ready for a prompt, and

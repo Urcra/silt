@@ -109,11 +109,12 @@ impl Core {
         if let Some(family) = self.families().get(&family_id) {
             return self.show_items(family, thread, family.history(thread));
         }
-        let conversation: Vec<HistoryItem<'_>> = self
-            .local_log(family_id)
+        let log = self.local_log(family_id);
+        let rewound = silt_log::rewound_in(log, thread);
+        let conversation: Vec<HistoryItem<'_>> = log
             .iter()
             .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
-            .map(|delta| HistoryItem { delta, source: HistorySource::Own })
+            .map(|delta| HistoryItem { delta, source: HistorySource::Own, rewound: rewound.contains(&delta.span.first()) })
             .collect();
         self.show_lines(None, thread, conversation)
     }

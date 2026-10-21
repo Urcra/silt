@@ -255,7 +255,11 @@ origin: string,
  * `user`, `assistant`, `thinking`, `tool_call`, `tool_result`,
  * `compaction`, `merge` or `pull`.
  */
-kind: string, text: string, time_ms: number, };
+kind: string, text: string, time_ms: number, 
+/**
+ * A revert rewound it (ADR 0029).
+ */
+rewound: boolean, };
 
 export type HistoryHit = { 
 /**
@@ -381,6 +385,12 @@ export type Pulled = { thread: string, from: string,
  * Conversation entries the pull brought in.
  */
 messages: number, files: Array<string>, };
+
+export type Reverted = { thread: string, turn: number, 
+/**
+ * The files written back.
+ */
+files: Array<string>, };
 
 export type ReplicaDeltas = { 
 /**

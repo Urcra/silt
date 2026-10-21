@@ -186,6 +186,40 @@ fn a_fork_from_a_turn_inherits_the_conversation_up_to_it() {
 }
 
 #[test]
+fn a_revert_rewinds_the_conversation_after_its_turn_and_keeps_it() {
+    let mut family = Family::new();
+    let session = SessionRef { agent: "claude-code".into(), id: "s1".into() };
+    let said = |text: &str| {
+        Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: format!("{{\"said\":\"{text}\"}}") })
+    };
+    let first = write_on_head(&mut family, DAEMON, said("first"));
+    write_on_head(&mut family, DAEMON, said("second"));
+    write_on_head(&mut family, DAEMON, said("third"));
+    write_on_head(&mut family, DAEMON, Op::Conv(ConvOp::Rewound { to: first.span.first() }));
+    write_on_head(&mut family, DAEMON, said("again"));
+
+    let rewound: Vec<(String, bool)> = family
+        .history(THREAD)
+        .into_iter()
+        .filter_map(|item| match &item.delta.op {
+            Op::Conv(ConvOp::Native { line, .. }) => Some((line.clone(), item.rewound)),
+            _ => None,
+        })
+        .collect();
+    let flags: Vec<bool> = rewound.iter().map(|(_, rewound)| *rewound).collect();
+    assert_eq!(flags, [false, true, true, false], "{rewound:?}");
+    let from_log = silt_log::rewound_in(family.log(), THREAD);
+    assert_eq!(from_log.len(), 2, "the server sees the same from the log alone");
+
+    // A fork made after the revert inherits what was rewound as rewound.
+    let fork = ThreadId(9);
+    let delta = family.delta(CHECKOUT_A, fork, Author::User, 0, family.thread_head(THREAD), Op::Fork { from: THREAD });
+    assert_eq!(family.apply(delta, &mut bases()), Ok(Applied::New));
+    let inherited = family.history(fork).into_iter().filter(|item| item.rewound).count();
+    assert_eq!(inherited, 2);
+}
+
+#[test]
 fn missing_base_text_rejects_without_changes() {
     let mut family = Family::new();
     let main = create_main(&mut family);

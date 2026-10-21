@@ -100,6 +100,13 @@ pub enum Request {
         thread: Option<String>,
         cwd: PathBuf,
     },
+    /// Takes the thread back to how turn `turn` left it (ADR 0029);
+    /// `thread` defaults to the one checked out at `cwd`.
+    Revert {
+        thread: Option<String>,
+        cwd: PathBuf,
+        turn: usize,
+    },
     MrCreate {
         thread: Option<String>,
         cwd: PathBuf,
@@ -517,6 +524,15 @@ pub struct HookReply {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Reverted {
+    pub thread: String,
+    pub turn: usize,
+    /// The files written back.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Pulled {
     pub thread: String,
     pub from: String,
@@ -901,6 +917,7 @@ mod tests {
             Queued::decl(&config),
             ReplyView::decl(&config),
             Pulled::decl(&config),
+            Reverted::decl(&config),
             ReplicaDeltas::decl(&config),
             Resumed::decl(&config),
             SearchFilters::decl(&config),

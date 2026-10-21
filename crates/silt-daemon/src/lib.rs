@@ -24,6 +24,7 @@ mod recorder;
 mod recovery;
 pub mod remote;
 mod resume;
+mod revert;
 mod server;
 mod sessions;
 mod spool;

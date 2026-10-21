@@ -42,9 +42,11 @@ function Copy({ command }: { command: string }) {
   )
 }
 
-function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
+function TurnDiff({ thread, turn, rewound }: { thread: string; turn: TurnInfo; rewound: boolean }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [reverting, setReverting] = useState(false)
   const diff = useQuery({
     queryKey: keys.diff(thread, { turn: turn.number }),
     queryFn: () => api.diff(thread, { turn: turn.number }),
@@ -54,6 +56,15 @@ function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
   const forkHere = () =>
     api.fork(thread, turn.number).then(
       (made) => void navigate({ to: '/t/$id', params: { id: made.thread } }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  const revertHere = () =>
+    api.revert(thread, turn.number).then(
+      (reverted) => {
+        setReverting(false)
+        toast(`Reverted to turn ${reverted.turn}: ${reverted.files.length} files written back`)
+        void queryClient.invalidateQueries()
+      },
       (failure: unknown) => toast(message(failure), 'danger'),
     )
   return (
@@ -66,6 +77,21 @@ function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
           fork from turn {turn.number}
         </button>
       )}
+      {!hosted() &&
+        !rewound &&
+        (reverting ? (
+          <span className="flex items-center gap-2 text-xs text-fg-2">
+            Files go back to how turn {turn.number} left them; later turns stay, marked rewound.
+            <button className="text-danger" onClick={() => void revertHere()}>
+              revert
+            </button>
+            <button onClick={() => setReverting(false)}>cancel</button>
+          </span>
+        ) : (
+          <button className="text-xs text-accent-fg" onClick={() => setReverting(true)} title="Take this thread's code and conversation back to this turn">
+            revert to turn {turn.number}
+          </button>
+        ))}
       {open && diff.data !== undefined && (
         <div className="w-full">
           <Diff text={diff.data} />
@@ -124,10 +150,16 @@ function Entry({
     return <p className="ml-10 whitespace-pre-wrap text-xs text-fg-2">Compaction summary: {entry.text}</p>
   }
   return (
-    <div data-testid="entry" className={`group ${entry.kind === 'user' ? 'mt-4' : ''}`}>
+    <div
+      data-testid="entry"
+      data-rewound={entry.rewound || undefined}
+      className={`group ${entry.kind === 'user' ? 'mt-4' : ''} ${entry.rewound ? 'opacity-50' : ''}`}
+      title={entry.rewound ? 'Rewound by a revert: kept in the history, no longer part of the conversation' : undefined}
+    >
       <div className="flex gap-2">
         <span className="w-8 shrink-0 text-right font-mono text-xs text-fg-3">{entry.index}</span>
         <div className="min-w-0 flex-1">
+          {entry.rewound && entry.kind === 'user' && <p className="text-xs italic text-fg-3">rewound by a revert</p>}
           <p className={KIND_STYLE[entry.kind] ?? 'text-sm'}>
             {entry.kind === 'user' ? '› ' : ''}
             {entry.kind === 'tool_call' ? '⚙ ' : ''}
@@ -138,7 +170,7 @@ function Entry({
               <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
             </div>
           ))}
-          {turn && <TurnDiff thread={thread} turn={turn} />}
+          {turn && <TurnDiff thread={thread} turn={turn} rewound={entry.rewound} />}
           {commenting && <CommentBox onSave={(text) => onComment(text).then(() => setCommenting(false))} />}
         </div>
         <button

@@ -203,7 +203,9 @@ fn render_page(page: &HistoryPage) -> String {
             "own" => String::new(),
             other => format!(" ({other} from {})", short(&entry.thread)),
         };
-        let _ = writeln!(out, "[{}] {}{origin}: {}", entry.index, entry.kind, entry.text.trim());
+        // An agent must not take a rewound turn as part of the conversation (ADR 0029).
+        let rewound = if entry.rewound { " (rewound by a revert, no longer part of the conversation)" } else { "" };
+        let _ = writeln!(out, "[{}] {}{origin}{rewound}: {}", entry.index, entry.kind, entry.text.trim());
     }
     out
 }

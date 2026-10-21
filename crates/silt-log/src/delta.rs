@@ -276,6 +276,13 @@ pub enum ConvOp {
         session: SessionRef,
         lines: BlobHash,
     },
+    /// The thread was reverted to the turn ending with `to` (ADR 0029): its
+    /// conversation after `to` and before this mark is rewound, kept in the
+    /// history but no longer the conversation. Last, as stored deltas name
+    /// variants by position.
+    Rewound {
+        to: DeltaId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

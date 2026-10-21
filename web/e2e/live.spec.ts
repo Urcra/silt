@@ -476,6 +476,45 @@ test('a fork from an earlier turn has the conversation up to it', async ({ page 
   await expect(history).not.toContainText('the second turn')
 })
 
+test('a revert takes the files back to a turn and keeps the later turns, rewound', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  for (const prompt of ['revert keeps this', 'revert drops this']) {
+    await page.getByLabel('draft').fill(prompt)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
+  }
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
+  const edits = () =>
+    page.evaluate(async (thread) => {
+      const response = await fetch(`/api/threads/${thread}/diff`, {
+        headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}` },
+      })
+      return ((await response.json()) as string).split('+fn acp() {}').length - 1
+    }, thread)
+  expect(await edits()).toBe(2)
+
+  await page.getByRole('button', { name: 'revert to turn 1' }).click()
+  await page.getByRole('button', { name: 'revert', exact: true }).click()
+  await expect(page.getByText(/^Reverted to turn 1/)).toBeVisible()
+  await expect.poll(edits).toBe(1)
+  const history = page.getByTestId('history')
+  await expect(history.getByTestId('entry').filter({ hasText: '› revert drops this' })).toHaveAttribute('data-rewound', 'true')
+  await expect(history.getByTestId('entry').filter({ hasText: '› revert keeps this' })).not.toHaveAttribute('data-rewound')
+
+  // The agent started next is primed without the rewound turn.
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('button', { name: 'Start agent' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await page.getByLabel('draft').fill('after the revert')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const reply = page.getByText(/^Done: You are continuing a conversation[\s\S]*after the revert$/)
+  await expect(reply).toContainText('revert keeps this')
+  await expect(reply).not.toContainText('revert drops this')
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+})
+
 test('a read-only link opens the conversation without signing in, until revoked', async ({ browser }) => {
   const owner = await (await browser.newContext()).newPage()
   await owner.goto(live.alice)

@@ -127,6 +127,7 @@ impl Readable {
 /// A thread's own history entries, each with the delta it came from.
 pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
     let mut transcripts = Transcripts::default();
+    let rewound = silt_log::rewound_in(log, thread);
     let mut out = Vec::new();
     for delta in log.iter().filter(|delta| delta.thread == thread) {
         let texts: Vec<(String, String)> = match &delta.op {
@@ -158,7 +159,15 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
             let index = out.len();
             out.push((
                 delta.span.first(),
-                HistoryEntry { index, thread: thread.to_string(), origin: "own".into(), kind, text, time_ms: delta.time_ms },
+                HistoryEntry {
+                    index,
+                    thread: thread.to_string(),
+                    origin: "own".into(),
+                    kind,
+                    text,
+                    time_ms: delta.time_ms,
+                    rewound: rewound.contains(&delta.span.first()),
+                },
             ));
         }
     }

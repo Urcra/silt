@@ -134,6 +134,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/fork", post(fork))
         .route("/api/threads/{id}/resume", post(resume))
         .route("/api/threads/{id}/pull", post(pull))
+        .route("/api/threads/{id}/revert", post(revert))
         .route("/api/threads/{id}/mrs", post(mr_create))
         .route("/api/threads/{id}/visibility", post(visibility))
         .route("/api/threads/{id}/share", post(share))
@@ -761,6 +762,15 @@ async fn resume(State(web): State<Web>, Path(thread): Path<String>, body: Option
 
 async fn pull(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask_in_clone(&web, &thread, |cwd| Request::Pull { thread: Some(thread.clone()), cwd }).await
+}
+
+#[derive(Deserialize)]
+struct RevertBody {
+    turn: usize,
+}
+
+async fn revert(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<RevertBody>) -> HttpResponse {
+    ask(&web, Request::Revert { thread: Some(thread), cwd: PathBuf::new(), turn: body.turn }).await
 }
 
 #[derive(Deserialize, Default)]

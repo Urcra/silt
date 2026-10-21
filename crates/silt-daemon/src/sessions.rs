@@ -733,6 +733,11 @@ impl Core {
             || !self.live_sessions(thread, |session| session.agent.capture() != Capture::Hooks).is_empty()
     }
 
+    /// Whether an agent works in the thread on this machine.
+    pub(crate) fn agent_live(&self, thread: ThreadId) -> bool {
+        self.running(thread).is_ok() || !self.live_sessions(thread, |_| true).is_empty()
+    }
+
     /// The live sessions of `thread` that `keep` keeps.
     fn live_sessions(&self, thread: ThreadId, keep: impl Fn(&Session) -> bool) -> Vec<String> {
         self.sessions
