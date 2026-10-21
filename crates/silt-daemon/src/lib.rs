@@ -1,4 +1,5 @@
 mod acp;
+mod attribution;
 pub mod client;
 mod comments;
 mod core;

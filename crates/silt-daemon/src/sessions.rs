@@ -17,6 +17,7 @@ use silt_types::{ActorId, FamilyId, ThreadId};
 use tokio::sync::oneshot;
 use tracing::warn;
 
+use crate::attribution;
 use crate::core::{Core, CoreError, Event, now_ms, to_response};
 use crate::protocol::{HookReply, Response, SessionStarted};
 
@@ -27,9 +28,6 @@ const TOOL_SETTLE: Duration = Duration::from_millis(250);
 /// hooks: agents flush their transcripts late, and some only write a tool
 /// call once it finished.
 const TRANSCRIPT_LAG: Duration = Duration::from_millis(400);
-/// How long a tool or turn read as finished from a transcript still owns
-/// the edits that arrive; longer than the lag plus a tick of tailing.
-const MARK_SETTLE: Duration = Duration::from_millis(1000);
 /// How often a session kept in a store rather than a file is read again.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(3);
 const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
@@ -976,46 +974,26 @@ impl Core {
     }
 
     pub(crate) fn author_for(&self, checkout: i64) -> Author {
-        if self.importing {
-            return Author::Import;
-        }
-        let sessions = || self.sessions.iter().filter(|session| session.record.checkout_id == checkout);
-        // A mark read close to when the edit was noticed, before or after,
-        // was written around the edit: transcripts trail the edits.
+        let sessions: Vec<attribution::SessionState<'_>> = self
+            .sessions
+            .iter()
+            .filter(|session| session.record.checkout_id == checkout)
+            .map(|session| attribution::SessionState {
+                agent: &session.record.agent,
+                session: &session.record.session_id,
+                hooks: session.agent.hooks(),
+                by_snapshot: session.agent.reads_by_snapshot(),
+                live: session.live,
+                in_turn: session.in_turn,
+                open_tool: session.open_tool.as_deref(),
+                closed_tool: session.closed_tool.as_ref().map(|(tool, at)| (tool.as_str(), *at)),
+                turn_closed: session.turn_closed,
+            })
+            .collect();
+        // An agent that hasn't written its session yet, but is running.
+        let pending = self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| pending.agent.id());
         let noticed = self.change_noticed.unwrap_or_else(Instant::now);
-        let settling = |at: &Instant| {
-            let apart = if *at > noticed { *at - noticed } else { noticed - *at };
-            apart < MARK_SETTLE
-        };
-        if let Some(author) = sessions().find_map(|session| {
-            let closed = session.closed_tool.as_ref().filter(|(_, at)| settling(at)).map(|(tool, _)| tool);
-            session.open_tool.as_ref().or(closed).map(|tool| Author::Agent {
-                agent: session.record.agent.clone(),
-                session: session.record.session_id.clone(),
-                tool_use_id: Some(tool.clone()),
-            })
-        }) {
-            return author;
-        }
-        // Without hooks, edits are only known to fall inside a turn; a store
-        // read by snapshot learns even that late, so its whole run counts.
-        sessions()
-            .find(|session| {
-                !session.agent.hooks()
-                    && (session.in_turn
-                        || session.turn_closed.as_ref().is_some_and(settling)
-                        || (session.live && session.agent.reads_by_snapshot()))
-            })
-            .map(|session| agent_author(&session.reference()))
-            .or_else(|| {
-                // The agent hasn't written its session yet, but it is running.
-                self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| Author::Agent {
-                    agent: pending.agent.id().to_owned(),
-                    session: String::new(),
-                    tool_use_id: None,
-                })
-            })
-            .unwrap_or(Author::User)
+        attribution::author(self.importing, &sessions, pending, noticed)
     }
 
     /// Returns a response to send now, or `None` when the reply is deferred.
