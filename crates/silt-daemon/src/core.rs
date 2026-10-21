@@ -454,6 +454,7 @@ impl Core {
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
+            Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
             Request::OpenWeb { cwd, once } => {
                 if let Some(cwd) = cwd {

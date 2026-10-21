@@ -60,7 +60,15 @@ pub(crate) struct AcpRun {
     /// first.
     first: Option<(String, bool)>,
     accepts: Accepts,
+    /// The merge request whose change guide this turn writes, and what the
+    /// agent has said in it so far (ADR 0025).
+    guiding: Option<(silt_types::DeltaId, String)>,
 }
+
+/// What the fork's agent is asked for a change guide.
+const GUIDE_PROMPT: &str = "Write a change guide for the reviewers of the merge request offered from this thread: \
+                            walk through what changed and why, in the order that's easiest to read, naming files and \
+                            the reasons behind each choice. Don't change any files; answer with the guide alone.";
 
 /// What a Plan first prompt starts with when the agent has no plan mode.
 const PLAN_FIRST: &str = "Before you change anything, write a plan for this and stop: don't edit files or run commands \
@@ -218,6 +226,7 @@ impl Core {
                 back_to: None,
                 first: options.prompt.map(|prompt| (prompt, options.plan)),
                 accepts: Accepts::default(),
+                guiding: None,
             },
         );
         self.agent_changed(thread).await;
@@ -612,6 +621,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
+                self.guide_written(thread, &reason).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
                 run.state = if planned && run.still_planning() {
@@ -729,6 +739,14 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         let thought = std::mem::take(&mut run.thought);
         let text = std::mem::take(&mut run.text);
+        if let Some((_, said)) = &mut run.guiding
+            && !text.is_empty()
+        {
+            if !said.is_empty() {
+                said.push_str("\n\n");
+            }
+            said.push_str(&text);
+        }
         if !thought.is_empty() {
             self.record_acp(thread, &acp::thought(&thought)).await?;
         }
@@ -736,6 +754,46 @@ impl Core {
             self.record_acp(thread, &acp::message(&text)).await?;
         }
         Ok(())
+    }
+
+    /// Keeps `text` as the request's change guide, or asks the fork's agent
+    /// running here to write it, and keeps its answer once its turn ends.
+    pub(crate) async fn mr_guide(&mut self, selector: &str, text: Option<String>) -> Result<&'static str, CoreError> {
+        let (family_id, request) = self.find_mr(selector)?;
+        if let Some(text) = text {
+            if text.trim().is_empty() {
+                return Err(CoreError::Invalid("the guide is empty".into()));
+            }
+            let by = match self.own_user() {
+                user if user.is_empty() => "you".to_owned(),
+                user => user,
+            };
+            self.keep_guide(family_id, &request, text, by).await?;
+            return Ok("kept");
+        }
+        let ready = self.acp.get(&request.fork).is_some_and(|run| run.state == AgentState::Idle);
+        if !ready {
+            return Err(CoreError::Invalid(
+                "start an agent in the fork and let it finish its turn to have it write the guide, or write one yourself".into(),
+            ));
+        }
+        self.acp.get_mut(&request.fork).expect("checked above").guiding = Some((request.id, String::new()));
+        let me = self.own_user();
+        self.send_prompt(request.fork, &me, GUIDE_PROMPT, Vec::new()).await?;
+        Ok("asked")
+    }
+
+    /// Keeps what the agent wrote for a guide, once its turn ended well.
+    async fn guide_written(&mut self, thread: ThreadId, reason: &silt_acp::StopReason) -> Result<(), CoreError> {
+        let Some((mr, said)) = self.acp.get_mut(&thread).and_then(|run| run.guiding.take()) else {
+            return Ok(());
+        };
+        if *reason != silt_acp::StopReason::EndTurn || said.trim().is_empty() {
+            return Ok(());
+        }
+        let (family_id, request) = self.find_mr(&mr.to_string())?;
+        let by = self.acp.get(&thread).map_or_else(|| "an agent".to_owned(), |run| run.info.name.clone());
+        self.keep_guide(family_id, &request, said, by).await
     }
 
     async fn record_acp(&mut self, thread: ThreadId, line: &str) -> Result<(), CoreError> {

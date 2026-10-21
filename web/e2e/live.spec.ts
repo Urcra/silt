@@ -355,6 +355,28 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
   await page.getByRole('button', { name: 'Offer', exact: true }).click()
   await expect(page).toHaveURL(/\/mr\//)
   await expect(page.getByTestId('mr-status')).toHaveText('open')
+
+  // A change guide: by hand, then by the fork's agent once one runs there.
+  const guide = page.getByRole('region', { name: 'change guide' })
+  await guide.getByRole('button', { name: "Ask the fork's agent" }).click()
+  await expect(page.getByRole('main')).toContainText('start an agent in the fork')
+  await guide.getByRole('button', { name: 'Write it' }).click()
+  await guide.getByLabel('guide').fill('Start with src/main.rs.')
+  await guide.getByRole('button', { name: 'Keep guide' }).click()
+  await expect(guide.getByTestId('guide')).toHaveText('Start with src/main.rs.')
+  await expect(guide).toContainText('by alice')
+
+  const request = page.url()
+  await page.getByRole('main').getByRole('link').filter({ hasText: /^[0-9a-f]{12}$/ }).first().click()
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('button', { name: 'Start agent' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await page.goto(request)
+  await guide.getByRole('button', { name: "Ask the fork's agent" }).click()
+  // The fake agent answers with its whole prompt, primed with the conversation.
+  await expect(guide.getByTestId('guide')).toContainText('Write a change guide for the reviewers', { timeout: 15_000 })
+  await expect(guide).toContainText('by Fake agent')
+
   await page.getByRole('link', { name: 'Merge requests' }).click()
   await expect(page.getByRole('main')).toContainText('Origin work')
 })

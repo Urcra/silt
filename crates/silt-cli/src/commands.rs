@@ -633,6 +633,16 @@ pub fn mr_request_changes(mr: &str, reason: &str) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn mr_guide(mr: &str, text: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let answer: String = call(&Request::MrGuide { mr: mr.into(), text })?;
+    match answer.as_str() {
+        "asked" => println!("asked the fork's agent to write the guide; it shows with `silt mr show {mr}` once its turn ends"),
+        _ => println!("kept the change guide of {mr}"),
+    }
+    Ok(())
+}
+
 pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let message: String = call(&Request::SetVisibility { cwd: current_dir()?, thread, visibility })?;

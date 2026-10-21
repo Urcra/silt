@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { api, short, type MrFile } from '../api'
+import { api, short, type MrFile, type MrGuide } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
-import { Banner, Button, Input } from '../ui'
+import { Banner, Button, Input, Textarea } from '../ui'
 import { Conversation } from './Conversation'
 import { Diff } from './Diff'
 
@@ -30,6 +30,59 @@ export function MergeRequests() {
         ))}
       </ul>
     </div>
+  )
+}
+
+/** A walk-through for reviewers: written by the fork's agent when asked, or by hand (ADR 0025). */
+function ChangeGuide({ id, guide, act }: { id: string; guide: MrGuide | null; act: (action: Promise<unknown>) => Promise<unknown> }) {
+  const [writing, setWriting] = useState(false)
+  const [text, setText] = useState('')
+  const [asked, setAsked] = useState(false)
+  return (
+    <section aria-label="change guide" className="rounded-md border border-line p-3 text-sm">
+      <div className="mb-1 flex items-center gap-2">
+        <h3 className="font-semibold">Change guide</h3>
+        {guide && <span className="text-xs text-fg-3">by {guide.by}</span>}
+        <span className="ml-auto flex gap-2">
+          <Button
+            onClick={() => {
+              setAsked(true)
+              void act(api.writeGuide(id))
+            }}
+            title="The agent running in the fork writes it, on this machine"
+          >
+            Ask the fork's agent
+          </Button>
+          <Button variant="ghost" onClick={() => setWriting(!writing)}>
+            Write it
+          </Button>
+        </span>
+      </div>
+      {guide ? (
+        <p data-testid="guide" className="whitespace-pre-wrap">
+          {guide.text}
+        </p>
+      ) : (
+        <p className="text-xs text-fg-3">{asked ? 'The fork’s agent is writing it…' : 'No guide yet.'}</p>
+      )}
+      {writing && (
+        <form
+          className="mt-2 space-y-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void act(api.writeGuide(id, text)).then(() => {
+              setWriting(false)
+              setText('')
+            })
+          }}
+        >
+          <Textarea aria-label="guide" rows={5} value={text} onChange={(event) => setText(event.target.value)} />
+          <Button type="submit" variant="primary" disabled={!text.trim()}>
+            Keep guide
+          </Button>
+        </form>
+      )}
+    </section>
   )
 }
 
@@ -68,6 +121,7 @@ export function MergeRequest({ id }: { id: string }) {
         </p>
         <p className="mt-2 whitespace-pre-wrap text-sm">{mr.summary}</p>
       </div>
+      <ChangeGuide id={id} guide={details.data.guide} act={act} />
       {mr.changes_requested && (
         <div data-testid="changes-requested">
           <Banner tone={mr.updated_since ? 'info' : 'warn'}>

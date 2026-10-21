@@ -203,6 +203,9 @@ pub fn merge_request(details: &MrDetails) -> String {
         request.target,
         request.summary.trim()
     );
+    if let Some(guide) = &details.guide {
+        let _ = write!(out, "\n── change guide, by {} ──\n{}\n", guide.by, guide.text.trim());
+    }
     if !details.conflicts.is_empty() {
         out.push_str("\nconflict hints (the merge keeps both sides; check these):\n");
         for conflict in &details.conflicts {

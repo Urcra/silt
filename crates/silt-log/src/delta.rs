@@ -131,6 +131,13 @@ pub enum MrOp {
         mr: DeltaId,
         reason: String,
     },
+    /// A walk-through of the request for its reviewers, by a person or an
+    /// agent on someone's machine; the latest one shows (ADR 0025).
+    Guided {
+        mr: DeltaId,
+        guide: String,
+        by: String,
+    },
 }
 
 impl Op {

@@ -120,6 +120,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/mrs/{id}/decline", post(decline))
         .route("/api/mrs/{id}/request-changes", post(mr_request_changes))
         .route("/api/mrs/{id}/seen", put(mr_seen))
+        .route("/api/mrs/{id}/guide", post(mr_guide))
         .route("/api/threads/{id}", delete(thread_purge))
         .route("/api/threads/{id}/fork", post(fork))
         .route("/api/threads/{id}/resume", post(resume))
@@ -655,6 +656,17 @@ struct SeenBody {
 
 async fn mr_seen(State(web): State<Web>, Path(mr): Path<String>, Json(body): Json<SeenBody>) -> HttpResponse {
     ask(&web, Request::MrSeen { mr, path: body.path, seen: body.seen }).await
+}
+
+#[derive(Deserialize, Default)]
+struct GuideBody {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+async fn mr_guide(State(web): State<Web>, Path(mr): Path<String>, body: Option<Json<GuideBody>>) -> HttpResponse {
+    let GuideBody { text } = body.map(|Json(body)| body).unwrap_or_default();
+    ask(&web, Request::MrGuide { mr, text }).await
 }
 
 #[derive(Deserialize, Default)]

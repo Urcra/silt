@@ -153,6 +153,8 @@ export const api = {
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
   mergeRequest: (id: string) => request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}`),
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
+  writeGuide: (id: string, text?: string) =>
+    request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),
   markSeen: (id: string, path: string, seen: boolean) =>
     request<string>('PUT', `/api/mrs/${encodeURIComponent(id)}/seen`, { path, seen }),
   requestChanges: (id: string, reason: string) =>

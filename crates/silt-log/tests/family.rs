@@ -513,6 +513,11 @@ fn merge_requests_open_and_resolve_once() {
     let request = &family.merge_requests()[0];
     assert_eq!(request.status, MrStatus::Open);
     assert_eq!(request.changes_requested.as_ref().map(|asked| asked.reason.as_str()), Some("and a doc comment"));
+    for (guide, by) in [("first draft", "agent"), ("read main first", "bob")] {
+        let head = family.thread_head(FORK);
+        on_thread(&mut family, ActorId(9), FORK, head, Op::Mr(MrOp::Guided { mr, guide: guide.into(), by: by.into() }));
+    }
+    assert_eq!(family.merge_requests()[0].guide, Some(("read main first".into(), "bob".into())));
 
     let parents: Frontier = family.thread_head(THREAD).ids().iter().copied().chain([mr]).collect();
     on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, parents, Op::Merge { from: FORK, mr: Some(mr) });

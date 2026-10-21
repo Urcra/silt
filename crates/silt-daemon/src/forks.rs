@@ -13,7 +13,7 @@ use similar::{DiffTag, TextDiff};
 use tracing::warn;
 
 use crate::core::{CanonicalCwd, Core, CoreError, now_ms, touched_inode};
-use crate::protocol::{MrDetails, MrFile, MrSummary, Pulled};
+use crate::protocol::{MrDetails, MrFile, MrGuide, MrSummary, Pulled};
 use crate::transcripts::native_entries;
 use crate::views::FileChange;
 
@@ -246,6 +246,7 @@ impl Core {
             conflicts,
             conversation,
             files,
+            guide: request.guide.clone().map(|(text, by)| MrGuide { text, by }),
         })
     }
 
@@ -314,6 +315,20 @@ impl Core {
         self.append_op(family_id, request.target, head, Op::Mr(asked)).await?;
         self.notify(request.fork, changes_requested_notice(&request.title, &reason)).await;
         Ok(self.summary_of(family_id, request.id))
+    }
+
+    /// Records `guide` as the request's change guide, on its fork.
+    pub(crate) async fn keep_guide(
+        &mut self,
+        family_id: FamilyId,
+        request: &MergeRequest,
+        guide: String,
+        by: String,
+    ) -> Result<(), CoreError> {
+        let head = self.families[&family_id].thread_head(request.fork);
+        self.append_op(family_id, request.fork, head, Op::Mr(MrOp::Guided { mr: request.id, guide, by })).await?;
+        self.announce(crate::protocol::BusEvent::Mrs);
+        Ok(())
     }
 
     fn summary_of(&self, family_id: FamilyId, mr: silt_types::DeltaId) -> MrSummary {

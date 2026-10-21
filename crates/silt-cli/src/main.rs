@@ -273,6 +273,9 @@ enum MrCommand {
         #[arg(required = true)]
         reason: Vec<String>,
     },
+    /// Write its change guide for reviewers, or without text ask the
+    /// fork's agent running in the web UI to write it
+    Guide { mr: String, text: Vec<String> },
 }
 
 #[derive(Debug, Subcommand)]
@@ -582,6 +585,7 @@ fn run() -> Result<(), Exn<CliError>> {
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
             MrCommand::RequestChanges { mr, reason } => commands::mr_request_changes(&mr, &reason.join(" ")),
+            MrCommand::Guide { mr, text } => commands::mr_guide(&mr, (!text.is_empty()).then(|| text.join(" "))),
         },
         Command::Visibility { visibility, thread } => commands::visibility(visibility, thread),
         Command::Auth { command } => match command {

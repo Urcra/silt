@@ -203,6 +203,8 @@ pub struct MergeRequest {
     pub status: MrStatus,
     /// The latest request for changes made while it was open.
     pub changes_requested: Option<ChangesRequested>,
+    /// The latest walk-through for reviewers, and who wrote it.
+    pub guide: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -527,7 +529,13 @@ impl Family {
                     opened_ms: delta.time_ms,
                     status: MrStatus::Open,
                     changes_requested: None,
+                    guide: None,
                 }),
+                MrOp::Guided { mr, guide, by } => {
+                    if let Some(request) = requests.iter_mut().find(|request| request.id == *mr) {
+                        request.guide = Some((guide.clone(), by.clone()));
+                    }
+                }
                 MrOp::ChangesRequested { mr, reason } => {
                     if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
                         && request.status == MrStatus::Open

@@ -196,9 +196,15 @@ conversation: Array<ShowLine>,
  * The files it changes, and whether this person has looked at each as
  * it is now (ADR 0024).
  */
-files: Array<MrFile>, };
+files: Array<MrFile>, 
+/**
+ * A walk-through for reviewers, and who wrote it (ADR 0025).
+ */
+guide: MrGuide | null, };
 
 export type MrFile = { path: string, seen: boolean, };
+
+export type MrGuide = { text: string, by: string, };
 
 export type MrSummary = { id: string, fork: string, target: string, title: string, summary: string, 
 /**

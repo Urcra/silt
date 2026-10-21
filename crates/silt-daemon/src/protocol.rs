@@ -116,6 +116,13 @@ pub enum Request {
         mr: String,
         reason: String,
     },
+    /// Keeps `text` as the request's change guide, or without it asks the
+    /// fork's agent running here to write one.
+    MrGuide {
+        mr: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
     /// Ticks a file of a merge request as looked at, or not, for this person.
     MrSeen {
         mr: String,
@@ -633,6 +640,16 @@ pub struct MrDetails {
     /// it is now (ADR 0024).
     #[serde(default)]
     pub files: Vec<MrFile>,
+    /// A walk-through for reviewers, and who wrote it (ADR 0025).
+    #[serde(default)]
+    pub guide: Option<MrGuide>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MrGuide {
+    pub text: String,
+    pub by: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1139,6 +1156,7 @@ mod tests {
             Mount::decl(&config),
             MrDetails::decl(&config),
             MrFile::decl(&config),
+            MrGuide::decl(&config),
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
             Preset::decl(&config),
