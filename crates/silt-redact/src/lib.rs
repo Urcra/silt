@@ -9,9 +9,12 @@
 //! - **Revealing.** An [`Overlay`] holds the secrets a machine knows and puts
 //!   them back wherever their placeholders or masks show up.
 
+use std::collections::HashSet;
 use std::env;
 use std::path::Path;
+use std::sync::{LazyLock, OnceLock};
 
+use aho_corasick::{AhoCorasick, Input, MatchKind};
 use sha2::{Digest, Sha256};
 use silt_crdt::TextOp;
 use silt_log::{CommentOp, ConvOp, Delta, MrOp, Op};
@@ -116,11 +119,53 @@ pub struct Redacted {
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
     secrets: Vec<String>,
+    /// Built on first use from `secrets`.
+    matchers: OnceLock<SecretMatchers>,
+}
+
+/// Finds every known secret in one pass, whatever their number.
+#[derive(Debug, Clone)]
+struct SecretMatchers {
+    /// The secrets as they are.
+    plain: AhoCorasick,
+    /// The secrets also as they appear inside JSON strings, each pattern
+    /// naming its secret in `json_secrets`.
+    json: AhoCorasick,
+    json_secrets: Vec<usize>,
+}
+
+/// An automaton preferring, where patterns start at the same place, the one
+/// listed first: callers list longer ones first, so a secret containing
+/// another is covered whole.
+fn automaton<P: AsRef<[u8]>>(patterns: impl IntoIterator<Item = P>) -> AhoCorasick {
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostFirst)
+        .build(patterns)
+        .expect("secrets are short enough for an automaton")
+}
+
+impl SecretMatchers {
+    fn new(secrets: &[String]) -> Self {
+        let mut json: Vec<(String, usize)> = secrets.iter().enumerate().map(|(index, secret)| (secret.clone(), index)).collect();
+        json.extend(secrets.iter().enumerate().filter_map(|(index, secret)| {
+            let escaped = json_escaped(secret);
+            (escaped != *secret).then_some((escaped, index))
+        }));
+        json.sort_by_key(|(pattern, _)| std::cmp::Reverse(pattern.len()));
+        Self {
+            plain: automaton(secrets),
+            json: automaton(json.iter().map(|(pattern, _)| pattern)),
+            json_secrets: json.iter().map(|(_, index)| *index).collect(),
+        }
+    }
 }
 
 impl Redactor {
     pub fn new(secrets: Vec<String>) -> Self {
-        let mut redactor = Self { secrets };
+        let mut redactor = Self {
+            secrets,
+            matchers: OnceLock::new(),
+        };
         redactor.normalize();
         redactor
     }
@@ -129,6 +174,11 @@ impl Redactor {
         self.secrets.retain(|secret| secret.chars().count() >= MIN_SECRET_LEN);
         self.secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
         self.secrets.dedup();
+        self.matchers = OnceLock::new();
+    }
+
+    fn matchers(&self) -> &SecretMatchers {
+        self.matchers.get_or_init(|| SecretMatchers::new(&self.secrets))
     }
 
     /// Secrets from this process's environment. Variables that aren't
@@ -202,15 +252,9 @@ impl Redactor {
 
     /// A transcript line is JSON: secrets appear there escaped.
     fn cover_json(&self, line: &str, found: &mut Vec<String>) -> String {
-        let mut out = line.to_owned();
-        for secret in &self.secrets {
-            let escaped = json_escaped(secret);
-            if escaped != *secret && out.contains(&escaped) {
-                out = out.replace(&escaped, &placeholder(secret));
-                found.push(secret.clone());
-            }
-        }
-        self.cover(&out, placeholder, found)
+        let matchers = self.matchers();
+        let covered = self.cover_with(line, &matchers.json, |pattern| matchers.json_secrets[pattern], placeholder, found);
+        self.cover_tokens(covered, placeholder, found)
     }
 
     /// An insert that ends in what may be the start of a secret, a token
@@ -238,13 +282,31 @@ impl Redactor {
     }
 
     fn cover(&self, text: &str, cover: impl Fn(&str) -> String, found: &mut Vec<String>) -> String {
-        let mut out = text.to_owned();
-        for secret in &self.secrets {
-            if out.contains(secret.as_str()) {
-                out = out.replace(secret.as_str(), &cover(secret));
-                found.push(secret.clone());
-            }
-        }
+        let covered = self.cover_with(text, &self.matchers().plain, |pattern| pattern, &cover, found);
+        self.cover_tokens(covered, cover, found)
+    }
+
+    /// `text` with each match of `matcher` covered as the secret
+    /// `secret_of` names for its pattern.
+    fn cover_with(
+        &self,
+        text: &str,
+        matcher: &AhoCorasick,
+        secret_of: impl Fn(usize) -> usize,
+        cover: impl Fn(&str) -> String,
+        found: &mut Vec<String>,
+    ) -> String {
+        let mut out = String::with_capacity(text.len());
+        matcher.replace_all_with(text, &mut out, |matched, _, out| {
+            let secret = &self.secrets[secret_of(matched.pattern().as_usize())];
+            out.push_str(&cover(secret));
+            found.push(secret.clone());
+            true
+        });
+        out
+    }
+
+    fn cover_tokens(&self, mut out: String, cover: impl Fn(&str) -> String, found: &mut Vec<String>) -> String {
         for (start, end) in tokens(&out).into_iter().rev() {
             let secret = out[start..end].to_owned();
             out.replace_range(start..end, &cover(&secret));
@@ -260,8 +322,41 @@ impl Redactor {
 /// leaves the machine.
 #[derive(Debug, Clone, Default)]
 pub struct Overlay {
-    /// Longest first, so a secret containing another is revealed whole.
-    secrets: Vec<String>,
+    secrets: Vec<Known>,
+    known: HashSet<String>,
+    /// Built on first use from `secrets`.
+    matcher: OnceLock<CoverMatcher>,
+}
+
+/// A secret with the forms that hide it, worked out once: each takes a hash.
+#[derive(Debug, Clone)]
+struct Known {
+    secret: String,
+    placeholder: String,
+    mask: String,
+}
+
+/// Every placeholder and mask of the known secrets, longest first.
+#[derive(Debug, Clone)]
+struct CoverMatcher {
+    automaton: AhoCorasick,
+    /// Each pattern's secret, and whether the pattern is its mask.
+    covers: Vec<(usize, bool)>,
+}
+
+impl CoverMatcher {
+    fn new(secrets: &[Known]) -> Self {
+        let mut covers: Vec<(&str, usize, bool)> = secrets
+            .iter()
+            .enumerate()
+            .flat_map(|(index, known)| [(known.placeholder.as_str(), index, false), (known.mask.as_str(), index, true)])
+            .collect();
+        covers.sort_by_key(|(pattern, _, _)| std::cmp::Reverse(pattern.len()));
+        Self {
+            automaton: automaton(covers.iter().map(|(pattern, _, _)| pattern)),
+            covers: covers.iter().map(|(_, index, is_mask)| (*index, *is_mask)).collect(),
+        }
+    }
 }
 
 impl Overlay {
@@ -275,11 +370,16 @@ impl Overlay {
 
     /// Remembers `secret`; whether it is new.
     pub fn learn(&mut self, secret: String) -> bool {
-        if secret.chars().count() < MIN_SECRET_LEN || self.secrets.contains(&secret) {
+        if secret.chars().count() < MIN_SECRET_LEN || self.known.contains(&secret) {
             return false;
         }
-        let at = self.secrets.partition_point(|known| known.len() >= secret.len());
-        self.secrets.insert(at, secret);
+        self.known.insert(secret.clone());
+        self.secrets.push(Known {
+            placeholder: placeholder(&secret),
+            mask: mask(&secret),
+            secret,
+        });
+        self.matcher = OnceLock::new();
         true
     }
 
@@ -295,21 +395,19 @@ impl Overlay {
     }
 
     fn reveal_as(&self, text: &str, hidden: Hidden, form: impl Fn(&str) -> String) -> String {
-        let mut out = text.to_owned();
-        if !out.contains("[REDACTED:") && !out.contains('*') {
-            return out;
+        if self.secrets.is_empty() || (!text.contains("[REDACTED:") && !text.contains('*')) {
+            return text.to_owned();
         }
-        for secret in &self.secrets {
-            let forms = match hidden {
-                Hidden::Both => vec![placeholder(secret), mask(secret)],
-                Hidden::Masks => vec![mask(secret)],
-            };
-            for covered in forms {
-                if out.contains(&covered) {
-                    out = out.replace(&covered, &form(secret));
-                }
+        let matcher = self.matcher.get_or_init(|| CoverMatcher::new(&self.secrets));
+        let mut out = String::with_capacity(text.len());
+        matcher.automaton.replace_all_with(text, &mut out, |matched, covered, out| {
+            let (index, is_mask) = matcher.covers[matched.pattern().as_usize()];
+            match hidden {
+                Hidden::Masks if !is_mask => out.push_str(covered),
+                Hidden::Both | Hidden::Masks => out.push_str(&form(&self.secrets[index].secret)),
             }
-        }
+            true
+        });
         out
     }
 
@@ -350,16 +448,14 @@ enum Hidden {
 
 /// Byte ranges of well-known token formats in `text`.
 fn tokens(text: &str) -> Vec<(usize, usize)> {
+    static PREFIXES: LazyLock<AhoCorasick> = LazyLock::new(|| automaton(TOKEN_PREFIXES));
     let mut found = Vec::new();
     let mut search = 0;
     while search < text.len() {
-        let next = TOKEN_PREFIXES
-            .iter()
-            .filter_map(|prefix| text[search..].find(prefix).map(|at| (search + at, prefix.len())))
-            .min();
-        let Some((start, prefix_len)) = next else {
+        let Some(next) = PREFIXES.find(Input::new(text).range(search..)) else {
             break;
         };
+        let (start, prefix_len) = (next.start(), next.len());
         // `\n` and friends in JSON text end in a letter, yet are boundaries.
         let mut before = text[..start].chars().rev();
         let at_boundary = match (before.next(), before.next()) {
@@ -427,6 +523,21 @@ mod tests {
         assert_eq!(overlay.reveal(&masked).len(), text.len());
         assert!(overlay.reveal(&masked).contains(TOKEN));
         assert_eq!(Overlay::default().reveal(&replaced), replaced);
+    }
+
+    #[test]
+    fn many_secrets_cost_one_pass() {
+        let secrets: Vec<String> = (0..5_000).map(|n| format!("secret-value-{n:05}")).collect();
+        let redactor = Redactor::new(secrets.clone());
+        let overlay = Overlay::new(secrets);
+        let text = "plain words and secret-value-04321 and \"secret-value-00007\" ".repeat(2_000);
+        let started = std::time::Instant::now();
+        let (replaced, found) = redactor.replace_found(&text);
+        assert_eq!(found, ["secret-value-00007", "secret-value-04321"]);
+        assert_eq!(overlay.reveal(&replaced), text);
+        let masked = redactor.mask_text(&text);
+        assert_eq!(overlay.reveal(&masked), text);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     #[test]
