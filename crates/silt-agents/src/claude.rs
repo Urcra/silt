@@ -110,7 +110,7 @@ pub fn transcript_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Ve
                 "parentUuid": parent,
                 "isSidechain": false,
                 "userType": "external",
-                "cwd": cwd,
+                "cwd": cwd.to_string_lossy(),
                 "sessionId": id,
                 "version": "2.1.0",
                 "type": if *role == Role::User { "user" } else { "assistant" },
@@ -256,7 +256,7 @@ impl Agent for ClaudeCode {
             }
         }
         let mcp = json!({
-            "mcpServers": { "silt": { "command": plan.mcp.command, "args": plan.mcp.args } }
+            "mcpServers": { "silt": { "command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args } }
         });
         launch.arg("--mcp-config").arg(mcp.to_string());
         launch.arg("--settings").arg(hook_settings(&plan.hook_command));

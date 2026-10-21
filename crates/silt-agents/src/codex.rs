@@ -192,7 +192,7 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
         json!({
             "id": id,
             "timestamp": timestamp,
-            "cwd": cwd,
+            "cwd": cwd.to_string_lossy(),
             "originator": "codex_cli_rs",
             "cli_version": TRANSLATED_VERSION,
             "source": "cli",
@@ -213,7 +213,7 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
                     "turn_context",
                     json!({
                         "turn_id": format!("turn-{turn}"),
-                        "cwd": cwd,
+                        "cwd": cwd.to_string_lossy(),
                         "approval_policy": "on-request",
                         "sandbox_policy": {"type": "workspace-write", "network_access": false},
                         "model": "gpt-5.5",
@@ -339,7 +339,7 @@ impl Agent for Codex {
         let toml = |value: &Value| value.to_string();
         launch
             .arg("-c")
-            .arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command))));
+            .arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command.to_string_lossy()))));
         launch.arg("-c").arg(format!("mcp_servers.silt.args={}", toml(&json!(plan.mcp.args))));
         if let Some(instructions) = &plan.instructions {
             launch.arg("-c").arg(format!("developer_instructions={}", toml(&json!(instructions))));

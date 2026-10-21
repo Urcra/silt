@@ -495,7 +495,7 @@ fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
         .entry("mcpServers")
         .or_insert_with(|| json!({}));
     if let Some(servers) = servers.as_object_mut() {
-        servers.insert("silt".into(), json!({"command": plan.mcp.command, "args": plan.mcp.args}));
+        servers.insert("silt".into(), json!({"command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args}));
     }
     fs::write(dir.join("settings.json"), settings.to_string())?;
     let mut context = fs::read_to_string(real.join("GEMINI.md")).unwrap_or_default();

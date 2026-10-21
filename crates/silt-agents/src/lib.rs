@@ -392,6 +392,16 @@ mod tests {
     }
 
     #[test]
+    fn sessions_translate_into_a_directory_whose_name_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let cwd = Path::new(std::ffi::OsStr::from_bytes(b"/w/caf\xe9"));
+        let messages = [(Role::User, "hi".to_owned())];
+        assert!(claude::transcript_lines(&messages, cwd, "s")[0].contains("/w/caf\u{fffd}"));
+        assert!(codex::rollout_lines(&messages, cwd, "s")[0].contains("/w/caf\u{fffd}"));
+        assert!(copilot::event_lines(&messages, cwd, "s")[0].contains("/w/caf\u{fffd}"));
+    }
+
+    #[test]
     fn skills_sharing_a_name_link_once() {
         let root = tempfile::tempdir().expect("temp dir");
         let skill = |path: &str| {

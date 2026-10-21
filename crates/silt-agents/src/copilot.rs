@@ -158,7 +158,7 @@ pub fn event_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<Str
     };
     push(
         "session.start",
-        json!({"sessionId": id, "version": 1, "producer": "copilot-agent", "copilotVersion": TRANSLATED_VERSION, "startTime": timestamp, "context": {"cwd": cwd, "gitRoot": cwd}}),
+        json!({"sessionId": id, "version": 1, "producer": "copilot-agent", "copilotVersion": TRANSLATED_VERSION, "startTime": timestamp, "context": {"cwd": cwd.to_string_lossy(), "gitRoot": cwd.to_string_lossy()}}),
     );
     for (index, (role, text)) in messages.iter().enumerate() {
         let turn = index.to_string();
@@ -289,7 +289,7 @@ impl Agent for Copilot {
                 prompt = Some(text.clone());
             }
         }
-        let mcp = json!({"mcpServers": {"silt": {"type": "local", "command": plan.mcp.command, "args": plan.mcp.args, "tools": ["*"]}}});
+        let mcp = json!({"mcpServers": {"silt": {"type": "local", "command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args, "tools": ["*"]}}});
         launch.arg("--additional-mcp-config").arg(mcp.to_string());
         launch.arg("--plugin-dir").arg(plugin(plan)?);
         for arg in &plan.args {
