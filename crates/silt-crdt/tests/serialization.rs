@@ -39,6 +39,7 @@ fn snapshots_resume_where_they_left_off() {
     let graph: CausalGraph = round_trip(a.graph());
     let doc: TextDoc = round_trip(a.doc());
     assert_eq!(doc.text(), a.text());
+    assert_eq!(doc.heads(), a.doc().heads(), "the heads come along");
     assert_eq!(graph.frontier(), a.graph().frontier());
 
     let mut graph = graph;

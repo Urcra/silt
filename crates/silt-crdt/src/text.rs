@@ -268,7 +268,7 @@ pub struct TextDoc {
     applied_index: BTreeMap<DeltaId, usize>,
     prepare: Frontier,
     /// The latest applied events, none an ancestor of another; `None` when
-    /// unknown, as after deserializing.
+    /// unknown.
     heads: Option<Vec<DeltaId>>,
     /// Whether the prepare state includes every applied event. With `heads`
     /// it lets the prepare version move to any descendant of all applied
@@ -283,6 +283,8 @@ struct TextDocState {
     deletes: BTreeMap<DeltaId, Vec<(CharId, u32)>>,
     applied: Vec<Applied>,
     prepare: Frontier,
+    /// Kept so a restored document still moves its prepare version cheaply.
+    heads: Option<Vec<DeltaId>>,
 }
 
 impl From<TextDocState> for TextDoc {
@@ -294,7 +296,7 @@ impl From<TextDocState> for TextDoc {
             applied_index: state.applied.iter().enumerate().map(|(index, applied)| (applied.id, index)).collect(),
             applied: state.applied,
             prepare: state.prepare,
-            heads: None,
+            heads: state.heads,
             complete: false,
         }
     }
@@ -308,6 +310,7 @@ impl From<TextDoc> for TextDocState {
             deletes: doc.deletes,
             applied: doc.applied,
             prepare: doc.prepare,
+            heads: doc.heads,
         }
     }
 }
@@ -392,7 +395,7 @@ impl TextDoc {
 
     /// The text as of the version containing exactly the ids in `vv`.
     pub fn text_at_vv(&self, vv: &VersionVector) -> String {
-        let mut text = String::new();
+        let mut text = String::with_capacity(self.len());
         for fragment in self.fragments.iter() {
             text.extend(&self.chars_of(fragment)[..fragment.visible_len_at(vv)]);
         }
@@ -496,7 +499,9 @@ impl TextDoc {
     }
 
     /// Checks that `event` is well formed and fits the document as of its
-    /// parents, which must already be in `graph`.
+    /// parents, which must already be in `graph`. It moves the prepare
+    /// version to those parents to measure the text there, hence `&mut`;
+    /// what the document holds doesn't change.
     pub fn check(&mut self, graph: &CausalGraph, event: &TextEvent) -> Result<(), TextError> {
         let units = event.op.units();
         if units == 0 {
