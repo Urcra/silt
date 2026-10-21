@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { api, type AgentStatus, type Presence } from '../api'
+import { api, type AgentStatus, type Presence, type Preset } from '../api'
 import { STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
 import { PromptQueue } from './Queue'
@@ -73,10 +73,43 @@ export function NewAgentThread() {
  * The agent working in the thread from the web UI (ADR 0014): starting it,
  * sending everyone's drafts as the prompt, answering its permission requests.
  */
+const PRESETS: { id: Preset; label: string }[] = [
+  { id: 'ask_before_commands', label: 'Ask before commands' },
+  { id: 'ask_for_everything', label: 'Ask for everything' },
+  { id: 'full_access', label: 'Full access' },
+]
+
+/** Which of the agent's permission requests the daemon answers by itself (ADR 0022). */
+function PresetPicker({ thread, preset, onPreset }: { thread: string; preset: Preset; onPreset: (preset: Preset) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-xs text-fg-2">
+      Permissions
+      <select
+        aria-label="permissions"
+        value={preset}
+        onChange={(event) => {
+          const chosen = event.target.value as Preset
+          void api.setPreset(thread, chosen).then(() => onPreset(chosen))
+        }}
+        className="rounded-sm border border-line bg-elevated px-1.5 py-0.5 text-xs text-fg-1"
+      >
+        {PRESETS.map((choice) => (
+          <option key={choice.id} value={choice.id}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+      {preset === 'full_access' && <span className="text-warn">nothing asks; the agent's own sandbox is all that limits it</span>}
+    </label>
+  )
+}
+
 export function AgentPanel({
   thread,
   status,
   toolOutput,
+  preset,
+  onPreset,
   draft,
   onSent,
   people,
@@ -85,6 +118,8 @@ export function AgentPanel({
   status: AgentStatus | null
   /** What the running tool printed so far. */
   toolOutput: string
+  preset: Preset
+  onPreset: (preset: Preset) => void
   draft: string
   onSent: () => void
   /** Everyone else here, whose machines may run an agent in the thread. */
@@ -192,6 +227,9 @@ export function AgentPanel({
         </div>
       )}
       {error && <p className="text-danger">{error}</p>}
+      <div className="mt-2">
+        <PresetPicker thread={thread} preset={preset} onPreset={onPreset} />
+      </div>
       <PromptQueue thread={thread} />
     </section>
   )

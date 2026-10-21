@@ -105,7 +105,11 @@ export type LiveState = { deltas: number,
 /**
  * The agent the web UI started in the thread, if any.
  */
-agent: AgentStatus | null, };
+agent: AgentStatus | null, 
+/**
+ * Which permission requests the daemon answers by itself.
+ */
+preset: Preset, };
 
 export type Mount = { 
 /**
@@ -142,6 +146,8 @@ export type PermissionAsked = { id: number, title: string,
  * Option ids and labels.
  */
 options: Array<[string, string]>, };
+
+export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access";
 
 export type Queued = { id: number, author: string, text: string, created_ms: number, };
 

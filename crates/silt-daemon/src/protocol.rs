@@ -248,6 +248,12 @@ pub enum Request {
         thread: String,
         text: String,
     },
+    /// Chooses which of the thread's agent's permission requests the daemon
+    /// answers by itself.
+    AgentPreset {
+        thread: String,
+        preset: Preset,
+    },
     /// Interrupts the agent's turn to tell it `text`.
     AcpSteer {
         thread: String,
@@ -681,6 +687,35 @@ pub struct LiveState {
     pub deltas: usize,
     /// The agent the web UI started in the thread, if any.
     pub agent: Option<AgentStatus>,
+    /// Which permission requests the daemon answers by itself.
+    pub preset: Preset,
+}
+
+/// Which permission requests the daemon answers for the person (ADR 0022).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
+    /// Edits, reads and searches go through; anything else asks.
+    #[default]
+    AskBeforeCommands,
+    AskForEverything,
+    /// Nothing asks.
+    FullAccess,
+}
+
+impl Preset {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AskBeforeCommands => "ask_before_commands",
+            Self::AskForEverything => "ask_for_everything",
+            Self::FullAccess => "full_access",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::AskBeforeCommands, Self::AskForEverything, Self::FullAccess].into_iter().find(|preset| preset.as_str() == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -850,6 +885,7 @@ mod tests {
             MrDetails::decl(&config),
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
+            Preset::decl(&config),
             Queued::decl(&config),
             Pulled::decl(&config),
             ReplicaDeltas::decl(&config),

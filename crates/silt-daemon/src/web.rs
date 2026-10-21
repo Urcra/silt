@@ -98,6 +98,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
+        .route("/api/threads/{id}/agent/preset", post(agent_preset))
         .route("/api/threads/{id}/queue", get(queue).post(queue_add))
         .route("/api/threads/{id}/queue/{item}", put(queue_edit).delete(queue_remove))
         .route("/api/threads/{id}/queue/{item}/move", post(queue_move))
@@ -454,6 +455,15 @@ async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(b
 
 async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
     ask(&web, Request::AcpSteer { thread, text: body.text }).await
+}
+
+#[derive(Deserialize)]
+struct PresetBody {
+    preset: crate::protocol::Preset,
+}
+
+async fn agent_preset(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<PresetBody>) -> HttpResponse {
+    ask(&web, Request::AgentPreset { thread, preset: body.preset }).await
 }
 
 async fn queue(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

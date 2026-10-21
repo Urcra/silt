@@ -488,6 +488,10 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
             }
             Request::AcpPrompt { thread, text } => to_response(self.acp_prompt(&thread, &text).await),
+            Request::AgentPreset { thread, preset } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.set_preset(thread, preset).await),
+                Err(error) => Response::error(error),
+            },
             Request::AcpSteer { thread, text } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.acp_steer(thread, &text).await),
                 Err(error) => Response::error(error),

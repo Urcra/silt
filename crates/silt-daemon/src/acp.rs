@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
-use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, TextKind};
+use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, TextKind};
 use crate::sessions::NewSession;
 
 pub(crate) struct AcpRun {
@@ -42,6 +42,9 @@ pub(crate) struct AcpRun {
     tool_output: HashMap<String, String>,
     /// What to tell the agent once the turn being cancelled for it ends.
     steering: Option<String>,
+    /// Each tool call's kind as the agent announced it, for permission
+    /// requests that don't repeat it.
+    tool_kinds: HashMap<String, String>,
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -152,6 +155,7 @@ impl Core {
                 error: None,
                 tool_output: HashMap::new(),
                 steering: None,
+                tool_kinds: HashMap::new(),
             },
         );
         self.agent_changed(thread).await;
@@ -327,6 +331,39 @@ impl Core {
         self.announce(crate::protocol::BusEvent::Threads);
     }
 
+    /// Answers a permission request by the thread's preset when it can, and
+    /// leaves it for the person otherwise (ADR 0022).
+    fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
+        let preset = self.preset(thread);
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        let kind = permission.tool_kind.clone().or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
+        match crate::presets::decide(preset, kind.as_deref(), &permission.option_kinds) {
+            Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
+            None => run.asking.push(permission),
+        }
+    }
+
+    pub(crate) fn preset(&self, thread: ThreadId) -> Preset {
+        self.agent_runs.get(&thread).and_then(|run| Preset::parse(&run.preset)).unwrap_or_default()
+    }
+
+    pub(crate) async fn set_preset(&mut self, thread: ThreadId, preset: Preset) -> Result<&'static str, CoreError> {
+        let mut record = self.agent_runs.get(&thread).cloned().unwrap_or_else(|| silt_store::AgentRunRecord {
+            agent: String::new(),
+            state: AgentState::Stopped.as_str().to_owned(),
+            error: None,
+            preset: String::new(),
+            mode: None,
+            updated_ms: 0,
+        });
+        record.preset = preset.as_str().to_owned();
+        record.updated_ms = crate::core::now_ms();
+        self.store.put_agent_run(thread, &record).await?;
+        self.agent_runs.insert(thread, record);
+        self.announce_agent(thread);
+        Ok("set")
+    }
+
     /// Reads how each thread's agent stood. One that ran went with the
     /// daemon's last process, so it stopped.
     pub(crate) async fn load_agent_runs(&mut self) -> Result<(), CoreError> {
@@ -391,13 +428,14 @@ impl Core {
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
-            AcpEvent::Agent(silt_acp::Event::Permission(permission)) => run.asking.push(permission),
+            AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.state = AgentState::Idle;
                 run.asking.clear();
+                run.tool_kinds.clear();
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
@@ -473,6 +511,7 @@ impl Core {
             }
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
+                run.tool_kinds.insert(id.clone(), kind.clone());
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::tool_call(&id, &title, &kind, input.as_ref())).await?;
             }

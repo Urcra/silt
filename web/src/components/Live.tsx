@@ -1,6 +1,6 @@
 import { EditorView, basicSetup } from 'codemirror'
 import { useEffect, useRef, useState } from 'react'
-import { api, type AgentStatus, type Presence } from '../api'
+import { api, type AgentStatus, type Presence, type Preset } from '../api'
 import { useBusEvents, useTopic } from '../bus'
 import { LiveReplica } from '../replica'
 import { AgentPanel } from './Agent'
@@ -13,6 +13,7 @@ interface Live {
   changes: number
   deltas: number | null
   agent: AgentStatus | null
+  preset: Preset
   /** What the running tool printed so far. */
   tool: { id: string | null; text: string }
 }
@@ -20,8 +21,14 @@ interface Live {
 const NO_TOOL = { id: null, text: '' }
 
 /** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
-function useLive(thread: string): Live {
-  const [live, setLive] = useState<Live>({ changes: 0, deltas: null, agent: null, tool: NO_TOOL })
+function useLive(thread: string): Live & { setPreset: (preset: Preset) => void } {
+  const [live, setLive] = useState<Live>({
+    changes: 0,
+    deltas: null,
+    agent: null,
+    preset: 'ask_before_commands',
+    tool: NO_TOOL,
+  })
   const [round, setRound] = useState(0)
   useEffect(() => {
     let current = true
@@ -33,6 +40,7 @@ function useLive(thread: string): Live {
           changes: previous.deltas !== null && previous.deltas !== state.deltas ? previous.changes + 1 : previous.changes,
           deltas: state.deltas,
           agent: state.agent,
+          preset: state.preset,
         })),
       () => undefined,
     )
@@ -61,7 +69,7 @@ function useLive(thread: string): Live {
       })
     }
   })
-  return live
+  return { ...live, setPreset: (preset) => setLive((previous) => ({ ...previous, preset })) }
 }
 
 /** Tells the others what this viewer is doing; returns what they are doing. */
@@ -249,7 +257,7 @@ export function LivePanel({
   const [draft, setDraft] = useState('')
   const [line, setLine] = useState<number | null>(null)
   const [following, setFollowing] = useState<string | null>(null)
-  const { changes, agent, tool } = useLive(thread)
+  const { changes, agent, tool, preset, setPreset } = useLive(thread)
   const people = usePresence(thread, file, line, draft, (present) => {
     const followed = present.find((person) => person.device === following)?.file
     if (followed) setFile(followed)
@@ -323,6 +331,8 @@ export function LivePanel({
         thread={thread}
         status={agent}
         toolOutput={tool.text}
+        preset={preset}
+        onPreset={setPreset}
         draft={draft}
         onSent={() => setDraft('')}
         people={people}

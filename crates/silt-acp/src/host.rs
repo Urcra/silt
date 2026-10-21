@@ -61,6 +61,14 @@ pub struct Permission {
     pub title: String,
     /// Option ids and what they say.
     pub options: Vec<(String, String)>,
+    /// What the tool does, as ACP names it (`edit`, `read`, `execute`…),
+    /// when the request says.
+    pub tool_kind: Option<String>,
+    /// The tool call it asks about, whose own announcement may say its kind.
+    pub tool_call_id: String,
+    /// Each option's kind, by its id (`allow_once`, `allow_always`,
+    /// `reject_once`, `reject_always`).
+    pub option_kinds: Vec<(String, String)>,
 }
 
 /// Why a turn ended.
@@ -270,9 +278,13 @@ async fn run(
             async move |request: RequestPermissionRequest, responder, _connection| {
                 let id = next_id.fetch_add(1, Ordering::SeqCst);
                 let options = request.options.iter().map(|option| (option.option_id.to_string(), option.name.clone())).collect();
+                let option_kinds =
+                    request.options.iter().map(|option| (option.option_id.to_string(), label(&option.kind))).collect();
                 let title = request.tool_call.fields.title.clone().unwrap_or_else(|| "a tool call".to_owned());
+                let tool_kind = request.tool_call.fields.kind.as_ref().map(label);
+                let tool_call_id = request.tool_call.tool_call_id.to_string();
                 parked.lock().expect("lock").insert(id, responder);
-                let _ = asked.send(Event::Permission(Permission { id, title, options }));
+                let _ = asked.send(Event::Permission(Permission { id, title, options, tool_kind, tool_call_id, option_kinds }));
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),

@@ -97,6 +97,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await bob.getByLabel('draft').fill('mind the tests')
   await expect(alice.getByTestId('presence')).toContainText('drafting: mind the tests')
 
+  await alice.getByLabel('permissions').selectOption('ask_for_everything')
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await alice.getByRole('button', { name: 'Start agent' }).click()
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -150,15 +151,16 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await bob.context().close()
 })
 
-test('a new thread starts with an agent in a known clone', async ({ page }) => {
+test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(page.getByLabel('permissions')).toHaveValue('ask_before_commands')
   await page.getByLabel('draft').fill('hello')
   await page.getByRole('button', { name: 'Send' }).click()
-  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: hello')).toBeVisible()
+  await expect(page.getByRole('group', { name: 'permission' })).toHaveCount(0)
 })
 
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
@@ -166,6 +168,7 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await page.getByLabel('permissions').selectOption('ask_for_everything')
   const draft = page.getByLabel('draft')
   const permission = page.getByRole('group', { name: 'permission' })
 
