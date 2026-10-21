@@ -127,6 +127,37 @@ fn file_session_id(path: &Path) -> Option<String> {
     value.get("sessionId")?.as_str().map(str::to_owned)
 }
 
+/// Writes `session` where the Gemini CLI home `gemini` finds it for `cwd`,
+/// with its subagents' sessions.
+fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+    let dir = claim_chats_dir(gemini, cwd)?;
+    let path = session_files(&dir)
+        .into_iter()
+        .find(|path| file_session_id(path).as_deref() == Some(&*session.id))
+        .unwrap_or_else(|| {
+            let stamp = crate::time::file_stamp(crate::now_ms());
+            let short: String = session.id.chars().take(8).collect();
+            dir.join(format!("session-{}-{short}.jsonl", &stamp[..16]))
+        });
+    let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
+    fs::create_dir_all(&dir)?;
+    crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
+    if !session.subagents.is_empty() {
+        let subagents = dir.join(&session.id);
+        fs::create_dir_all(&subagents)?;
+        for (name, lines) in &session.subagents {
+            crate::replace_transcript(&subagents.join(format!("{name}.jsonl")), &rewrites.lines(lines))?;
+        }
+    }
+    Ok(path)
+}
+
+/// Where the session in `transcript` keeps its subagents' sessions.
+fn subagents_dir(transcript: &Path) -> Option<PathBuf> {
+    let id = file_session_id(transcript).filter(|id| crate::is_safe_id(id))?;
+    Some(transcript.parent()?.join(id))
+}
+
 #[derive(Default)]
 struct Seen {
     kind: String,
@@ -379,6 +410,25 @@ impl Agent for Gemini {
         SessionIds::Chosen
     }
 
+    /// Subagent sessions, in `chats/<session id>/<subagent id>.jsonl`.
+    fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
+        let Some(dir) = subagents_dir(transcript) else {
+            return Vec::new();
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+            .filter_map(|path| Some((path.file_stem()?.to_string_lossy().into_owned(), path.clone())))
+            .filter(|(name, _)| crate::is_safe_id(name))
+            .collect();
+        found.sort();
+        found
+    }
+
     fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
         let dir = chats_dir(&gemini_dir()?, cwd)?;
         session_files(&dir)
@@ -399,19 +449,7 @@ impl Agent for Gemini {
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
         let gemini = gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
-        let dir = claim_chats_dir(&gemini, cwd)?;
-        let path = session_files(&dir)
-            .into_iter()
-            .find(|path| file_session_id(path).as_deref() == Some(&*session.id))
-            .unwrap_or_else(|| {
-                let stamp = crate::time::file_stamp(crate::now_ms());
-                let short: String = session.id.chars().take(8).collect();
-                dir.join(format!("session-{}-{short}.jsonl", &stamp[..16]))
-            });
-        let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
-        fs::create_dir_all(&dir)?;
-        crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
-        Ok(path)
+        restore_into(&gemini, root, cwd, session)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
@@ -591,6 +629,28 @@ mod tests {
         let finished = r#"{"id":"a","timestamp":"t","type":"gemini","content":"Done.","thoughts":[],"tokens":{"total":2}}"#;
         assert_eq!(marks(&mut reader, finished), vec![Mark::Stopped]);
         assert_eq!(marks(&mut reader, finished), Vec::new(), "once");
+    }
+
+    #[test]
+    fn subagent_sessions_are_listed_and_restored_with_their_parent() {
+        let gemini = tempfile::tempdir().expect("temp dir");
+        let session = RecordedSession {
+            id: "new-session".into(),
+            former_ids: vec!["old-session".into()],
+            former_cwds: vec!["/old/repo".into()],
+            main: vec![r#"{"sessionId":"old-session","projectHash":"h","kind":"main"}"#.into()],
+            subagents: vec![(
+                "helper-1".into(),
+                vec![r#"{"sessionId":"helper-1","kind":"subagent","directories":["/old/repo"]}"#.into()],
+            )],
+            ..Default::default()
+        };
+        let main = restore_into(gemini.path(), Path::new("/new"), Path::new("/new/repo"), &session).expect("restores");
+        let side = Gemini.side_transcripts(&main);
+        assert_eq!(side.len(), 1);
+        assert_eq!(side[0].0, "helper-1");
+        assert_eq!(side[0].1, main.parent().expect("chats").join("new-session/helper-1.jsonl"));
+        assert!(fs::read_to_string(&side[0].1).expect("reads").contains("/new/repo"));
     }
 
     #[test]
