@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 use silt_crdt::{CausalGraph, FileTree, InodeId};
 use silt_types::{DeltaId, ThreadId};
 
-use super::{Family, FileState, ThreadState};
-use crate::delta::Delta;
+use super::{Family, FileState, ThreadState, Turns};
+use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]; a snapshot in another one is
 /// replayed instead of read.
-pub const SNAPSHOT_FORMAT: i64 = 1;
+pub const SNAPSHOT_FORMAT: i64 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -29,6 +29,7 @@ struct Written<'a> {
     tree: &'a FileTree,
     files: &'a HashMap<InodeId, FileState>,
     threads: &'a BTreeMap<ThreadId, ThreadState>,
+    turns: &'a HashMap<SessionRef, Turns>,
     log: Vec<Logged>,
 }
 
@@ -39,6 +40,7 @@ struct Read {
     tree: FileTree,
     files: HashMap<InodeId, FileState>,
     threads: BTreeMap<ThreadId, ThreadState>,
+    turns: HashMap<SessionRef, Turns>,
     log: Vec<Logged>,
 }
 
@@ -68,6 +70,7 @@ impl Family {
             tree: &self.tree,
             files: &self.files,
             threads: &self.threads,
+            turns: &self.turns,
             log: self.log.iter().map(Logged::of).collect::<Result<_, _>>()?,
         })
     }
@@ -90,8 +93,15 @@ impl Family {
             next += found + 1;
         }
         let rest = &stored[next..];
-        let family =
-            Self { graph: read.graph, tree: read.tree, files: read.files, threads: read.threads, log, ..Self::default() };
+        let family = Self {
+            graph: read.graph,
+            tree: read.tree,
+            files: read.files,
+            threads: read.threads,
+            turns: read.turns,
+            log,
+            ..Self::default()
+        };
         Ok((family, rest))
     }
 }

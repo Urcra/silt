@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
-use silt_log::{Applied, Author, Content, ConvOp, Delta, Family, FileView, LogError, Op, SessionFile, SessionRef};
+use silt_log::{Applied, Author, Content, ConvOp, Delta, Family, FileView, LogError, Op, SessionFile, SessionRef, TurnMark};
 use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
 
 const DAEMON: ActorId = ActorId(1);
@@ -407,6 +407,36 @@ fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
         )
     };
     assert_eq!(read(&mut deltas.iter()), read(&mut deltas.iter().rev()));
+}
+
+#[test]
+fn turn_marks_say_which_tool_is_open_and_which_were_recorded() {
+    let mut family = Family::new();
+    let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
+    let mark = |family: &mut Family, mark: TurnMark| {
+        write_on_head(family, DAEMON, Op::Conv(ConvOp::Turn { session: session.clone(), mark }));
+    };
+    let started = |id: &str| TurnMark::ToolStarted { tool_use_id: id.into(), tool: "Edit".into() };
+    let finished = |id: &str| TurnMark::ToolFinished { tool_use_id: id.into() };
+
+    mark(&mut family, TurnMark::PromptSubmitted);
+    assert_eq!(family.open_tool(&session), None);
+    assert!(family.has_turn_mark(&session, &TurnMark::PromptSubmitted), "the same prompt mark again is a repeat");
+    mark(&mut family, started("t1"));
+    assert_eq!(family.open_tool(&session), Some("t1"));
+    assert!(family.has_turn_mark(&session, &started("t1")));
+    assert!(!family.has_turn_mark(&session, &finished("t1")));
+    mark(&mut family, finished("t1"));
+    assert_eq!(family.open_tool(&session), None);
+    assert!(!family.has_turn_mark(&session, &TurnMark::PromptSubmitted), "a new prompt after a tool is not a repeat");
+
+    mark(&mut family, started("t2"));
+    mark(&mut family, finished("t0"));
+    assert_eq!(family.open_tool(&session), Some("t2"), "another tool finishing leaves this one open");
+    mark(&mut family, TurnMark::Stopped);
+    assert_eq!(family.open_tool(&session), None, "the turn's end closes it");
+    let other = SessionRef { agent: "claude-code".into(), id: "other".into() };
+    assert!(!family.has_turn_mark(&other, &started("t1")));
 }
 
 #[test]

@@ -293,11 +293,12 @@ impl Core {
                 run.state = AgentState::Exited;
                 run.handle = None;
                 run.asking.clear();
-                let session = run.session.clone();
-                if let Some(session) = session.and_then(|id| self.session_mut(&id)) {
-                    session.live = false;
-                    session.in_turn = false;
-                    session.open_tool = None;
+                if let Some(id) = run.session.clone() {
+                    self.close_open_tool(&id).await?;
+                    if let Some(session) = self.session_mut(&id) {
+                        session.live = false;
+                        session.in_turn = false;
+                    }
                 }
             }
         }

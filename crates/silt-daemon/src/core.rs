@@ -36,6 +36,7 @@ pub enum Event {
     Tick,
     CloseTool {
         session_id: String,
+        tool_use_id: Option<String>,
         reply: oneshot::Sender<Response>,
     },
     /// A push's answer, from sync epoch `epoch`.

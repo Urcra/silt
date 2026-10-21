@@ -50,7 +50,6 @@ pub(crate) struct Session {
     pub(crate) transcript: Option<PathBuf>,
     pub(crate) offsets: HashMap<String, SessionFileOffset>,
     pub(crate) readers: HashMap<String, Box<dyn Reader>>,
-    pub(crate) open_tool: Option<String>,
     pub(crate) in_turn: bool,
     /// The last tool and turn read as finished from the transcript, and
     /// when: edits the watcher reports just after still belong to them.
@@ -349,7 +348,6 @@ impl Core {
             transcript: new.transcript.clone(),
             offsets,
             readers,
-            open_tool: None,
             in_turn: false,
             closed_tool: None,
             turn_closed: None,
@@ -415,7 +413,6 @@ impl Core {
                 agent_cwd: PathBuf::new(),
                 offsets,
                 readers: HashMap::new(),
-                open_tool: None,
                 in_turn: false,
                 closed_tool: None,
                 turn_closed: None,
@@ -646,10 +643,10 @@ impl Core {
             }
         }
         for id in &ids {
+            self.close_open_tool(id).await?;
             if let Some(session) = self.session_mut(id) {
                 session.live = false;
                 session.in_turn = false;
-                session.open_tool = None;
             }
         }
         Ok("ended")
@@ -783,6 +780,7 @@ impl Core {
     }
 
     async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
+        let open = self.open_tool(session_id).map(str::to_owned);
         let session = self.session_mut(session_id).expect("caller checked");
         let mark = match mark {
             Mark::PromptSubmitted => {
@@ -794,19 +792,15 @@ impl Core {
                 // calls are written, as Gemini's does; a tool means the turn
                 // goes on.
                 session.in_turn = true;
-                session.open_tool = Some(tool_use_id.clone());
                 TurnMark::ToolStarted { tool_use_id, tool }
             }
             Mark::ToolFinished { tool_use_id } => {
-                if session.open_tool.as_deref() == Some(&tool_use_id) {
-                    session.open_tool = None;
-                }
                 session.closed_tool = Some((tool_use_id.clone(), Instant::now()));
                 TurnMark::ToolFinished { tool_use_id }
             }
             Mark::Stopped => {
                 session.in_turn = false;
-                if let Some(tool) = session.open_tool.take() {
+                if let Some(tool) = open {
                     session.closed_tool = Some((tool, Instant::now()));
                 }
                 session.turn_closed = Some(Instant::now());
@@ -814,6 +808,22 @@ impl Core {
             }
         };
         self.record_turn(session_id, mark).await
+    }
+
+    /// The tool the session's marks say is open, as any process recording
+    /// it reads them from the log.
+    pub(crate) fn open_tool(&self, session_id: &str) -> Option<&str> {
+        let session = self.session(session_id)?;
+        self.families().get(&session.family)?.open_tool(&session.reference())
+    }
+
+    /// Ends the turn of a session that stopped with a tool still open, so
+    /// the tool doesn't go on taking the credit for later edits.
+    pub(crate) async fn close_open_tool(&mut self, session_id: &str) -> Result<(), CoreError> {
+        if self.open_tool(session_id).is_some() {
+            self.record_turn(session_id, TurnMark::Stopped).await?;
+        }
+        Ok(())
     }
 
     /// Records the session's side files as attachments when they are new or
@@ -909,7 +919,7 @@ impl Core {
                 capture: session.agent.capture(),
                 live: session.live,
                 in_turn: session.in_turn,
-                open_tool: session.open_tool.as_deref(),
+                open_tool: self.open_tool(&session.record.session_id),
                 closed_tool: session.closed_tool.as_ref().map(|(tool, at)| (tool.as_str(), *at)),
                 turn_closed: session.turn_closed,
             })
@@ -955,17 +965,15 @@ impl Core {
             }
             "PreToolUse" => {
                 let tool_use_id = input.tool_use_id.clone().unwrap_or_default();
-                if let Some(session) = self.session_mut(&session_id) {
-                    session.open_tool = Some(tool_use_id.clone());
-                }
                 let mark = TurnMark::ToolStarted { tool_use_id, tool: input.tool_name.clone().unwrap_or_default() };
                 self.record_turn(&session_id, mark).await
             }
             "PostToolUse" => {
                 let events = self.events.clone();
+                let tool_use_id = input.tool_use_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(TOOL_SETTLE).await;
-                    let _ = events.send(Event::CloseTool { session_id, reply });
+                    let _ = events.send(Event::CloseTool { session_id, tool_use_id, reply });
                 });
                 return None;
             }
@@ -996,20 +1004,26 @@ impl Core {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    pub(crate) async fn close_tool(&mut self, session_id: &str, reply: oneshot::Sender<Response>) {
-        let tool = self.session_mut(session_id).and_then(|session| session.open_tool.take());
+    /// Finishes `tool_use_id`, or without one whichever tool is open.
+    pub(crate) async fn close_tool(&mut self, session_id: &str, tool_use_id: Option<String>, reply: oneshot::Sender<Response>) {
+        let tool = tool_use_id.filter(|id| !id.is_empty()).or_else(|| self.open_tool(session_id).map(str::to_owned));
         if let Some(tool_use_id) = tool {
             let _ = self.record_turn(session_id, TurnMark::ToolFinished { tool_use_id }).await;
         }
         let _ = reply.send(Response::ok("ok"));
     }
 
+    /// Records a turn mark, unless the log has it already: a mark seen by
+    /// two processes, or read again, is recorded once.
     pub(crate) async fn record_turn(&mut self, session_id: &str, mark: TurnMark) -> Result<(), CoreError> {
         let Some(session) = self.session(session_id) else {
             return Ok(());
         };
         let reference = session.reference();
         let (family, thread) = (session.family, session.record.thread);
+        if self.families().get(&family).is_some_and(|loaded| loaded.has_turn_mark(&reference, &mark)) {
+            return Ok(());
+        }
         let author = agent_author(&reference);
         self.append_conv(family, thread, author, ConvOp::Turn { session: reference, mark }).await?;
         Ok(())

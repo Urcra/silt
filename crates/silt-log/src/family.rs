@@ -9,11 +9,13 @@ use silt_crdt::{
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
-use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op};
+use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op, SessionRef, TurnMark};
 
 mod snapshot;
+mod turns;
 
 pub use snapshot::{SNAPSHOT_FORMAT, SnapshotError};
+use turns::Turns;
 
 /// Supplies the text of git blobs, which the projection needs the first
 /// time a file that came from git is edited.
@@ -304,6 +306,7 @@ pub struct Family {
     tree: FileTree,
     files: HashMap<InodeId, FileState>,
     threads: BTreeMap<ThreadId, ThreadState>,
+    turns: HashMap<SessionRef, Turns>,
     log: Vec<Delta>,
     shapes: Shapes,
 }
@@ -328,6 +331,18 @@ impl Family {
 
     pub fn thread(&self, thread: ThreadId) -> Option<&ThreadState> {
         self.threads.get(&thread)
+    }
+
+    /// The tool the session started last and hasn't finished, unless its
+    /// turn ended since.
+    pub fn open_tool(&self, session: &SessionRef) -> Option<&str> {
+        self.turns.get(session).and_then(Turns::open_tool)
+    }
+
+    /// Whether the session's `mark` is recorded already, so recording it
+    /// again would add nothing.
+    pub fn has_turn_mark(&self, session: &SessionRef, mark: &TurnMark) -> bool {
+        self.turns.get(session).is_some_and(|turns| turns.has(mark))
     }
 
     pub fn threads(&self) -> impl Iterator<Item = (&ThreadId, &ThreadState)> {
@@ -726,6 +741,9 @@ impl Family {
                 thread.title = Some(title.clone());
                 thread.title_stamp = stamp;
             }
+        }
+        if let Op::Conv(crate::delta::ConvOp::Turn { session, mark }) = &delta.op {
+            self.turns.entry(session.clone()).or_default().record(mark);
         }
         self.log.push(delta);
     }
