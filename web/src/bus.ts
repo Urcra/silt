@@ -6,9 +6,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { token, type BusEvent } from './api'
 import { keys } from './query'
-import { apiUrl } from './served'
+import { apiUrl, hosted } from './served'
 
 const RECONNECT_MS = 1000
+const HOSTED_REFRESH_MS = 3000
 
 type Listener = (event: BusEvent) => void
 
@@ -47,6 +48,14 @@ class Bus {
   }
 
   private connect() {
+    if (hosted()) {
+      // The server has no event socket yet, so everything shown is fetched
+      // again every few seconds instead.
+      this.retry ??= setInterval(() => {
+        for (const listener of this.listeners) listener({ event: 'lagged' })
+      }, HOSTED_REFRESH_MS)
+      return
+    }
     if (this.socket || this.retry || typeof WebSocket === 'undefined') return
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const socket = new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/events')}?token=${token()}`)

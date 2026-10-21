@@ -457,6 +457,103 @@ impl Browser {
         let status = response.status();
         (status, response.json().await.unwrap_or_default())
     }
+
+    async fn post(&self, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let response = self
+            .http
+            .post(format!("{}/app/api{path}", self.base))
+            .header(reqwest::header::COOKIE, &self.cookie)
+            .header("x-silt-request", "1")
+            .json(&body)
+            .send()
+            .await
+            .expect("sends");
+        let status = response.status();
+        (status, response.json().await.unwrap_or_default())
+    }
+}
+
+#[tokio::test]
+async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
+    use silt_proto::{AgentReport, AgentState, AgentsReport, CommandAnswer, ControlReply, RemoteCommand};
+    let world = world(Visibility::Team("core".into())).await;
+    let people = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let prompt = serde_json::json!({ "text": "add a test" });
+    let (status, refused) = alice.post(&format!("/threads/{THREAD}/agent/prompt"), prompt.clone()).await;
+    assert_eq!((status, refused["error"].as_str()), (StatusCode::CONFLICT, Some("no device runs an agent in this thread")));
+
+    let report = AgentsReport {
+        agents: vec![AgentReport {
+            thread: THREAD,
+            agent: "Fake agent".into(),
+            state: AgentState::AwaitingPermission,
+            permissions: Vec::new(),
+            queued: 0,
+            preset: "ask_for_everything".into(),
+        }],
+    };
+    let machine = &world.alice;
+    assert_eq!(machine.send(machine.request(Method::PUT, "/v1/control/agents").json(&report)).await, StatusCode::NO_CONTENT);
+    let (_, live) = alice.get(&format!("/threads/{THREAD}/live")).await;
+    assert_eq!(
+        (live["agent"]["state"].as_str(), live["preset"].as_str()),
+        (Some("awaiting_permission"), Some("ask_for_everything"))
+    );
+
+    let bob = Browser::sign_in(people("bob"), "bob").await;
+    let (status, refused) = bob.post(&format!("/threads/{THREAD}/agent/prompt"), prompt.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "bob writes the thread, but the agent runs on alice's machine");
+    assert_eq!(refused["error"], "alice's agent runs on their machine; only they can direct it");
+
+    // Alice's machine takes each command and answers it as it would its own web UI.
+    let daemon = async {
+        for answer in [
+            CommandAnswer { ok: true, message: String::new(), data: "sent".into() },
+            CommandAnswer::refused("no such permission request"),
+        ] {
+            let reply: ControlReply = machine
+                .request(Method::GET, "/v1/control?wait_ms=10000")
+                .send()
+                .await
+                .expect("sends")
+                .json()
+                .await
+                .expect("reply");
+            let [command] = reply.commands.as_slice() else { panic!("one command at a time: {reply:?}") };
+            assert_eq!(command.sender, "alice");
+            assert!(command.capabilities.allow(&command.command).is_ok());
+            let answered = machine.request(Method::POST, &format!("/v1/control/{}", command.id)).json(&answer);
+            assert_eq!(machine.send(answered).await, StatusCode::NO_CONTENT);
+            if answer.ok {
+                assert_eq!(command.command, RemoteCommand::Prompt { text: "add a test".into(), plan: false });
+            }
+        }
+    };
+    let browser = async {
+        let sent = alice.post(&format!("/threads/{THREAD}/agent/prompt"), prompt.clone()).await;
+        let answered =
+            alice.post(&format!("/threads/{THREAD}/agent/answer"), serde_json::json!({ "id": 9, "option": "allow" })).await;
+        (sent, answered)
+    };
+    let ((), (sent, answered)) = tokio::join!(daemon, browser);
+    assert_eq!(sent, (StatusCode::OK, serde_json::json!("sent")));
+    assert_eq!(answered.0, StatusCode::CONFLICT);
+    assert_eq!(answered.1["error"], "no such permission request");
+}
+
+#[tokio::test]
+async fn changes_from_the_hosted_app_need_its_header() {
+    let world = world(Visibility::Org).await;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let unmarked = alice
+        .http
+        .post(format!("{}/app/api/threads/{THREAD}/agent/stop", alice.base))
+        .header(reqwest::header::COOKIE, &alice.cookie)
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(unmarked.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

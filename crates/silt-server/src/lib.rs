@@ -46,6 +46,7 @@ mod orgs;
 mod pages;
 mod presence;
 mod projects;
+mod relayed;
 mod sign_in;
 mod visibility;
 

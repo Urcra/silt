@@ -13,7 +13,7 @@ import { Button, Input, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
-import { LivePanel } from './Live'
+import { HostedLivePanel, LivePanel } from './Live'
 import { ShareDialog } from './ShareDialog'
 
 const KIND_STYLE: Record<string, string> = {
@@ -270,6 +270,7 @@ export function ThreadView({ id }: { id: string }) {
             lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}
           />
         )}
+        {history.data?.thread && hosted() && <HostedLivePanel thread={history.data.thread} />}
         {history.error && <p className="text-danger">{message(history.error)}</p>}
         <div ref={list} className="relative mt-4" style={{ height: rows.getTotalSize() }} data-testid="history">
           {rows.getVirtualItems().map((row) => {

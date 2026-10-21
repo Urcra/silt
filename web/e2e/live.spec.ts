@@ -181,10 +181,23 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   }).toPass({ timeout: 15_000 })
   await expect(waiting.getByText('needs you')).toBeVisible()
 
-  await asked.getByRole('button', { name: 'Allow' }).click()
+  // The browser has no daemon: what it asks goes through the server to the machine.
+  await waiting.getByRole('link').first().click()
+  const there = hosted.getByRole('region', { name: 'live' })
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
+  await there.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(machine.getByText(/^Done: wait for me/)).toBeVisible()
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+
+  await there.getByLabel('draft').fill('from the browser')
+  await there.getByRole('button', { name: 'Send' }).click()
+  await expect(asked).toContainText('Edit src/main.rs')
+  await expect(there.getByRole('group', { name: 'permission' })).toBeVisible()
+  await there.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
+  await expect(machine.getByText('I was not allowed to edit.')).toBeVisible()
   await expect(async () => {
-    await hosted.reload()
+    await hosted.goto(`${live.server}/app/`)
     await expect(waiting).toHaveCount(0, { timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
   await machine.getByRole('button', { name: 'Stop agent' }).click()

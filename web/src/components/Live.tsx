@@ -242,6 +242,37 @@ function FileEditor({
   )
 }
 
+/** The thread's agent as the machine running it reports it, on a page the server serves (ADR 0026). */
+export function HostedLivePanel({ thread }: { thread: string }) {
+  const [draft, setDraft] = useState('')
+  const { agent, tool, preset, setPreset } = useLive(thread)
+  return (
+    <section className="mt-6" aria-label="live">
+      <h3 className="font-semibold">Live</h3>
+      <label className="mt-2 block text-sm">
+        Your next prompt
+        <textarea
+          aria-label="draft"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          className="mt-1 block w-full rounded border border-line p-2"
+          rows={2}
+        />
+      </label>
+      <AgentPanel
+        thread={thread}
+        status={agent}
+        toolOutput={tool.text}
+        preset={preset}
+        onPreset={setPreset}
+        draft={draft}
+        onSent={() => setDraft('')}
+        people={[]}
+      />
+    </section>
+  )
+}
+
 /** Who else is here, their drafts and the thread's files, live (ADR 0014). */
 export function LivePanel({
   thread,

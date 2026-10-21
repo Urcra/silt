@@ -4,10 +4,12 @@
 
 use std::time::{Duration, Instant};
 
-use silt_proto::{AgentReport, AgentsReport, AskedPermission, CommandAnswer, ControlCommand};
-use tracing::warn;
+use silt_proto::{AgentReport, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, RemoteCommand};
+use tokio::sync::oneshot;
+use tracing::{info, warn};
 
 use crate::core::{Core, Event};
+use crate::protocol::{Preset, Request, Response, StartOptions};
 
 /// How long one poll waits on the server for a command.
 const POLL_WAIT: Duration = Duration::from_secs(25);
@@ -93,6 +95,10 @@ impl Core {
                     .map(|asked| AskedPermission { id: asked.id, title: asked.title, options: asked.options })
                     .collect(),
                 queued,
+                preset: serde_json::to_value(self.preset(thread))
+                    .ok()
+                    .and_then(|preset| preset.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
             });
         }
         agents
@@ -103,16 +109,7 @@ impl Core {
             ControlEvent::Polled(Ok(commands)) => {
                 self.control.polling = false;
                 for command in commands {
-                    let id = command.id;
-                    let answer = self.run_command(command).await;
-                    let Some(remote) = self.remote.clone() else {
-                        break;
-                    };
-                    tokio::spawn(async move {
-                        if let Err(error) = remote.answer_command(id, &answer).await {
-                            warn!(%error, id, "could not answer a command");
-                        }
-                    });
+                    self.run_command(command).await;
                 }
                 self.drive_control().await;
             }
@@ -133,8 +130,121 @@ impl Core {
         }
     }
 
-    async fn run_command(&mut self, command: ControlCommand) -> CommandAnswer {
-        warn!(id = command.id, sender = command.sender, "refusing a command from elsewhere");
-        CommandAnswer { ok: false, message: "this device doesn't take commands from elsewhere yet".into() }
+    /// Runs a command as the same request from this machine's web UI would
+    /// run, and answers it once that request is answered.
+    async fn run_command(&mut self, command: ControlCommand) {
+        let Some(remote) = self.remote.clone() else {
+            return;
+        };
+        let id = command.id;
+        let request = self.checked(command);
+        let (reply, response) = oneshot::channel();
+        match request {
+            Ok(request) => self.request(request, reply).await,
+            Err(refusal) => {
+                let _ = reply.send(Response::error(refusal));
+            }
+        }
+        tokio::spawn(async move {
+            let answer = match response.await {
+                Ok(Response::Ok { data }) => CommandAnswer { ok: true, message: String::new(), data },
+                Ok(Response::Error { message }) => CommandAnswer::refused(message),
+                Err(_) => CommandAnswer::refused("the daemon stopped"),
+            };
+            if let Err(error) = remote.answer_command(id, &answer).await {
+                warn!(%error, id, "could not answer a command");
+            }
+        });
+    }
+
+    /// The request a command makes here, once its sender may make it
+    /// (ADR 0026): only this machine's own person runs things on it, from
+    /// a device allowed to.
+    fn checked(&self, command: ControlCommand) -> Result<Request, String> {
+        let me = self.own_user();
+        if me.is_empty() {
+            return Err("this machine doesn't know whose it is; sign it in again".into());
+        }
+        if command.sender != me {
+            warn!(sender = command.sender, "refusing a command from someone else");
+            return Err(format!("only {me} runs things on this machine"));
+        }
+        command.capabilities.allow(&command.command).map_err(|needs| format!("that device may not {needs}"))?;
+        info!(id = command.id, thread = %command.thread, from = ?command.from, "running a command from elsewhere");
+        let thread = command.thread.to_string();
+        let preset = |preset: String| {
+            serde_json::from_value::<Preset>(serde_json::Value::String(preset)).map_err(|_| "unknown preset".to_owned())
+        };
+        Ok(match command.command {
+            RemoteCommand::Prompt { text, plan } => Request::AcpPrompt { thread, text, plan, attachments: Vec::new() },
+            RemoteCommand::Queue { text } => Request::QueueAdd { thread, text },
+            RemoteCommand::Steer { text } => Request::AcpSteer { thread, text },
+            RemoteCommand::Answer { id, option } => Request::AcpAnswer { thread, id, option },
+            RemoteCommand::Cancel => Request::AcpCancel { thread },
+            RemoteCommand::Stop => Request::AcpStop { thread },
+            RemoteCommand::Preset { preset: chosen } => Request::AgentPreset { thread, preset: preset(chosen)? },
+            RemoteCommand::Mode { mode } => Request::AcpMode { thread, mode },
+            RemoteCommand::Setting { id, value } => Request::AcpSetting { thread, id, value },
+            RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
+                thread: Some(thread),
+                clone: None,
+                agent,
+                options: StartOptions { mode, preset: chosen.map(preset).transpose()?, ..StartOptions::default() },
+            },
+            RemoteCommand::Resume => return Err("resuming a thread from elsewhere isn't supported yet".into()),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_proto::Capabilities;
+    use silt_store::Store;
+    use silt_types::{ActorId, DeviceId, ThreadId};
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::remote::{Remote, RemoteConfig};
+
+    fn command(sender: &str, capabilities: Capabilities, command: RemoteCommand) -> ControlCommand {
+        ControlCommand { id: 1, thread: ThreadId(7), sender: sender.into(), from: None, capabilities, sent_ms: 0, command }
+    }
+
+    #[tokio::test]
+    async fn only_this_machines_person_runs_things_on_it_from_an_allowed_device() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let store = Store::open(data.path()).await.expect("opens");
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        let prompt = || RemoteCommand::Prompt { text: "hi".into(), plan: false };
+        assert!(core.checked(command("alice", Capabilities::ALL, prompt())).is_err(), "not signed in");
+
+        core.remote = Some(Remote::new(RemoteConfig {
+            url: "http://127.0.0.1:9".into(),
+            token: String::new(),
+            device: DeviceId(2),
+            name: "workstation".into(),
+            user: "alice".into(),
+        }));
+        assert_eq!(
+            core.checked(command("bob", Capabilities::ALL, prompt())).err().as_deref(),
+            Some("only alice runs things on this machine")
+        );
+        let answering = Capabilities { answer_permissions: true, review: true, ..Capabilities::default() };
+        assert_eq!(
+            core.checked(command("alice", answering, prompt())).err().as_deref(),
+            Some("that device may not send prompts")
+        );
+        let answer = RemoteCommand::Answer { id: 3, option: Some("allow".into()) };
+        assert!(matches!(
+            core.checked(command("alice", answering, answer)),
+            Ok(Request::AcpAnswer { id: 3, option: Some(_), .. })
+        ));
+        assert!(matches!(
+            core.checked(command("alice", Capabilities::ALL, prompt())),
+            Ok(Request::AcpPrompt { text, plan: false, .. }) if text == "hi"
+        ));
+        let unknown = RemoteCommand::Preset { preset: "anything goes".into() };
+        assert_eq!(core.checked(command("alice", Capabilities::ALL, unknown)).err().as_deref(), Some("unknown preset"));
     }
 }

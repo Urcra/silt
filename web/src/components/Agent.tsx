@@ -5,6 +5,7 @@ import { api, type AgentStatus, type Presence, type Preset, type PromptAttachmen
 import { readAttachment } from '../attachments'
 import { APPROVED, PRESETS, STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
+import { hosted } from '../served'
 import { useActions } from '../shortcuts'
 import { PromptQueue } from './Queue'
 
@@ -162,7 +163,10 @@ export function AgentPanel({
           <p className="text-xs text-fg-3">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
         </div>
       )}
-      {!live && !elsewhere && (
+      {!live && !elsewhere && hosted() && (
+        <p className="text-fg-2">No device of yours runs an agent in this thread right now.</p>
+      )}
+      {!live && !elsewhere && !hosted() && (
         <div className="flex flex-wrap items-center gap-2">
           <span>Run an agent here:</span>
           <AgentPicker value={agent} onChange={setAgent} />
@@ -264,6 +268,7 @@ export function AgentPanel({
               </label>
             )}
             <label
+              hidden={hosted()}
               className="cursor-pointer rounded border border-line px-2 py-1 text-xs"
               title={status.takes_images ? 'Attach images or files' : `Attach text files; ${status.agent} takes no images`}
             >
@@ -304,10 +309,12 @@ export function AgentPanel({
         </div>
       )}
       {error && <p className="text-danger">{error}</p>}
-      <div className="mt-2">
-        <PresetPicker thread={thread} preset={preset} onPreset={onPreset} />
-      </div>
-      <PromptQueue thread={thread} />
+      {(live || !hosted()) && (
+        <div className="mt-2">
+          <PresetPicker thread={thread} preset={preset} onPreset={onPreset} />
+        </div>
+      )}
+      {!hosted() && <PromptQueue thread={thread} />}
     </section>
   )
 }

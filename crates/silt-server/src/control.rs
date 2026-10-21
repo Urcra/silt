@@ -9,7 +9,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use silt_proto::{AgentReport, AgentsReport, CommandAnswer, ControlCommand, ControlReply, RemoteCommand};
+use silt_proto::{AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand};
 use silt_types::{DeviceId, ThreadId};
 use tokio::sync::{Mutex, Notify};
 
@@ -25,6 +25,8 @@ pub(crate) struct Control {
     board: Mutex<Board>,
     /// Woken when a command is relayed, for the polls to look again.
     relayed: Notify,
+    /// Woken when a command is answered, for whoever waits on one.
+    answered: Notify,
 }
 
 struct Heard {
@@ -53,9 +55,23 @@ impl Board {
 }
 
 impl Control {
-    #[cfg_attr(not(test), expect(dead_code, reason = "commands for offline devices are refused next"))]
+    #[cfg(test)]
     pub(crate) async fn online(&self, device: DeviceId) -> bool {
         self.board.lock().await.online().any(|(online, _)| *online == device)
+    }
+
+    /// The device that last reported running an agent in `thread`, whether
+    /// it's still online, and what it reported.
+    pub(crate) async fn runs(&self, thread: ThreadId) -> Option<(DeviceId, bool, AgentReport)> {
+        let board = self.board.lock().await;
+        board
+            .devices
+            .iter()
+            .filter_map(|(device, heard)| {
+                heard.agents.iter().find(|agent| agent.thread == thread).map(|agent| (device, heard, agent))
+            })
+            .max_by_key(|(_, heard, _)| heard.at)
+            .map(|(device, heard, agent)| (*device, heard.at.elapsed() < OFFLINE_AFTER, agent.clone()))
     }
 
     /// The agents running on online devices, by thread, for showing only
@@ -123,6 +139,9 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
             thread: ThreadId(id_from(&row.thread_id)),
             sender: row.sender,
             from: row.from_device.as_deref().map(|device| DeviceId(id_from(device))),
+            // Browsers and devices alike may do everything, until people
+            // choose per device.
+            capabilities: Capabilities::ALL,
             sent_ms: row.created_ms,
             command,
         });
@@ -163,11 +182,30 @@ pub(crate) async fn answer(
     if answered.rows_affected() == 0 {
         return Err(not_found());
     }
+    server.shared.control.answered.notify_waiters();
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The command's answer, once its daemon gives one within `wait`.
+pub(crate) async fn answer_of(server: &Server, id: i64, wait: Duration) -> Result<Option<CommandAnswer>, ServerError> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let answered = server.shared.control.answered.notified();
+        tokio::pin!(answered);
+        answered.as_mut().enable();
+        let answer = sqlx::query_scalar!("SELECT answer FROM control_commands WHERE id = ?", id).fetch_one(server.db()).await?;
+        if let Some(answer) = answer {
+            return Ok(Some(serde_json::from_str(&answer)?));
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(None);
+        }
+        let _ = tokio::time::timeout(left, answered).await;
+    }
+}
+
 /// A command for `device`, from `sender` on the device `from` if any.
-#[cfg_attr(not(test), expect(dead_code, reason = "browsers relay commands next"))]
 pub(crate) struct Relay {
     pub(crate) device: DeviceId,
     pub(crate) thread: ThreadId,
@@ -178,7 +216,6 @@ pub(crate) struct Relay {
 }
 
 /// Leaves the command for its daemon's next poll, and wakes the polls.
-#[cfg_attr(not(test), expect(dead_code, reason = "browsers relay commands next"))]
 pub(crate) async fn relay(server: &Server, relay: Relay) -> Result<i64, ServerError> {
     let (device, thread, from) = (id_bytes(relay.device.0), id_bytes(relay.thread.0), relay.from.map(|from| id_bytes(from.0)));
     let command = serde_json::to_string(&relay.command)?;
@@ -302,17 +339,19 @@ mod tests {
         let stale = super::relay(&server, relay(RemoteCommand::Stop, Duration::ZERO)).await.expect("relays");
         assert!(laptop.poll(0).await.is_empty(), "an expired command isn't taken");
 
-        let answer = CommandAnswer { ok: true, message: "queued".into() };
+        let answer = CommandAnswer { ok: true, message: String::new(), data: "queued".into() };
         let answered =
             |device: &Device, id: i64| device.request(reqwest::Method::POST, &format!("/v1/control/{id}")).json(&answer).send();
+        assert_eq!(answer_of(&server, id, Duration::ZERO).await.expect("reads"), None);
+        let waiting = {
+            let server = server.clone();
+            tokio::spawn(async move { answer_of(&server, id, Duration::from_secs(10)).await })
+        };
         assert_eq!(answered(&phone, id).await.expect("sends").status(), StatusCode::NOT_FOUND, "only its device answers");
         assert_eq!(answered(&laptop, id).await.expect("sends").status(), StatusCode::NO_CONTENT);
         assert_eq!(answered(&laptop, id).await.expect("sends").status(), StatusCode::NOT_FOUND, "once");
-        let kept = sqlx::query_scalar!("SELECT answer FROM control_commands WHERE id = ?", id)
-            .fetch_one(server.db())
-            .await
-            .expect("kept");
-        assert_eq!(kept.as_deref(), Some(r#"{"ok":true,"message":"queued"}"#));
+        let heard = tokio::time::timeout(Duration::from_secs(5), waiting).await.expect("wakes").expect("joins");
+        assert_eq!(heard.expect("reads"), Some(answer.clone()), "whoever waits hears the answer at once");
         assert_ne!(stale, id);
     }
 
@@ -340,6 +379,7 @@ mod tests {
             state: AgentState::AwaitingPermission,
             permissions: Vec::new(),
             queued: 2,
+            preset: "full_access".into(),
         };
         // A thread Alice doesn't see isn't hers to report.
         let report = AgentsReport { agents: vec![agent(ThreadId(7)), agent(ThreadId(99))] };
@@ -349,5 +389,17 @@ mod tests {
         let running = server.shared.control.running().await;
         assert_eq!(running.len(), 1);
         assert_eq!(running[&ThreadId(7)], (device, agent(ThreadId(7))));
+        assert_eq!(server.shared.control.runs(ThreadId(7)).await, Some((device, true, agent(ThreadId(7)))));
+        assert_eq!(server.shared.control.runs(ThreadId(99)).await, None);
+
+        if let Some(heard) = server.shared.control.board.lock().await.devices.get_mut(&device) {
+            heard.at = heard.at.checked_sub(OFFLINE_AFTER).expect("the clock has run this long");
+        }
+        assert!(server.shared.control.running().await.is_empty(), "a device gone quiet runs nothing anyone sees");
+        assert_eq!(
+            server.shared.control.runs(ThreadId(7)).await,
+            Some((device, false, agent(ThreadId(7)))),
+            "but its thread is still known to run there, for a prompt to wait for it"
+        );
     }
 }

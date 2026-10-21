@@ -28,6 +28,7 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
     let api = Router::new()
         .route("/app/api/status", get(status))
         .merge(crate::browse::routes())
+        .merge(crate::relayed::routes())
         // Not the page: the app would read it as an empty answer.
         .route(
             "/app/api/{*rest}",

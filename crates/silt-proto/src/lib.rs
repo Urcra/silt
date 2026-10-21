@@ -877,6 +877,10 @@ pub struct AgentReport {
     /// Prompts waiting their turn.
     #[serde(default)]
     pub queued: u32,
+    /// Which permission requests the daemon answers by itself, as the daemon
+    /// names it.
+    #[serde(default)]
+    pub preset: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -930,8 +934,47 @@ pub enum RemoteCommand {
     Mode {
         mode: String,
     },
+    /// Picks one of a setting's choices, such as the agent's model.
+    Setting {
+        id: String,
+        value: String,
+    },
     /// Takes the thread up on this device.
     Resume,
+}
+
+/// What a person lets one of their devices do to the others (ADR 0026).
+/// Missing ones are refused.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct Capabilities {
+    pub answer_permissions: bool,
+    pub send_prompts: bool,
+    pub run_agents: bool,
+    pub review: bool,
+}
+
+impl Capabilities {
+    pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true };
+
+    /// Whether these let the device send `command`, and if not, what it
+    /// would need, for saying so.
+    pub fn allow(&self, command: &RemoteCommand) -> Result<(), &'static str> {
+        let (allowed, needs) = match command {
+            RemoteCommand::Answer { .. } => (self.answer_permissions, "answer permissions"),
+            RemoteCommand::Prompt { .. } | RemoteCommand::Queue { .. } | RemoteCommand::Steer { .. } | RemoteCommand::Cancel => {
+                (self.send_prompts, "send prompts")
+            }
+            RemoteCommand::Start { .. }
+            | RemoteCommand::Stop
+            | RemoteCommand::Preset { .. }
+            | RemoteCommand::Mode { .. }
+            | RemoteCommand::Setting { .. }
+            | RemoteCommand::Resume => (self.run_agents, "start and stop agents"),
+        };
+        if allowed { Ok(()) } else { Err(needs) }
+    }
 }
 
 /// A command waiting for the daemon it's meant for.
@@ -943,6 +986,9 @@ pub struct ControlCommand {
     pub sender: String,
     #[serde(default)]
     pub from: Option<DeviceId>,
+    /// What the sending device may do, for the daemon to check.
+    #[serde(default)]
+    pub capabilities: Capabilities,
     pub sent_ms: i64,
     pub command: RemoteCommand,
 }
@@ -952,10 +998,19 @@ pub struct ControlReply {
     pub commands: Vec<ControlCommand>,
 }
 
-/// How a daemon answered a command.
+/// How a daemon answered a command: what it would have answered its own
+/// web UI, or why not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CommandAnswer {
     pub ok: bool,
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+impl CommandAnswer {
+    pub fn refused(message: impl Into<String>) -> Self {
+        Self { ok: false, message: message.into(), data: serde_json::Value::Null }
+    }
 }
