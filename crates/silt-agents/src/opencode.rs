@@ -18,19 +18,19 @@ use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Recorde
 pub const AGENT: &str = "opencode";
 
 /// Runs `opencode` and returns its output. The output goes through a file:
-/// OpenCode cuts its output short when writing large amounts to a pipe.
+/// OpenCode cuts its output short when writing large amounts to a pipe. It
+/// holds a conversation, so the file is private to this user, unique to
+/// this call, and never one someone planted.
 fn opencode(args: &[&str], cwd: Option<&Path>) -> io::Result<Vec<u8>> {
     let launch = Launch::new("opencode");
-    let output_path = std::env::temp_dir().join(format!("silt-opencode-{}-{}.out", std::process::id(), crate::now_ms()));
-    let output = fs::File::create(&output_path)?;
+    let output = tempfile::Builder::new().prefix("silt-opencode-").suffix(".out").tempfile()?;
     let mut command = Command::new(&launch.program);
-    command.args(args).stdin(Stdio::null()).stdout(output).stderr(Stdio::piped());
+    command.args(args).stdin(Stdio::null()).stdout(output.reopen()?).stderr(Stdio::piped());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     let result = command.output();
-    let stdout = fs::read(&output_path);
-    let _ = fs::remove_file(&output_path);
+    let stdout = fs::read(output.path());
     let result = result?;
     if result.status.success() {
         stdout
@@ -320,11 +320,9 @@ impl Agent for OpenCode {
         }
         let lines: Vec<String> = session.main.iter().map(|line| rewrites.apply(line)).collect();
         let export = export_from_records(&lines);
-        let file = std::env::temp_dir().join(format!("silt-opencode-{}.json", session.id));
-        fs::write(&file, export.to_string())?;
-        let imported = opencode(&["import", &file.to_string_lossy()], Some(cwd));
-        let _ = fs::remove_file(&file);
-        imported?;
+        let mut file = tempfile::Builder::new().prefix("silt-opencode-").suffix(".json").tempfile()?;
+        io::Write::write_all(&mut file, export.to_string().as_bytes())?;
+        opencode(&["import", &file.path().to_string_lossy()], Some(cwd))?;
         Ok(PathBuf::from(format!("opencode:{}", session.id)))
     }
 
