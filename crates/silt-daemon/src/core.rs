@@ -348,8 +348,8 @@ impl Core {
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }
-            Request::Inbox { all } => to_response(self.inbox(all).await),
-            Request::InboxRead { read } => to_response(self.inbox_read(&read).await.map(|()| "read")),
+            Request::Inbox { all } => return answer_later(reply, self.inbox(all)),
+            Request::InboxRead { read } => return answer_later(reply, self.inbox_read(read)),
             Request::ThreadDelete { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Delete).await),
             Request::ThreadRestore { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Restore).await),
             Request::ThreadPurge { thread } => to_response(self.thread_lifecycle(&thread, Lifecycle::Purge).await),
@@ -365,7 +365,7 @@ impl Core {
                 line,
                 draft,
                 leaving,
-            } => to_response(self.presence(&thread, file, line, draft, leaving).await),
+            } => return answer_later(reply, self.presence(&thread, file, line, draft, leaving)),
             Request::AcpAgents => Response::ok(self.acp_agents()),
             Request::AcpStart { thread, clone, agent } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
@@ -1140,36 +1140,50 @@ impl Core {
         Ok(if once { web.one_time_url() } else { web.url() })
     }
 
-    /// The actor for this daemon's own deltas in one thread. Threads of a
-    /// family grow concurrently, and an actor's deltas must form one chain.
-    async fn inbox(&self, all: bool) -> Result<Vec<crate::protocol::InboxEntry>, CoreError> {
-        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
-        let reply = remote.inbox(all).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
-        Ok(reply
-            .notifications
-            .into_iter()
-            .map(|notification| crate::protocol::InboxEntry {
-                id: notification.id,
-                kind: notification.kind,
-                thread: notification.thread.to_string(),
-                actor: notification.actor,
-                text: notification.text,
-                created_ms: notification.created_ms,
-                read: notification.read,
-            })
-            .collect())
+    fn connected(&self) -> Result<Remote, CoreError> {
+        self.remote
+            .clone()
+            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }
 
-    async fn inbox_read(&self, read: &silt_proto::InboxRead) -> Result<(), CoreError> {
-        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
-        remote.inbox_read(read).await.map_err(|error| CoreError::Invalid(error.to_string()))
+    fn inbox(&self, all: bool) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
+        let remote = self.connected()?;
+        Ok(async move {
+            let reply = remote.inbox(all).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+            Ok(reply
+                .notifications
+                .into_iter()
+                .map(|notification| crate::protocol::InboxEntry {
+                    id: notification.id,
+                    kind: notification.kind,
+                    thread: notification.thread.to_string(),
+                    actor: notification.actor,
+                    text: notification.text,
+                    created_ms: notification.created_ms,
+                    read: notification.read,
+                })
+                .collect())
+        })
     }
 
-    async fn presence(&self, selector: &str, file: Option<String>, line: Option<u32>, draft: String, leaving: bool) -> Result<silt_proto::PresenceReply, CoreError> {
+    fn inbox_read(&self, read: silt_proto::InboxRead) -> Result<impl Future<Output = Result<&'static str, CoreError>> + use<>, CoreError> {
+        let remote = self.connected()?;
+        Ok(async move {
+            remote.inbox_read(&read).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+            Ok("read")
+        })
+    }
+
+    fn presence(
+        &self,
+        selector: &str,
+        file: Option<String>,
+        line: Option<u32>,
+        draft: String,
+        leaving: bool,
+    ) -> Result<impl Future<Output = Result<silt_proto::PresenceReply, CoreError>> + use<>, CoreError> {
         let thread = self.find_thread(selector)?;
-        let Some(remote) = &self.remote else {
-            return Ok(silt_proto::PresenceReply::default());
-        };
+        let remote = self.remote.clone();
         let update = silt_proto::PresenceUpdate {
             thread,
             file,
@@ -1182,7 +1196,12 @@ impl Core {
                 streaming: self.redactor.replace(&status.streaming),
             }),
         };
-        remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
+        Ok(async move {
+            let Some(remote) = remote else {
+                return Ok(silt_proto::PresenceReply::default());
+            };
+            remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
+        })
     }
 
     /// Teammates' current drafts for the thread's next prompt, for its
@@ -1304,6 +1323,8 @@ impl Core {
         }
     }
 
+    /// The actor for this daemon's own deltas in one thread. Threads of a
+    /// family grow concurrently, and an actor's deltas must form one chain.
     pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
         self.actor.derive(thread.0)
     }
@@ -1398,6 +1419,25 @@ fn redactor(data_dir: &Path) -> Redactor {
         Vec::new()
     });
     Redactor::from_env().with(secrets)
+}
+
+/// Answers `reply` once `call`, a call to the server, is done, off the event
+/// loop: a slow server then holds up only this request.
+fn answer_later<T, F>(reply: oneshot::Sender<Response>, call: Result<F, CoreError>)
+where
+    T: serde::Serialize,
+    F: Future<Output = Result<T, CoreError>> + Send + 'static,
+{
+    match call {
+        Ok(call) => {
+            tokio::spawn(async move {
+                let _ = reply.send(to_response(call.await));
+            });
+        }
+        Err(error) => {
+            let _ = reply.send(Response::error(error));
+        }
+    }
 }
 
 pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {

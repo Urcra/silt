@@ -152,12 +152,23 @@ pub struct Remote {
     http: reqwest::Client,
 }
 
+/// The longest any call to the server may take, unless it says otherwise:
+/// a server that stops answering must not hold up what waits on it.
+const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Blobs can be large and links slow.
+const BLOB_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Teammates' drafts go into an agent's prompt while the hook waits.
+const DRAFTS_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Remote {
     pub fn new(config: RemoteConfig) -> Self {
-        Self {
-            config,
-            http: reqwest::Client::new(),
-        }
+        let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(CALL_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { config, http }
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -219,7 +230,8 @@ impl Remote {
 
     pub async fn present(&self, thread: ThreadId) -> Result<PresenceReply, RemoteError> {
         let path = format!("/v1/presence?thread={thread}");
-        Ok(checked(self.request(reqwest::Method::GET, &path).send().await?).await?.json().await?)
+        let request = self.request(reqwest::Method::GET, &path).timeout(DRAFTS_TIMEOUT);
+        Ok(checked(request.send().await?).await?.json().await?)
     }
 
     pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {
@@ -293,6 +305,7 @@ impl Remote {
     pub async fn put_blob(&self, hash: BlobHash, bytes: Vec<u8>) -> Result<(), RemoteError> {
         let response = self
             .request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}"))
+            .timeout(BLOB_TIMEOUT)
             .body(bytes)
             .send()
             .await?;
@@ -301,7 +314,11 @@ impl Remote {
     }
 
     pub async fn get_blob(&self, hash: BlobHash) -> Result<Vec<u8>, RemoteError> {
-        let response = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).send().await?;
+        let response = self
+            .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}"))
+            .timeout(BLOB_TIMEOUT)
+            .send()
+            .await?;
         Ok(checked(response).await?.bytes().await?.to_vec())
     }
 
