@@ -674,7 +674,9 @@ pub(crate) struct Restored {
     pub(crate) start: AgentStart,
 }
 
-/// Longest rendered transcript a primed session starts with.
+/// Longest rendered transcript a primed session starts with, in characters.
+/// The prompt is one command-line argument, which Linux caps at 128 KiB, and
+/// a character takes up to four bytes.
 const PRIMED_BUDGET: usize = 24_000;
 
 /// The conversation recorded in `history`, by any agents.

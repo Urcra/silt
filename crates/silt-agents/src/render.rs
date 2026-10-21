@@ -57,7 +57,9 @@ fn clip(text: &str) -> String {
 
 /// The first prompt of a new session that continues a conversation recorded
 /// with another agent: as much of the end of it as fits in `budget`
-/// characters, and where to read the rest.
+/// characters, and where to read the rest. The prompt is an agent's
+/// command-line argument, which can't be longer than the system allows, so
+/// even the last message is cut to the budget.
 pub fn render_transcript(entries: &[Entry], thread: &str, from_agent: &str, budget: usize) -> String {
     let messages = translated_text(entries);
     let mut kept: Vec<String> = Vec::new();
@@ -69,11 +71,15 @@ pub fn render_transcript(entries: &[Entry], thread: &str, from_agent: &str, budg
             Role::Assistant => "Assistant",
         };
         let block = format!("## {speaker}\n\n{}\n", text.trim());
-        if used + block.len() > budget && !kept.is_empty() {
+        let length = block.chars().count();
+        if used + length > budget {
+            if kept.is_empty() {
+                kept.push(end_of(speaker, text.trim(), budget));
+            }
             cut = true;
             break;
         }
-        used += block.len();
+        used += length;
         kept.push(block);
     }
     kept.reverse();
@@ -89,6 +95,15 @@ pub fn render_transcript(entries: &[Entry], thread: &str, from_agent: &str, budg
     prompt.push_str(" Read it, then reply briefly that you are ready to continue and wait for the next instruction.\n\n# Conversation so far\n\n");
     prompt.push_str(&kept.join("\n"));
     prompt
+}
+
+/// A message block holding about the last `budget` characters of `text`.
+fn end_of(speaker: &str, text: &str, budget: usize) -> String {
+    const MARK: &str = "(The start of this message is cut.) …";
+    let room = budget.saturating_sub(speaker.len() + MARK.len() + 6);
+    let skip = text.chars().count().saturating_sub(room);
+    let end: String = text.chars().skip(skip).collect();
+    format!("## {speaker}\n\n{MARK}{end}\n")
 }
 
 #[cfg(test)]
@@ -140,5 +155,18 @@ mod tests {
         assert!(!full.contains("Only the end"));
         let short = render_transcript(&conversation(), "abc", "Claude Code", 20);
         assert!(short.contains("Only the end") && short.contains("## User\n\nThanks") && !short.contains("Fix the lexer"));
+    }
+
+    #[test]
+    fn a_last_message_longer_than_the_budget_keeps_its_end() {
+        let long = Entry::User {
+            text: format!("start {} end", "é".repeat(100_000)),
+        };
+        let budget = 1_000;
+        let prompt = render_transcript(&[long], "abc", "Claude Code", budget);
+        let (_, conversation) = prompt.split_once("# Conversation so far\n\n").expect("has the conversation");
+        assert!(conversation.chars().count() <= budget, "{}", conversation.chars().count());
+        assert!(prompt.contains("Only the end") && prompt.contains("is cut.) …") && prompt.ends_with("é end\n"));
+        assert!(!prompt.contains("start é"));
     }
 }
