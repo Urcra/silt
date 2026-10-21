@@ -308,6 +308,11 @@ pub fn normalize(line: &str) -> Vec<Entry> {
         "system" if value.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
             vec![Entry::Compaction { summary: None }]
         }
+        // What Claude Code adds as the user's turn, such as a skill's text,
+        // hook feedback or a note on an image, which nobody typed.
+        "user" if value.get("isMeta").and_then(Value::as_bool) == Some(true) => {
+            vec![Entry::Other { kind: "meta".into() }]
+        }
         "user" | "assistant" => message_entries(kind, &value),
         other => vec![Entry::Other { kind: other.to_owned() }],
     }
@@ -434,6 +439,8 @@ mod tests {
     fn normalizes_messages_tools_and_compaction() {
         let user = r#"{"type":"user","message":{"role":"user","content":"Fix the lexer"}}"#;
         assert_eq!(normalize(user), vec![Entry::User { text: "Fix the lexer".into() }]);
+        let skill = r#"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /s"}]}}"#;
+        assert_eq!(normalize(skill), vec![Entry::Other { kind: "meta".into() }]);
 
         let assistant = r#"{"type":"assistant","message":{"role":"assistant","content":[
             {"type":"thinking","thinking":"look at lexer.rs","signature":"x"},
