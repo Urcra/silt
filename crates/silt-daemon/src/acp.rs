@@ -2,6 +2,7 @@
 //! thread's checkout on this machine and recorded as a session of the `acp`
 //! adapter, so history, search, forks and handoffs treat it like any other.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use silt_acp::registry::{self, AgentInfo};
@@ -37,6 +38,8 @@ pub(crate) struct AcpRun {
     thought: String,
     asking: Vec<Permission>,
     error: Option<String>,
+    /// Each running tool call's output so far, to tell browsers what's new.
+    tool_output: HashMap<String, String>,
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -136,6 +139,7 @@ impl Core {
                 thought: String::new(),
                 asking: Vec::new(),
                 error: None,
+                tool_output: HashMap::new(),
             },
         );
         self.announce_agent(thread);
@@ -367,7 +371,12 @@ impl Core {
                 self.record_acp(thread, &acp::tool_call(&id, &title, &kind, input.as_ref())).await?;
             }
             Update::ToolUpdate { id, status, output } => {
+                if let Some(output) = &output {
+                    let before = run.tool_output.insert(id.clone(), output.clone()).unwrap_or_default();
+                    self.announce_tool_output(thread, &id, &before, output);
+                }
                 if let Some(status @ ("completed" | "failed")) = status.as_deref() {
+                    self.acp.get_mut(&thread).expect("caller checked").tool_output.remove(&id);
                     self.flush_acp(thread).await?;
                     self.record_acp(thread, &acp::tool_result(&id, status, output.as_deref())).await?;
                 }

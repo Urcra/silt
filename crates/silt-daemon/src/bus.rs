@@ -47,7 +47,50 @@ impl Core {
 
     pub(crate) fn announce_text(&self, thread: ThreadId, kind: TextKind, text: &str) {
         if self.heard() && !text.is_empty() {
-            self.announce(BusEvent::AgentText { thread: thread.to_string(), kind, text: text.to_owned() });
+            let thread = thread.to_string();
+            self.announce(BusEvent::AgentText { thread, kind, text: text.to_owned(), tool_use_id: None, restart: false });
         }
+    }
+
+    /// What's new in a tool call's output, which ACP sends whole each time.
+    pub(crate) fn announce_tool_output(&self, thread: ThreadId, tool_use_id: &str, before: &str, output: &str) {
+        if !self.heard() {
+            return;
+        }
+        let Some((text, restart)) = piece(before, output) else {
+            return;
+        };
+        self.announce(BusEvent::AgentText {
+            thread: thread.to_string(),
+            kind: TextKind::Tool,
+            text,
+            tool_use_id: Some(tool_use_id.to_owned()),
+            restart,
+        });
+    }
+}
+
+/// What `output` adds to `before`, or all of it when it replaced `before`
+/// (`true`); nothing when it is the same.
+fn piece(before: &str, output: &str) -> Option<(String, bool)> {
+    if before == output {
+        return None;
+    }
+    Some(match output.strip_prefix(before) {
+        Some(added) => (added.to_owned(), false),
+        None => (output.to_owned(), true),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tool_s_output_is_sent_a_piece_at_a_time() {
+        assert_eq!(piece("", "compiling"), Some(("compiling".into(), false)));
+        assert_eq!(piece("compiling", "compiling\nok"), Some(("\nok".into(), false)));
+        assert_eq!(piece("compiling\nok", "compiling\nok"), None);
+        assert_eq!(piece("step 1", "step 2"), Some(("step 2".into(), true)), "a replaced output starts over");
     }
 }

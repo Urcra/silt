@@ -39,7 +39,7 @@ export type AgentStatus = { agent: string, state: AgentState,
  */
 streaming: string, thinking: string, permissions: Array<PermissionAsked>, error: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 

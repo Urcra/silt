@@ -701,7 +701,17 @@ pub enum BusEvent {
     /// The agent the web UI started in the thread; `None` once it's gone.
     Agent { thread: String, status: Option<AgentStatus> },
     /// A piece of what the agent says, thinks or a tool prints, as it comes.
-    AgentText { thread: String, kind: TextKind, text: String },
+    /// A tool's pieces name the tool call; one that `restart`s replaces
+    /// what came before it rather than following it.
+    AgentText {
+        thread: String,
+        kind: TextKind,
+        text: String,
+        #[serde(default)]
+        tool_use_id: Option<String>,
+        #[serde(default)]
+        restart: bool,
+    },
     /// The inbox may have changed.
     Inbox,
     /// Merge requests may have changed.
