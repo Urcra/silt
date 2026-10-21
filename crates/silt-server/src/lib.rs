@@ -180,6 +180,8 @@ struct Shared {
     vapid: web_push_native::jwt_simple::algorithms::ES256KeyPair,
     /// When read-only link tokens opened nothing, lately (ADR 0027).
     link_misses: std::sync::Mutex<Vec<std::time::Instant>>,
+    /// Merge requests as a device of each person last showed them.
+    mr_views: Mutex<HashMap<(UserId, String), (std::time::Instant, serde_json::Value)>>,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
 }
@@ -252,6 +254,7 @@ impl Server {
                 writes: Mutex::new(()),
                 vapid,
                 link_misses: std::sync::Mutex::new(Vec::new()),
+                mr_views: Mutex::new(HashMap::new()),
                 passwords: accounts::PasswordChecks::default(),
                 config,
                 http,

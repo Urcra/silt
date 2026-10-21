@@ -1026,6 +1026,17 @@ pub enum RemoteCommand {
         id: String,
         value: String,
     },
+    /// A merge request as this device sees it, with its files and diff,
+    /// which need the family's code.
+    MrShow {
+        mr: String,
+    },
+    /// Marks one of a merge request's files seen, or not, as it is now.
+    MrSeen {
+        mr: String,
+        path: String,
+        seen: bool,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1058,6 +1069,7 @@ impl Capabilities {
             | RemoteCommand::Preset { .. }
             | RemoteCommand::Mode { .. }
             | RemoteCommand::Setting { .. } => (self.run_agents, "start and stop agents"),
+            RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } => (self.review, "review merge requests"),
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

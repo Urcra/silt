@@ -410,6 +410,53 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await machine.context().close()
 })
 
+test('the server-hosted app reviews a merge request through a machine, and ticks its files seen', async ({ browser }) => {
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await machine.getByRole('button', { name: 'Fork', exact: true }).click()
+  await expect(machine.getByRole('main').getByText(/^Fork of/)).toBeVisible()
+  await machine.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await machine.getByRole('button', { name: 'Start agent' }).click()
+  await machine.getByLabel('draft').fill('fork work')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  await expect(machine.getByText(/^Done: [\s\S]*fork work$/)).toBeVisible()
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await machine.getByRole('button', { name: 'Offer as merge request' }).click()
+  await machine.getByLabel('merge request title').fill('Fork work')
+  await machine.getByRole('button', { name: 'Offer', exact: true }).click()
+  await expect(machine).toHaveURL(/\/mr\//)
+  const mr = new URL(machine.url()).pathname.split('/mr/')[1]
+
+  const hosted = await (await browser.newContext()).newPage()
+  await hosted.goto(`${live.server}/app/mr/${mr}`)
+  await hosted.getByLabel('User').fill('alice')
+  await hosted.getByLabel('Password').fill('correct horse battery')
+  await hosted.getByRole('button', { name: 'Sign in' }).click()
+  await expect(hosted.getByTestId('mr-status')).toHaveText('open')
+  const seen = hosted.getByLabel('seen src/main.rs')
+  await expect(async () => {
+    await hosted.reload()
+    await expect(seen).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await expect(hosted.getByText('+fn acp() {}').first()).toBeVisible()
+  await expect(hosted.getByTestId('seen-count')).toHaveText('0/1 seen')
+  const marked = hosted.waitForResponse((response) => response.url().endsWith('/seen'))
+  await seen.click()
+  await expect(hosted.getByTestId('seen-count')).toHaveText('1/1 seen')
+  expect((await marked).status()).toBe(200)
+  await hosted.reload()
+  await expect(hosted.getByTestId('seen-count')).toHaveText('1/1 seen')
+  // The machine hears of it too, as it would from another of its person's devices.
+  await machine.reload()
+  await expect(machine.getByTestId('seen-count')).toHaveText('1/1 seen')
+  // Declined, so the thread doesn't wait on Alice's review in later tests.
+  await hosted.getByRole('button', { name: 'Decline' }).click()
+  await expect(hosted.getByTestId('mr-status')).toHaveText('declined')
+  await machine.context().close()
+  await hosted.context().close()
+})
+
 test('a read-only link opens the conversation without signing in, until revoked', async ({ browser }) => {
   const owner = await (await browser.newContext()).newPage()
   await owner.goto(live.alice)

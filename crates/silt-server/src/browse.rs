@@ -29,7 +29,6 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/comments", get(comments))
         .route("/app/api/threads/{id}/state", patch(change_state))
         .route("/app/api/mrs", get(merge_requests))
-        .route("/app/api/mrs/{id}", get(merge_request))
         .route("/app/api/search", get(search))
         .route("/app/api/inbox", get(inbox))
         .route("/app/api/inbox/read", post(inbox_read))

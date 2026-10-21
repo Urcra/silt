@@ -36,6 +36,98 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/agent/setting", post(setting))
         .route("/app/api/threads/{id}/queue", post(enqueue))
         .route("/app/api/threads/{id}/continue", post(continue_on))
+        .route("/app/api/mrs/{id}", get(mr_details))
+        .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
+}
+
+/// How long one device's view of a merge request stands in for asking
+/// again, as the hosted app fetches every few seconds.
+const MR_VIEW_FOR: Duration = Duration::from_secs(15);
+
+/// Has one of the person's online devices answer `command`, trying each
+/// until one can: any that holds the family can.
+async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, command: RemoteCommand) -> Result<Value, Refused> {
+    if let Err(needs) = browser.capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
+    }
+    let mut last = "none of your devices is online to show the changes".to_owned();
+    for device in crate::accounts::devices_of(server.db(), browser.user).await? {
+        if !server.shared.control.heard(device.id).await.0 {
+            continue;
+        }
+        let relay = Relay {
+            device: device.id,
+            thread,
+            sender: browser.user,
+            from: None,
+            capabilities: browser.capabilities,
+            command: command.clone(),
+            ttl: ANSWER_WAIT,
+        };
+        let id = control::relay(server, relay).await?;
+        match control::answer_of(server, id, ANSWER_WAIT).await? {
+            Some(answer) if answer.ok => return Ok(answer.data),
+            Some(answer) => last = answer.message,
+            None => last = format!("{} didn't answer", device.name),
+        }
+    }
+    Err(Refused(StatusCode::CONFLICT, last))
+}
+
+/// A merge request as the server holds it, with its files and diff from
+/// one of the person's devices when one is online (ADR 0026).
+async fn mr_details(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Refused> {
+    let Json(own) = crate::browse::merge_request(State(server.clone()), Extension(browser), Path(id.clone())).await?;
+    let mut details = serde_json::to_value(&own).map_err(crate::ServerError::from)?;
+    if !browser.capabilities.review {
+        return Ok(Json(details));
+    }
+    let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
+    let key = (browser.user, request.id.to_string());
+    let cached =
+        server.shared.mr_views.lock().await.get(&key).filter(|(at, _)| at.elapsed() < MR_VIEW_FOR).map(|(_, view)| view.clone());
+    let view = match cached {
+        Some(view) => Some(view),
+        None => {
+            let asked =
+                ask_any_device(&server, browser, request.target, RemoteCommand::MrShow { mr: request.id.to_string() }).await;
+            let view = asked.ok();
+            if let Some(view) = &view {
+                server.shared.mr_views.lock().await.insert(key, (std::time::Instant::now(), view.clone()));
+            }
+            view
+        }
+    };
+    if let Some(view) = view {
+        for field in ["diff", "conflicts", "files"] {
+            details[field] = view[field].clone();
+        }
+    }
+    Ok(Json(details))
+}
+
+#[derive(Deserialize)]
+struct SeenBody {
+    path: String,
+    seen: bool,
+}
+
+/// Marks a file seen through a device, which knows the file as it is now.
+async fn mr_seen(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<SeenBody>,
+) -> Result<Json<Value>, Refused> {
+    let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
+    let command = RemoteCommand::MrSeen { mr: request.id.to_string(), path: body.path, seen: body.seen };
+    let answer = ask_any_device(&server, browser, request.target, command).await?;
+    server.shared.mr_views.lock().await.remove(&(browser.user, request.id.to_string()));
+    Ok(Json(answer))
 }
 
 /// For a daemon passing on what its own web UI asks of an agent running on
