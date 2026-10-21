@@ -2,8 +2,12 @@
 
 use std::time::Duration;
 
-use silt_acp::{Command, Event, Start, StopReason, Update, start};
+use silt_acp::{Accepts, Attachment, Command, Event, Start, StopReason, Update, start};
 use tokio::sync::mpsc;
+
+fn prompt(text: &str) -> Command {
+    Command::Prompt { text: text.into(), attachments: Vec::new() }
+}
 
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
     tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("the agent answers").expect("events keep coming")
@@ -30,7 +34,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
     assert!(!loaded);
     assert_eq!(name, "fake-agent");
 
-    assert!(agent.send(Command::Prompt("add acp".into())));
+    assert!(agent.send(prompt("add acp")));
     let mut seen = Vec::new();
     loop {
         match next(&mut events).await {
@@ -85,7 +89,7 @@ async fn an_agent_that_dies_is_reported_gone() {
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options(dir.path(), vec![("FAKE_ACP_CRASH".into(), "1".into())]), sender);
     assert!(matches!(next(&mut events).await, Event::Ready { .. }));
-    agent.send(Command::Prompt("crash".into()));
+    agent.send(prompt("crash"));
     while !matches!(next(&mut events).await, Event::Exited) {}
 }
 
@@ -95,7 +99,7 @@ async fn cancelling_answers_the_pending_permission_request() {
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options(dir.path(), Vec::new()), sender);
     assert!(matches!(next(&mut events).await, Event::Ready { .. }));
-    agent.send(Command::Prompt("then cancel".into()));
+    agent.send(prompt("then cancel"));
     while !matches!(next(&mut events).await, Event::Permission(_)) {}
     agent.send(Command::Cancel);
     loop {
@@ -133,7 +137,7 @@ async fn modes_and_settings_come_with_the_session_and_change_on_request() {
 
     // The mode is asked for before the prompt, so the turn runs in it.
     agent.send(Command::SetMode("plan".into()));
-    agent.send(Command::Prompt("add acp".into()));
+    agent.send(prompt("add acp"));
     let mut said = Vec::new();
     loop {
         match next(&mut events).await {
@@ -154,6 +158,38 @@ async fn an_agent_without_modes_says_so() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options(dir.path(), vec![("FAKE_ACP_NO_MODES".into(), "1".into())]), sender);
-    assert!(matches!(next(&mut events).await, Event::Ready { modes: None, settings, .. } if settings.is_empty()));
+    assert!(matches!(
+        next(&mut events).await,
+        Event::Ready { modes: None, settings, accepts, .. } if settings.is_empty() && accepts == Accepts::default()
+    ));
+    agent.send(Command::Stop);
+}
+
+#[tokio::test]
+async fn attachments_reach_the_agent_as_it_takes_them() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), Vec::new()), sender);
+    let Event::Ready { accepts, .. } = next(&mut events).await else {
+        panic!("the session starts first");
+    };
+    assert_eq!(accepts, Accepts { image: true, embedded: true });
+    let attachments = vec![
+        Attachment { name: "shot.png".into(), mime: "image/png".into(), data: vec![0x89, b'P', b'N', b'G'] },
+        Attachment { name: "notes.txt".into(), mime: "text/plain".into(), data: b"hi".to_vec() },
+    ];
+    agent.send(Command::Prompt { text: "look".into(), attachments });
+    loop {
+        match next(&mut events).await {
+            Event::Permission(permission) => {
+                agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) });
+            }
+            Event::Update(Update::AgentText(text)) => {
+                assert_eq!(text, r#"Done: look (with an image (image/png), attachment:notes.txt saying "hi")"#);
+                break;
+            }
+            _ => {}
+        }
+    }
     agent.send(Command::Stop);
 }

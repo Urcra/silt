@@ -3,7 +3,8 @@
 //! `fn acp() {}`) when allowed, and answer. It can load the sessions it
 //! made in the same process, replaying what was said, and refuses others.
 //! It has a `code` and a `plan` mode, where it only answers with a plan,
-//! and a model setting; `FAKE_ACP_NO_MODES` leaves them out. With
+//! and a model setting, and takes images and files, which its answer
+//! names; `FAKE_ACP_NO_MODES` leaves all that out. With
 //! `FAKE_ACP_CRASH` set it dies on a prompt.
 
 use std::collections::HashMap;
@@ -11,12 +12,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, ContentChunk, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue,
-    SessionConfigSelectOption, SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
-    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    AgentCapabilities, ContentBlock, ContentChunk, EmbeddedResourceResource, Implementation, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+    PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode, SessionModeState,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 
@@ -78,7 +79,11 @@ async fn main() -> Result<()> {
             async move |initialize: InitializeRequest, responder, _connection| {
                 responder.respond(
                     InitializeResponse::new(initialize.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new().load_session(true))
+                        .agent_capabilities(
+                            AgentCapabilities::new()
+                                .load_session(true)
+                                .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
+                        )
                         .agent_info(Implementation::new("fake-agent", "1.0")),
                 )
             },
@@ -157,6 +162,20 @@ async fn main() -> Result<()> {
                             _ => None,
                         })
                         .collect();
+                    let attached: Vec<String> = request
+                        .prompt
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Image(image) => Some(format!("an image ({})", image.mime_type)),
+                            ContentBlock::Resource(resource) => Some(match &resource.resource {
+                                EmbeddedResourceResource::TextResourceContents(text) => format!("{} saying {:?}", text.uri, text.text),
+                                EmbeddedResourceResource::BlobResourceContents(blob) => blob.uri.clone(),
+                                _ => "a resource".to_owned(),
+                            }),
+                            _ => None,
+                        })
+                        .collect();
+                    let prompt = if attached.is_empty() { prompt } else { format!("{prompt} (with {})", attached.join(", ")) };
                     let (cwd, planning) = {
                         let state = state.lock().expect("lock");
                         let id = session.to_string();

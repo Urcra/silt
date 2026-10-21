@@ -59,7 +59,15 @@ modes: AgentModes | null,
 /**
  * Its settings with a choice of values, such as its model.
  */
-settings: Array<AgentSetting>, };
+settings: Array<AgentSetting>, 
+/**
+ * What it takes attached to a prompt.
+ */
+takes_images: boolean, 
+/**
+ * Files other than text and images.
+ */
+takes_files: boolean, };
 
 export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
 
@@ -170,6 +178,12 @@ export type PermissionAsked = { id: number, title: string,
 options: Array<[string, string]>, };
 
 export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access";
+
+export type PromptAttachment = { name: string, mime: string, 
+/**
+ * The content, in base64.
+ */
+data: string, };
 
 export type Queued = { id: number, author: string, text: string, created_ms: number, };
 

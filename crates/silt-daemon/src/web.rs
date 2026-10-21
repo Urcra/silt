@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, Request as HttpRequest, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request as HttpRequest, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response as HttpResponse};
@@ -94,7 +94,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/agents", get(agents))
         .route("/api/agents/start", post(agent_start))
         .route("/api/clones/branches", get(branches))
-        .route("/api/threads/{id}/agent/prompt", post(agent_prompt))
+        .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
@@ -447,10 +447,15 @@ struct AgentPrompt {
     text: String,
     #[serde(default)]
     plan: bool,
+    #[serde(default)]
+    attachments: Vec<crate::protocol::PromptAttachment>,
 }
 
+/// A prompt's body: its files, in base64, as large as `acp::decode` takes.
+const PROMPT_BODY_BYTES: usize = 36 << 20;
+
 async fn agent_prompt(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
-    ask(&web, Request::AcpPrompt { thread, text: body.text, plan: body.plan }).await
+    ask(&web, Request::AcpPrompt { thread, text: body.text, plan: body.plan, attachments: body.attachments }).await
 }
 
 async fn agent_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

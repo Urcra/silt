@@ -488,7 +488,10 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
             Request::Branches { clone } => to_response(self.branches(&clone)),
-            Request::AcpPrompt { thread, text, plan } => to_response(self.acp_prompt(&thread, &text, plan).await),
+            Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
+                Ok(attachments) => to_response(self.acp_prompt_with(&thread, &text, plan, attachments).await),
+                Err(error) => Response::error(error),
+            },
             Request::AcpMode { thread, mode } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.set_mode(thread, &mode).await),
                 Err(error) => Response::error(error),

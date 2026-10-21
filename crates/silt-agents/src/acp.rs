@@ -27,8 +27,20 @@ pub fn session_of(line: &str) -> Option<(String, String)> {
     })
 }
 
-pub fn prompt(text: &str, by: &str) -> String {
-    json!({"t": "prompt", "text": text, "by": by}).to_string()
+/// A prompt by `by`, naming the files attached to it; each file's content
+/// is recorded beside the session under that name.
+pub fn prompt(text: &str, by: &str, attached: &[String]) -> String {
+    let mut record = json!({"t": "prompt", "text": text, "by": by});
+    if !attached.is_empty() {
+        record["attached"] = json!(attached);
+    }
+    record.to_string()
+}
+
+/// How a prompt reads with the files attached to it named after its text.
+fn with_attached(text: String, record: &Value) -> String {
+    let attached: Vec<&str> = record["attached"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if attached.is_empty() { text } else { format!("{text}\n\n(attached: {})", attached.join(", ")) }
 }
 
 pub fn message(text: &str) -> String {
@@ -64,7 +76,7 @@ pub fn read_line(line: &str) -> Read {
     match record["t"].as_str().unwrap_or_default() {
         "prompt" => {
             read.marks.push(Mark::PromptSubmitted);
-            read.entries.push(Entry::User { text: field("text") });
+            read.entries.push(Entry::User { text: with_attached(field("text"), &record) });
         }
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
@@ -144,7 +156,7 @@ mod tests {
     fn records_read_back_as_a_conversation() {
         let lines = [
             session("fake", "Fake agent", "s1"),
-            prompt("add acp", "alice"),
+            prompt("add acp", "alice", &[]),
             thought("planning"),
             tool_call("c1", "Edit src/main.rs", "edit", Some(&json!({"path": "src/main.rs"}))),
             tool_result("c1", "completed", Some("edited")),
@@ -162,5 +174,11 @@ mod tests {
         assert_eq!(marks.last(), Some(&Mark::Stopped));
         assert_eq!(session_of(&lines[0]), Some(("fake".into(), "s1".into())));
         assert_eq!(session_of(&lines[1]), None);
+    }
+
+    #[test]
+    fn a_prompt_names_its_attachments() {
+        let read = read_line(&prompt("look", "alice", &["prompt-1/shot.png".into()]));
+        assert_eq!(read.entries, [Entry::User { text: "look\n\n(attached: prompt-1/shot.png)".into() }]);
     }
 }

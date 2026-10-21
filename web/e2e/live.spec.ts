@@ -251,3 +251,30 @@ test('Plan first asks an agent without a plan mode for a plan by the prompt', as
   await expect(page.getByText('Done: use a table instead')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Plain agent is ready')
 })
+
+const SHOT = { name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }
+const NOTES = { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') }
+
+test('files attached to a prompt reach the agent and are named in the conversation', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('attach files').setInputFiles([SHOT, NOTES])
+  await expect(page.getByRole('list', { name: 'attached files' })).toContainText('shot.png')
+  await page.getByLabel('draft').fill('look at these')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: look at these (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
+  await expect(page.getByText(/\(attached: prompt\/\w+\/shot\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
+  await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
+})
+
+test("an agent that takes no images is told a text file's content in the prompt, and an image is refused", async ({ page }) => {
+  await startInNewThread(page, 'Plain agent')
+  await page.getByLabel('attach files').setInputFiles([SHOT])
+  await page.getByLabel('draft').fill('see this')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText("Plain agent doesn't take files like shot.png")).toBeVisible()
+
+  await page.getByRole('button', { name: 'remove shot.png' }).click()
+  await page.getByLabel('attach files').setInputFiles([NOTES])
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText(/^Done: see this\s+notes\.txt:\s+```\s+hello\s+```$/)).toBeVisible()
+})

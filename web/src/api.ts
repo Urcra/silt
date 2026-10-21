@@ -15,6 +15,7 @@ import type {
   MrSummary,
   PresenceReply,
   Preset,
+  PromptAttachment,
   Queued,
   ReplicaDeltas,
   SearchResult,
@@ -114,7 +115,8 @@ export const api = {
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
   branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
   status: () => request<DaemonStatus>('GET', '/api/status'),
-  prompt: (id: string, text: string, plan = false) => request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan }),
+  prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
+    request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),
   setMode: (id: string, mode: string) => request<string>('POST', `${thread(id)}/agent/mode`, { mode }),
   setSetting: (id: string, setting: string, value: string) =>
     request<string>('POST', `${thread(id)}/agent/setting`, { id: setting, value }),

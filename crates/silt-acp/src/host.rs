@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest,
     PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
     SessionConfigId, SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, TextContent, ToolCallContent,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, ToolCallContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde_json::Value;
@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::modes::{Modes, Setting, modes_of, settings_of};
+use crate::prompt::{Accepts, Attachment, blocks};
 
 /// How to start the agent.
 #[derive(Debug, Clone)]
@@ -36,7 +37,10 @@ pub struct Start {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Prompt(String),
+    Prompt {
+        text: String,
+        attachments: Vec<Attachment>,
+    },
     Cancel,
     /// The person's answer to a permission request: an option id, or none
     /// to refuse.
@@ -146,6 +150,7 @@ pub enum Event {
         agent: String,
         modes: Option<Modes>,
         settings: Vec<Setting>,
+        accepts: Accepts,
     },
     Update(Update),
     ModeChanged(String),
@@ -316,6 +321,7 @@ async fn run(
         .connect_with(transport, async move |connection: ConnectionTo<Agent>| {
             let init = connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
             let agent = init.agent_info.as_ref().map_or_else(|| start.program.clone(), |info| info.name.clone());
+            let accepts = Accepts::of(&init.agent_capabilities.prompt_capabilities);
             let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
                 Some(id) => {
                     replaying.store(true, Ordering::SeqCst);
@@ -341,6 +347,7 @@ async fn run(
                         agent,
                         modes: modes_of(modes),
                         settings: settings_of(options.unwrap_or_default()),
+                        accepts,
                     });
                     SessionId::new(id)
                 }
@@ -355,14 +362,15 @@ async fn run(
                         agent,
                         modes: modes_of(created.modes),
                         settings: settings_of(created.config_options.unwrap_or_default()),
+                        accepts,
                     });
                     created.session_id
                 }
             };
             while let Some(command) = commands.recv().await {
                 match command {
-                    Command::Prompt(text) => {
-                        let request = PromptRequest::new(session.clone(), vec![ContentBlock::Text(TextContent::new(text))]);
+                    Command::Prompt { text, attachments } => {
+                        let request = PromptRequest::new(session.clone(), blocks(&text, &attachments, accepts));
                         let ended = events.clone();
                         // Sent here rather than in the task, so a mode set
                         // just before reaches the agent first.

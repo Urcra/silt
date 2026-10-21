@@ -5,10 +5,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use silt_acp::registry::{self, AgentInfo};
-use silt_acp::{AgentHandle, Command, Permission, Start, Update};
+use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Start, Update};
 use silt_agents::acp;
-use silt_log::{ConvOp, Op};
+use silt_log::{Author, ConvOp, Op};
 use silt_proto::AgentState;
 use silt_store::CheckoutId;
 use silt_types::ThreadId;
@@ -16,7 +18,9 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
-use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, StartOptions, TextKind};
+use crate::protocol::{
+    AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, PromptAttachment, StartOptions, TextKind,
+};
 use crate::sessions::NewSession;
 
 pub(crate) struct AcpRun {
@@ -55,6 +59,7 @@ pub(crate) struct AcpRun {
     /// The prompt to send once the agent is ready, and whether to plan
     /// first.
     first: Option<(String, bool)>,
+    accepts: Accepts,
 }
 
 /// What a Plan first prompt starts with when the agent has no plan mode.
@@ -209,6 +214,7 @@ impl Core {
                 planning: false,
                 back_to: None,
                 first: options.prompt.map(|prompt| (prompt, options.plan)),
+                accepts: Accepts::default(),
             },
         );
         self.agent_changed(thread).await;
@@ -255,6 +261,18 @@ impl Core {
     /// queues it otherwise (ADR 0022). An agent awaiting input takes it as
     /// the answer to its plan.
     pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str, plan: bool) -> Result<&'static str, CoreError> {
+        self.acp_prompt_with(selector, text, plan, Vec::new()).await
+    }
+
+    /// [`Self::acp_prompt`] with files attached, which only go with a prompt
+    /// the agent takes now.
+    pub(crate) async fn acp_prompt_with(
+        &mut self,
+        selector: &str,
+        text: &str,
+        plan: bool,
+        attachments: Vec<Attachment>,
+    ) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         if text.trim().is_empty() {
             return Err(CoreError::Invalid("there is nothing to send".into()));
@@ -264,17 +282,25 @@ impl Core {
             if plan {
                 return Err(CoreError::Invalid("Plan first starts a turn of its own; send it once this one ends".into()));
             }
+            if !attachments.is_empty() {
+                return Err(CoreError::Invalid(
+                    "attached files go with a prompt the agent takes now; send it once this turn ends".into(),
+                ));
+            }
             self.enqueue(thread, text, false).await?;
             return Ok("queued");
         }
         let run = self.acp.get_mut(&thread).expect("checked above");
+        if let Some(refused) = attachments.iter().find(|attachment| !run.accepts.takes(attachment)) {
+            return Err(CoreError::Invalid(format!("{} doesn't take files like {}", run.info.name, refused.name)));
+        }
         if plan {
             plan_first(run);
         } else if let Some(mode) = run.back_to.take() {
             send(run, Command::SetMode(mode));
         }
         let me = self.own_user();
-        self.send_prompt(thread, &me, text).await?;
+        self.send_prompt(thread, &me, text, attachments).await?;
         Ok("sent")
     }
 
@@ -302,18 +328,24 @@ impl Core {
         if let Some(steer) = run.steering.take() {
             let me = self.own_user();
             let said = format!("I interrupted your last turn to say: {steer}");
-            return self.send_prompt(thread, &me, &said).await;
+            return self.send_prompt(thread, &me, &said, Vec::new()).await;
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
         };
         self.announce(crate::protocol::BusEvent::Queue { thread: thread.to_string() });
-        self.send_prompt(thread, &next.author, &next.text).await
+        self.send_prompt(thread, &next.author, &next.text, Vec::new()).await
     }
 
     /// Records and sends a prompt by `author`, with teammates' drafts, the
     /// thread's notices and, first in a new session, its conversation.
-    async fn send_prompt(&mut self, thread: ThreadId, author: &str, text: &str) -> Result<(), CoreError> {
+    async fn send_prompt(
+        &mut self,
+        thread: ThreadId,
+        author: &str,
+        text: &str,
+        attachments: Vec<Attachment>,
+    ) -> Result<(), CoreError> {
         let mut authors = vec![author.to_owned()];
         let mut said = text.trim().to_owned();
         for (user, draft) in self.teammates_draft_list(thread).await {
@@ -333,11 +365,12 @@ impl Core {
         if let Some(primer) = self.acp.get_mut(&thread).and_then(|run| run.primer.take()) {
             prompt = format!("{primer}\n\n{prompt}");
         }
-        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "))).await?;
+        let attached = self.record_attachments(thread, &attachments).await?;
+        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached)).await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
-        send(run, Command::Prompt(prompt));
+        send(run, Command::Prompt { text: prompt, attachments });
         self.agent_changed(thread).await;
         Ok(())
     }
@@ -504,6 +537,8 @@ impl Core {
             error: run.error.clone(),
             modes: run.modes.as_ref().map(Into::into),
             settings: run.settings.iter().map(Into::into).collect(),
+            takes_images: run.accepts.image,
+            takes_files: run.accepts.embedded,
         })
     }
 
@@ -537,11 +572,12 @@ impl Core {
                 run.error = Some(error);
                 run.state = AgentState::Error;
             }
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent, modes, settings }) => {
+            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent, modes, settings, accepts }) => {
                 let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone());
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.modes = modes;
                 run.settings = settings;
+                run.accepts = accepts;
                 if let Some(mode) = kept.filter(|mode| {
                     run.modes
                         .as_ref()
@@ -705,6 +741,70 @@ impl Core {
         };
         self.record_line(&session, "main", line.to_owned(), None).await
     }
+
+    /// Keeps each file beside the session, as text redacted like the rest of
+    /// the conversation, and answers with the names it's kept under.
+    async fn record_attachments(&mut self, thread: ThreadId, attachments: &[Attachment]) -> Result<Vec<String>, CoreError> {
+        let Some(id) = self.acp.get(&thread).and_then(|run| run.session.clone()) else {
+            return Ok(Vec::new());
+        };
+        let Some(reference) = self.session_mut(&id).map(|session| session.reference()) else {
+            return Ok(Vec::new());
+        };
+        let family = self.threads[&thread].family;
+        let mut names = Vec::new();
+        for attachment in attachments {
+            let bytes = match std::str::from_utf8(&attachment.data) {
+                Ok(text) => {
+                    let (redacted, found) = self.redactor.replace_found(text);
+                    self.learn_secrets(found);
+                    redacted.into_bytes()
+                }
+                Err(_) => attachment.data.clone(),
+            };
+            let blob = self.store.blobs().put(&bytes).await?;
+            let name = attachment_name(&blob.to_string(), &attachment.name);
+            let op = ConvOp::Attachment { session: reference.clone(), name: name.clone(), blob };
+            self.append_conv(family, thread, Author::User, op).await?;
+            names.push(name);
+        }
+        Ok(names)
+    }
+}
+
+/// The largest file a prompt takes, and all of a prompt's files together.
+const ATTACHMENT_BYTES: usize = 10 << 20;
+const ATTACHMENTS_BYTES: usize = 25 << 20;
+
+/// The prompt's files from the web UI's base64.
+pub(crate) fn decode(attachments: Vec<PromptAttachment>) -> Result<Vec<Attachment>, CoreError> {
+    let mut total = 0;
+    attachments
+        .into_iter()
+        .map(|attachment| {
+            let data = BASE64
+                .decode(attachment.data.as_bytes())
+                .map_err(|_| CoreError::Invalid(format!("{} didn't arrive whole", attachment.name)))?;
+            total += data.len();
+            if data.len() > ATTACHMENT_BYTES || total > ATTACHMENTS_BYTES {
+                return Err(CoreError::Invalid(format!(
+                    "{} is too large: a prompt takes files of up to 10 MiB, 25 MiB together",
+                    attachment.name
+                )));
+            }
+            Ok(Attachment { name: attachment.name, mime: attachment.mime, data })
+        })
+        .collect()
+}
+
+/// Where a prompt's file is kept beside its session: under its content's
+/// hash, so names can repeat, and as one plain path segment whatever the
+/// browser called it.
+fn attachment_name(hash: &str, name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let safe: String = base.chars().map(|c| if c.is_control() { '_' } else { c }).collect();
+    let safe = if safe.is_empty() || safe == "." || safe == ".." { "file".to_owned() } else { safe };
+    format!("prompt/{}/{safe}", &hash[..hash.len().min(12)])
 }
 
 impl AcpRun {
@@ -785,6 +885,29 @@ mod tests {
         assert_eq!(shown_state(AgentState::Working, true), AgentState::AwaitingPermission);
         assert_eq!(shown_state(AgentState::Working, false), AgentState::Working);
         assert_eq!(shown_state(AgentState::Idle, true), AgentState::Idle);
+    }
+
+    #[test]
+    fn a_prompts_files_are_kept_under_one_plain_segment_whatever_they_were_called() {
+        let hash = "0123456789abcdef0123";
+        assert_eq!(attachment_name(hash, "shot.png"), "prompt/0123456789ab/shot.png");
+        assert_eq!(attachment_name(hash, "../../etc/passwd"), "prompt/0123456789ab/passwd");
+        assert_eq!(attachment_name(hash, r"C:\Users\me\notes.txt"), "prompt/0123456789ab/notes.txt");
+        assert_eq!(attachment_name(hash, ".."), "prompt/0123456789ab/file");
+        assert_eq!(attachment_name(hash, "a/"), "prompt/0123456789ab/file");
+        assert_eq!(attachment_name(hash, "line\nbreak"), "prompt/0123456789ab/line_break");
+        assert!(silt_agents::is_side_file_name(&attachment_name(hash, "dir/.")));
+    }
+
+    #[test]
+    fn files_arrive_whole_and_within_bounds() {
+        let file = |data: String| PromptAttachment { name: "f".into(), mime: "text/plain".into(), data };
+        let decoded = decode(vec![file(BASE64.encode("hi"))]).expect("decodes");
+        assert_eq!(decoded[0].data, b"hi");
+        assert!(decode(vec![file("not base64!".into())]).is_err());
+        assert!(decode(vec![file(BASE64.encode(vec![0; ATTACHMENT_BYTES + 1]))]).is_err());
+        let large = BASE64.encode(vec![0; ATTACHMENT_BYTES]);
+        assert!(decode(vec![file(large.clone()), file(large.clone()), file(large)]).is_err());
     }
 
     #[tokio::test]

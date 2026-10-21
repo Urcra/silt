@@ -256,6 +256,8 @@ pub enum Request {
         /// Plan first: the agent writes a plan to approve before editing.
         #[serde(default)]
         plan: bool,
+        #[serde(default)]
+        attachments: Vec<PromptAttachment>,
     },
     /// Switches the thread's agent to one of its modes, kept for the
     /// thread's later runs.
@@ -753,6 +755,20 @@ pub struct AgentStatus {
     pub modes: Option<AgentModes>,
     /// Its settings with a choice of values, such as its model.
     pub settings: Vec<AgentSetting>,
+    /// What it takes attached to a prompt.
+    pub takes_images: bool,
+    /// Files other than text and images.
+    pub takes_files: bool,
+}
+
+/// A file sent with a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct PromptAttachment {
+    pub name: String,
+    pub mime: String,
+    /// The content, in base64.
+    pub data: String,
 }
 
 /// How an agent starts, beyond which agent: for a new thread, where it
@@ -992,6 +1008,7 @@ mod tests {
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
             Preset::decl(&config),
+            PromptAttachment::decl(&config),
             Queued::decl(&config),
             Pulled::decl(&config),
             ReplicaDeltas::decl(&config),

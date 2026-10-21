@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { rememberModes } from '../agentModes'
-import { api, type AgentStatus, type Presence, type Preset } from '../api'
+import { api, type AgentStatus, type Presence, type Preset, type PromptAttachment } from '../api'
+import { readAttachment } from '../attachments'
 import { PRESETS, STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
 import { PromptQueue } from './Queue'
@@ -128,6 +129,7 @@ export function AgentPanel({
 }) {
   const [agent, setAgent] = useState('')
   const [planFirst, setPlanFirst] = useState(false)
+  const [attached, setAttached] = useState<PromptAttachment[]>([])
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
@@ -210,18 +212,37 @@ export function AgentPanel({
             </div>
           )}
           <AgentChoices thread={thread} status={status} act={act} />
+          {attached.length > 0 && (
+            <ul aria-label="attached files" className="flex flex-wrap gap-2 text-xs">
+              {attached.map((file, index) => (
+                <li key={`${file.name}-${index}`} className="flex items-center gap-1 rounded-sm bg-surface-2 px-1.5 py-0.5">
+                  {file.name}
+                  <button
+                    aria-label={`remove ${file.name}`}
+                    className="text-fg-3 hover:text-fg-1"
+                    onClick={() => setAttached(attached.filter((_, kept) => kept !== index))}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <button
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || (attached.length > 0 && !ready(status))}
               className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
-              onClick={() => act(api.prompt(thread, draft, planFirst && ready(status)), () => {
+              onClick={() => act(api.prompt(thread, draft, planFirst && ready(status), attached), () => {
                 setPlanFirst(false)
+                setAttached([])
                 onSent()
               })}
               title={
                 ready(status)
                   ? "Sends your draft together with everyone else's"
-                  : 'Queues your draft for when the agent is ready'
+                  : attached.length > 0
+                    ? 'Attached files go with a prompt the agent takes now'
+                    : 'Queues your draft for when the agent is ready'
               }
             >
               {ready(status) ? 'Send' : 'Queue'}
@@ -235,6 +256,24 @@ export function AgentPanel({
                 Plan first
               </label>
             )}
+            <label
+              className="cursor-pointer rounded border border-line px-2 py-1 text-xs"
+              title={status.takes_images ? 'Attach images or files' : `Attach text files; ${status.agent} takes no images`}
+            >
+              Attach
+              <input
+                type="file"
+                multiple
+                aria-label="attach files"
+                className="sr-only"
+                accept={status.takes_images || status.takes_files ? undefined : 'text/*,.md,.json,.ts,.tsx,.rs,.py,.toml,.yaml,.yml'}
+                onChange={(event) => {
+                  const files = [...(event.target.files ?? [])]
+                  event.target.value = ''
+                  act(Promise.all(files.map(readAttachment)).then((read) => setAttached((before) => [...before, ...read])))
+                }}
+              />
+            </label>
             {(status.state === 'working' || status.state === 'awaiting_permission') && (
               <button
                 disabled={!draft.trim()}
