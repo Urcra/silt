@@ -570,9 +570,9 @@ impl Core {
             .map(|family| {
                 let view = family.thread_view(checkout.record.thread);
                 view.paths()
-                    .into_iter()
-                    .filter(|(_, inode)| view.tree().kind(*inode) != Some(silt_crdt::InodeKind::Dir))
-                    .map(|(path, _)| path)
+                    .iter()
+                    .filter(|(_, inode)| view.tree().kind(**inode) != Some(silt_crdt::InodeKind::Dir))
+                    .map(|(path, _)| path.clone())
                     .collect()
             })
             .unwrap_or_default()
@@ -709,8 +709,8 @@ impl Core {
             return Ok(actions);
         };
         let mut first: HashMap<String, String> = HashMap::new();
-        for path in family.thread_view(checkout.record.thread).paths().into_keys() {
-            first.entry(path.to_lowercase()).or_insert(path);
+        for path in family.thread_view(checkout.record.thread).paths().keys() {
+            first.entry(path.to_lowercase()).or_insert_with(|| path.clone());
         }
         actions.retain(|action| match action {
             DiskAction::Write { path, .. } => {

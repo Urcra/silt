@@ -72,7 +72,7 @@ impl Core {
     }
 
     pub fn paths(&self) -> Vec<String> {
-        self.family.thread_view(self.thread).paths().into_keys().collect()
+        self.family.thread_view(self.thread).paths().keys().cloned().collect()
     }
 
     pub fn needed_base(&self, path: &str) -> Option<GitOid> {

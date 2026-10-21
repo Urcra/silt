@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, TextDoc, TextError, TextEvent,
@@ -192,9 +192,7 @@ pub enum Applied {
 pub struct ThreadView<'a> {
     family: &'a Family,
     version: Frontier,
-    tree: Cow<'a, FileTree>,
-    /// What the thread has seen, unless it has seen everything.
-    seen: Option<VersionVector>,
+    shape: Arc<Shape>,
 }
 
 impl ThreadView<'_> {
@@ -203,18 +201,18 @@ impl ThreadView<'_> {
     }
 
     pub fn tree(&self) -> &FileTree {
-        &self.tree
+        self.shape.tree.as_ref().unwrap_or(&self.family.tree)
     }
 
-    pub fn paths(&self) -> BTreeMap<String, InodeId> {
-        self.tree.paths()
+    pub fn paths(&self) -> Arc<BTreeMap<String, InodeId>> {
+        Arc::clone(self.shape.paths.get_or_init(|| Arc::new(self.tree().paths())))
     }
 
     pub fn file(&self, inode: InodeId) -> Option<FileView> {
-        let Some(seen) = &self.seen else {
+        let Some(seen) = &self.shape.seen else {
             return self.family.file(inode);
         };
-        self.tree.kind(inode)?;
+        self.tree().kind(inode)?;
         let state = self.family.files.get(&inode)?;
         let (_, content) = state.content_at(|id| seen.contains(id))?;
         Some(match content {
@@ -225,7 +223,7 @@ impl ThreadView<'_> {
     }
 
     pub fn is_executable(&self, inode: InodeId) -> bool {
-        match &self.seen {
+        match &self.shape.seen {
             None => self.family.is_executable(inode),
             Some(seen) => self
                 .family
@@ -233,6 +231,52 @@ impl ThreadView<'_> {
                 .get(&inode)
                 .is_some_and(|state| state.executable_at(|id| seen.contains(id))),
         }
+    }
+}
+
+/// What a view of one version holds beyond the family itself.
+#[derive(Debug)]
+struct Shape {
+    /// What the thread has seen, unless it has seen everything.
+    seen: Option<VersionVector>,
+    /// The tree as of that version; `None` when it is the family's own.
+    tree: Option<FileTree>,
+    paths: OnceLock<Arc<BTreeMap<String, InodeId>>>,
+}
+
+/// The shapes of recently viewed versions. A thread's view replays the move
+/// log and listing paths walks the whole tree, and recording one file asks
+/// for its thread's view several times over.
+#[derive(Debug, Default)]
+struct Shapes(Mutex<Vec<(ShapeKey, Arc<Shape>)>>);
+
+/// The thread's version, or the family's when the view is the family's own.
+#[derive(Debug, PartialEq, Eq)]
+struct ShapeKey {
+    whole: bool,
+    version: Frontier,
+}
+
+const SHAPES_KEPT: usize = 8;
+
+impl Clone for Shapes {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Shapes {
+    fn get_or_insert(&self, key: ShapeKey, make: impl FnOnce() -> Shape) -> Arc<Shape> {
+        let mut shapes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, shape)) = shapes.iter().find(|(known, _)| *known == key) {
+            return Arc::clone(shape);
+        }
+        let shape = Arc::new(make());
+        if shapes.len() >= SHAPES_KEPT {
+            shapes.remove(0);
+        }
+        shapes.push((key, Arc::clone(&shape)));
+        shape
     }
 }
 
@@ -245,6 +289,7 @@ pub struct Family {
     files: HashMap<InodeId, FileState>,
     threads: BTreeMap<ThreadId, ThreadState>,
     log: Vec<Delta>,
+    shapes: Shapes,
 }
 
 impl Family {
@@ -468,16 +513,22 @@ impl Family {
     pub fn thread_view(&self, thread: ThreadId) -> ThreadView<'_> {
         let version = self.thread_head(thread);
         let whole = self.threads.len() <= 1 || version == *self.graph.frontier();
-        let seen = (!whole).then(|| self.graph.version_vector(&version));
-        let tree = match &seen {
-            None => Cow::Borrowed(&self.tree),
-            Some(seen) => Cow::Owned(self.tree.at(|id| seen.contains(id))),
+        let key = ShapeKey {
+            whole,
+            version: if whole { self.graph.frontier().clone() } else { version.clone() },
         };
+        let shape = self.shapes.get_or_insert(key, || {
+            let seen = (!whole).then(|| self.graph.version_vector(&version));
+            Shape {
+                tree: seen.as_ref().map(|seen| self.tree.at(|id| seen.contains(id))),
+                seen,
+                paths: OnceLock::new(),
+            }
+        });
         ThreadView {
             family: self,
             version,
-            tree,
-            seen,
+            shape,
         }
     }
 

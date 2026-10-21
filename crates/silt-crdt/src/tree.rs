@@ -150,7 +150,7 @@ impl FileTree {
 
     pub fn apply(&mut self, event: &TreeEvent) -> Result<(), TreeError> {
         let stamp = Stamp::from(event.id);
-        if self.log.iter().any(|entry| entry.stamp == stamp) {
+        if self.log.binary_search_by(|entry| entry.stamp.cmp(&stamp)).is_ok() {
             return Ok(());
         }
         let (inode, parent, name) = match &event.op {

@@ -207,7 +207,7 @@ impl Bridge {
         let view = family.thread_view(self.thread);
         // Paths as listed, with conflict names, rather than built from each
         // file's own name.
-        let listed: HashMap<InodeId, String> = view.paths().into_iter().map(|(path, inode)| (inode, path)).collect();
+        let listed: HashMap<InodeId, String> = view.paths().iter().map(|(path, inode)| (*inode, path.clone())).collect();
         let by_inode: HashMap<InodeId, &String> =
             self.entries.iter().map(|(path, entry)| (entry.inode, path)).collect();
         let version = view.version().clone();

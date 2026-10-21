@@ -395,6 +395,31 @@ fn a_forks_new_content_and_mode_stay_in_the_fork() {
 }
 
 #[test]
+fn views_follow_new_deltas_on_either_thread() {
+    let mut family = Family::new();
+    create_main(&mut family);
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let listed = |family: &Family, thread| family.thread_view(thread).paths().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(listed(&family, FORK), ["src", "src/main.rs"]);
+    let create = |name: &str| Op::Create {
+        kind: InodeKind::File,
+        parent: Parent::Root,
+        name: name.into(),
+        content: Content::Empty,
+        executable: false,
+    };
+    let head = family.thread_head(FORK);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, create("fork.txt"));
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_A, THREAD, head, create("source.txt"));
+    assert_eq!(listed(&family, FORK), ["fork.txt", "src", "src/main.rs"]);
+    assert_eq!(listed(&family, THREAD), ["source.txt", "src", "src/main.rs"]);
+    let copy = family.clone();
+    assert_eq!(listed(&copy, THREAD), listed(&family, THREAD));
+}
+
+#[test]
 fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
     use silt_log::{CommentOp, CommentTarget, MrOp};
     let mut family = Family::new();

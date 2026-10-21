@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
@@ -367,6 +367,7 @@ fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<Option<String>, 
             }
         }
     }
+    let paths: HashMap<InodeId, String> = family.tree().paths().into_iter().map(|(path, inode)| (inode, path)).collect();
     counts
         .into_iter()
         .map(|(tool, files)| {
@@ -374,7 +375,7 @@ fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<Option<String>, 
                 .into_iter()
                 .filter(|(inode, _)| family.tree().kind(*inode) != Some(silt_crdt::InodeKind::Dir))
                 .map(|(inode, (inserted, deleted))| FileEdit {
-                    path: family.tree().path_of(inode).unwrap_or_else(|| "(deleted)".into()),
+                    path: paths.get(&inode).cloned().unwrap_or_else(|| "(deleted)".into()),
                     inserted,
                     deleted,
                 })
