@@ -124,13 +124,17 @@ n=0
 event() { n=$((n + 1)); printf '{"type":"%s","data":%s,"id":"%s-%s","timestamp":"%s","parentId":null}\n' "$1" "$2" "$session" "$n" "$now" >> "$events"; }
 turn() {
     event user.message "{\"content\":\"$1\",\"transformedContent\":\"$1\"}"
+    event assistant.turn_start '{"turnId":"0"}'
     event assistant.message "{\"content\":\"\",\"toolRequests\":[{\"toolCallId\":\"$2\",\"name\":\"edit\",\"arguments\":{\"path\":\"$(pwd)/src/main.rs\"}}]}"
+    event assistant.turn_end '{"turnId":"0"}'
     # Like Copilot, events reach the file a little after they happen.
     printf '%s\n' "$3" >> src/main.rs
     sleep 0.1
     event tool.execution_start "{\"toolCallId\":\"$2\",\"toolName\":\"edit\"}"
     event tool.execution_complete "{\"toolCallId\":\"$2\",\"success\":true,\"result\":{\"content\":\"edited\"}}"
+    event assistant.turn_start '{"turnId":"1"}'
     event assistant.message '{"content":"Copilot says done.","toolRequests":[]}'
+    event assistant.turn_end '{"turnId":"1"}'
 }
 if [ -n "$resume" ]; then
     [ -f "$events" ] || { echo "no session $session" >&2; exit 3; }

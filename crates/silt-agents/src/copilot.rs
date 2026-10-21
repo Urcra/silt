@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
+use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, translated_text};
 
 pub const AGENT: &str = "copilot-cli";
 
@@ -24,6 +24,46 @@ pub fn home() -> Option<PathBuf> {
 
 fn session_dir(home: &Path, id: &str) -> PathBuf {
     home.join("session-state").join(id)
+}
+
+/// Reads events, ending the turn when a model call that asked for no tool
+/// ends: also when the reply was empty or cancelled.
+#[derive(Default)]
+pub struct CopilotReader {
+    /// Inside `assistant.turn_start` … `turn_end`, which older versions
+    /// don't write; a reply without tools then ends the turn itself.
+    in_call: bool,
+    asked_for_tools: bool,
+}
+
+impl Reader for CopilotReader {
+    fn push(&mut self, line: &str) -> Read {
+        let mut read = read_line(line);
+        let kind = serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_default();
+        match kind.as_str() {
+            "assistant.turn_start" => {
+                self.in_call = true;
+                self.asked_for_tools = false;
+            }
+            "assistant.message" => {
+                self.asked_for_tools |= read.entries.iter().any(|entry| matches!(entry, Entry::ToolCall { .. }));
+                if self.in_call {
+                    read.marks.retain(|mark| *mark != Mark::Stopped);
+                }
+            }
+            "assistant.turn_end" => {
+                if self.in_call && !self.asked_for_tools {
+                    read.marks.push(Mark::Stopped);
+                }
+                self.in_call = false;
+            }
+            _ => {}
+        }
+        read
+    }
 }
 
 /// The conversation steps and turn marks in one event.
@@ -162,7 +202,7 @@ impl Agent for Copilot {
     }
 
     fn reader(&self) -> Box<dyn Reader> {
-        Box::new(Stateless(read_line))
+        Box::<CopilotReader>::default()
     }
 
     fn session_ids(&self) -> SessionIds {
@@ -303,6 +343,24 @@ pub(crate) fn shell_quote(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_call_without_tools_ends_the_turn_when_it_ends() {
+        let event = |kind: &str, data: &str| format!(r#"{{"type":"{kind}","data":{data},"id":"x","timestamp":"t","parentId":null}}"#);
+        let mut reader = CopilotReader::default();
+        let mut marks = |line: String| reader.push(&line).marks;
+        assert_eq!(marks(event("user.message", r#"{"content":"go"}"#)), vec![Mark::PromptSubmitted]);
+        assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"0"}"#)), Vec::new());
+        let asks = r#"{"content":"Editing.","toolRequests":[{"toolCallId":"c1","name":"edit"}]}"#;
+        assert_eq!(marks(event("assistant.message", asks)), Vec::new());
+        assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"0"}"#)), Vec::new(), "tools come next");
+        assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"1"}"#)), Vec::new());
+        let answers = r#"{"content":"Done.","toolRequests":[]}"#;
+        assert_eq!(marks(event("assistant.message", answers)), Vec::new(), "the call may still go on");
+        assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"1"}"#)), vec![Mark::Stopped]);
+        assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"2"}"#)), Vec::new());
+        assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"2"}"#)), vec![Mark::Stopped], "an empty or cancelled reply");
+    }
 
     #[test]
     fn reads_events() {
