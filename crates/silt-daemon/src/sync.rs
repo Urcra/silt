@@ -273,6 +273,8 @@ impl Core {
             }
         }
         self.persist_with(family_id, &fresh, &rows, None).await?;
+        // Others' work is what the server notifies people of.
+        self.announce(crate::protocol::BusEvent::Inbox);
         self.syncs.entry(family_id).or_default().appended_from_server(at, fresh.len() as u64);
         if self.families.contains_key(&family_id) {
             self.lease_changes(&fresh, &heads_before).await?;
@@ -358,6 +360,7 @@ impl Core {
                 self.save_sync(family.id).await;
             }
         }
+        let before = self.heard().then(|| self.listed_state());
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
         self.follow_trash(&listing.deleted, &listing.purged, &remote_threads, requested).await;
         for info in listing.threads {
@@ -389,6 +392,9 @@ impl Core {
             }
             self.threads.insert(info.id, record);
         }
+        if before.is_some_and(|before| self.listed_state() != before) {
+            self.announce(crate::protocol::BusEvent::Threads);
+        }
         let unregistered: Vec<ThreadRecord> = self
             .threads
             .values()
@@ -398,6 +404,21 @@ impl Core {
         for thread in unregistered {
             self.register_thread(&thread);
         }
+    }
+
+    /// What the server's listing tells this daemon, to see whether one
+    /// changed it.
+    fn listed_state(&self) -> Vec<(ThreadId, String, Vec<String>, bool)> {
+        let mut state: Vec<_> = self
+            .threads
+            .values()
+            .map(|thread| {
+                let collaborators = self.collaborators.get(&thread.id).cloned().unwrap_or_default();
+                (thread.id, thread.owner.clone(), collaborators, self.deleted.contains(&thread.id))
+            })
+            .collect();
+        state.sort();
+        state
     }
 
     pub(crate) fn register_thread(&self, thread: &ThreadRecord) {

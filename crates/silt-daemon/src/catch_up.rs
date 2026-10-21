@@ -33,6 +33,7 @@ impl Core {
             }
             let deltas = self.store.deltas_after(family_id, known.unwrap_or(-1)).await?;
             let fresh = self.take_in(family_id, known.is_none(), deltas).await?;
+            self.announce_family(family_id, &fresh);
             self.positions.insert(family_id, position);
             grown.push((family_id, fresh));
         }

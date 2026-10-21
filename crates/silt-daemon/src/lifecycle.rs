@@ -48,20 +48,22 @@ impl Core {
         }
         let short = thread.short();
         self.trash_changed.insert(thread, std::time::Instant::now());
-        match change {
+        let done = match change {
             Lifecycle::Delete => {
                 self.mark_deleted(thread, true).await?;
-                Ok(format!("thread {short} is in the trash; `silt thread restore {short}` brings it back"))
+                format!("thread {short} is in the trash; `silt thread restore {short}` brings it back")
             }
             Lifecycle::Restore => {
                 self.mark_deleted(thread, false).await?;
-                Ok(format!("thread {short} is back"))
+                format!("thread {short} is back")
             }
             Lifecycle::Purge => {
                 self.drop_threads(&HashSet::from([thread])).await?;
-                Ok(format!("thread {short} is purged for good"))
+                format!("thread {short} is purged for good")
             }
-        }
+        };
+        self.announce(crate::protocol::BusEvent::Threads);
+        Ok(done)
     }
 
     pub(crate) async fn mark_deleted(&mut self, thread: ThreadId, deleted: bool) -> Result<(), CoreError> {
@@ -132,6 +134,7 @@ impl Core {
         for thread in threads {
             if let Some(run) = self.acp.remove(thread) {
                 run.stop();
+                self.announce_agent(*thread);
             }
         }
         for thread in threads {

@@ -278,6 +278,7 @@ impl Core {
             import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
         self.store.append_deltas(family_id, &deltas).await?;
         self.families.insert(family_id, family);
+        self.announce_family(family_id, &deltas);
 
         let checkout_path = match head {
             Some(commit) if isolated => repo.create_managed_checkout(&thread.to_string(), commit, None)?.path,

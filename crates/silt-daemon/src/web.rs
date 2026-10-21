@@ -2,13 +2,14 @@
 //! 127.0.0.1, guarded by a per-start token and a `Host` check. Every API
 //! call becomes a socket [`Request`], so the UI and the CLI share one path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request as HttpRequest, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
@@ -17,10 +18,10 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::core::Event;
-use crate::protocol::{CommentOn, Request, Response, SearchFilters};
+use crate::protocol::{BusEvent, BusSubscription, CommentOn, Request, Response, SearchFilters};
 
 #[derive(rust_embed::Embed)]
 #[folder = "../../web/dist"]
@@ -30,6 +31,7 @@ struct Assets;
 #[derive(Clone)]
 struct Web {
     events: mpsc::UnboundedSender<Event>,
+    bus: broadcast::Sender<BusEvent>,
     token: String,
     port: u16,
     codes: OneTimeCodes,
@@ -67,14 +69,15 @@ impl WebInfo {
 }
 
 /// Starts the web server on 127.0.0.1 (`SILT_WEB_PORT`, or any free port).
-pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Result<WebInfo> {
+pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::Sender<BusEvent>) -> std::io::Result<WebInfo> {
     let port = std::env::var("SILT_WEB_PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(0);
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let codes = OneTimeCodes::default();
-    let web = Web { events, token: token.clone(), port, codes: codes.clone() };
+    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone() };
     let api = Router::new()
+        .route("/api/events", get(events_socket))
         .route("/api/status", get(status))
         .route("/api/threads", get(threads))
         .route("/api/threads/{id}/history", get(history))
@@ -239,6 +242,45 @@ async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Req
         return Failed { status: StatusCode::INTERNAL_SERVER_ERROR, message }.into_response();
     };
     ask(web, make(clone)).await
+}
+
+/// The browser's event bus (ADR 0021).
+async fn events_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
+    let bus = web.bus.subscribe();
+    upgrade.on_upgrade(move |socket| serve_events(socket, bus))
+}
+
+/// Sends the socket the events of the topics it subscribed to, until it
+/// closes.
+async fn serve_events(mut socket: WebSocket, mut bus: broadcast::Receiver<BusEvent>) {
+    let mut topics: HashSet<String> = HashSet::new();
+    loop {
+        let event = tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(change) = serde_json::from_str::<BusSubscription>(&text) {
+                        topics.extend(change.subscribe);
+                        topics.retain(|topic| !change.unsubscribe.contains(topic));
+                    }
+                    continue;
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => return,
+            },
+            event = bus.recv() => match event {
+                Ok(event) if event.topic().is_none_or(|topic| topics.contains(&topic)) => event,
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => BusEvent::Lagged,
+                Err(broadcast::error::RecvError::Closed) => return,
+            },
+        };
+        let Ok(text) = serde_json::to_string(&event) else {
+            continue;
+        };
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
 }
 
 async fn status(State(web): State<Web>) -> HttpResponse {
@@ -575,7 +617,8 @@ mod tests {
         let (events, _inbox) = mpsc::unbounded_channel();
         let codes = OneTimeCodes::default();
         let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
-        let web = Web { events, token: info.token.clone(), port: 1, codes };
+        let bus = broadcast::channel(1).0;
+        let web = Web { events, bus, token: info.token.clone(), port: 1, codes };
         let url = info.one_time_url();
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();

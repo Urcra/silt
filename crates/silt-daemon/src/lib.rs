@@ -1,5 +1,6 @@
 mod acp;
 mod attribution;
+mod bus;
 mod capture;
 pub mod capture_lock;
 mod catch_up;

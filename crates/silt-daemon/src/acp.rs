@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
-use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked};
+use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, TextKind};
 use crate::sessions::NewSession;
 
 pub(crate) struct AcpRun {
@@ -138,6 +138,7 @@ impl Core {
                 error: None,
             },
         );
+        self.announce_agent(thread);
         Ok(thread.to_string())
     }
 
@@ -200,6 +201,7 @@ impl Core {
         run.state = AgentState::Working;
         run.error = None;
         send(run, Command::Prompt(prompt));
+        self.announce_agent(thread);
         Ok("sent")
     }
 
@@ -219,6 +221,7 @@ impl Core {
             run.asking.retain(|asked| asked.id != *id);
         }
         send(run, command);
+        self.announce_agent(thread);
         Ok("ok")
     }
 
@@ -259,6 +262,7 @@ impl Core {
                 current.error = Some(error.to_string());
             }
         }
+        self.announce_agent(thread);
     }
 
     async fn handle_acp(&mut self, thread: ThreadId, event: AcpEvent) -> Result<(), CoreError> {
@@ -347,12 +351,14 @@ impl Core {
                 if !run.thought.is_empty() {
                     self.flush_acp(thread).await?;
                 }
+                self.announce_text(thread, TextKind::Message, &text);
                 self.acp.get_mut(&thread).expect("caller checked").text.push_str(&text);
             }
             Update::Thought(text) => {
                 if !run.text.is_empty() {
                     self.flush_acp(thread).await?;
                 }
+                self.announce_text(thread, TextKind::Thought, &text);
                 self.acp.get_mut(&thread).expect("caller checked").thought.push_str(&text);
             }
             Update::UserText(_) => {}

@@ -203,6 +203,8 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// What changed, for browsers listening (ADR 0021).
+    pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -353,6 +355,7 @@ impl Core {
             registry_checked: false,
             resident,
             adopted: HashSet::new(),
+            bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -1048,6 +1051,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         let Err(error) = self.store.append_deltas_with(family_id, deltas, rows, read).await else {
             self.snapshot_if_due(family_id).await;
+            self.announce_family(family_id, deltas);
             return Ok(());
         };
         if let Err(reload) = self.reload_family(family_id).await {
@@ -1293,7 +1297,7 @@ impl Core {
     /// works a single time, to hand to another program.
     async fn open_web(&mut self, once: bool) -> Result<String, CoreError> {
         if self.web.is_none() {
-            self.web = Some(crate::web::start(self.events.clone()).await?);
+            self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
         }
         let web = self.web.as_ref().expect("started above");
         Ok(if once { web.one_time_url() } else { web.url() })

@@ -39,6 +39,10 @@ export type AgentStatus = { agent: string, state: AgentState,
  */
 streaming: string, thinking: string, permissions: Array<PermissionAsked>, error: string | null, };
 
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
+
+export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
+
 export type CloneInfo = { repo: string, path: string, };
 
 export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, } | { "at": "unknown" };
@@ -178,6 +182,8 @@ export type SearchResult = { thread: string, kind: string, snippet: string,
 owner: string | null, status: ThreadStatus | null, repo: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
+
+export type TextKind = "message" | "thought" | "tool";
 
 export type ThreadSummary = { id: string, repo: string, title: string | null, 
 /**

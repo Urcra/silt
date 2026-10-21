@@ -689,6 +689,62 @@ pub struct CloneInfo {
     pub path: PathBuf,
 }
 
+/// What changed, for the browsers listening on `/api/events` (ADR 0021).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum BusEvent {
+    /// The thread listing may have changed.
+    Threads,
+    /// The thread's family has new deltas; `deltas` is its log's length.
+    Thread { thread: String, deltas: usize },
+    /// The agent the web UI started in the thread; `None` once it's gone.
+    Agent { thread: String, status: Option<AgentStatus> },
+    /// A piece of what the agent says, thinks or a tool prints, as it comes.
+    AgentText { thread: String, kind: TextKind, text: String },
+    /// The inbox may have changed.
+    Inbox,
+    /// Merge requests may have changed.
+    Mrs,
+    /// The socket fell behind and missed events: fetch everything again.
+    Lagged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum TextKind {
+    Message,
+    Thought,
+    Tool,
+}
+
+impl BusEvent {
+    /// The topic a socket subscribes to for it: `threads`, `thread:<id>`,
+    /// `inbox` or `mrs`; none for what every socket hears.
+    pub fn topic(&self) -> Option<String> {
+        match self {
+            Self::Threads => Some("threads".to_owned()),
+            Self::Thread { thread, .. } | Self::Agent { thread, .. } | Self::AgentText { thread, .. } => {
+                Some(format!("thread:{thread}"))
+            }
+            Self::Inbox => Some("inbox".to_owned()),
+            Self::Mrs => Some("mrs".to_owned()),
+            Self::Lagged => None,
+        }
+    }
+}
+
+/// What a browser sends on `/api/events`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct BusSubscription {
+    #[serde(default)]
+    pub subscribe: Vec<String>,
+    #[serde(default)]
+    pub unsubscribe: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,6 +771,8 @@ mod tests {
             AgentChoices::decl(&config),
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
+            BusEvent::decl(&config),
+            BusSubscription::decl(&config),
             CloneInfo::decl(&config),
             CommentLocation::decl(&config),
             CommentOn::decl(&config),
@@ -738,6 +796,7 @@ mod tests {
             SearchFilters::decl(&config),
             SearchResult::decl(&config),
             ShowLine::decl(&config),
+            TextKind::decl(&config),
             ThreadSummary::decl(&config),
             TurnInfo::decl(&config),
         ];

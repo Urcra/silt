@@ -383,6 +383,62 @@ fn the_web_ui_forks_offers_and_trashes_without_the_cli() {
     assert!(!ok && answer["error"].is_string(), "{answer}");
 }
 
+/// The next event on the socket that `wanted` accepts, within the wait.
+async fn event_where(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    wanted: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    use futures_util::StreamExt;
+    let found = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(Ok(message)) = socket.next().await {
+            let Ok(text) = message.into_text() else { continue };
+            let event: serde_json::Value = serde_json::from_str(&text).expect("events are JSON");
+            if wanted(&event) {
+                return event;
+            }
+        }
+        panic!("the socket closed");
+    });
+    found.await.expect("the event came")
+}
+
+#[test]
+fn browsers_hear_of_new_threads_and_of_changes_to_the_ones_they_watch() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let env = Env::new();
+    let api = Api::open(&env);
+    let url = format!("{}/api/events?token={}", api.base.replacen("http", "ws", 1), api.token);
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("connects");
+        socket.send(Message::text(r#"{"subscribe":["threads"]}"#)).await.expect("subscribes");
+        let (silt, repo, home, claude_dir, fake) =
+            (env!("CARGO_BIN_EXE_silt"), env.repo.clone(), env.silt_home.clone(), env.claude_dir.clone(), env.fake.clone());
+        let recorded = tokio::task::spawn_blocking(move || {
+            Command::new(silt)
+                .arg("claude")
+                .current_dir(repo)
+                .env("SILT_HOME", home)
+                .env("CLAUDE_CONFIG_DIR", claude_dir)
+                .env("SILT_CLAUDE_BIN", fake)
+                .output()
+                .expect("silt runs")
+        });
+        event_where(&mut socket, |event| event["event"] == "threads").await;
+        assert!(recorded.await.expect("joins").status.success());
+
+        let thread = api.ok("GET", "/api/threads", None)[0]["id"].as_str().expect("a thread").to_owned();
+        let watch = serde_json::json!({ "subscribe": [format!("thread:{thread}")] }).to_string();
+        socket.send(Message::text(watch)).await.expect("subscribes");
+        let comment = serde_json::json!({ "on": { "on": "entry", "index": 0 }, "text": "nice" });
+        api.ok("POST", &format!("/api/threads/{thread}/comments"), Some(comment));
+        let changed = event_where(&mut socket, |event| event["event"] == "thread").await;
+        assert_eq!(changed["thread"], thread.as_str());
+        assert!(changed["deltas"].as_u64().is_some_and(|deltas| deltas > 0), "{changed}");
+    });
+}
+
 #[test]
 fn isolated_sessions_work_in_a_managed_checkout() {
     let env = Env::new();
