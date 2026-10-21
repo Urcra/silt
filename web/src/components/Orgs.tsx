@@ -200,7 +200,7 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
 
 /** The person's orgs: members, teams, defaults and projects, changed by their owners (ADR 0013). */
 export function Orgs() {
-  const orgs = useQuery({ queryKey: keys.orgs, queryFn: api.orgs })
+  const orgs = useQuery({ queryKey: keys.orgs, queryFn: () => api.orgs() })
   const change = useOrgChange()
   return (
     <div className="mx-auto max-w-3xl space-y-4">

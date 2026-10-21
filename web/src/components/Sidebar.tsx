@@ -11,6 +11,7 @@ import { keys, message } from '../query'
 import { type Section, sections, unread } from '../sections'
 import { useThreadState } from '../threadState'
 import { Button, Icon, Menu, Skeleton, Tag } from '../ui'
+import { useInWorkspace } from '../workspaceFilter'
 
 /** An agent state worth showing next to its thread; a stopped one isn't. */
 function shownState(thread: ThreadSummary) {
@@ -122,7 +123,8 @@ export function Sidebar() {
   const named = useQuery({ queryKey: keys.projects, queryFn: api.projects })
   const nameOf = (repo: string) => named.data?.find((project) => project.repo === repo)?.name ?? projectName(repo)
   const now = useNow()
-  const grouped = sections(threads.data ?? [], now)
+  const shown = useInWorkspace()
+  const grouped = sections((threads.data ?? []).filter(shown), now)
   const link = 'mx-2 mb-2 flex items-center gap-2 rounded-sm px-2 py-1 text-fg-1 hover:bg-surface-2'
   return (
     <nav aria-label="projects" className="flex min-h-0 flex-1 flex-col overflow-y-auto py-2 text-sm">

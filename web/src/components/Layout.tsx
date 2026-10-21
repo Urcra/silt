@@ -9,13 +9,16 @@ import { keys } from '../query'
 import { MainScroll } from '../scroll'
 import { sections } from '../sections'
 import { useActions } from '../shortcuts'
+import { hosted } from '../served'
 import { THEMES, applyTheme, storedTheme, type Theme } from '../theme'
 import { Icon, IconButton, Toaster, cx } from '../ui'
+import { useInWorkspace } from '../workspaceFilter'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MergeRequest } from './MergeRequests'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
 import { ThreadView } from './ThreadView'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const
 
@@ -124,8 +127,9 @@ function useSidebarWidth() {
 /** A phone's way around: what waits on the person first (ADR 0028). */
 function TabBar() {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const waiting = sections(threads.data ?? [], useNow()).needs_you.length
-  const tab = 'flex flex-col items-center gap-0.5 py-1.5 text-[11px] text-fg-2'
+  const shown = useInWorkspace()
+  const waiting = sections((threads.data ?? []).filter(shown), useNow()).needs_you.length
+  const tab ='flex flex-col items-center gap-0.5 py-1.5 text-[11px] text-fg-2'
   const active = { className: 'text-accent-fg' }
   return (
     <nav
@@ -171,6 +175,7 @@ export function Layout() {
           aria-expanded={sidebarShown}
           onClick={() => setSidebarShown(!sidebarShown)}
         />
+        {!hosted() && <WorkspaceSwitcher />}
         <Breadcrumbs />
         <nav className="ml-auto flex items-center gap-4 text-xs">
           <Palette />

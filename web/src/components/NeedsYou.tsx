@@ -4,13 +4,15 @@ import { useNow } from '../now'
 import { keys, message } from '../query'
 import { sections } from '../sections'
 import { EmptyState, Skeleton } from '../ui'
+import { useInWorkspace } from '../workspaceFilter'
 import { NeedsYouItem } from './Sidebar'
 
 /** What waits on the person, each answerable in place: a phone's first screen (ADR 0028). */
 export function NeedsYou() {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const shown = useInWorkspace()
   const now = useNow()
-  const waiting = sections(threads.data ?? [], now).needs_you
+  const waiting = sections((threads.data ?? []).filter(shown), now).needs_you
   return (
     <section aria-label="waiting on you" className="mx-auto max-w-2xl space-y-3">
       <h2 className="text-lg font-semibold">Needs you</h2>

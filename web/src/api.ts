@@ -4,6 +4,7 @@
 // one-time code a browser opened by `silt open` carries, and is kept for the tab.
 
 import { apiUrl } from './served'
+import { askedServer } from './workspace'
 import type {
   AgentChoices,
   CommentOn,
@@ -150,16 +151,19 @@ export const api = {
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
   branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
   projects: () => request<Project[]>('GET', '/api/projects'),
-  orgs: () => request<OrgInfo[]>('GET', '/api/orgs'),
-  orgChange: (change: OrgChange) => request<string>('POST', '/api/orgs/change', change),
-  devices: () => request<DeviceView[]>('GET', '/api/devices'),
-  pairPhone: () => request<PhonePairing>('POST', '/api/pair'),
+  // Orgs, devices and notification settings are each server's own: the
+  // chosen workspace's server answers (ADR 0032).
+  orgs: (server: string | null = askedServer()) => request<OrgInfo[]>('GET', `/api/orgs${onServer(server)}`),
+  orgChange: (change: OrgChange) => request<string>('POST', `/api/orgs/change${onServer(askedServer())}`, change),
+  devices: () => request<DeviceView[]>('GET', `/api/devices${onServer(askedServer())}`),
+  pairPhone: () => request<PhonePairing>('POST', `/api/pair${onServer(askedServer())}`),
   links: (id: string) => request<ThreadLink[]>('GET', `${thread(id)}/links`),
   makeLink: (id: string, link: NewLink) => request<ThreadLink>('POST', `${thread(id)}/links`, link),
   revokeLink: (id: string, link: number) => request<null>('POST', `${thread(id)}/links/${link}/revoke`),
   changeDevice: (id: string, change: DeviceChange) =>
-    request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}`, change),
-  revokeDevice: (id: string) => request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke`),
+    request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}${onServer(askedServer())}`, change),
+  revokeDevice: (id: string) =>
+    request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke${onServer(askedServer())}`),
   continueOn: (id: string, device: string, agent: string) =>
     request<string>('POST', `${thread(id)}/continue`, { device, agent }),
   setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
@@ -189,8 +193,9 @@ export const api = {
     request<string>('POST', `/api/inbox/read${onServer(server)}`, read),
   pushKey: () => request<string>('GET', '/api/push/key'),
   subscribePush: (subscription: PushSubscriptionJSON) => request<null>('POST', '/api/push/subscriptions', subscription),
-  notificationSettings: () => request<KindSetting[]>('GET', '/api/me/notifications'),
-  setNotification: (setting: KindSetting) => request<KindSetting[]>('PUT', '/api/me/notifications', setting),
+  notificationSettings: () => request<KindSetting[]>('GET', `/api/me/notifications${onServer(askedServer())}`),
+  setNotification: (setting: KindSetting) =>
+    request<KindSetting[]>('PUT', `/api/me/notifications${onServer(askedServer())}`, setting),
   revert: (id: string, turn: number) => request<Reverted>('POST', `${thread(id)}/revert`, { turn }),
   fork: (id: string, turn?: number) => request<Resumed>('POST', `${thread(id)}/fork`, turn === undefined ? {} : { turn }),
   setVisibility: (id: string, visibility: string) => request<string>('POST', `${thread(id)}/visibility`, { visibility }),

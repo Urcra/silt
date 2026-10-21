@@ -5,6 +5,7 @@ import { api, short, type GraphQuery, type GraphRow } from '../api'
 import { layout } from '../lanes'
 import { keys, message } from '../query'
 import { Button, EmptyState, Select, Skeleton, Tag, cx } from '../ui'
+import { useInWorkspace } from '../workspaceFilter'
 
 const ROW = 36
 const LANE = 16
@@ -122,7 +123,10 @@ export function Graph() {
     limit: null,
   }
   const graph = useQuery({ queryKey: keys.graph(query), queryFn: () => api.graph(query) })
-  const rows = graph.data ?? []
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const shown = useInWorkspace()
+  const inView = new Set((threads.data ?? []).filter(shown).map((thread) => thread.id))
+  const rows = (graph.data ?? []).filter((row) => !threads.data || inView.has(row.thread))
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3">
