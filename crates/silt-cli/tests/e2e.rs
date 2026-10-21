@@ -48,6 +48,59 @@ printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"role":"user","
 hook Stop
 "#;
 
+/// A Claude Code session of two turns with tools of every kind Silt treats
+/// apart, and an edit by hand between the turns.
+const FAKE_CLAUDE_TOOLS: &str = r#"#!/bin/sh
+set -eu
+session=""
+settings=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --session-id) session="$2"; shift 2 ;;
+        --settings) settings="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+dir="$CLAUDE_CONFIG_DIR/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+transcript="$dir/$session.jsonl"
+hook() {
+    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
+    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"%s","tool_use_id":"%s","tool_input":%s}' \
+        "$session" "$1" "${2:-}" "${3:-}" "${4:-null}" | sh -c "$command"
+}
+say() { printf '%s\n' "$1" >> "$transcript"; }
+prompt() { say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"$1\"}}"; hook UserPromptSubmit; }
+reply() { say "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]}}"; }
+start() {
+    say "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"$1\",\"name\":\"$2\",\"input\":$3}]}}"
+    hook PreToolUse "$2" "$1" "$3"
+}
+finish() {
+    hook PostToolUse "$2" "$1" "$3"
+    say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"$1\",\"content\":\"ok\",\"is_error\":false}]}}"
+}
+
+prompt "Add a farewell and a helper"
+start toolu_1 Edit '{"file_path":"src/main.rs"}'
+printf 'fn farewell() {}\n' >> src/main.rs
+finish toolu_1 Edit '{"file_path":"src/main.rs"}'
+start toolu_2 Read '{"file_path":"src/main.rs"}'
+finish toolu_2 Read '{"file_path":"src/main.rs"}'
+start toolu_3 Bash '{"command":"make helper"}'
+printf 'pub fn help() {}\n' > src/helper.rs
+finish toolu_3 Bash '{"command":"make helper"}'
+reply "Added both."
+hook Stop
+printf '// by hand\n' >> src/helper.rs
+prompt "Now a note"
+start toolu_4 Write '{"file_path":"'"$(pwd)"'/NOTES.md"}'
+printf '# Notes\n' > NOTES.md
+finish toolu_4 Write '{"file_path":"'"$(pwd)"'/NOTES.md"}'
+reply "Noted."
+hook Stop
+"#;
+
 struct Env {
     _dirs: Vec<tempfile::TempDir>,
     silt_home: PathBuf,
@@ -58,6 +111,10 @@ struct Env {
 
 impl Env {
     fn new() -> Self {
+        Self::with_claude(FAKE_CLAUDE)
+    }
+
+    fn with_claude(script: &str) -> Self {
         let silt_home = tempfile::Builder::new().prefix("silt").tempdir_in("/tmp").expect("temp dir");
         let claude_dir = tempfile::tempdir().expect("temp dir");
         let repo = tempfile::tempdir().expect("temp dir");
@@ -68,7 +125,7 @@ impl Env {
         git(repo.path(), &["add", "."]);
         git(repo.path(), &["commit", "-q", "-m", "init"]);
         let fake = bin.path().join("claude");
-        fs::write(&fake, FAKE_CLAUDE).expect("write fake claude");
+        fs::write(&fake, script).expect("write fake claude");
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
         Self {
             silt_home: silt_home.path().to_owned(),
@@ -212,6 +269,36 @@ fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
     assert!(show.contains("> Please add a farewell line to main") && show.contains("Done: farewell added."), "{show}");
     assert!(!show.contains("outside tool calls"), "{show}");
     assert!(env.stdout(&["diff", &thread, "--turn", "1"]).contains("+fn farewell() {}"));
+}
+
+/// What a recorded session projects to, as `silt show` and `silt diff` print
+/// it, with what differs between two machines (paths, thread ids) left out.
+fn projection(env: &Env, envs: &[(&str, &str)]) -> String {
+    let ran = env.run_with(&["claude"], envs);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let thread = env.thread();
+    let mut printed = String::new();
+    for args in [&["show"][..], &["diff"], &["diff", "--turn", "1"], &["diff", "--turn", "2"]] {
+        let mut args = args.to_vec();
+        args.insert(1, &thread);
+        printed += &format!("$ silt {}\n{}\n", args.join(" "), env.stdout(&args));
+    }
+    printed.replace(&env.repo.to_string_lossy().into_owned(), "<repo>").replace(&thread, "<thread>")
+}
+
+#[test]
+fn a_session_recorded_without_the_daemon_projects_as_one_recorded_by_it() {
+    let with_daemon = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    with_daemon.silt(&["daemon", "start"]);
+    let recorded_by_daemon = projection(&with_daemon, &[]);
+    let without = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    let recorded_alone = projection(&without, &[("SILT_DAEMONLESS_CAPTURE", "1")]);
+
+    assert_eq!(recorded_alone, recorded_by_daemon);
+    for (tool, file) in [("toolu_1", "src/main.rs"), ("toolu_3", "src/helper.rs"), ("toolu_4", "NOTES.md")] {
+        assert!(recorded_alone.contains(&format!("✎ {file}")), "{tool}'s edit of {file} is credited to it:\n{recorded_alone}");
+    }
+    assert!(recorded_alone.contains("outside tool calls: src/helper.rs +1"), "the edit by hand:\n{recorded_alone}");
 }
 
 #[test]
