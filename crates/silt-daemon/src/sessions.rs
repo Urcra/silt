@@ -82,6 +82,14 @@ pub(crate) struct PendingSession {
     pub(crate) started: Instant,
 }
 
+/// What becomes of a session still not found when it is looked for.
+#[derive(Debug, Clone, Copy)]
+enum Waiting {
+    Keep,
+    /// The agent exited, so it never wrote one.
+    GiveUp,
+}
+
 /// A thread just made for a clone.
 pub(crate) struct CreatedThread {
     pub(crate) thread: ThreadId,
@@ -270,11 +278,9 @@ impl Core {
             _ => repo.root().to_owned(),
         };
         let checkout_actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        let existing = self
-            .checkouts
-            .values()
-            .find(|checkout| checkout.record.path == checkout_path)
-            .map(|checkout| checkout.record.clone());
+        // From the store, as a process other than the daemon doesn't hold
+        // every checkout.
+        let existing = self.store.checkouts().await?.into_iter().find(|checkout| checkout.path == checkout_path);
         let checkout = match existing {
             Some(previous) => {
                 self.checkouts.remove(&previous.id);
@@ -603,27 +609,8 @@ impl Core {
     /// The agent in `thread` exited: find its session if it is still
     /// unknown, and record what it wrote last.
     pub(crate) async fn end_session(&mut self, thread: ThreadId) -> Result<&'static str, CoreError> {
-        let known: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
-        let waiting: Vec<PendingSession> = {
-            let (waiting, rest) = std::mem::take(&mut self.pending).into_iter().partition(|pending| pending.thread == thread);
-            self.pending = rest;
-            waiting
-        };
-        for pending in waiting {
-            let (agent, cwd, since) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms);
-            let known = known.clone();
-            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known)).await?;
-            match found {
-                Some(found) => self.register_found(pending, found).await?,
-                None => warn!("the agent's session was never written"),
-            }
-        }
-        let ids: Vec<String> = self
-            .sessions
-            .iter()
-            .filter(|session| session.record.thread == thread && session.live)
-            .map(|session| session.record.session_id.clone())
-            .collect();
+        self.find_waiting(thread, Waiting::GiveUp).await?;
+        let ids = self.live_sessions(thread, |_| true);
         // Edits still waiting for the transcript are taken in now, while
         // the marks just read still own them.
         let checkouts: HashSet<CheckoutId> = self
@@ -633,22 +620,7 @@ impl Core {
             .map(|session| session.record.checkout_id)
             .collect();
         for id in &ids {
-            let id = id.clone();
-            let snapshot = self.session(&id).and_then(|session| {
-                let found = Found { id: id.clone(), transcript: session.transcript.clone()? };
-                let agent = session.agent;
-                (agent.capture() == Capture::Snapshot).then_some((agent, found))
-            });
-            match snapshot {
-                Some((agent, found)) => {
-                    let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found)).await?;
-                    match lines {
-                        Ok(lines) => self.record_snapshot(&id, lines).await?,
-                        Err(error) => warn!(%error, "could not read the session"),
-                    }
-                }
-                None => self.tail_session_up_to(&id, u64::MAX).await?,
-            }
+            self.read_session(id, u64::MAX).await?;
         }
         // Once for all the thread's sessions, with their last marks read.
         for checkout in &checkouts {
@@ -664,6 +636,92 @@ impl Core {
             }
         }
         Ok("ended")
+    }
+
+    /// The capture step for the thread's agent run by a process that isn't
+    /// the daemon, which has no watcher to say when files change (ADR
+    /// 0018): find its session if still unknown, and for an agent without
+    /// hooks read what it wrote and take in the checkout's changes.
+    pub(crate) async fn record_step(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        self.find_waiting(thread, Waiting::Keep).await?;
+        let ids = self.live_sessions(thread, |session| match session.agent.capture() {
+            Capture::Hooks => false,
+            Capture::Transcript => true,
+            Capture::Snapshot => session.last_snapshot.is_none_or(|last| last.elapsed() >= SNAPSHOT_INTERVAL),
+        });
+        let mut checkouts = HashSet::new();
+        for id in &ids {
+            self.read_session(id, TAIL_CHUNK).await?;
+            checkouts.extend(self.session(id).map(|session| session.record.checkout_id));
+        }
+        for checkout in checkouts {
+            if self.checkouts.contains_key(&checkout) {
+                self.rescan(checkout).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the thread's agent needs `record_step`: its session is still
+    /// unknown, or it has no hooks to capture with.
+    pub(crate) fn steps(&self, thread: ThreadId) -> bool {
+        self.pending.iter().any(|pending| pending.thread == thread)
+            || !self.live_sessions(thread, |session| session.agent.capture() != Capture::Hooks).is_empty()
+    }
+
+    /// The live sessions of `thread` that `keep` keeps.
+    fn live_sessions(&self, thread: ThreadId, keep: impl Fn(&Session) -> bool) -> Vec<String> {
+        self.sessions
+            .iter()
+            .filter(|session| session.record.thread == thread && session.live && keep(session))
+            .map(|session| session.record.session_id.clone())
+            .collect()
+    }
+
+    /// Looks for the sessions the thread's agents haven't been found to
+    /// write yet, and records those found.
+    async fn find_waiting(&mut self, thread: ThreadId, unfound: Waiting) -> Result<(), CoreError> {
+        let known: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
+        let waiting: Vec<PendingSession> = {
+            let (waiting, rest) = std::mem::take(&mut self.pending).into_iter().partition(|pending| pending.thread == thread);
+            self.pending = rest;
+            waiting
+        };
+        for pending in waiting {
+            let (agent, cwd, since) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms);
+            let known = known.clone();
+            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known)).await?;
+            match (found, unfound) {
+                (Some(found), _) => self.register_found(pending, found).await?,
+                (None, Waiting::Keep) => self.pending.push(pending),
+                (None, Waiting::GiveUp) => warn!("the agent's session was never written"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Records what the session wrote since it was last read: up to about
+    /// `limit` bytes of each transcript, or the whole of a store.
+    async fn read_session(&mut self, session_id: &str, limit: u64) -> Result<(), CoreError> {
+        let snapshot = self.session(session_id).and_then(|session| {
+            let found = Found { id: session_id.to_owned(), transcript: session.transcript.clone()? };
+            let agent = session.agent;
+            (agent.capture() == Capture::Snapshot).then_some((agent, found))
+        });
+        let Some((agent, found)) = snapshot else {
+            return self.tail_session_up_to(session_id, limit).await;
+        };
+        let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found)).await?;
+        if let Some(session) = self.session_mut(session_id) {
+            session.last_snapshot = Some(Instant::now());
+        }
+        match lines {
+            Ok(lines) => self.record_snapshot(session_id, lines).await,
+            Err(error) => {
+                warn!(%error, "could not read the session");
+                Ok(())
+            }
+        }
     }
 
     /// Records new lines of a session's transcripts, a chunk at a time so a

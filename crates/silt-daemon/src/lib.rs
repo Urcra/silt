@@ -14,6 +14,7 @@ mod live;
 mod load;
 pub mod paths;
 pub mod protocol;
+mod recorder;
 mod recovery;
 pub mod remote;
 mod resume;
@@ -27,4 +28,5 @@ mod web;
 
 pub use capture::capture_here;
 pub use core::CoreError;
+pub use recorder::{NewRun, Recorder};
 pub use server::{RunError, holds_lock, run};

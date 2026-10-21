@@ -16,7 +16,7 @@ use silt_agents::claude::HookInput;
 use silt_log::TurnMark;
 use silt_store::Store;
 
-use crate::capture_lock::CaptureLock;
+use crate::capture_lock::{CaptureLock, Turn};
 use crate::core::{Core, CoreError};
 use crate::protocol::HookReply;
 
@@ -29,7 +29,7 @@ const TURN_WAIT: Duration = Duration::from_secs(10);
 pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value) -> Result<HookReply, CoreError> {
     let input: HookInput = serde_json::from_value(input).map_err(CoreError::HookInput)?;
     let lock = CaptureLock::open(data_dir)?;
-    let _turn = tokio::time::timeout(TURN_WAIT, lock.turn()).await.map_err(|_| CoreError::LockTimeout)??;
+    let _turn = turn_in_time(&lock).await?;
     let store = Store::open(data_dir).await?;
     let Some(record) = store.sessions().await?.into_iter().find(|record| record.session_id == input.session_id) else {
         return Ok(HookReply::default());
@@ -37,6 +37,11 @@ pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value
     let actor = crate::server::load_actor(data_dir)?;
     let mut core = Core::for_session(store, actor, data_dir, record).await?;
     core.capture(event, &input).await
+}
+
+/// Waits for this process's turn at writing, for at most `TURN_WAIT`.
+pub(crate) async fn turn_in_time(lock: &CaptureLock) -> Result<Turn<'_>, CoreError> {
+    Ok(tokio::time::timeout(TURN_WAIT, lock.turn()).await.map_err(|_| CoreError::LockTimeout)??)
 }
 
 /// Tools that change only the files their input names.

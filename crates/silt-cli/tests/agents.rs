@@ -91,6 +91,21 @@ fn codex_sessions_are_found_and_continue_natively_elsewhere() {
 }
 
 #[test]
+fn the_wrapper_records_an_agent_without_hooks_when_no_daemon_runs() {
+    let world = world();
+    let laptop = &world.laptop;
+    laptop.silt(&["daemon", "stop"]);
+    laptop.silt_with(&["codex"], &[("SILT_DAEMONLESS_CAPTURE", "1")]);
+    assert_eq!(laptop.stdout(&["daemon", "status"]).trim(), "not running", "the wrapper recorded it alone");
+
+    let thread = thread_of(laptop);
+    let show = laptop.stdout(&["show", &thread]);
+    assert!(show.contains("> Please add a farewell line to main") && show.contains("Codex says done."), "{show}");
+    assert!(show.contains("    ✎ src/main.rs"), "the edit is credited to the tool call: {show}");
+    assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains("Codex says done.")), "and it syncs");
+}
+
+#[test]
 fn gemini_and_copilot_sessions_continue_natively_elsewhere() {
     for (agent, said) in [("gemini", "Gemini says done."), ("copilot", "Copilot says done.")] {
         let world = world();

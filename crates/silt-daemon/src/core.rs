@@ -194,6 +194,10 @@ pub struct Core {
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
     pub(crate) registry_checked: bool,
+    /// Whether this is the daemon, which holds every family and watches its
+    /// checkouts, rather than a hook or wrapper holding only its own
+    /// family and watching nothing (ADR 0018).
+    pub(crate) resident: bool,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -219,7 +223,7 @@ impl Core {
         data_dir: &Path,
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<Self, CoreError> {
-        let mut core = Self::open(store, actor, data_dir, events).await?;
+        let mut core = Self::open(store, actor, data_dir, events, true).await?;
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
@@ -257,16 +261,14 @@ impl Core {
     }
 
     /// A core holding only `record`'s session, its checkout and its family:
-    /// what a hook capturing without the daemon needs (ADR 0018). Nothing
-    /// listens to its events, as it has no watchers or timers.
+    /// what a hook capturing without the daemon needs (ADR 0018).
     pub(crate) async fn for_session(
         store: Store,
         actor: ActorId,
         data_dir: &Path,
         record: SessionRecord,
     ) -> Result<Self, CoreError> {
-        let (events, _) = mpsc::unbounded_channel();
-        let mut core = Self::open(store, actor, data_dir, events).await?;
+        let mut core = Self::visiting(store, actor, data_dir).await?;
         let Some(thread) = core.threads.get(&record.thread).cloned() else {
             return Ok(core);
         };
@@ -291,6 +293,13 @@ impl Core {
         Ok(core)
     }
 
+    /// A core for a process other than the daemon, holding no family yet.
+    /// Nothing listens to its events, as it has no watchers or timers.
+    pub(crate) async fn visiting(store: Store, actor: ActorId, data_dir: &Path) -> Result<Self, CoreError> {
+        let (events, _) = mpsc::unbounded_channel();
+        Self::open(store, actor, data_dir, events, false).await
+    }
+
     /// The parts every `Core` starts from: thread records and what is known
     /// of secrets, but no family, checkout or session yet.
     async fn open(
@@ -298,6 +307,7 @@ impl Core {
         actor: ActorId,
         data_dir: &Path,
         events: mpsc::UnboundedSender<Event>,
+        resident: bool,
     ) -> Result<Self, CoreError> {
         let mut core = Self {
             store,
@@ -334,6 +344,7 @@ impl Core {
             recoveries: Vec::new(),
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
+            resident,
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -506,6 +517,9 @@ impl Core {
     ) -> Result<(), CoreError> {
         let (id, path) = (record.id, record.path.clone());
         self.hold_checkout(record, entries)?;
+        if !self.resident {
+            return Ok(());
+        }
         let events = self.events.clone();
         let watcher = watch::watch(&path, move |paths| {
             let _ = events.send(Event::Changed { checkout: id, paths, noticed: Instant::now(), settled: false });

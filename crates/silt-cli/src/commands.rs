@@ -175,26 +175,54 @@ fn find_agent(name: &str) -> Result<&'static dyn Agent, Exn<CliError>> {
 /// every file edit.
 pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     let agent = find_agent(name)?;
-    ensure_daemon()?;
     let cwd = current_dir()?;
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
-    let started: SessionStarted = call(&Request::StartSession {
-        cwd,
-        agent: agent.id().into(),
-        session_id: session_id.clone(),
-        isolated,
-        existing: false,
-    })?;
+    let (started, mut recording) = if daemonless_capture() {
+        record_here(agent, &cwd, session_id.as_deref(), isolated)?
+    } else {
+        ensure_daemon()?;
+        let started: SessionStarted = call(&Request::StartSession {
+            cwd,
+            agent: agent.id().into(),
+            session_id: session_id.clone(),
+            isolated,
+            existing: false,
+        })?;
+        let recording = Recording::Daemon { thread: started.thread.clone(), ended: false };
+        (started, recording)
+    };
     eprintln!("silt: recording thread {} in {}", short(&started.thread), started.checkout.display());
     if let Some(mount) = &started.mount {
         mount_checkout(mount, &started.checkout, &started.thread);
     }
     let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd };
-    let session = SessionEnd::new(&started.thread);
-    let status = run.launch(Start::New { id: session_id }, args)?;
-    session.end()?;
+    let status = run.launch(Start::New { id: session_id }, args, &mut recording)?;
+    recording.end()?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
     exit_like(status)
+}
+
+/// Whether to capture in this process even when a daemon runs.
+fn daemonless_capture() -> bool {
+    env::var_os("SILT_DAEMONLESS_CAPTURE").is_some_and(|value| value == "1")
+}
+
+/// Starts the agent's session in this process, without the daemon.
+fn record_here(
+    agent: &'static dyn Agent,
+    cwd: &Path,
+    session_id: Option<&str>,
+    isolated: bool,
+) -> Result<(SessionStarted, Recording), Exn<CliError>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    let run = silt_daemon::NewRun { cwd, agent: agent.id(), session_id, isolated };
+    let (recorder, started) = runtime
+        .block_on(silt_daemon::Recorder::start(&paths::data_dir(), run))
+        .or_raise(|| CliError("could not start recording the session".into()))?;
+    Ok((started, Recording::Here { runtime, recorder: Some(Box::new(recorder)) }))
 }
 
 /// Exits as the agent did: with its code, or 128 + the signal that ended it,
@@ -210,31 +238,59 @@ fn exit_like(status: std::process::ExitStatus) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-/// Tells the daemon the agent is done with the thread, on every way out of
+/// Who records the agent's session. Its end is recorded on every way out of
 /// the wrapper, errors included; otherwise later edits would be credited to
 /// an agent that is gone.
-struct SessionEnd {
-    thread: String,
-    ended: bool,
+enum Recording {
+    Daemon {
+        thread: String,
+        ended: bool,
+    },
+    /// This process, without the daemon (ADR 0018).
+    Here {
+        runtime: tokio::runtime::Runtime,
+        recorder: Option<Box<silt_daemon::Recorder>>,
+    },
 }
 
-impl SessionEnd {
-    fn new(thread: &str) -> Self {
-        Self { thread: thread.to_owned(), ended: false }
+/// How often the wrapper runs the capture step for an agent without hooks.
+const STEP_INTERVAL: Duration = Duration::from_secs(1);
+
+impl Recording {
+    /// Runs `command` until it exits, running the capture step meanwhile
+    /// when recording here.
+    fn run(&mut self, command: Command) -> io::Result<std::process::ExitStatus> {
+        match self {
+            Self::Daemon { .. } => {
+                tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(run_until_exit(command, None))
+            }
+            Self::Here { runtime, recorder } => runtime.block_on(run_until_exit(command, recorder.as_deref_mut())),
+        }
     }
 
     fn end(mut self) -> Result<(), Exn<CliError>> {
-        self.ended = true;
-        call::<String>(&Request::EndSession { thread: self.thread.clone() })?;
-        Ok(())
+        self.end_once()
+    }
+
+    fn end_once(&mut self) -> Result<(), Exn<CliError>> {
+        match self {
+            Self::Daemon { ended: true, .. } | Self::Here { recorder: None, .. } => Ok(()),
+            Self::Daemon { thread, ended } => {
+                *ended = true;
+                call::<String>(&Request::EndSession { thread: thread.clone() })?;
+                Ok(())
+            }
+            Self::Here { runtime, recorder } => {
+                let recorder = recorder.take().expect("matched above");
+                runtime.block_on((*recorder).end()).or_raise(|| CliError("could not record the end of the session".into()))
+            }
+        }
     }
 }
 
-impl Drop for SessionEnd {
+impl Drop for Recording {
     fn drop(&mut self) {
-        if !self.ended {
-            let _ = call::<String>(&Request::EndSession { thread: self.thread.clone() });
-        }
+        let _ = self.end_once();
     }
 }
 
@@ -250,29 +306,38 @@ impl Drop for Scratch {
 /// Runs the agent until it exits. Ctrl-C and Ctrl-\ reach the agent from
 /// the terminal, which handles them; this wrapper stays to record the end of
 /// the session. A hangup or termination is passed on to the agent, and the
-/// wrapper still waits for it to exit.
-fn run_until_exit(command: Command) -> io::Result<std::process::ExitStatus> {
+/// wrapper still waits for it to exit. With a `recorder`, it runs the
+/// capture step every `STEP_INTERVAL` meanwhile.
+async fn run_until_exit(
+    command: Command,
+    mut recorder: Option<&mut silt_daemon::Recorder>,
+) -> io::Result<std::process::ExitStatus> {
     use tokio::signal::unix::{SignalKind, signal};
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(async {
-        let mut child = tokio::process::Command::from(command).spawn()?;
-        let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
-        let (mut hangup, mut terminate) = (signal(SignalKind::hangup())?, signal(SignalKind::terminate())?);
-        let pass_on = |child: &tokio::process::Child, sent: rustix::process::Signal| {
-            if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id.cast_signed())) {
-                let _ = rustix::process::kill_process(pid, sent);
-            }
-        };
-        loop {
-            tokio::select! {
-                status = child.wait() => return status,
-                _ = interrupt.recv() => {}
-                _ = quit.recv() => {}
-                _ = hangup.recv() => pass_on(&child, rustix::process::Signal::HUP),
-                _ = terminate.recv() => pass_on(&child, rustix::process::Signal::TERM),
+    let mut child = tokio::process::Command::from(command).spawn()?;
+    let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
+    let (mut hangup, mut terminate) = (signal(SignalKind::hangup())?, signal(SignalKind::terminate())?);
+    let pass_on = |child: &tokio::process::Child, sent: rustix::process::Signal| {
+        if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id.cast_signed())) {
+            let _ = rustix::process::kill_process(pid, sent);
+        }
+    };
+    let mut steps = tokio::time::interval(STEP_INTERVAL);
+    steps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            _ = interrupt.recv() => {}
+            _ = quit.recv() => {}
+            _ = hangup.recv() => pass_on(&child, rustix::process::Signal::HUP),
+            _ = terminate.recv() => pass_on(&child, rustix::process::Signal::TERM),
+            _ = steps.tick(), if recorder.is_some() => {
+                let recorder = recorder.as_mut().expect("only ticks with one");
+                if let Err(error) = recorder.tick().await {
+                    eprintln!("silt: could not record: {}", silt_daemon::protocol::error_chain(&error));
+                }
             }
         }
-    })
+    }
 }
 
 /// One run of an agent in a thread's checkout.
@@ -286,7 +351,12 @@ struct Run<'a> {
 impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
     /// rules and skills it doesn't read by itself.
-    fn launch(&self, start: Start, args: &[String]) -> Result<std::process::ExitStatus, Exn<CliError>> {
+    fn launch(
+        &self,
+        start: Start,
+        args: &[String],
+        recording: &mut Recording,
+    ) -> Result<std::process::ExitStatus, Exn<CliError>> {
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
@@ -320,7 +390,7 @@ impl Run<'_> {
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = Command::new(&launch.program);
         command.args(&launch.args).envs(launch.envs.iter().map(|(key, value)| (key, value))).current_dir(self.cwd);
-        run_until_exit(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
+        recording.run(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
     }
 }
 
@@ -461,9 +531,9 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
         }
     };
     let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd };
-    let session = SessionEnd::new(&resumed.thread);
-    let status = run.launch(start, args)?;
-    session.end()?;
+    let mut recording = Recording::Daemon { thread: resumed.thread.clone(), ended: false };
+    let status = run.launch(start, args, &mut recording)?;
+    recording.end()?;
     exit_like(status)
 }
 
@@ -546,7 +616,7 @@ pub fn hook(agent: Option<&str>, event: &str) {
 /// The running daemon's answer to the hook, unless no daemon runs, it
 /// didn't answer in time, or capture in process was asked for.
 fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
-    if env::var_os("SILT_DAEMONLESS_CAPTURE").is_some_and(|value| value == "1") || !silt_daemon::holds_lock(&paths::data_dir()) {
+    if daemonless_capture() || !silt_daemon::holds_lock(&paths::data_dir()) {
         return None;
     }
     let request = Request::Hook { event: event.to_owned(), input: input.clone() };

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use silt_checkout::Bridge;
 use silt_log::Delta;
 use silt_sync::ClientSync;
-use silt_types::FamilyId;
+use silt_types::{FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, RepoBases, stored_entries};
@@ -28,7 +28,7 @@ impl Core {
         let mut grown = Vec::new();
         for (family_id, position) in self.store.positions().await? {
             let known = self.positions.get(&family_id).copied();
-            if known.is_some_and(|known| known >= position) {
+            if known.is_some_and(|known| known >= position) || !self.follows(family_id) {
                 continue;
             }
             let deltas = self.store.deltas_after(family_id, known.unwrap_or(-1)).await?;
@@ -36,8 +36,10 @@ impl Core {
             self.positions.insert(family_id, position);
             grown.push((family_id, deltas));
         }
+        // A checkout held already may have been given to another thread.
         for record in self.store.checkouts().await? {
-            if !self.checkouts.contains_key(&record.id) && record.path.exists() {
+            let held = self.checkouts.get(&record.id).map(|checkout| &checkout.record);
+            if held != Some(&record) && record.path.exists() && self.follows_thread(record.thread) {
                 let entries = stored_entries(&self.store, record.id).await?;
                 self.start_checkout(record, entries)?;
             }
@@ -49,7 +51,9 @@ impl Core {
             .sessions()
             .await?
             .into_iter()
-            .filter(|record| !known.contains(&(record.agent.clone(), record.session_id.clone())))
+            .filter(|record| {
+                !known.contains(&(record.agent.clone(), record.session_id.clone())) && self.follows_thread(record.thread)
+            })
             .collect();
         let taken = self.sessions.len();
         self.take_sessions(new).await?;
@@ -62,6 +66,16 @@ impl Core {
             self.redactor = self.redactor.clone().with(learned);
         }
         Ok(())
+    }
+
+    /// Whether this core takes in what others store of the family: the
+    /// daemon all of it, any other process only the families it holds.
+    fn follows(&self, family: FamilyId) -> bool {
+        self.resident || self.families.contains_key(&family) || self.raw.contains_key(&family)
+    }
+
+    fn follows_thread(&self, thread: ThreadId) -> bool {
+        self.threads.get(&thread).is_some_and(|record| self.follows(record.family))
     }
 
     /// Remembers what the store holds at the end of this daemon's turn, so
