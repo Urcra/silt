@@ -9,13 +9,35 @@
 //! person.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use silt_agents::Capture;
 use silt_agents::claude::HookInput;
 use silt_log::TurnMark;
+use silt_store::Store;
 
+use crate::capture_lock::CaptureLock;
 use crate::core::{Core, CoreError};
 use crate::protocol::HookReply;
+
+/// How long a hook waits for its turn at writing before it gives up, so a
+/// daemon stopped while writing can't hang the agent.
+const TURN_WAIT: Duration = Duration::from_secs(10);
+
+/// Runs a hook's capture step in this process, without the daemon, for the
+/// data in `data_dir`.
+pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value) -> Result<HookReply, CoreError> {
+    let input: HookInput = serde_json::from_value(input).map_err(CoreError::HookInput)?;
+    let lock = CaptureLock::open(data_dir)?;
+    let _turn = tokio::time::timeout(TURN_WAIT, lock.turn()).await.map_err(|_| CoreError::LockTimeout)??;
+    let store = Store::open(data_dir).await?;
+    let Some(record) = store.sessions().await?.into_iter().find(|record| record.session_id == input.session_id) else {
+        return Ok(HookReply::default());
+    };
+    let actor = crate::server::load_actor(data_dir)?;
+    let mut core = Core::for_session(store, actor, data_dir, record).await?;
+    core.capture(event, &input).await
+}
 
 /// Tools that change only the files their input names.
 const FILE_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];

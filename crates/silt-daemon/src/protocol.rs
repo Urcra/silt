@@ -278,7 +278,7 @@ impl Response {
 }
 
 /// `error` and what caused it, on one line.
-pub(crate) fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     let mut message = error.to_string();
     let mut cause = error.source();
     while let Some(source) = cause {

@@ -85,12 +85,17 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with(args, &[])
+    }
+
+    fn run_with(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_silt"))
             .args(args)
             .current_dir(&self.repo)
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
+            .envs(envs.iter().copied())
             .output()
             .expect("silt runs")
     }
@@ -187,6 +192,25 @@ fn records_a_session_with_attributed_edits_and_survives_a_restart() {
     assert!(eventually(|| env.stdout(&["show", &thread]).contains("one more thing while silt was down")));
     let show = env.stdout(&["show", &thread]);
     assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "{show}");
+}
+
+#[test]
+fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
+    let env = Env::new();
+    let ran = env.run_with(&["claude"], &[("SILT_DAEMONLESS_CAPTURE", "1")]);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    assert!(!String::from_utf8_lossy(&ran.stderr).contains("could not record"), "{}", String::from_utf8_lossy(&ran.stderr));
+
+    let thread = env.thread();
+    assert!(
+        eventually(|| env.stdout(&["show", &thread]).contains("src/main.rs +17 -0")),
+        "the tool call's edit is attributed to it:\n{}",
+        env.stdout(&["show", &thread])
+    );
+    let show = env.stdout(&["show", &thread]);
+    assert!(show.contains("> Please add a farewell line to main") && show.contains("Done: farewell added."), "{show}");
+    assert!(!show.contains("outside tool calls"), "{show}");
+    assert!(env.stdout(&["diff", &thread, "--turn", "1"]).contains("+fn farewell() {}"));
 }
 
 #[test]

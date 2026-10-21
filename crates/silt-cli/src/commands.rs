@@ -20,7 +20,9 @@ use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use crate::CliError;
 use crate::render::{self, short};
 
-const HOOK_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a hook waits for the daemon before it captures in its own
+/// process instead (ADR 0018).
+const HOOK_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) fn fail(message: impl Into<String>) -> Exn<CliError> {
     Exn::new(CliError(message.into()))
@@ -525,11 +527,11 @@ pub fn hook(agent: Option<&str>, event: &str) {
         let session = input.get("sessionId").cloned().unwrap_or_default();
         input = serde_json::json!({ "session_id": session, "hook_event_name": event });
     }
-    let request = Request::Hook { event: event.to_owned(), input };
-    let Ok(Response::Ok { data }) = client::send(&paths::socket_path(), &request, Some(HOOK_TIMEOUT)) else {
-        return;
+    let reply = match forwarded(event, &input) {
+        Some(reply) => reply,
+        None => captured_here(event, input),
     };
-    if let Ok(HookReply { additional_context: Some(context) }) = serde_json::from_value(data) {
+    if let HookReply { additional_context: Some(context) } = reply {
         let output = if copilot {
             serde_json::json!({ "additionalContext": context })
         } else {
@@ -539,6 +541,36 @@ pub fn hook(agent: Option<&str>, event: &str) {
         };
         println!("{output}");
     }
+}
+
+/// The running daemon's answer to the hook, unless no daemon runs, it
+/// didn't answer in time, or capture in process was asked for.
+fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
+    if env::var_os("SILT_DAEMONLESS_CAPTURE").is_some_and(|value| value == "1") || !silt_daemon::holds_lock(&paths::data_dir()) {
+        return None;
+    }
+    let request = Request::Hook { event: event.to_owned(), input: input.clone() };
+    match client::send(&paths::socket_path(), &request, Some(HOOK_TIMEOUT)) {
+        Ok(Response::Ok { data }) => Some(serde_json::from_value(data).unwrap_or_default()),
+        // It answered, so it captured what it could; capturing here too
+        // would find the same.
+        Ok(_) => Some(HookReply::default()),
+        Err(_) => None,
+    }
+}
+
+/// Captures the hook in this process. A hook never fails the agent: what it
+/// couldn't record is told on stderr.
+fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
+    let captured = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(silt_daemon::CoreError::from)
+        .and_then(|runtime| runtime.block_on(silt_daemon::capture_here(&paths::data_dir(), event, input)));
+    captured.unwrap_or_else(|error| {
+        eprintln!("silt: could not record the {event} hook: {}", silt_daemon::protocol::error_chain(&error));
+        HookReply::default()
+    })
 }
 
 pub fn pull(thread: Option<String>) -> Result<(), Exn<CliError>> {

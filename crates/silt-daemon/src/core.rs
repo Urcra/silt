@@ -8,7 +8,7 @@ use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
-use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
+use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, SessionRecord, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
 use silt_types::{ActorId, BlobHash, DeviceId, FamilyId, Frontier, GitOid, ThreadId};
 use tokio::sync::{mpsc, oneshot};
@@ -92,6 +92,10 @@ pub enum CoreError {
     Text(#[from] silt_crdt::TextError),
     #[error("could not encode a snapshot of a family")]
     Encode(#[source] postcard::Error),
+    #[error("the hook's input is not what Silt expects")]
+    HookInput(#[source] serde_json::Error),
+    #[error("another process kept the capture lock too long")]
+    LockTimeout,
     #[error("could not {doing}")]
     Agent {
         doing: &'static str,
@@ -215,6 +219,86 @@ impl Core {
         data_dir: &Path,
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<Self, CoreError> {
+        let mut core = Self::open(store, actor, data_dir, events).await?;
+        core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
+        let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
+        for family_id in families {
+            let repo = core
+                .threads
+                .values()
+                .filter(|thread| thread.family == family_id && !thread.repo_root.as_os_str().is_empty())
+                .find_map(|thread| Repo::discover(&thread.repo_root).ok());
+            core.take_loaded(family_id, load::family(&core.store, family_id, repo.as_ref()).await?);
+            core.snapshot_if_due(family_id).await;
+            let state = core.store.sync_state(family_id).await?;
+            core.syncs
+                .insert(family_id, ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
+        }
+        for record in core.store.checkouts().await? {
+            if !record.path.exists() {
+                continue;
+            }
+            let entries = stored_entries(&core.store, record.id).await?;
+            core.start_checkout(record, entries)?;
+        }
+        core.load_sessions().await?;
+        // Queued rather than done here, so the socket is already taking
+        // requests while they run; they still come before any request.
+        for checkout in core.checkouts.values() {
+            let _ = core.events.send(Event::Changed {
+                checkout: checkout.record.id,
+                paths: vec![checkout.record.path.clone()],
+                noticed: Instant::now(),
+                settled: true,
+            });
+        }
+        core.end_turn().await?;
+        Ok(core)
+    }
+
+    /// A core holding only `record`'s session, its checkout and its family:
+    /// what a hook capturing without the daemon needs (ADR 0018). Nothing
+    /// listens to its events, as it has no watchers or timers.
+    pub(crate) async fn for_session(
+        store: Store,
+        actor: ActorId,
+        data_dir: &Path,
+        record: SessionRecord,
+    ) -> Result<Self, CoreError> {
+        let (events, _) = mpsc::unbounded_channel();
+        let mut core = Self::open(store, actor, data_dir, events).await?;
+        let Some(thread) = core.threads.get(&record.thread).cloned() else {
+            return Ok(core);
+        };
+        let checkout = core
+            .store
+            .checkouts()
+            .await?
+            .into_iter()
+            .find(|checkout| checkout.id == record.checkout_id && checkout.path.exists());
+        let repo = checkout
+            .as_ref()
+            .map(|checkout| checkout.path.clone())
+            .into_iter()
+            .chain((!thread.repo_root.as_os_str().is_empty()).then_some(thread.repo_root))
+            .find_map(|path| Repo::discover(&path).ok());
+        core.take_loaded(thread.family, load::family(&core.store, thread.family, repo.as_ref()).await?);
+        if let Some(checkout) = checkout {
+            let entries = stored_entries(&core.store, checkout.id).await?;
+            core.hold_checkout(checkout, entries)?;
+        }
+        core.take_sessions(vec![record]).await?;
+        Ok(core)
+    }
+
+    /// The parts every `Core` starts from: thread records and what is known
+    /// of secrets, but no family, checkout or session yet.
+    async fn open(
+        store: Store,
+        actor: ActorId,
+        data_dir: &Path,
+        events: mpsc::UnboundedSender<Event>,
+    ) -> Result<Self, CoreError> {
         let mut core = Self {
             store,
             actor,
@@ -261,39 +345,6 @@ impl Core {
         core.store.learn_secrets(core.redactor.secrets()).await?;
         core.redactor = core.redactor.clone().with(stored.iter().cloned());
         core.known_secrets = stored.into_iter().chain(core.redactor.secrets().iter().cloned()).collect();
-        core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
-        let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
-        for family_id in families {
-            let repo = core
-                .threads
-                .values()
-                .filter(|thread| thread.family == family_id && !thread.repo_root.as_os_str().is_empty())
-                .find_map(|thread| Repo::discover(&thread.repo_root).ok());
-            core.take_loaded(family_id, load::family(&core.store, family_id, repo.as_ref()).await?);
-            core.snapshot_if_due(family_id).await;
-            let state = core.store.sync_state(family_id).await?;
-            core.syncs
-                .insert(family_id, ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
-        }
-        for record in core.store.checkouts().await? {
-            if !record.path.exists() {
-                continue;
-            }
-            let entries = stored_entries(&core.store, record.id).await?;
-            core.start_checkout(record, entries)?;
-        }
-        core.load_sessions().await?;
-        // Queued rather than done here, so the socket is already taking
-        // requests while they run; they still come before any request.
-        for checkout in core.checkouts.values() {
-            let _ = core.events.send(Event::Changed {
-                checkout: checkout.record.id,
-                paths: vec![checkout.record.path.clone()],
-                noticed: Instant::now(),
-                settled: true,
-            });
-        }
-        core.end_turn().await?;
         Ok(core)
     }
 
@@ -453,19 +504,31 @@ impl Core {
         record: CheckoutRecord,
         entries: BTreeMap<String, DiskEntry>,
     ) -> Result<(), CoreError> {
+        let (id, path) = (record.id, record.path.clone());
+        self.hold_checkout(record, entries)?;
+        let events = self.events.clone();
+        let watcher = watch::watch(&path, move |paths| {
+            let _ = events.send(Event::Changed { checkout: id, paths, noticed: Instant::now(), settled: false });
+        })?;
+        self.checkouts.get_mut(&id).expect("just held")._watcher = Some(watcher);
+        Ok(())
+    }
+
+    /// Takes on a checkout without watching it, as a hook capturing on its
+    /// own does: it compares the disk when the hook runs.
+    pub(crate) fn hold_checkout(
+        &mut self,
+        record: CheckoutRecord,
+        entries: BTreeMap<String, DiskEntry>,
+    ) -> Result<(), CoreError> {
         let family = self
             .threads
             .get(&record.thread)
             .map(|thread| thread.family)
             .ok_or_else(|| CoreError::Invalid("checkout of an unknown thread".into()))?;
         let repo = Repo::discover(&record.path)?;
-        let events = self.events.clone();
-        let id = record.id;
-        let watcher = watch::watch(&record.path, move |paths| {
-            let _ = events.send(Event::Changed { checkout: id, paths, noticed: Instant::now(), settled: false });
-        })?;
         let bridge = Bridge::new(record.actor, record.thread, entries);
-        self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watcher: Some(watcher) });
+        self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watcher: None });
         Ok(())
     }
 

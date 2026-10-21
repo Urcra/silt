@@ -185,7 +185,7 @@ async fn write_response(write: &mut OwnedWriteHalf, response: &Response) -> io::
 }
 
 /// This daemon's actor, kept across restarts so its deltas stay one chain.
-fn load_actor(data_dir: &Path) -> io::Result<ActorId> {
+pub(crate) fn load_actor(data_dir: &Path) -> io::Result<ActorId> {
     let path = data_dir.join("actor");
     if let Ok(text) = fs::read_to_string(&path)
         && let Ok(actor) = text.trim().parse::<ActorId>()

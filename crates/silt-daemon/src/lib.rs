@@ -25,4 +25,6 @@ mod views;
 mod watch;
 mod web;
 
+pub use capture::capture_here;
+pub use core::CoreError;
 pub use server::{RunError, holds_lock, run};
