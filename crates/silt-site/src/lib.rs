@@ -11,6 +11,9 @@ use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd, 
 pub const PAGES: &[&str] =
     &["guide/index.md", "guide/handoff.md", "guide/servers.md", "live-and-agents.md", "self-hosting.md", "reference/cli.md"];
 
+/// The landing page, rendered as the site's `index.html` (ADR 0033).
+pub const LANDING: &str = "landing.md";
+
 /// Where docs that aren't pages of the site, such as the ADRs, are read.
 const REPOSITORY_DOCS: &str = "https://github.com/Urcra/silt/blob/main/docs";
 
@@ -153,13 +156,29 @@ pub fn build(docs: &Path, out: &Path) -> Result<Vec<PathBuf>, SiteError> {
         write(&path, &document(page, rendered, &titles))?;
         written.push(path);
     }
+    let path = docs.join(LANDING);
+    let markdown = fs::read_to_string(&path).map_err(|source| SiteError::Read { path: path.clone(), source })?;
+    let landing = render(LANDING, &markdown);
+    if let Some(target) = landing.links.iter().find(|target| !docs.join(target).is_file()) {
+        return Err(SiteError::BrokenLink { page: LANDING.to_owned(), target: target.clone() });
+    }
     let index = out.join("index.html");
-    write(
-        &index,
-        "<!doctype html>\n<meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0; url=guide/index.html\">\n<a href=\"guide/index.html\">Silt</a>\n",
-    )?;
+    write(&index, &landing_document(&landing))?;
     written.push(index);
     Ok(written)
+}
+
+/// The landing page (ADR 0033), the site's root: the docs' colours, without
+/// their sidebar.
+pub fn landing_document(rendered: &Rendered) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>Silt · {title}</title>\n<style>{STYLE}</style></head>\n\
+         <body class=\"landing\"><header><a class=\"brand\" href=\"index.html\">Silt</a><a href=\"guide/index.html\">Docs</a></header>\n\
+         <main>{body}</main></body></html>\n",
+        title = escape(&rendered.title),
+        body = rendered.body,
+    )
 }
 
 fn write(path: &Path, text: &str) -> Result<(), SiteError> {
@@ -181,7 +200,11 @@ main{flex:1 1 30rem;max-width:46rem;padding:1.5rem 1rem;min-width:0}a{color:var(
 code,pre{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:.9em;background:var(--code);border-radius:4px}\
 code{padding:.1em .3em}pre{padding:.75rem 1rem;overflow-x:auto}pre code{padding:0}\
 h1,h2,h3{line-height:1.25}h2{margin-top:2rem}\
-@media(max-width:40rem){nav{min-height:0;border-right:0;border-bottom:1px solid var(--line);flex-basis:100%}}";
+@media(max-width:40rem){nav{min-height:0;border-right:0;border-bottom:1px solid var(--line);flex-basis:100%}}\
+body.landing{display:block}.landing header{display:flex;gap:1.5rem;align-items:center;max-width:48rem;margin:0 auto;\
+padding:1rem;border-bottom:1px solid var(--line)}.landing header a{text-decoration:none}\
+.landing main{max-width:48rem;margin:0 auto;padding:2.5rem 1rem 4rem}.landing h1{font-size:clamp(2rem,6vw,3rem);margin:0 0 1rem}\
+.landing h1+p{font-size:1.2rem;color:var(--muted)}";
 
 #[cfg(test)]
 mod tests {
@@ -222,5 +245,8 @@ mod tests {
         assert_eq!(written.len(), PAGES.len() + 1);
         let handoff = fs::read_to_string(out.path().join("guide/handoff.html")).expect("read");
         assert!(handoff.contains("<title>Hand off a thread to another machine · Silt</title>"));
+        let landing = fs::read_to_string(out.path().join("index.html")).expect("read");
+        assert!(landing.contains("class=\"landing\"") && landing.contains("href=\"guide/index.html\""), "{landing}");
+        assert!(landing.contains("href=\"guide/handoff.html\""), "the landing page reaches the guide");
     }
 }
