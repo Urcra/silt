@@ -82,11 +82,59 @@ pub struct CausalGraph {
     by_actor: BTreeMap<ActorId, Vec<usize>>,
     frontier: Frontier,
     max_lamport: Option<Lamport>,
+    #[serde(skip)]
+    journal: Option<Journal>,
+}
+
+/// What [`CausalGraph::roll_back`] restores: the graph as it was at
+/// [`CausalGraph::begin`].
+#[derive(Debug, Clone)]
+struct Journal {
+    runs: usize,
+    frontier: Frontier,
+    max_lamport: Option<Lamport>,
+    /// Earlier runs extended since, with their length before.
+    extended: Vec<(usize, u64)>,
 }
 
 impl CausalGraph {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Starts recording additions, so they can be taken back together
+    /// without copying the graph first.
+    pub fn begin(&mut self) {
+        self.journal = Some(Journal {
+            runs: self.runs.len(),
+            frontier: self.frontier.clone(),
+            max_lamport: self.max_lamport,
+            extended: Vec::new(),
+        });
+    }
+
+    /// Keeps what was added since [`CausalGraph::begin`].
+    pub fn keep(&mut self) {
+        self.journal = None;
+    }
+
+    /// Takes back everything added since [`CausalGraph::begin`].
+    pub fn roll_back(&mut self) {
+        let Some(journal) = self.journal.take() else {
+            return;
+        };
+        for run in self.runs.drain(journal.runs..) {
+            let runs = self.by_actor.get_mut(&run.span.actor).expect("every run is indexed by its actor");
+            runs.pop();
+            if runs.is_empty() {
+                self.by_actor.remove(&run.span.actor);
+            }
+        }
+        for (index, len) in journal.extended.into_iter().rev() {
+            self.runs[index].span.len = len;
+        }
+        self.frontier = journal.frontier;
+        self.max_lamport = journal.max_lamport;
     }
 
     pub fn frontier(&self) -> &Frontier {
@@ -352,6 +400,9 @@ impl CausalGraph {
                 .get(&span.actor)
                 .and_then(|runs| runs.last())
                 .expect("actor with a previous delta has a run");
+            if let Some(journal) = self.journal.as_mut().filter(|journal| run_index < journal.runs) {
+                journal.extended.push((run_index, self.runs[run_index].span.len));
+            }
             self.runs[run_index].span.len += span.len;
             return;
         }
@@ -507,6 +558,28 @@ mod tests {
                 assert_eq!(ids_of(&only_b), ids_of(&graph.diff(&vv_a, &vv_b)), "{b:?} minus {a:?}");
             }
         }
+    }
+
+    #[test]
+    fn rolling_back_restores_the_graph_from_before() {
+        let mut graph = diamond();
+        let before = graph.clone();
+        graph.begin();
+        graph.add(span(1, 10, 2), &frontier(&[id(1, 9)])).expect("extends a's run");
+        graph.add(span(1, 12, 1), &frontier(&[id(1, 11)])).expect("extends it again");
+        graph.add(span(5, 13, 1), &frontier(&[id(1, 12)])).expect("a new actor");
+        graph.roll_back();
+        assert_eq!(graph.runs(), before.runs());
+        assert_eq!(graph.frontier(), before.frontier());
+        assert_eq!(graph.next_lamport(), before.next_lamport());
+        assert!(!graph.contains(id(5, 13)) && !graph.contains(id(1, 10)));
+        graph.add(span(5, 10, 1), &frontier(&[id(1, 9)])).expect("the new actor starts afresh");
+
+        graph.begin();
+        graph.add(span(1, 10, 1), &frontier(&[id(1, 9)])).expect("kept");
+        graph.keep();
+        graph.roll_back();
+        assert!(graph.contains(id(1, 10)), "nothing to take back after keeping");
     }
 
     #[test]

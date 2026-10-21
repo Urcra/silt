@@ -52,6 +52,22 @@ fn malformed_deltas_are_refused_quickly() {
 }
 
 #[test]
+fn a_batch_refused_or_not_stored_leaves_the_room_as_it_was() {
+    let mut family = Family::new();
+    let mut room = Room::new(1);
+    let first = title(&mut family, ActorId(1), "a");
+    let second = title(&mut family, ActorId(1), "b");
+    let mut broken = title(&mut family, ActorId(2), "c");
+    broken.span.len = 1 << 62;
+    assert!(room.push(vec![first.clone(), second.clone(), broken]).is_err());
+    let abandoned = room.prepare(vec![first.clone()]).expect("prepares");
+    assert_eq!(abandoned.fresh(), std::slice::from_ref(&first));
+    drop(abandoned);
+    assert!(!room.graph().contains(first.span.first()), "an abandoned batch is taken back");
+    assert_eq!(room.push(vec![first, second]).expect("pushes again").accepted, 2);
+}
+
+#[test]
 fn deltas_overlapping_stored_ones_are_conflicts() {
     let mut family = Family::new();
     let mut room = Room::new(1);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use silt_crdt::{Added, CausalError, CausalGraph};
 use silt_log::Delta;
@@ -19,18 +19,40 @@ pub struct PushOutcome {
     pub seq: u64,
 }
 
-/// A checked batch, ready to store.
-#[derive(Debug, Clone)]
-pub struct Prepared {
-    graph: CausalGraph,
+/// A checked batch, ready to store. Its ids are already in the room's
+/// graph; dropping it without [`Prepared::commit`] takes them out again.
+#[derive(Debug)]
+pub struct Prepared<'room> {
+    room: &'room mut Room,
     fresh: Vec<Delta>,
-    after: u64,
 }
 
-impl Prepared {
+impl Prepared<'_> {
     /// The deltas the room doesn't have yet.
     pub fn fresh(&self) -> &[Delta] {
         &self.fresh
+    }
+
+    /// Stores the batch, numbered from the room's `seq() + 1`.
+    pub fn commit(mut self) -> PushOutcome {
+        let fresh = std::mem::take(&mut self.fresh);
+        let room = &mut *self.room;
+        room.graph.keep();
+        let accepted = fresh.len();
+        for delta in fresh {
+            room.by_first.insert(delta.span.first(), room.deltas.len());
+            room.deltas.push(delta);
+        }
+        PushOutcome {
+            accepted,
+            seq: room.seq(),
+        }
+    }
+}
+
+impl Drop for Prepared<'_> {
+    fn drop(&mut self) {
+        self.room.graph.roll_back();
     }
 }
 
@@ -93,24 +115,27 @@ impl Room {
     /// Stores new deltas, skipping known ones. The batch is checked whole
     /// first, so a rejected batch changes nothing.
     pub fn push(&mut self, batch: Vec<Delta>) -> Result<PushOutcome, PushError> {
-        let prepared = self.prepare(batch)?;
-        Ok(self.commit(prepared))
+        Ok(self.prepare(batch)?.commit())
     }
 
-    /// Checks a batch without storing it: the new deltas, in the order
-    /// [`Room::commit`] will number them, from `seq() + 1`.
-    pub fn prepare(&self, batch: Vec<Delta>) -> Result<Prepared, PushError> {
-        let mut graph = self.graph.clone();
-        let mut fresh = Vec::new();
+    /// Checks a batch: the new deltas, in the order [`Prepared::commit`]
+    /// will number them. A rejected batch changes nothing.
+    pub fn prepare(&mut self, batch: Vec<Delta>) -> Result<Prepared<'_>, PushError> {
+        self.graph.begin();
+        let mut prepared = Prepared {
+            room: self,
+            fresh: Vec::new(),
+        };
+        let mut fresh_ids = HashSet::new();
         for delta in batch {
             let id = delta.span.first();
-            if let Some(index) = self.by_first.get(&id) {
-                if self.deltas[*index] != delta {
+            if let Some(index) = prepared.room.by_first.get(&id) {
+                if prepared.room.deltas[*index] != delta {
                     return Err(PushError::Conflict(id));
                 }
                 continue;
             }
-            if fresh.iter().any(|known: &Delta| known.span.first() == id) {
+            if !fresh_ids.insert(id) {
                 continue;
             }
             // Every replica would refuse a malformed delta, so storing it
@@ -119,7 +144,7 @@ impl Room {
                 id,
                 reason: error.to_string(),
             })?;
-            let added = graph.add(delta.span, &delta.parents).map_err(|error| match error {
+            let added = prepared.room.graph.add(delta.span, &delta.parents).map_err(|error| match error {
                 CausalError::UnknownParent(_) => PushError::MissingParents(id),
                 CausalError::ConflictingSpan { .. } => PushError::Conflict(id),
                 other => PushError::Invalid {
@@ -132,29 +157,9 @@ impl Room {
             if added != Added::New(delta.span) {
                 return Err(PushError::Conflict(id));
             }
-            fresh.push(delta);
+            prepared.fresh.push(delta);
         }
-        Ok(Prepared {
-            graph,
-            fresh,
-            after: self.seq(),
-        })
-    }
-
-    /// Stores a batch [`Room::prepare`] checked. Nothing may have been
-    /// stored in between.
-    pub fn commit(&mut self, prepared: Prepared) -> PushOutcome {
-        assert_eq!(prepared.after, self.seq(), "the room changed since the batch was prepared");
-        let accepted = prepared.fresh.len();
-        self.graph = prepared.graph;
-        for delta in prepared.fresh {
-            self.by_first.insert(delta.span.first(), self.deltas.len());
-            self.deltas.push(delta);
-        }
-        PushOutcome {
-            accepted,
-            seq: self.seq(),
-        }
+        Ok(prepared)
     }
 
     /// The `seq` of the delta whose first id is `id`.
@@ -165,6 +170,11 @@ impl Room {
     /// Deltas after `cursor`, with their `seq`. `last` is the id of the
     /// delta the client saw at `cursor`, which must still be there.
     pub fn pull(&self, cursor: u64, last: Option<DeltaId>, limit: usize) -> Result<Vec<(u64, Delta)>, PullError> {
+        Ok(self.after(cursor, last)?.take(limit).map(|(seq, delta)| (seq, delta.clone())).collect())
+    }
+
+    /// `pull` without copying: the deltas after `cursor`, with their `seq`.
+    pub fn after(&self, cursor: u64, last: Option<DeltaId>) -> Result<impl Iterator<Item = (u64, &Delta)>, PullError> {
         let matches = match (cursor, last) {
             (0, _) => true,
             (_, None) => false,
@@ -173,12 +183,7 @@ impl Room {
         if !matches {
             return Err(PullError::UnknownCursor { cursor });
         }
-        let start = usize::try_from(cursor).unwrap_or(usize::MAX);
-        Ok(self.deltas[start..]
-            .iter()
-            .take(limit)
-            .zip(cursor + 1..)
-            .map(|(delta, seq)| (seq, delta.clone()))
-            .collect())
+        let start = usize::try_from(cursor).map_or(self.deltas.len(), |start| start.min(self.deltas.len()));
+        Ok((cursor + 1..).zip(&self.deltas[start..]))
     }
 }

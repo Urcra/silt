@@ -632,7 +632,7 @@ async fn push(
         .await?;
     }
     tx.commit().await?;
-    let outcome = room.commit(prepared);
+    let outcome = prepared.commit();
     let index_rows = server.observe(family, &stored).await;
     drop(rooms);
     server.write_index(&index_rows).await;
@@ -684,15 +684,15 @@ async fn pull(
             match rooms.get(&family) {
                 Some(room) => {
                     let readable = viewer.readable(family.0, room);
-                    room.pull(query.after, last, usize::MAX)
+                    room.after(query.after, last)
                         .map_err(|error| match error {
                             PullError::UnknownCursor { .. } => ApiError(StatusCode::CONFLICT, ErrorReply::UnknownCursor),
                         })?
-                        .into_iter()
                         .filter(|(seq, _)| {
                             usize::try_from(*seq - 1).is_ok_and(|index| readable.get(index).copied().unwrap_or(false))
                         })
                         .take(PULL_LIMIT)
+                        .map(|(seq, delta)| (seq, delta.clone()))
                         .collect()
                 }
                 None if query.after == 0 => Vec::new(),
