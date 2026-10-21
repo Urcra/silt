@@ -57,11 +57,12 @@ impl Core {
 
     /// A file's content as the checkout at `root` holds it on disk.
     async fn worktree_bytes(&self, root: &Path, path: &str, view: Option<FileView>) -> Result<Vec<u8>, CoreError> {
-        let repo = &self.checkouts.values().find(|checkout| checkout.record.path == root).expect("checked out above").repo;
+        let checkout = self.checkouts.values().find(|checkout| checkout.record.path == root).expect("checked out above");
+        let repo = &checkout.repo;
         Ok(match view {
             Some(FileView::Text(text)) => repo.filters()?.to_worktree(path, text.as_bytes())?,
             Some(FileView::GitText(oid)) => repo.filters()?.to_worktree(path, &repo.blob(oid)?)?,
-            Some(FileView::Blob(hash)) => self.blob(hash).await?,
+            Some(FileView::Blob(hash)) => self.blob(checkout.family, hash).await?,
             None => Vec::new(),
         })
     }

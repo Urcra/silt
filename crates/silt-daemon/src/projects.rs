@@ -17,7 +17,7 @@ impl Core {
     /// clone here, then the clones the server doesn't know.
     pub(crate) fn projects(&self) -> impl Future<Output = Result<Vec<Project>, CoreError>> + Send + 'static {
         let local = self.local_projects();
-        let remote = self.remote.clone();
+        let remote = self.default_remote().cloned();
         async move {
             let Some(remote) = remote else {
                 return Ok(local);
@@ -205,7 +205,9 @@ impl Core {
     }
 
     fn signed_in(&self) -> Result<crate::remote::Remote, CoreError> {
-        self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+        self.default_remote()
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }
 }
 

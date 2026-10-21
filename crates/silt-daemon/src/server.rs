@@ -141,7 +141,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Pulled { family, epoch, generation, outcome, error } => {
                 core.pulled(family, epoch, generation, outcome, error).await
             }
-            Event::Listed(listing, requested) => core.listed(listing, requested).await,
+            Event::Listed { server, listing, requested } => core.listed(&server, listing, requested).await,
             Event::Personal(synced) => core.personal_synced(*synced).await,
             Event::Control(event) => core.control_event(event).await,
         }

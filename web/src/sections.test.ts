@@ -22,6 +22,8 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     review: false,
     mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null, ...mine },
     visibility: null,
+    server: null,
+    local_only: false,
     ...overrides,
   }
 }

@@ -67,7 +67,8 @@ impl Core {
     /// (ADR 0016).
     async fn warn_of_others_work(&self, source: ThreadId, thread: ThreadId) {
         let record = &self.threads[&source];
-        let others = record.owner != self.own_user() || self.collaborators.get(&source).is_some_and(|people| !people.is_empty());
+        let others =
+            record.owner != self.own_user(source) || self.collaborators.get(&source).is_some_and(|people| !people.is_empty());
         if others {
             let owner = if record.owner.is_empty() { "someone else".to_owned() } else { record.owner.clone() };
             self.notify(
@@ -179,7 +180,7 @@ impl Core {
     /// Pulls everything the server has for the family, so a resume never
     /// starts from a partial thread.
     pub(crate) async fn catch_up(&mut self, family: FamilyId) -> Result<(), CoreError> {
-        let Some(remote) = self.remote.clone() else {
+        let Some(remote) = self.remote_of(family).cloned() else {
             return Ok(());
         };
         let mut after = 0;
@@ -197,7 +198,7 @@ impl Core {
     /// Everything the server has for the family, with its sequence numbers,
     /// changing nothing here.
     pub(crate) async fn fetch_family(&self, family: FamilyId) -> Result<Vec<(u64, Delta)>, CoreError> {
-        let Some(remote) = &self.remote else {
+        let Some(remote) = self.remote_of(family) else {
             return Err(CoreError::Invalid("not signed in to a server".into()));
         };
         let mut fetched: Vec<(u64, Delta)> = Vec::new();
@@ -234,7 +235,7 @@ impl Core {
         if repo.has_commit(commit) {
             return Ok(());
         }
-        if let Some(remote) = &self.remote {
+        if let Some(remote) = self.remote_of(family) {
             let (url, headers) = remote.git_mirror(family);
             match repo.fetch_from_mirror(&url, &headers) {
                 Ok(()) if repo.has_commit(commit) => {
@@ -256,7 +257,7 @@ impl Core {
         // In log order: a bundle holds only what came since the one before
         // it, so it needs that one first.
         for (commits, blob) in bundles {
-            let bytes = self.blob(blob).await?;
+            let bytes = self.blob(family, blob).await?;
             if let Err(error) = repo.fetch_bundle(&bytes, &thread.to_string()) {
                 warn!(%error, "could not fetch a bundle");
             }
@@ -294,7 +295,7 @@ impl Core {
     }
 
     async fn take_lease(&mut self, thread: ThreadId) -> Result<(), CoreError> {
-        let Some(remote) = self.remote.clone() else {
+        let Some(remote) = self.remote_for(thread).cloned() else {
             return Ok(());
         };
         let lease =
@@ -403,7 +404,7 @@ impl Core {
             .map(|candidate| candidate.record.id)
             .expect("attached above");
         if target.id() == source.id() {
-            let recorded = self.recorded_session(&history, &session, as_fork, target).await?;
+            let recorded = self.recorded_session(family_id, &history, &session, as_fork, target).await?;
             let recorded = recorded.checked().map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             let recorded = recorded.into_inner();
@@ -433,7 +434,7 @@ impl Core {
         let entries = conversation(&history);
         let new_id = uuid::Uuid::now_v7().to_string();
         if let Some(lines) = target.translate(&entries, &agent_cwd, &new_id) {
-            let lines = self.relocate_side_files(&history, &session, source, &new_id, lines).await?;
+            let lines = self.relocate_side_files(family_id, &history, &session, source, &new_id, lines).await?;
             let recorded = RecordedSession { id: new_id.clone(), main: lines.clone(), ..Default::default() }
                 .checked()
                 .map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
@@ -493,13 +494,14 @@ impl Core {
     /// and points the translated lines there.
     async fn relocate_side_files(
         &self,
+        family: FamilyId,
         history: &[&Delta],
         session: &SessionRef,
         source: &'static dyn Agent,
         new_id: &str,
         lines: Vec<String>,
     ) -> Result<Vec<String>, CoreError> {
-        let recorded = self.recorded_session(history, session, false, source).await?;
+        let recorded = self.recorded_session(family, history, session, false, source).await?;
         if recorded.attachments.is_empty() {
             return Ok(lines);
         }
@@ -524,6 +526,7 @@ impl Core {
     /// forks, under the id to restore it as.
     async fn recorded_session(
         &self,
+        family: FamilyId,
         history: &[&Delta],
         session: &SessionRef,
         as_fork: bool,
@@ -548,7 +551,7 @@ impl Core {
                         recorded.former_dirs.push(dir.clone());
                     }
                     Op::Conv(ConvOp::SessionTranslated { session: from, lines }) if from == part => {
-                        let text = String::from_utf8_lossy(&self.blob(*lines).await?).into_owned();
+                        let text = String::from_utf8_lossy(&self.blob(family, *lines).await?).into_owned();
                         recorded.main.extend(text.lines().map(str::to_owned));
                     }
                     Op::Conv(ConvOp::Native { session: from, file, line }) if from == part => match file {
@@ -568,7 +571,7 @@ impl Core {
         }
         recorded.subagents = subagents.into_iter().collect();
         for (name, blob) in attachments {
-            recorded.attachments.push((name, self.blob(blob).await?));
+            recorded.attachments.push((name, self.blob(family, blob).await?));
         }
         Ok(recorded)
     }

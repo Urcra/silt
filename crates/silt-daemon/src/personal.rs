@@ -144,8 +144,10 @@ impl Core {
 
     /// Sends what changed here and fetches what changed elsewhere, when due
     /// and not already under way.
+    /// Only the default server keeps this person's state so far; what's of
+    /// another server's threads stays here rather than reach it.
     pub(crate) fn drive_thread_states(&mut self) {
-        let Some(remote) = self.remote.clone() else {
+        let Some(remote) = self.default_remote().cloned() else {
             return;
         };
         let due = self.personal.last_sync.is_none_or(|last| last.elapsed() >= STATES_INTERVAL);
@@ -154,12 +156,21 @@ impl Core {
         }
         self.personal.syncing = true;
         self.personal.last_sync = Some(Instant::now());
-        let sending: Vec<ThreadState> =
-            self.personal.pending.iter().filter_map(|thread| self.personal.states.get(thread).cloned()).collect();
+        let server = remote.config.url.clone();
+        let sending: Vec<ThreadState> = self
+            .personal
+            .pending
+            .iter()
+            .filter(|thread| self.homed_at(**thread, &server))
+            .filter_map(|thread| self.personal.states.get(thread).cloned())
+            .collect();
         let marking: Vec<(String, SeenMark)> = self
             .personal
             .seen_pending
             .iter()
+            .filter(|key| {
+                self.find_mr(&key.0).is_ok_and(|(family, _)| self.remote_of(family).is_some_and(|at| at.config.url == server))
+            })
             .filter_map(|key| self.personal.seen.get(key).map(|mark| (key.0.clone(), mark.clone())))
             .collect();
         let events = self.events.clone();

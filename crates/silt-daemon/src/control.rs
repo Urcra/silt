@@ -29,20 +29,27 @@ const RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct Control {
+    /// The channel to each server, by URL (ADR 0032).
+    channels: HashMap<String, Channel>,
+    /// Agents running on the person's other online devices, by thread, as
+    /// the last listing of the server named with each said.
+    elsewhere: HashMap<ThreadId, (String, RunningElsewhere)>,
+}
+
+#[derive(Default)]
+struct Channel {
     polling: bool,
     poll_after: Option<Instant>,
     reporting: bool,
     report_after: Option<Instant>,
     /// What the server last took, and when.
     reported: Option<(Instant, Vec<AgentReport>)>,
-    /// Agents running on the person's other online devices, by thread, as
-    /// the last listing said.
-    elsewhere: HashMap<ThreadId, RunningElsewhere>,
 }
 
+/// What a server answered on its channel, by its URL.
 pub(crate) enum ControlEvent {
-    Polled(Result<Vec<ControlCommand>, String>),
-    Reported(Result<Vec<AgentReport>, String>),
+    Polled(String, Result<Vec<ControlCommand>, String>),
+    Reported(String, Result<Vec<AgentReport>, String>),
 }
 
 /// What this machine's web UI asks of an agent running on another of the
@@ -57,28 +64,34 @@ fn waited(after: Option<Instant>) -> bool {
 }
 
 impl Core {
-    /// Keeps a poll open, and reports the agents here when due.
+    /// Keeps a poll open to each server, and reports the agents here when due.
     pub(crate) async fn drive_control(&mut self) {
-        let Some(remote) = self.remote.clone() else {
-            return;
-        };
-        if !self.control.polling && waited(self.control.poll_after) {
-            self.control.polling = true;
-            let (events, remote) = (self.events.clone(), remote.clone());
+        for remote in self.remotes.clone() {
+            self.drive_channel(remote).await;
+        }
+    }
+
+    async fn drive_channel(&mut self, remote: crate::remote::Remote) {
+        let server = remote.config.url.clone();
+        let channel = self.control.channels.entry(server.clone()).or_default();
+        if !channel.polling && waited(channel.poll_after) {
+            channel.polling = true;
+            let (events, remote, server) = (self.events.clone(), remote.clone(), server.clone());
             tokio::spawn(async move {
                 let polled = remote.control(POLL_WAIT).await.map(|reply| reply.commands).map_err(|error| error.to_string());
-                let _ = events.send(Event::Control(ControlEvent::Polled(polled)));
+                let _ = events.send(Event::Control(ControlEvent::Polled(server, polled)));
             });
         }
-        if self.control.reporting || !waited(self.control.report_after) {
+        if channel.reporting || !waited(channel.report_after) {
             return;
         }
-        let agents = self.agent_reports().await;
-        let due = self.control.reported.as_ref().is_none_or(|(at, sent)| *sent != agents || at.elapsed() >= HEARTBEAT);
+        let agents = self.agent_reports(&server).await;
+        let channel = self.control.channels.entry(server.clone()).or_default();
+        let due = channel.reported.as_ref().is_none_or(|(at, sent)| *sent != agents || at.elapsed() >= HEARTBEAT);
         if !due {
             return;
         }
-        self.control.reporting = true;
+        channel.reporting = true;
         let events = self.events.clone();
         let startable = silt_acp::registry::all(&self.data_dir)
             .into_iter()
@@ -87,12 +100,14 @@ impl Core {
         tokio::spawn(async move {
             let report = AgentsReport { agents, startable };
             let reported = remote.report_agents(&report).await.map(|()| report.agents).map_err(|error| error.to_string());
-            let _ = events.send(Event::Control(ControlEvent::Reported(reported)));
+            let _ = events.send(Event::Control(ControlEvent::Reported(server, reported)));
         });
     }
 
-    async fn agent_reports(&self) -> Vec<AgentReport> {
-        let mut threads: Vec<_> = self.acp.keys().copied().collect();
+    /// The agents here in threads that sync with `server`, which hears of
+    /// no others.
+    async fn agent_reports(&self, server: &str) -> Vec<AgentReport> {
+        let mut threads: Vec<_> = self.acp.keys().copied().filter(|thread| self.homed_at(*thread, server)).collect();
         threads.sort();
         let mut agents = Vec::new();
         for thread in threads {
@@ -127,38 +142,41 @@ impl Core {
 
     pub(crate) async fn control_event(&mut self, event: ControlEvent) {
         match event {
-            ControlEvent::Polled(Ok(commands)) => {
-                self.control.polling = false;
+            ControlEvent::Polled(server, Ok(commands)) => {
+                self.control.channels.entry(server.clone()).or_default().polling = false;
                 for command in commands {
-                    self.run_command(command).await;
+                    self.run_command(&server, command).await;
                 }
                 self.drive_control().await;
             }
-            ControlEvent::Polled(Err(error)) => {
-                warn!(%error, "could not poll the server for commands");
-                self.control.polling = false;
-                self.control.poll_after = Some(Instant::now() + RETRY);
+            ControlEvent::Polled(server, Err(error)) => {
+                warn!(%error, server, "could not poll the server for commands");
+                let channel = self.control.channels.entry(server).or_default();
+                channel.polling = false;
+                channel.poll_after = Some(Instant::now() + RETRY);
             }
-            ControlEvent::Reported(Ok(agents)) => {
-                self.control.reporting = false;
-                self.control.reported = Some((Instant::now(), agents));
+            ControlEvent::Reported(server, Ok(agents)) => {
+                let channel = self.control.channels.entry(server).or_default();
+                channel.reporting = false;
+                channel.reported = Some((Instant::now(), agents));
             }
-            ControlEvent::Reported(Err(error)) => {
-                warn!(%error, "could not report this device's agents");
-                self.control.reporting = false;
-                self.control.report_after = Some(Instant::now() + RETRY);
+            ControlEvent::Reported(server, Err(error)) => {
+                warn!(%error, server, "could not report this device's agents");
+                let channel = self.control.channels.entry(server).or_default();
+                channel.reporting = false;
+                channel.report_after = Some(Instant::now() + RETRY);
             }
         }
     }
 
     /// Runs a command as the same request from this machine's web UI would
     /// run, and answers it once that request is answered.
-    async fn run_command(&mut self, command: ControlCommand) {
-        let Some(remote) = self.remote.clone() else {
+    async fn run_command(&mut self, server: &str, command: ControlCommand) {
+        let Some(remote) = self.remotes.iter().find(|remote| remote.config.url == server).cloned() else {
             return;
         };
         let id = command.id;
-        let request = self.checked(command);
+        let request = self.checked(server, command);
         let (reply, response) = oneshot::channel();
         match request {
             Ok(request) => self.request(request, reply).await,
@@ -178,17 +196,23 @@ impl Core {
         });
     }
 
-    /// The request a command makes here, once its sender may make it
-    /// (ADR 0026): only this machine's own person runs things on it, from
-    /// a device allowed to.
-    fn checked(&self, command: ControlCommand) -> Result<Request, String> {
-        let me = self.own_user();
+    /// The request a command from `server` makes here, once its sender may
+    /// make it (ADR 0026): only this machine's own person there runs things
+    /// on it, from a device allowed to, and only in threads that sync there
+    /// (ADR 0032).
+    fn checked(&self, server: &str, command: ControlCommand) -> Result<Request, String> {
+        let me = self.remotes.iter().find(|remote| remote.config.url == server).map(|remote| remote.config.user.clone());
+        let me = me.unwrap_or_default();
         if me.is_empty() {
             return Err("this machine doesn't know whose it is; sign it in again".into());
         }
         if command.sender != me {
             warn!(sender = command.sender, "refusing a command from someone else");
             return Err(format!("only {me} runs things on this machine"));
+        }
+        if self.threads.contains_key(&command.thread) && !self.homed_at(command.thread, server) {
+            warn!(thread = %command.thread, server, "refusing a command for a thread of another server");
+            return Err("that thread doesn't sync with this server".into());
         }
         command.capabilities.allow(&command.command).map_err(|needs| format!("that device may not {needs}"))?;
         info!(id = command.id, thread = %command.thread, from = ?command.from, "running a command from elsewhere");
@@ -222,9 +246,15 @@ impl Core {
 impl Core {
     /// Takes in what the listing says runs on the person's other devices,
     /// and tells browsers of each thread whose agent's place changed.
-    pub(crate) fn take_running_elsewhere(&mut self, running: Vec<RunningElsewhere>) {
-        let now: HashMap<ThreadId, RunningElsewhere> =
-            running.into_iter().map(|running| (running.agent.thread, running)).collect();
+    pub(crate) fn take_running_elsewhere(&mut self, server: &str, running: Vec<RunningElsewhere>) {
+        let mut now: HashMap<ThreadId, (String, RunningElsewhere)> = self
+            .control
+            .elsewhere
+            .iter()
+            .filter(|(_, (from, _))| from != server)
+            .map(|(thread, running)| (*thread, running.clone()))
+            .collect();
+        now.extend(running.into_iter().map(|running| (running.agent.thread, (server.to_owned(), running))));
         let changed: BTreeSet<ThreadId> = now
             .keys()
             .chain(self.control.elsewhere.keys())
@@ -247,7 +277,7 @@ impl Core {
     /// The agent another of the person's devices runs in the thread, while
     /// none runs here.
     fn elsewhere_of(&self, thread: ThreadId) -> Option<&RunningElsewhere> {
-        if self.running_here(thread) { None } else { self.control.elsewhere.get(&thread) }
+        if self.running_here(thread) { None } else { self.control.elsewhere.get(&thread).map(|(_, running)| running) }
     }
 
     /// How the thread's agent stands for this machine's web UI: the one
@@ -319,7 +349,7 @@ impl Core {
         thread: ThreadId,
         command: RemoteCommand,
     ) -> Result<impl Future<Output = Result<serde_json::Value, CoreError>> + Send + 'static, CoreError> {
-        let remote = self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server".into()))?;
+        let remote = self.server_for(thread)?;
         Ok(async move {
             remote.relay(thread, &RelayRequest { command, when_back: false }).await.map_err(|error| match error {
                 RemoteError::Refused(ErrorReply::Invalid { message } | ErrorReply::Forbidden { message }) => {
@@ -352,34 +382,83 @@ mod tests {
         let (events, _inbox) = mpsc::unbounded_channel();
         let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
         let prompt = || RemoteCommand::Prompt { text: "hi".into(), plan: false };
-        assert!(core.checked(command("alice", Capabilities::ALL, prompt())).is_err(), "not signed in");
+        let work = "http://127.0.0.1:9";
+        assert!(core.checked(work, command("alice", Capabilities::ALL, prompt())).is_err(), "not signed in");
 
-        core.remote = Some(Remote::new(RemoteConfig {
-            url: "http://127.0.0.1:9".into(),
-            token: String::new(),
-            device: DeviceId(2),
-            name: "workstation".into(),
-            user: "alice".into(),
-        }));
+        let sign_in = |url: &str, user: &str| {
+            Remote::new(RemoteConfig {
+                url: url.into(),
+                token: String::new(),
+                device: DeviceId(2),
+                name: "workstation".into(),
+                user: user.into(),
+            })
+        };
+        core.remotes = vec![sign_in(work, "alice"), sign_in("http://127.0.0.1:10", "ada")];
         assert_eq!(
-            core.checked(command("bob", Capabilities::ALL, prompt())).err().as_deref(),
+            core.checked(work, command("bob", Capabilities::ALL, prompt())).err().as_deref(),
             Some("only alice runs things on this machine")
+        );
+        assert_eq!(
+            core.checked("http://127.0.0.1:10", command("alice", Capabilities::ALL, prompt())).err().as_deref(),
+            Some("only ada runs things on this machine"),
+            "each server knows its own person"
         );
         let answering = Capabilities { answer_permissions: true, review: true, ..Capabilities::default() };
         assert_eq!(
-            core.checked(command("alice", answering, prompt())).err().as_deref(),
+            core.checked(work, command("alice", answering, prompt())).err().as_deref(),
             Some("that device may not send prompts")
         );
         let answer = RemoteCommand::Answer { id: 3, option: Some("allow".into()) };
         assert!(matches!(
-            core.checked(command("alice", answering, answer)),
+            core.checked(work, command("alice", answering, answer)),
             Ok(Request::AcpAnswer { id: 3, option: Some(_), .. })
         ));
         assert!(matches!(
-            core.checked(command("alice", Capabilities::ALL, prompt())),
+            core.checked(work, command("alice", Capabilities::ALL, prompt())),
             Ok(Request::AcpPrompt { text, plan: false, .. }) if text == "hi"
         ));
         let unknown = RemoteCommand::Preset { preset: "anything goes".into() };
-        assert_eq!(core.checked(command("alice", Capabilities::ALL, unknown)).err().as_deref(), Some("unknown preset"));
+        assert_eq!(core.checked(work, command("alice", Capabilities::ALL, unknown)).err().as_deref(), Some("unknown preset"));
+    }
+
+    #[tokio::test]
+    async fn a_server_runs_nothing_in_a_thread_of_another() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let store = Store::open(data.path()).await.expect("opens");
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        let sign_in = |url: &str| {
+            Remote::new(RemoteConfig {
+                url: url.into(),
+                token: String::new(),
+                device: DeviceId(2),
+                name: "workstation".into(),
+                user: "alice".into(),
+            })
+        };
+        let (work, oss) = ("http://127.0.0.1:9", "http://127.0.0.1:10");
+        core.remotes = vec![sign_in(work), sign_in(oss)];
+        let family = silt_types::FamilyId(3);
+        core.threads.insert(
+            ThreadId(7),
+            silt_store::ThreadRecord {
+                id: ThreadId(7),
+                family,
+                repo_root: Default::default(),
+                repo: "example.com/app".into(),
+                created_ms: 0,
+                owner: "alice".into(),
+            },
+        );
+        core.set_home(family, crate::homes::Home::Server(oss.into())).await.expect("saves");
+        let prompt = RemoteCommand::Prompt { text: "hi".into(), plan: false };
+        assert_eq!(
+            core.checked(work, command("alice", Capabilities::ALL, prompt.clone())).err().as_deref(),
+            Some("that thread doesn't sync with this server")
+        );
+        assert!(core.checked(oss, command("alice", Capabilities::ALL, prompt.clone())).is_ok());
+        core.set_home(family, crate::homes::Home::Local).await.expect("saves");
+        assert!(core.checked(oss, command("alice", Capabilities::ALL, prompt)).is_err(), "a local thread takes no commands");
     }
 }

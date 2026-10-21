@@ -71,7 +71,7 @@ impl Core {
             }
             CommentOn::Lines { path, start, end } => self.code_target(family_id, thread, &path, start, end)?,
         };
-        let by = match self.own_user() {
+        let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
             user => user,
         };
@@ -136,7 +136,7 @@ impl Core {
         let family_id = self.threads[&thread].family;
         self.ensure_projected(family_id, cwd).await?;
         let parent = self.comment_id(family_id, thread, comment)?;
-        let by = match self.own_user() {
+        let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
             user => user,
         };

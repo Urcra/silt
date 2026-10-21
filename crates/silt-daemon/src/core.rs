@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
+use crate::homes::Home;
 use crate::lifecycle::Lifecycle;
 use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
@@ -50,7 +51,12 @@ pub enum Event {
         error: Option<String>,
     },
     /// A listing, and when it was asked for.
-    Listed(Result<Listing, String>, Instant),
+    /// A server's listing, asked for at `requested`.
+    Listed {
+        server: String,
+        listing: Result<Listing, String>,
+        requested: Instant,
+    },
     /// What the server took of this person's thread states and seen marks,
     /// and all it holds of them (ADR 0024).
     Personal(Box<crate::personal::Synced>),
@@ -179,7 +185,12 @@ pub struct Core {
     pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
     pub(crate) data_dir: PathBuf,
-    pub(crate) remote: Option<Remote>,
+    /// The servers this machine is signed in to, the default first (ADR 0032).
+    pub(crate) remotes: Vec<Remote>,
+    /// Where families given a home sync; see [`Core::remote_of`].
+    pub(crate) homes: HashMap<FamilyId, Home>,
+    /// Where each project's new families go, by repository.
+    pub(crate) project_homes: HashMap<String, Home>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests
     /// made before aren't taken as answers to new ones.
@@ -188,8 +199,10 @@ pub struct Core {
     /// Secrets already remembered in the store, which keeps redacting them
     /// after they leave the environment (ADR 0019).
     pub(crate) known_secrets: HashSet<String>,
-    pub(crate) last_listing: Option<Instant>,
-    pub(crate) sync_error: Option<String>,
+    /// When each server's listing was last asked for, by URL.
+    pub(crate) last_listings: HashMap<String, Instant>,
+    /// Each server's last sync error, by URL.
+    pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
     pub(crate) heads: HashMap<CheckoutId, GitOid>,
     /// How much of each family's log its stored snapshot covers.
@@ -261,6 +274,10 @@ impl Core {
         // catching up afterwards takes in what they stored meanwhile.
         core.positions = core.store.positions().await?;
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
+        core.homes =
+            core.store.family_homes().await?.into_iter().map(|(family, home)| (family, Home::from_stored(home))).collect();
+        core.project_homes =
+            core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -368,13 +385,15 @@ impl Core {
             acp: HashMap::new(),
             events,
             data_dir: data_dir.to_owned(),
-            remote: remote::load_config(data_dir).map(Remote::new),
+            remotes: remote::load_sign_ins(data_dir).into_iter().map(Remote::new).collect(),
+            homes: HashMap::new(),
+            project_homes: HashMap::new(),
             syncs: HashMap::new(),
             sync_epochs: HashMap::new(),
             redactor: redactor(data_dir),
             known_secrets: HashSet::new(),
-            last_listing: None,
-            sync_error: None,
+            last_listings: HashMap::new(),
+            sync_errors: HashMap::new(),
             heads: HashMap::new(),
             snapshotted: HashMap::new(),
             positions: HashMap::new(),
@@ -442,7 +461,7 @@ impl Core {
             }
             Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {
-                self.remote = remote::load_config(&self.data_dir).map(Remote::new);
+                self.remotes = remote::load_sign_ins(&self.data_dir).into_iter().map(Remote::new).collect();
                 let fresh = redactor(&self.data_dir);
                 let secrets = fresh.secrets().to_vec();
                 self.redactor = self.redactor.clone().with(secrets.iter().cloned());
@@ -460,18 +479,20 @@ impl Core {
                 Response::ok("reloaded")
             }
             Request::Status => Response::ok(crate::protocol::DaemonStatus {
-                server: self.remote.as_ref().map(|remote| remote.config.url.clone()),
-                device: self.remote.as_ref().map(|remote| remote.config.device.to_string()),
-                servers: remote::load_sign_ins(&self.data_dir)
-                    .into_iter()
-                    .map(|kept| silt_proto::view::SignIn {
-                        url: kept.url,
-                        user: kept.user,
-                        device: kept.device.to_string(),
-                        name: kept.name,
+                server: self.default_remote().map(|remote| remote.config.url.clone()),
+                device: self.default_remote().map(|remote| remote.config.device.to_string()),
+                servers: self
+                    .remotes
+                    .iter()
+                    .map(|remote| silt_proto::view::SignIn {
+                        url: remote.config.url.clone(),
+                        user: remote.config.user.clone(),
+                        device: remote.config.device.to_string(),
+                        name: remote.config.name.clone(),
+                        sync_error: self.sync_errors.get(&remote.config.url).cloned(),
                     })
                     .collect(),
-                sync_error: self.sync_error.clone(),
+                sync_error: self.default_remote().and_then(|remote| self.sync_errors.get(&remote.config.url).cloned()),
                 threads: self.threads.len(),
                 diverged: self
                     .threads
@@ -1058,7 +1079,7 @@ impl Core {
                 // must be checked after any wait, right before writing.
                 let bytes = match content {
                     DiskContent::Text(text) => self.checkout(checkout_id)?.repo.filters()?.to_worktree(&path, text.as_bytes())?,
-                    DiskContent::Blob(hash) => self.blob(hash).await?,
+                    DiskContent::Blob(hash) => self.blob(self.checkout(checkout_id)?.family, hash).await?,
                     DiskContent::GitBlob(oid) => {
                         let repo = &self.checkout(checkout_id)?.repo;
                         repo.filters()?.to_worktree(&path, &repo.blob(oid)?)?
@@ -1412,7 +1433,8 @@ impl Core {
         deltas: &[Delta],
         before: &HashMap<ThreadId, Frontier>,
     ) -> Result<(), CoreError> {
-        let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
+        // The deltas are of one family, so of one server.
+        let Some(device) = deltas.first().and_then(|delta| self.device_for(delta.thread)) else {
             return Ok(());
         };
         let holder = |thread: ThreadId| {
@@ -1455,7 +1477,7 @@ impl Core {
     /// Pushes a commit origin lacks to the server's git mirror, in the
     /// background; the bundle recorded next to it covers a failure.
     fn push_to_mirror(&self, family: FamilyId, thread: ThreadId, repo: &Repo, commit: GitOid) {
-        let Some(remote) = &self.remote else {
+        let Some(remote) = self.remote_of(family) else {
             return;
         };
         let (url, headers) = remote.git_mirror(family);
@@ -1480,8 +1502,11 @@ impl Core {
         Ok(if once { web.one_time_url() } else { web.url() })
     }
 
+    /// The server what belongs to no thread, such as the inbox, is asked of.
     fn connected(&self) -> Result<Remote, CoreError> {
-        self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+        self.default_remote()
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }
 
     fn inbox(
@@ -1529,7 +1554,7 @@ impl Core {
         leaving: bool,
     ) -> Result<impl Future<Output = Result<silt_proto::PresenceReply, CoreError>> + use<>, CoreError> {
         let thread = self.find_thread(selector)?;
-        let remote = self.remote.clone();
+        let remote = self.remote_for(thread).cloned();
         let update = silt_proto::PresenceUpdate {
             thread,
             file,
@@ -1579,7 +1604,7 @@ impl Core {
 
     /// Who else is drafting a prompt for the thread, and what.
     pub(crate) async fn teammates_draft_list(&self, thread: ThreadId) -> Vec<(String, String)> {
-        let Some(remote) = self.remote.as_ref() else {
+        let Some(remote) = self.remote_for(thread) else {
             return Vec::new();
         };
         let Ok(reply) = remote.present(thread).await else {
@@ -1628,7 +1653,7 @@ impl Core {
     /// Whether this machine's user may write into `thread`: its owner or a
     /// collaborator, or anyone when there is no server.
     pub(crate) fn may_write(&self, thread: ThreadId) -> bool {
-        let user = self.own_user();
+        let user = self.own_user(thread);
         let Some(record) = self.threads.get(&thread) else {
             return false;
         };
@@ -1640,8 +1665,7 @@ impl Core {
 
     async fn share(&mut self, selector: &str, user: &str, remove: bool) -> Result<String, CoreError> {
         let thread = self.find_thread(selector)?;
-        let remote =
-            self.remote.as_ref().ok_or_else(|| CoreError::Invalid("sharing needs a server; use `silt auth login`".into()))?;
+        let remote = self.server_for(thread)?;
         remote.share(thread, user, remove).await.map_err(|source| CoreError::Server { doing: "share the thread", source })?;
         let names = self.collaborators.entry(thread).or_default();
         names.retain(|name| name != user);
@@ -1671,11 +1695,6 @@ impl Core {
         self.actor.derive(thread.0)
     }
 
-    /// This device's user on the server; empty without one.
-    pub(crate) fn own_user(&self) -> String {
-        self.remote.as_ref().map(|remote| remote.config.user.clone()).unwrap_or_default()
-    }
-
     /// Starts a new thread in `from`'s family at `from`'s current head.
     pub(crate) async fn fork_thread(&mut self, from: ThreadId) -> Result<ThreadId, CoreError> {
         self.fork_thread_at(from, None, None).await
@@ -1693,8 +1712,8 @@ impl Core {
     ) -> Result<ThreadId, CoreError> {
         let source = self.threads[&from].clone();
         let fork = ThreadId(uuid::Uuid::now_v7().as_u128());
-        let record = ThreadRecord { id: fork, created_ms: now_ms(), owner: self.own_user(), ..source.clone() };
-        match (&visibility, &self.remote) {
+        let record = ThreadRecord { id: fork, created_ms: now_ms(), owner: self.own_user(from), ..source.clone() };
+        match (&visibility, self.remote_for(from)) {
             (Some(_), Some(remote)) => remote
                 .register_thread(&crate::sync::thread_info(&record), visibility, crate::sync::origin_url(&record))
                 .await

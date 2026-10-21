@@ -204,7 +204,7 @@ export type SignIn = { url: string, user: string, device: string,
 /**
  * This device's name there.
  */
-name: string, };
+name: string, sync_error: string | null, };
 
 export type DeviceAgent = { thread: string, title: string | null, agent: string, state: AgentState, };
 
@@ -533,7 +533,15 @@ review: boolean, mine: Mine,
 /**
  * Its own visibility; none when it follows its project's or org's.
  */
-visibility: Visibility | null, };
+visibility: Visibility | null, 
+/**
+ * The server it syncs with (ADR 0032); none without one.
+ */
+server: string | null, 
+/**
+ * It stays on this machine only, by its project's choice.
+ */
+local_only: boolean, };
 
 export type TurnInfo = { 
 /**

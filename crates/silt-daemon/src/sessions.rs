@@ -279,13 +279,17 @@ impl Core {
         };
         let thread = ThreadId(uuid::Uuid::now_v7().as_u128());
         let family_id = FamilyId(uuid::Uuid::now_v7().as_u128());
+        let project = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
+        if let Some(home) = self.new_home(&project) {
+            self.set_home(family_id, home).await?;
+        }
         let record = ThreadRecord {
             id: thread,
             family: family_id,
             repo_root: repo.root().to_owned(),
-            repo: repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
+            repo: project,
             created_ms: now_ms(),
-            owner: self.own_user(),
+            owner: self.own_user_in(family_id),
         };
         self.store.create_thread(&record).await?;
         self.register_thread(&record);

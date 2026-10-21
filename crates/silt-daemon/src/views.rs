@@ -20,7 +20,6 @@ impl Core {
     }
 
     pub(crate) fn summaries(&self, include: impl Fn(ThreadId) -> bool) -> Vec<ThreadSummary> {
-        let device = self.remote.as_ref().map(|remote| remote.config.device);
         let records: Vec<&ThreadRecord> = self.thread_records().values().filter(|record| include(record.id)).collect();
         let families: BTreeSet<FamilyId> = records.iter().map(|record| record.family).collect();
         let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
@@ -30,7 +29,6 @@ impl Core {
             }
         }
         let checked_out: HashSet<ThreadId> = self.checkouts.values().map(|checkout| checkout.record.thread).collect();
-        let me = self.own_user();
         let mrs = self.mr_list(None).unwrap_or_default();
         let merged: HashSet<&str> = mrs.iter().filter(|mr| mr.status == "approved").map(|mr| mr.fork.as_str()).collect();
         let reviewing: HashSet<&str> = mrs
@@ -40,7 +38,7 @@ impl Core {
                 self.find_thread(&mr.target)
                     .ok()
                     .and_then(|target| self.threads.get(&target))
-                    .is_some_and(|target| target.owner.is_empty() || target.owner == me)
+                    .is_some_and(|target| target.owner.is_empty() || target.owner == self.own_user(target.id))
             })
             .map(|mr| mr.target.as_str())
             .collect();
@@ -58,7 +56,7 @@ impl Core {
                 let diverged = self.syncs.get(&record.family).is_some_and(|sync| sync.diverged().is_some());
                 let location = if diverged {
                     "diverged"
-                } else if lease.is_some_and(|holder| Some(holder) != device) {
+                } else if lease.is_some_and(|holder| Some(holder) != self.device_for(record.id)) {
                     "moved"
                 } else if checked_out {
                     "here"
@@ -97,6 +95,8 @@ impl Core {
                     review: reviewing.contains(record.id.to_string().as_str()),
                     mine: self.personal.mine(record.id),
                     visibility: self.visibility.get(&record.id).cloned(),
+                    server: self.remote_of(record.family).map(|remote| remote.config.url.clone()),
+                    local_only: self.homes.get(&record.family) == Some(&crate::homes::Home::Local),
                 }
             })
             .collect();
@@ -352,7 +352,7 @@ impl Core {
     }
 
     pub(crate) async fn search(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
-        if let Some(remote) = &self.remote {
+        if let Some(remote) = self.default_remote() {
             let request = silt_proto::SearchQuery {
                 q: query.to_owned(),
                 repo: filters.repo.clone(),

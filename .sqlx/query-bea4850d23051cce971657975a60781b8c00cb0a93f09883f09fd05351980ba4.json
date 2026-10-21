@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, home FROM family_homes",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_homes",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "home",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "family_homes",
+            "name": "home"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "bea4850d23051cce971657975a60781b8c00cb0a93f09883f09fd05351980ba4"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo, home FROM project_homes",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_homes",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "home",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_homes",
+            "name": "home"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "496f2e933943c3380e1b5016d1b3a1145f62a3e894ae8086322614d3d27288da"
+}

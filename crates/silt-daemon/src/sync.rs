@@ -11,6 +11,7 @@ use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event, RepoBases, touched_inode};
+use crate::homes::Home;
 use crate::remote::{Remote, RemoteError};
 
 const LISTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -28,7 +29,7 @@ impl Core {
         }
     }
 
-    fn family_ids(&self) -> Vec<FamilyId> {
+    pub(crate) fn family_ids(&self) -> Vec<FamilyId> {
         let mut ids: Vec<FamilyId> = self.families.keys().chain(self.raw.keys()).copied().collect();
         ids.sort();
         ids.dedup();
@@ -37,21 +38,26 @@ impl Core {
 
     /// Starts any push, pull or listing that is due.
     pub(crate) fn drive_sync(&mut self) {
-        let Some(remote) = self.remote.clone() else {
+        if self.remotes.is_empty() {
             return;
-        };
+        }
         self.drive_thread_states();
-        if self.last_listing.is_none_or(|last| last.elapsed() >= LISTING_INTERVAL) {
-            let requested = Instant::now();
-            self.last_listing = Some(requested);
-            let events = self.events.clone();
-            let remote = remote.clone();
-            tokio::spawn(async move {
-                let listing = remote.listing().await.map_err(|error| error.to_string());
-                let _ = events.send(Event::Listed(listing, requested));
-            });
+        for remote in self.remotes.clone() {
+            let server = remote.config.url.clone();
+            if self.last_listings.get(&server).is_none_or(|last| last.elapsed() >= LISTING_INTERVAL) {
+                let requested = Instant::now();
+                self.last_listings.insert(server.clone(), requested);
+                let events = self.events.clone();
+                tokio::spawn(async move {
+                    let listing = remote.listing().await.map_err(|error| error.to_string());
+                    let _ = events.send(Event::Listed { server, listing, requested });
+                });
+            }
         }
         for family in self.family_ids() {
+            let Some(remote) = self.remote_of(family).cloned() else {
+                continue;
+            };
             if let Some(batch) = self.next_push(family) {
                 let (events, remote, store, uploaded) =
                     (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
@@ -119,7 +125,7 @@ impl Core {
         if epoch != self.sync_epoch(family) {
             return;
         }
-        self.note_sync_error(error);
+        self.note_family_error(family, error);
         let effects = self.syncs.entry(family).or_default().on_push(generation, outcome);
         self.handle_effects(family, effects).await;
         self.save_sync(family).await;
@@ -136,20 +142,31 @@ impl Core {
         if epoch != self.sync_epoch(family) {
             return;
         }
-        self.note_sync_error(error);
+        self.note_family_error(family, error);
         let effects = self.syncs.entry(family).or_default().on_pull(generation, outcome);
         self.handle_effects(family, effects).await;
         self.save_sync(family).await;
         self.drive_sync();
     }
 
-    fn note_sync_error(&mut self, error: Option<String>) {
-        if let Some(error) = &error
-            && self.sync_error.as_ref() != Some(error)
-        {
-            warn!(%error, "sync failed");
+    fn note_family_error(&mut self, family: FamilyId, error: Option<String>) {
+        if let Some(server) = self.remote_of(family).map(|remote| remote.config.url.clone()) {
+            self.note_sync_error(&server, error);
         }
-        self.sync_error = error;
+    }
+
+    fn note_sync_error(&mut self, server: &str, error: Option<String>) {
+        match error {
+            Some(error) => {
+                if self.sync_errors.get(server) != Some(&error) {
+                    warn!(%error, server, "sync failed");
+                }
+                self.sync_errors.insert(server.to_owned(), error);
+            }
+            None => {
+                self.sync_errors.remove(server);
+            }
+        }
     }
 
     async fn handle_effects(&mut self, family: FamilyId, effects: Vec<Effect>) {
@@ -371,15 +388,30 @@ impl Core {
             .collect()
     }
 
-    pub(crate) async fn listed(&mut self, listing: Result<Listing, String>, requested: Instant) {
+    /// Takes in the listing of the server at `server`, which speaks only for
+    /// the families whose home it is (ADR 0032).
+    pub(crate) async fn listed(&mut self, server: &str, listing: Result<Listing, String>, requested: Instant) {
         let listing = match listing {
             Ok(listing) => listing,
             Err(error) => {
-                self.note_sync_error(Some(error));
+                self.note_sync_error(server, Some(error));
                 return;
             }
         };
-        for family in &listing.families {
+        let home = Home::Server(server.to_owned());
+        for family in listing.families.iter().map(|family| family.id).chain(listing.threads.iter().map(|info| info.family)) {
+            if let Err(error) = self.settle_home(family, home.clone()).await {
+                warn!(%error, "could not record where a family syncs");
+            }
+        }
+        let deleted: Vec<ThreadId> = listing.deleted.iter().copied().filter(|thread| self.homed_at(*thread, server)).collect();
+        let purged: Vec<ThreadId> = listing.purged.iter().copied().filter(|thread| self.homed_at(*thread, server)).collect();
+        let own: Vec<_> = listing
+            .families
+            .iter()
+            .filter(|family| self.remote_of(family.id).is_some_and(|remote| remote.config.url == server))
+            .collect();
+        for family in own {
             let sync = self.syncs.entry(family.id).or_default();
             let before = sync.view();
             if sync.observe_view(family.view) {
@@ -391,13 +423,19 @@ impl Core {
         }
         let before = self.heard().then(|| self.listed_state());
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
-        self.follow_trash(&listing.deleted, &listing.purged, &remote_threads, requested).await;
-        let visibility: HashMap<ThreadId, silt_proto::Visibility> = listing.visibility.into_iter().collect();
+        self.follow_trash(&deleted, &purged, &remote_threads, requested).await;
+        let mut visibility: HashMap<ThreadId, silt_proto::Visibility> = self
+            .visibility
+            .iter()
+            .filter(|(thread, _)| !self.homed_at(**thread, server))
+            .map(|(thread, seen)| (*thread, seen.clone()))
+            .collect();
+        visibility.extend(listing.visibility);
         if visibility != self.visibility {
             self.visibility = visibility;
             self.announce(crate::protocol::BusEvent::Threads);
         }
-        self.take_running_elsewhere(listing.running);
+        self.take_running_elsewhere(server, listing.running);
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {
@@ -433,7 +471,9 @@ impl Core {
         let unregistered: Vec<ThreadRecord> = self
             .threads
             .values()
-            .filter(|thread| !remote_threads.contains(&thread.id) && !self.deleted.contains(&thread.id))
+            .filter(|thread| {
+                self.homed_at(thread.id, server) && !remote_threads.contains(&thread.id) && !self.deleted.contains(&thread.id)
+            })
             .cloned()
             .collect();
         for thread in unregistered {
@@ -457,7 +497,7 @@ impl Core {
     }
 
     pub(crate) fn register_thread(&self, thread: &ThreadRecord) {
-        let Some(remote) = self.remote.clone() else {
+        let Some(remote) = self.remote_of(thread.family).cloned() else {
             return;
         };
         let info = thread_info(thread);
@@ -482,7 +522,7 @@ impl Core {
     }
 
     async fn register_now(&self, thread: ThreadId, recovery_of: Option<ThreadId>) -> Result<(), CoreError> {
-        let Some(remote) = &self.remote else {
+        let Some(remote) = self.remote_for(thread) else {
             return Ok(());
         };
         let record = &self.threads[&thread];
@@ -495,12 +535,13 @@ impl Core {
         remote.register(body).await.map_err(|source| CoreError::Server { doing: "register the thread", source })
     }
 
-    /// The blob's bytes, fetched from the server when not stored locally.
-    pub(crate) async fn blob(&self, hash: BlobHash) -> Result<Vec<u8>, CoreError> {
+    /// A blob of the family's, fetched from its home server when not stored
+    /// locally; no other server hears of it.
+    pub(crate) async fn blob(&self, family: FamilyId, hash: BlobHash) -> Result<Vec<u8>, CoreError> {
         if let Ok(bytes) = self.store.blobs().get(hash).await {
             return Ok(bytes);
         }
-        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid(format!("blob {hash} is missing")))?;
+        let remote = self.remote_of(family).ok_or_else(|| CoreError::Invalid(format!("blob {hash} is missing")))?;
         let bytes = remote.get_blob(hash).await.map_err(|source| CoreError::Server { doing: "fetch a file", source })?;
         self.store.blobs().put(&bytes).await?;
         Ok(bytes)

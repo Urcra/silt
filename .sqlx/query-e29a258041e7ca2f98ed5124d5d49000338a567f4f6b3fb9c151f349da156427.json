@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO family_homes (family_id, home) VALUES (?, ?) ON CONFLICT (family_id) DO UPDATE SET home = excluded.home",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e29a258041e7ca2f98ed5124d5d49000338a567f4f6b3fb9c151f349da156427"
+}

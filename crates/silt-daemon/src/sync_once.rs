@@ -31,8 +31,9 @@ pub async fn sync_once(data_dir: &Path, thread: Option<&str>) -> Result<Synced, 
     let store = Store::open(data_dir).await?;
     let actor = crate::server::load_actor(data_dir)?;
     let mut core = Core::visiting(store, actor, data_dir).await?;
-    let remote =
-        core.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
+    if core.remotes.is_empty() {
+        return Err(CoreError::Invalid("not connected to a server; use `silt auth login`".into()));
+    }
     let families: Vec<FamilyId> = match thread {
         Some(thread) => vec![core.threads[&core.find_thread(thread)?].family],
         None => {
@@ -48,16 +49,32 @@ pub async fn sync_once(data_dir: &Path, thread: Option<&str>) -> Result<Synced, 
         core.check_commits().await?;
         core.end_turn().await?;
     }
-    let listing = remote.listing().await.map_err(|source| CoreError::Server { doing: "list threads", source })?;
-    let listed: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
-    for record in core.threads.values().filter(|record| families.contains(&record.family) && !listed.contains(&record.id)) {
-        remote
-            .register_thread(&thread_info(record), None, crate::sync::origin_url(record))
-            .await
-            .map_err(|source| CoreError::Server { doing: "register the thread", source })?;
+    // Each family goes only to its own server (ADR 0032); one kept on this
+    // machine goes nowhere.
+    let families: Vec<(FamilyId, crate::remote::Remote)> =
+        families.into_iter().filter_map(|family| core.remote_of(family).cloned().map(|remote| (family, remote))).collect();
+    let mut servers: Vec<crate::remote::Remote> = Vec::new();
+    for (_, remote) in &families {
+        if !servers.iter().any(|known| known.config.url == remote.config.url) {
+            servers.push(remote.clone());
+        }
+    }
+    for remote in &servers {
+        let listing = remote.listing().await.map_err(|source| CoreError::Server { doing: "list threads", source })?;
+        let listed: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
+        let unlisted = core.threads.values().filter(|record| {
+            !listed.contains(&record.id)
+                && families.iter().any(|(family, home)| *family == record.family && home.config.url == remote.config.url)
+        });
+        for record in unlisted {
+            remote
+                .register_thread(&thread_info(record), None, crate::sync::origin_url(record))
+                .await
+                .map_err(|source| CoreError::Server { doing: "register the thread", source })?;
+        }
     }
     let mut synced = Synced { families: families.len(), deltas: 0 };
-    for family in families {
+    for (family, remote) in families {
         loop {
             let batch = {
                 let _turn = turn_in_time(&lock).await?;

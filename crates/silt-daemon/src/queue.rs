@@ -25,7 +25,7 @@ impl Core {
         if text.is_empty() {
             return Err(CoreError::Invalid("there is nothing to queue".into()));
         }
-        let id = self.store.enqueue(thread, &self.own_user(), text, now_ms(), first).await?;
+        let id = self.store.enqueue(thread, &self.own_user(thread), text, now_ms(), first).await?;
         self.queue_changed(thread);
         // An idle agent takes it at once.
         if self.acp.contains_key(&thread) && self.agent_state(thread) == Some(silt_proto::AgentState::Idle) {

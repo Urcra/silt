@@ -48,6 +48,12 @@ pub struct ThreadSummary {
     /// Its own visibility; none when it follows its project's or org's.
     #[serde(default)]
     pub visibility: Option<Visibility>,
+    /// The server it syncs with (ADR 0032); none without one.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// It stays on this machine only, by its project's choice.
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 /// What this person keeps about a thread for themselves (ADR 0024).
@@ -218,6 +224,8 @@ pub struct SignIn {
     pub device: String,
     /// This device's name there.
     pub name: String,
+    #[serde(default)]
+    pub sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

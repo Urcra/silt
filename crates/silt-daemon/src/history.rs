@@ -129,7 +129,7 @@ impl Core {
     /// when connected, else what this machine knows.
     pub(crate) async fn in_flight_anywhere(&self, cwd: &std::path::Path, path: &str) -> Result<Vec<InFlight>, CoreError> {
         let (identity, relative, here) = self.repo_path(cwd, path)?;
-        let Some(remote) = &self.remote else {
+        let Ok(remote) = self.server_for_project(&identity) else {
             return Ok(self.in_flight(&identity, &relative, here));
         };
         let reply = remote
@@ -252,7 +252,6 @@ impl Core {
     /// The history graph over the families here, as `query` asks: turns,
     /// commits, forks, merge requests and merges, newest first.
     pub(crate) fn graph(&self, query: &GraphQuery) -> Vec<GraphRow> {
-        let me = self.own_user();
         let summaries: HashMap<String, crate::protocol::ThreadSummary> =
             self.thread_summaries().into_iter().map(|summary| (summary.id.clone(), summary)).collect();
         let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
@@ -269,7 +268,7 @@ impl Core {
                     continue;
                 };
                 if query.project.as_ref().is_some_and(|project| *project != summary.repo)
-                    || (query.mine && !summary.owner.is_empty() && summary.owner != me)
+                    || (query.mine && !summary.owner.is_empty() && summary.owner != self.own_user(thread))
                 {
                     continue;
                 }

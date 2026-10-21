@@ -40,7 +40,7 @@ impl Core {
         if change == Lifecycle::Purge && !deleted {
             return Err(CoreError::Invalid("delete the thread first (`silt thread delete`); purging works on the trash".into()));
         }
-        if let Some(remote) = &self.remote {
+        if let Some(remote) = self.remote_for(thread) {
             remote
                 .thread_lifecycle(thread, change.action())
                 .await

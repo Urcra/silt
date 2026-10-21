@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO project_homes (repo, home) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET home = excluded.home",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "13c03597ac2e3bc992641b32edcff24b1e2b720028895c816bc0724e09298119"
+}

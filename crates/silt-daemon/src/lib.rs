@@ -11,6 +11,7 @@ mod core;
 mod disk;
 mod forks;
 mod history;
+mod homes;
 mod lifecycle;
 mod live;
 mod load;

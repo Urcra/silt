@@ -399,6 +399,50 @@ impl Store {
             .collect())
     }
 
+    /// Where each family syncs, for those given a home (ADR 0032): a
+    /// server's URL, or empty for this machine only.
+    pub async fn family_homes(&self) -> Result<Vec<(FamilyId, String)>, StoreError> {
+        sqlx::query!("SELECT family_id, home FROM family_homes")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| Ok((FamilyId(id_from(&row.family_id)?), row.home)))
+            .collect()
+    }
+
+    pub async fn set_family_home(&self, family: FamilyId, home: &str) -> Result<(), StoreError> {
+        let id = id_bytes(family.0);
+        sqlx::query!(
+            "INSERT INTO family_homes (family_id, home) VALUES (?, ?) ON CONFLICT (family_id) DO UPDATE SET home = excluded.home",
+            id,
+            home
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Where each project's new families go, by repository.
+    pub async fn project_homes(&self) -> Result<Vec<(String, String)>, StoreError> {
+        Ok(sqlx::query!("SELECT repo, home FROM project_homes")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| (row.repo, row.home))
+            .collect())
+    }
+
+    pub async fn set_project_home(&self, repo: &str, home: &str) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO project_homes (repo, home) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET home = excluded.home",
+            repo,
+            home
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn deleted_threads(&self) -> Result<Vec<ThreadId>, StoreError> {
         sqlx::query_scalar!("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(&self.pool)

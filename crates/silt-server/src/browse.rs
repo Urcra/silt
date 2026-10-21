@@ -236,6 +236,8 @@ fn summary(
             && requests.iter().any(|(_, request)| request.target == row.id && request.status == MrStatus::Open),
         mine: Mine::of(states.get(&row.id)),
         visibility: row.visibility.clone(),
+        server: None,
+        local_only: false,
     }
 }
 

@@ -51,7 +51,7 @@ impl Core {
     /// lease, or nobody does.
     pub(crate) fn ensure_writer(&self, thread: ThreadId) -> Result<(), CoreError> {
         let owner = &self.threads[&thread].owner;
-        let user = self.own_user();
+        let user = self.own_user(thread);
         if !owner.is_empty() && !user.is_empty() && *owner != user {
             return Err(CoreError::Invalid(format!(
                 "thread {} belongs to {owner}; fork it to continue the work",
@@ -60,7 +60,7 @@ impl Core {
         }
         let (_, family) = self.loaded_family(thread)?;
         let lease = family.thread(thread).and_then(ThreadState::lease);
-        let device = self.remote.as_ref().map(|remote| remote.config.device);
+        let device = self.device_for(thread);
         match (lease, device) {
             (Some((holder, _)), Some(device)) if holder != device => Err(CoreError::Invalid(format!(
                 "thread {} is being worked on from another device; run this there, or fork the thread",
@@ -357,12 +357,11 @@ impl Core {
         selector: Option<&str>,
         visibility: Visibility,
     ) -> Result<String, CoreError> {
-        let remote =
-            self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
         let refused = |source| CoreError::Server { doing: "change the visibility", source };
         match selector {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;
+                let remote = self.server_for(thread)?;
                 remote.set_visibility(None, Some(thread), visibility.clone()).await.map_err(refused)?;
                 // Shown at once, before the next listing says so.
                 self.visibility.insert(thread, visibility.clone());
@@ -375,6 +374,7 @@ impl Core {
                     .remote_url("origin")?
                     .map(|url| silt_git::normalize_remote(&url))
                     .ok_or_else(|| CoreError::Invalid("this clone has no origin remote".into()))?;
+                let remote = self.server_for_project(&identity)?;
                 remote.set_visibility(Some(identity.clone()), None, visibility.clone()).await.map_err(refused)?;
                 Ok(format!("project {identity} is now {visibility}"))
             }

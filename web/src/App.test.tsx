@@ -64,6 +64,8 @@ test('threads are grouped by project, newest first', () => {
     review: false,
     mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
     visibility: null,
+    server: null,
+    local_only: false,
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])
   expect(grouped.map(([repo, threads]) => [repo, threads.map((each) => each.id)])).toEqual([

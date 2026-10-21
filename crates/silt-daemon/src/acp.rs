@@ -318,7 +318,7 @@ impl Core {
         } else if let Some(mode) = run.back_to.take() {
             send(run, Command::SetMode(mode));
         }
-        let me = self.own_user();
+        let me = self.own_user(thread);
         self.send_prompt(thread, &me, text, attachments).await?;
         Ok("sent")
     }
@@ -345,7 +345,7 @@ impl Core {
             return Ok(());
         };
         if let Some(steer) = run.steering.take() {
-            let me = self.own_user();
+            let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
             return self.send_prompt(thread, &me, &said, Vec::new()).await;
         }
@@ -771,7 +771,7 @@ impl Core {
             if text.trim().is_empty() {
                 return Err(CoreError::Invalid("the guide is empty".into()));
             }
-            let by = match self.own_user() {
+            let by = match self.own_user(request.target) {
                 user if user.is_empty() => "you".to_owned(),
                 user => user,
             };
@@ -785,7 +785,7 @@ impl Core {
             ));
         }
         self.acp.get_mut(&request.fork).expect("checked above").guiding = Some((request.id, String::new()));
-        let me = self.own_user();
+        let me = self.own_user(request.fork);
         self.send_prompt(request.fork, &me, GUIDE_PROMPT, Vec::new()).await?;
         Ok("asked")
     }
