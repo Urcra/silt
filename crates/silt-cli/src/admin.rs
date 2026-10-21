@@ -5,7 +5,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use exn::{Exn, ResultExt};
@@ -79,6 +79,14 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     if config_path.exists() && !options.force {
         return Err(fail(format!("{} exists; pass --force to replace it", config_path.display())));
     }
+    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
+    if options.systemd.is_some() && [Path::new("/home"), Path::new("/root")].iter().any(|home| exe.starts_with(home)) {
+        return Err(fail(format!(
+            "the unit would run {}, but it keeps the service out of home directories; install silt elsewhere first, for example `sudo install -m 755 {} /usr/local/bin/silt`, and run that",
+            exe.display(),
+            exe.display()
+        )));
+    }
     // The service user may own an existing directory, so only a new one is
     // made private here.
     std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
@@ -120,7 +128,7 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
         println!("  password: {password}   (shown once; change it with `silt server user passwd {}`)", options.admin);
     }
     if let Some(unit) = options.systemd {
-        let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
+        hand_over(&data, &options.service_user);
         let text = SERVER_UNIT
             .replace("@SILT@", &exe.to_string_lossy())
             .replace("@DATA@", &data.to_string_lossy())
@@ -132,6 +140,19 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     }
     println!("then sign in from a machine with: silt auth login --server {}", config.public_url());
     Ok(())
+}
+
+/// Gives the data dir to the service's user, which runs the server: run as
+/// root, init has made it root's.
+fn hand_over(data: &Path, user: &str) {
+    if !rustix::process::geteuid().is_root() {
+        return;
+    }
+    let owner = format!("{user}:{user}");
+    let given = std::process::Command::new("chown").arg("-R").arg(&owner).arg(data).status();
+    if !given.is_ok_and(|status| status.success()) {
+        eprintln!("silt: could not give {} to {owner}; do so before starting the service", data.display());
+    }
 }
 
 pub fn server_run(listen: Option<String>, data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
