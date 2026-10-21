@@ -143,11 +143,11 @@ enum Command {
         #[arg(long)]
         file: Option<String>,
         /// YYYY-MM-DD, or a number of days ago such as 7d
-        #[arg(long)]
-        since: Option<String>,
+        #[arg(long, value_parser = commands::parse_date)]
+        since: Option<i64>,
         /// YYYY-MM-DD, or a number of days ago such as 7d
-        #[arg(long)]
-        until: Option<String>,
+        #[arg(long, value_parser = commands::parse_date)]
+        until: Option<i64>,
     },
     /// Open the web UI: threads, search, history, merge requests and comments
     Open {
@@ -170,8 +170,8 @@ enum Command {
         #[arg(long, requires = "lines", conflicts_with = "entry")]
         file: Option<String>,
         /// A line or a range such as 10-14
-        #[arg(long)]
-        lines: Option<String>,
+        #[arg(long, value_parser = commands::parse_lines)]
+        lines: Option<(usize, usize)>,
         /// A history entry, numbered as `silt history` shows them
         #[arg(long)]
         entry: Option<usize>,
@@ -662,8 +662,8 @@ fn run() -> Result<(), Exn<CliError>> {
                 status,
                 branch,
                 file,
-                since: since.as_deref().map(commands::parse_date).transpose()?,
-                until: until.as_deref().map(commands::parse_date).transpose()?,
+                since,
+                until,
             },
         ),
         Command::InFlight { path } => commands::in_flight(&path),
@@ -675,7 +675,7 @@ fn run() -> Result<(), Exn<CliError>> {
             lines,
             entry,
             text,
-        } => commands::comment(&thread, file, lines.as_deref(), entry, &text.join(" ")),
+        } => commands::comment(&thread, file, lines, entry, &text.join(" ")),
         Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
         Command::Server { command } => match command {
             ServerCommand::Init {

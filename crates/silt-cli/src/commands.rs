@@ -796,25 +796,16 @@ pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliE
 pub fn comment(
     thread: &str,
     file: Option<String>,
-    lines: Option<&str>,
+    lines: Option<(usize, usize)>,
     entry: Option<usize>,
     text: &str,
 ) -> Result<(), Exn<CliError>> {
-    ensure_daemon()?;
     let on = match (file, lines, entry) {
-        (Some(path), Some(lines), None) => {
-            let (start, end) = match lines.split_once('-') {
-                Some((start, end)) => (start.trim().parse(), end.trim().parse()),
-                None => (lines.trim().parse(), lines.trim().parse()),
-            };
-            let (Ok(start), Ok(end)) = (start, end) else {
-                return Err(fail(format!("--lines takes a line or a range like 10-14, not {lines:?}")));
-            };
-            CommentOn::Lines { path, start, end }
-        }
+        (Some(path), Some((start, end)), None) => CommentOn::Lines { path, start, end },
         (None, None, Some(index)) => CommentOn::Entry { index },
         _ => return Err(fail("comment on either --file with --lines, or --entry")),
     };
+    ensure_daemon()?;
     let comment: CommentView = call(&Request::Comment {
         thread: thread.into(),
         on,
@@ -846,23 +837,49 @@ pub fn comments(thread: &str, resolve: Option<&str>) -> Result<(), Exn<CliError>
 
 /// Milliseconds since the epoch for `YYYY-MM-DD` (UTC midnight) or `<n>d`
 /// (n days ago).
-pub fn parse_date(text: &str) -> Result<i64, Exn<CliError>> {
+pub fn parse_date(text: &str) -> Result<i64, String> {
     const DAY_MS: i64 = 86_400_000;
     if let Some(days) = text.strip_suffix('d') {
-        let days: i64 = days.parse().map_err(|_| fail(format!("invalid number of days in {text:?}")))?;
+        let days: u32 = days.parse().map_err(|_| format!("invalid number of days in {text:?}"))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or_default());
-        return Ok(now - days * DAY_MS);
+        return Ok(now - i64::from(days) * DAY_MS);
     }
-    let parts: Vec<i64> = text.split('-').filter_map(|part| part.parse().ok()).collect();
-    let [year, month, day] = parts[..] else {
-        return Err(fail(format!("expected YYYY-MM-DD or a number of days like 7d, not {text:?}")));
+    let parts: Option<Vec<i64>> = text
+        .split('-')
+        .map(|part| part.bytes().all(|byte| byte.is_ascii_digit()).then(|| part.parse().ok()).flatten())
+        .collect();
+    let Some([year, month, day]) = parts.as_deref().and_then(|parts| <[i64; 3]>::try_from(parts).ok()) else {
+        return Err(format!("expected YYYY-MM-DD or a number of days like 7d, not {text:?}"));
     };
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return Err(fail(format!("invalid date {text:?}")));
+    if !(1..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=days_in_month(year, month)).contains(&day) {
+        return Err(format!("{text:?} is not a date"));
     }
     Ok(days_from_civil(year, month, day) * DAY_MS)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// A line, or a range such as `10-14`, numbered from 1.
+pub fn parse_lines(text: &str) -> Result<(usize, usize), String> {
+    let number = |part: &str| part.trim().parse::<usize>().ok().filter(|line| *line >= 1);
+    let (start, end) = match text.split_once('-') {
+        Some((start, end)) => (number(start), number(end)),
+        None => (number(text), number(text)),
+    };
+    match (start, end) {
+        (Some(start), Some(end)) if start <= end => Ok((start, end)),
+        _ => Err(format!("expected a line or a range like 10-14, lines counted from 1, not {text:?}")),
+    }
 }
 
 /// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
@@ -884,10 +901,6 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
-
-
-
-/// Runs `command` in the sandbox in place of this process.
 /// Runs `command` in the sandbox, exiting with its status. Silt's own data
 /// is hidden too: its socket controls the daemon.
 pub fn sandbox(mut sandbox: silt_sandbox::Sandbox, command: &[String]) -> Result<(), Exn<CliError>> {
@@ -927,6 +940,14 @@ mod tests {
         assert!(parse_date("2026-13-01").is_err());
         assert!(parse_date("yesterday").is_err());
         assert!(parse_date("7d").is_ok_and(|ms| ms > 1_700_000_000_000));
+        assert!(parse_date("2026-02-31").is_err(), "no such day");
+        assert!(parse_date("2028-02-29").is_ok(), "a leap day");
+        assert!(parse_date("2026-x-10-20").is_err());
+        assert!(parse_date("99999999999999999d").is_err(), "too many days to count");
+        assert_eq!(parse_lines("10-14"), Ok((10, 14)));
+        assert_eq!(parse_lines("7"), Ok((7, 7)));
+        assert!(parse_lines("14-10").is_err());
+        assert!(parse_lines("0").is_err());
     }
 }
 
