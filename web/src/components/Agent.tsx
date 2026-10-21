@@ -11,7 +11,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
       aria-label="agent to start"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="rounded border border-neutral-300 px-2 py-1 text-sm"
+      className="rounded border border-line px-2 py-1 text-sm"
     >
       <option value="">pick an agent…</option>
       {(choices.data?.agents ?? []).map((agent) => (
@@ -51,7 +51,7 @@ export function NewAgentThread() {
         aria-label="clone"
         value={clone}
         onChange={(event) => setClone(event.target.value)}
-        className="rounded border border-neutral-300 px-2 py-1"
+        className="rounded border border-line px-2 py-1"
       >
         {clones.map((known) => (
           <option key={known.path} value={known.path}>
@@ -59,10 +59,10 @@ export function NewAgentThread() {
           </option>
         ))}
       </select>
-      <button disabled={!agent} className="rounded bg-neutral-900 px-2 py-1 text-white disabled:opacity-40">
+      <button disabled={!agent} className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40">
         Start
       </button>
-      {error && <p className="w-full text-rose-700">{error}</p>}
+      {error && <p className="w-full text-danger">{error}</p>}
     </form>
   )
 }
@@ -98,14 +98,14 @@ export function AgentPanel({
   const elsewhere = people.find((person) => person.agent)
 
   return (
-    <section aria-label="agent at work" className="mt-3 rounded border border-neutral-200 p-3 text-sm">
+    <section aria-label="agent at work" className="mt-3 rounded border border-line p-3 text-sm">
       {!running && elsewhere?.agent && (
         <div className="space-y-2">
           <p data-testid="agent-state">
             {elsewhere.user}&apos;s <span className="font-medium">{elsewhere.agent.name}</span> is {elsewhere.agent.state}
           </p>
           {elsewhere.agent.streaming && <p className="whitespace-pre-wrap">{elsewhere.agent.streaming}</p>}
-          <p className="text-xs text-neutral-500">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
+          <p className="text-xs text-fg-3">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
         </div>
       )}
       {!running && !elsewhere && (
@@ -114,12 +114,12 @@ export function AgentPanel({
           <AgentPicker value={agent} onChange={setAgent} />
           <button
             disabled={!agent}
-            className="rounded bg-neutral-900 px-2 py-1 text-white disabled:opacity-40"
+            className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
             onClick={() => act(api.startAgent(agent, { thread }))}
           >
             Start agent
           </button>
-          {status?.error && <p className="w-full text-rose-700">{status.agent} stopped: {status.error}</p>}
+          {status?.error && <p className="w-full text-danger">{status.agent} stopped: {status.error}</p>}
         </div>
       )}
       {running && (
@@ -127,27 +127,27 @@ export function AgentPanel({
           <p data-testid="agent-state">
             <span className="font-medium">{status.agent}</span> is {status.state}
           </p>
-          {status.thinking && <p className="text-xs italic text-neutral-500">{status.thinking}</p>}
+          {status.thinking && <p className="text-xs italic text-fg-3">{status.thinking}</p>}
           {status.streaming && <p className="whitespace-pre-wrap">{status.streaming}</p>}
           {toolOutput && (
-            <pre data-testid="tool-output" className="max-h-48 overflow-auto rounded bg-neutral-50 p-2 text-xs">
+            <pre data-testid="tool-output" className="max-h-48 overflow-auto rounded bg-surface-1 p-2 text-xs">
               {toolOutput}
             </pre>
           )}
           {status.permissions.map((asked) => (
-            <div key={asked.id} className="rounded bg-amber-50 p-2" role="group" aria-label="permission">
+            <div key={asked.id} className="rounded bg-warn-tint p-2" role="group" aria-label="permission">
               <p>The agent asks to run: {asked.title}</p>
               <div className="mt-1 flex gap-2">
                 {asked.options.map(([option, label]) => (
                   <button
                     key={option}
-                    className="rounded border border-neutral-400 px-2 py-0.5"
+                    className="rounded border border-line-strong px-2 py-0.5"
                     onClick={() => act(api.answer(thread, asked.id, option))}
                   >
                     {label}
                   </button>
                 ))}
-                <button className="text-neutral-500" onClick={() => act(api.answer(thread, asked.id, null))}>
+                <button className="text-fg-3" onClick={() => act(api.answer(thread, asked.id, null))}>
                   Dismiss
                 </button>
               </div>
@@ -156,25 +156,25 @@ export function AgentPanel({
           <div className="flex gap-2">
             <button
               disabled={status.state !== 'ready'}
-              className="rounded bg-neutral-900 px-2 py-1 text-white disabled:opacity-40"
+              className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
               onClick={() => act(api.prompt(thread, draft), onSent)}
               title="Sends your draft together with everyone else's"
             >
               Send
             </button>
             {status.state === 'working' && (
-              <button className="rounded border border-neutral-300 px-2 py-1" onClick={() => act(api.cancelTurn(thread))}>
+              <button className="rounded border border-line px-2 py-1" onClick={() => act(api.cancelTurn(thread))}>
                 Cancel turn
               </button>
             )}
-            <button className="rounded border border-neutral-300 px-2 py-1" onClick={() => act(api.stopAgent(thread))}>
+            <button className="rounded border border-line px-2 py-1" onClick={() => act(api.stopAgent(thread))}>
               Stop agent
             </button>
           </div>
-          {status.error && <p className="text-rose-700">{status.error}</p>}
+          {status.error && <p className="text-danger">{status.error}</p>}
         </div>
       )}
-      {error && <p className="text-rose-700">{error}</p>}
+      {error && <p className="text-danger">{error}</p>}
     </section>
   )
 }

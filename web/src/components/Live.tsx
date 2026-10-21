@@ -227,9 +227,9 @@ function FileEditor({
 
   return (
     <div>
-      {!replica.writable && <p className="text-xs text-neutral-500">Read only: ask the owner to share the thread to edit it.</p>}
-      {error && <p className="text-xs text-rose-700">{error}</p>}
-      <div ref={host} data-testid="editor" className="rounded border border-neutral-300 text-sm" />
+      {!replica.writable && <p className="text-xs text-fg-3">Read only: ask the owner to share the thread to edit it.</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
+      <div ref={host} data-testid="editor" className="rounded border border-line text-sm" />
     </div>
   )
 }
@@ -299,7 +299,7 @@ export function LivePanel({
             )}{' '}
             {person.file && (
               <button
-                className="text-xs text-sky-700"
+                className="text-xs text-accent-fg"
                 onClick={() => follow(following === person.device ? null : person.device)}
               >
                 {following === person.device ? `Stop following ${person.user}` : `Follow ${person.user}`}
@@ -307,7 +307,7 @@ export function LivePanel({
             )}
           </li>
         ))}
-        {people.length === 0 && <li className="text-neutral-500">Nobody else is here.</li>}
+        {people.length === 0 && <li className="text-fg-3">Nobody else is here.</li>}
       </ul>
       <label className="mt-2 block text-sm">
         Your draft of the next prompt
@@ -315,7 +315,7 @@ export function LivePanel({
           aria-label="draft"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          className="mt-1 block w-full rounded border border-neutral-300 p-2"
+          className="mt-1 block w-full rounded border border-line p-2"
           rows={2}
         />
       </label>
@@ -327,13 +327,13 @@ export function LivePanel({
         onSent={() => setDraft('')}
         people={people}
       />
-      {error && <p className="text-rose-700">{error}</p>}
+      {error && <p className="text-danger">{error}</p>}
       {replica && (
         <div className="mt-3 grid grid-cols-[12rem_1fr] gap-3">
           <ul aria-label="files" className="text-sm">
             {replica.paths().map((path) => (
               <li key={path}>
-                <button className={path === file ? 'font-semibold' : 'text-sky-700'} onClick={() => open(path)}>
+                <button className={path === file ? 'font-semibold' : 'text-accent-fg'} onClick={() => open(path)}>
                   {path}
                 </button>
               </li>

@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { api, short } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
+import { Tag } from '../ui'
 import { NewAgentThread } from './Agent'
 import { Search } from './Search'
 
@@ -14,9 +15,9 @@ export function ThreadList() {
       <Search />
       <h2 className="mb-2 text-lg font-semibold">Threads</h2>
       <NewAgentThread />
-      {threads.error && <p className="text-rose-700">{message(threads.error)}</p>}
+      {threads.error && <p className="text-danger">{message(threads.error)}</p>}
       <table className="w-full text-left text-sm">
-        <thead className="text-xs text-neutral-500">
+        <thead className="font-mono text-[11px] tracking-wider text-fg-3 uppercase">
           <tr>
             <th className="py-1">Thread</th>
             <th>Title</th>
@@ -29,23 +30,25 @@ export function ThreadList() {
         </thead>
         <tbody data-testid="threads">
           {[...(threads.data ?? [])].reverse().map((thread) => (
-            <tr key={thread.id} className="border-t border-neutral-100">
+            <tr key={thread.id} className="border-t border-line-subtle hover:bg-surface-1">
               <td className="py-1 font-mono">
-                <Link className="text-sky-700" to="/t/$id" params={{ id: thread.id }}>
+                <Link className="text-accent-fg" to="/t/$id" params={{ id: thread.id }}>
                   {short(thread.id)}
                 </Link>
               </td>
               <td>
-                {thread.title ?? <span className="text-neutral-400">untitled</span>}
+                {thread.title ?? <span className="text-fg-3">untitled</span>}
                 {thread.forked_from && (
-                  <span className="ml-2 text-xs text-violet-700">fork of {short(thread.forked_from)}</span>
+                  <Tag tone="info" className="ml-2">
+                    fork of {short(thread.forked_from)}
+                  </Tag>
                 )}
               </td>
               <td>{thread.agent ?? ''}</td>
               <td>{thread.location}</td>
               <td>{thread.messages}</td>
               <td>{thread.edits}</td>
-              <td className="text-xs text-neutral-500">{thread.repo}</td>
+              <td className="font-mono text-xs text-fg-3">{thread.repo}</td>
             </tr>
           ))}
         </tbody>

@@ -22,22 +22,22 @@ export function Inbox() {
         <label className="text-sm">
           <input type="checkbox" checked={all} onChange={(event) => setAll(event.target.checked)} /> show read
         </label>
-        <button className="text-sm text-sky-700" onClick={() => void markRead({ all: true })}>
+        <button className="text-sm text-accent-fg" onClick={() => void markRead({ all: true })}>
           Mark all read
         </button>
       </div>
-      {inbox.error && <p className="text-rose-700">{message(inbox.error)}</p>}
-      {inbox.isSuccess && notifications.length === 0 && <p className="text-neutral-500">Nothing new.</p>}
+      {inbox.error && <p className="text-danger">{message(inbox.error)}</p>}
+      {inbox.isSuccess && notifications.length === 0 && <p className="text-fg-3">Nothing new.</p>}
       <ul data-testid="inbox" className="space-y-2">
         {notifications.map((notification) => (
-          <li key={notification.id} className={notification.read ? 'text-neutral-500' : ''}>
-            <Link className="text-sky-700" to="/t/$id" params={{ id: notification.thread }}>
+          <li key={notification.id} className={notification.read ? 'text-fg-3' : ''}>
+            <Link className="text-accent-fg" to="/t/$id" params={{ id: notification.thread }}>
               {short(notification.thread)}
             </Link>{' '}
             {notification.text}{' '}
             {!notification.read && (
               <button
-                className="text-xs text-sky-700"
+                className="text-xs text-accent-fg"
                 aria-label={`mark ${notification.id} read`}
                 onClick={() => void markRead({ ids: [notification.id] })}
               >
