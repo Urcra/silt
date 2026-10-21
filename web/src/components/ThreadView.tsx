@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useWindowVirtualizer } from '@tanstack/react-virtual'
-import { useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useContext, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
+import { MainScroll } from '../scroll'
 import { Diff } from './Diff'
 import { LivePanel } from './Live'
 
@@ -178,8 +179,10 @@ export function ThreadView({ id }: { id: string }) {
   useTopic(history.data ? `thread:${history.data.thread}` : null)
   const entries = history.data?.entries ?? []
   const list = useRef<HTMLDivElement>(null)
-  const rows = useWindowVirtualizer({
+  const scroll = useContext(MainScroll)
+  const rows = useVirtualizer({
     count: entries.length,
+    getScrollElement: () => scroll.current,
     estimateSize: () => 28,
     overscan: 20,
     scrollMargin: list.current?.offsetTop ?? 0,

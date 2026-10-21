@@ -63,7 +63,7 @@ test('reviews and approves a merge request', async ({ page }) => {
   await page.getByRole('link', { name: 'Add forked' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('open')
   await expect(page.getByTestId('diff')).toContainText('+fn forked() {}')
-  await expect(page.getByText('Continuing in a fork')).toBeVisible()
+  await expect(page.getByRole('main').getByText('Continuing in a fork')).toBeVisible()
 
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
