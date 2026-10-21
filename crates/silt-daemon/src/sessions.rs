@@ -178,6 +178,13 @@ pub(crate) fn agent_author(session: &SessionRef) -> Author {
     Author::Agent { agent: session.agent.clone(), session: session.id.clone(), tool_use_id: None }
 }
 
+/// The branch a thread started from `base` follows: `base` itself, or the
+/// one an `origin/` branch tracks; none for a commit or a tag.
+fn branch_named(repo: &Repo, base: &str) -> Result<Option<String>, CoreError> {
+    let branches = repo.branches()?;
+    Ok(branches.iter().any(|branch| branch == base).then(|| base.strip_prefix("origin/").unwrap_or(base).to_owned()))
+}
+
 pub(crate) fn resolve_agent(name: &str) -> Result<&'static dyn Agent, CoreError> {
     silt_agents::agent(name).ok_or_else(|| {
         let known: Vec<&str> = silt_agents::AGENTS.iter().map(|agent| agent.command()).collect();
@@ -195,7 +202,7 @@ impl Core {
         already_ran: bool,
     ) -> Result<SessionStarted, CoreError> {
         let agent = resolve_agent(agent)?;
-        let created = self.create_thread(cwd, isolated, already_ran).await?;
+        let created = self.create_thread(cwd, isolated, already_ran, None).await?;
         match session_id {
             Some(id) => {
                 let new = NewSession {
@@ -240,12 +247,24 @@ impl Core {
         cwd: &Path,
         isolated: bool,
         already_ran: bool,
+        base: Option<&str>,
     ) -> Result<CreatedThread, CoreError> {
         let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
         self.remember_clone(&cwd).await;
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
-        let head = repo.head_commit()?;
+        let (head, branch) = match base {
+            Some(base) => {
+                if !isolated {
+                    return Err(CoreError::Invalid(format!(
+                        "work in your own clone starts from what's checked out there; give the thread its own checkout to start from {base}"
+                    )));
+                }
+                let commit = repo.commit_of(base)?.ok_or_else(|| CoreError::Invalid(format!("{base} names no commit here")))?;
+                (Some(commit), branch_named(&repo, base)?)
+            }
+            None => (repo.head_commit()?, repo.head_branch()?),
+        };
         if isolated && head.is_none() {
             return Err(CoreError::Invalid("an isolated checkout needs at least one commit".into()));
         }
@@ -273,7 +292,6 @@ impl Core {
         self.threads.insert(thread, record);
 
         let mut family = Family::new();
-        let branch = repo.head_branch()?;
         let deltas =
             import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
         self.store.append_deltas(family_id, &deltas).await?;

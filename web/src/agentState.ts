@@ -1,5 +1,12 @@
-import type { AgentState } from './api'
+import type { AgentState, Preset } from './api'
 import type { Tone } from './ui'
+
+/** Which of the agent's permission requests the daemon answers by itself (ADR 0022). */
+export const PRESETS: { id: Preset; label: string }[] = [
+  { id: 'ask_before_commands', label: 'Ask before commands' },
+  { id: 'ask_for_everything', label: 'Ask for everything' },
+  { id: 'full_access', label: 'Full access' },
+]
 
 /** How a state reads after the agent's name (ADR 0022). */
 export const STATE_PHRASE: Record<AgentState, string> = {

@@ -3,8 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { api, short } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
-import { Tag } from '../ui'
-import { NewAgentThread } from './Agent'
+import { Icon, Tag } from '../ui'
 import { Search } from './Search'
 
 export function ThreadList() {
@@ -13,8 +12,16 @@ export function ThreadList() {
   return (
     <div>
       <Search />
-      <h2 className="mb-2 text-lg font-semibold">Threads</h2>
-      <NewAgentThread />
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Threads</h2>
+        <Link
+          to="/new"
+          className="inline-flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+        >
+          <Icon name="plus" />
+          New thread
+        </Link>
+      </div>
       {threads.error && <p className="text-danger">{message(threads.error)}</p>}
       <table className="w-full text-left text-sm">
         <thead className="font-mono text-[11px] tracking-wider text-fg-3 uppercase">

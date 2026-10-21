@@ -48,6 +48,14 @@ export function Sidebar() {
         <Icon name="thread" />
         All threads
       </Link>
+      <Link
+        to="/new"
+        className="mx-2 mb-2 flex items-center gap-2 rounded-sm px-2 py-1 text-fg-1 hover:bg-surface-2"
+        activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
+      >
+        <Icon name="plus" />
+        New thread
+      </Link>
       {threads.isPending && (
         <div className="space-y-2 px-4">
           <Skeleton />

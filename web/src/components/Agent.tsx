@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { rememberModes } from '../agentModes'
 import { api, type AgentStatus, type Presence, type Preset } from '../api'
-import { STATE_PHRASE, running } from '../agentState'
+import { PRESETS, STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
 import { PromptQueue } from './Queue'
 
-function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
+export function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
   return (
     <select
@@ -24,60 +24,6 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
     </select>
   )
 }
-
-/** Starts an agent in a new thread of a clone this machine knows. */
-export function NewAgentThread() {
-  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const navigate = useNavigate()
-  const [agent, setAgent] = useState('')
-  const [clone, setClone] = useState('')
-  const [error, setError] = useState<string>()
-  const clones = choices.data?.clones ?? []
-  if (clones.length === 0) return null
-  return (
-    <form
-      className="mb-4 flex flex-wrap items-center gap-2 text-sm"
-      onSubmit={(event) => {
-        event.preventDefault()
-        setError(undefined)
-        api.startAgent(agent, { clone: clone || clones[0].path }).then(
-          (thread) => void navigate({ to: '/t/$id', params: { id: thread } }),
-          (failure: unknown) => setError(message(failure)),
-        )
-      }}
-    >
-      <span>New thread with</span>
-      <AgentPicker value={agent} onChange={setAgent} />
-      <span>in</span>
-      <select
-        aria-label="clone"
-        value={clone}
-        onChange={(event) => setClone(event.target.value)}
-        className="rounded border border-line px-2 py-1"
-      >
-        {clones.map((known) => (
-          <option key={known.path} value={known.path}>
-            {known.repo || known.path}
-          </option>
-        ))}
-      </select>
-      <button disabled={!agent} className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40">
-        Start
-      </button>
-      {error && <p className="w-full text-danger">{error}</p>}
-    </form>
-  )
-}
-
-/**
- * The agent working in the thread from the web UI (ADR 0014): starting it,
- * sending everyone's drafts as the prompt, answering its permission requests.
- */
-const PRESETS: { id: Preset; label: string }[] = [
-  { id: 'ask_before_commands', label: 'Ask before commands' },
-  { id: 'ask_for_everything', label: 'Ask for everything' },
-  { id: 'full_access', label: 'Full access' },
-]
 
 /** Which of the agent's permission requests the daemon answers by itself (ADR 0022). */
 function PresetPicker({ thread, preset, onPreset }: { thread: string; preset: Preset; onPreset: (preset: Preset) => void }) {
@@ -155,6 +101,10 @@ function AgentChoices({ thread, status, act }: { thread: string; status: AgentSt
 
 const APPROVED = 'The plan is approved. Go ahead.'
 
+/**
+ * The agent working in the thread from the web UI (ADR 0014): starting it,
+ * sending everyone's drafts as the prompt, answering its permission requests.
+ */
 export function AgentPanel({
   thread,
   status,
@@ -185,6 +135,11 @@ export function AgentPanel({
   }
   const live = status !== null && running(status.state)
   const elsewhere = people.find((person) => person.agent)
+  const modes = status?.modes?.available
+  const agentName = status?.agent
+  useEffect(() => {
+    if (agentName && modes) rememberModes(agentName, modes)
+  }, [agentName, modes])
 
   return (
     <section aria-label="agent at work" className="mt-3 rounded border border-line p-3 text-sm">

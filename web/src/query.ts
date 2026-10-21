@@ -21,6 +21,8 @@ export const keys = {
   mr: (id: string) => ['mrs', id] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
+  branches: (clone: string) => ['branches', clone] as const,
+  status: ['status'] as const,
 }
 
 export function message(error: unknown): string {

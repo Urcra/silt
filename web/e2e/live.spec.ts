@@ -151,11 +151,16 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await bob.context().close()
 })
 
-test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {
+async function startInNewThread(page: Page, agent: string) {
   await page.goto(live.alice)
-  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('main').getByRole('link', { name: 'New thread' }).click()
+  await page.getByLabel('agent to start').selectOption({ label: agent })
   await page.getByRole('button', { name: 'Start' }).click()
-  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
+}
+
+test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
   await expect(page.getByLabel('permissions')).toHaveValue('ask_before_commands')
   await page.getByLabel('draft').fill('hello')
   await page.getByRole('button', { name: 'Send' }).click()
@@ -164,10 +169,7 @@ test('a new thread starts with an agent in a known clone, which edits without as
 })
 
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
-  await page.goto(live.alice)
-  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await page.getByRole('button', { name: 'Start' }).click()
-  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')
   const draft = page.getByLabel('draft')
   const permission = page.getByRole('group', { name: 'permission' })
@@ -192,12 +194,27 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   await expect(page.getByText('Done: I interrupted your last turn to say: change of plan')).toBeVisible()
 })
 
-async function startInNewThread(page: Page, agent: string) {
+test('a thread started in the background from a branch plans its first prompt and waits in Needs you', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByLabel('agent to start').selectOption({ label: agent })
-  await page.getByRole('button', { name: 'Start' }).click()
-  await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
-}
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  await form.getByLabel('first prompt').fill('write the docs')
+  await form.getByLabel('base branch').selectOption('origin/main')
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByLabel('permissions').selectOption('ask_for_everything')
+  await form.getByLabel('visibility').selectOption('private')
+  await form.getByLabel('Plan first').check()
+  await form.getByLabel('Start in the background').check()
+  await form.getByRole('button', { name: 'Start' }).click()
+
+  await expect(page.getByText('Fake agent started in a new thread')).toBeVisible()
+  await expect(form.getByLabel('first prompt')).toHaveValue('')
+  const waiting = page.getByRole('region', { name: 'needs you' })
+  await waiting.getByRole('link').first().click()
+  await expect(page.getByText('Plan: write the docs')).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
+  await expect(page.getByLabel('permissions')).toHaveValue('ask_for_everything')
+})
 
 test("the agent's modes and model are offered, and Plan first plans in its plan mode", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')

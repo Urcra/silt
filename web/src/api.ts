@@ -6,6 +6,7 @@ import type {
   AgentChoices,
   CommentOn,
   CommentView,
+  DaemonStatus,
   HistoryPage,
   InboxEntry,
   InboxRead,
@@ -17,6 +18,7 @@ import type {
   Queued,
   ReplicaDeltas,
   SearchResult,
+  StartOptions,
   ThreadSummary,
   TurnInfo,
 } from './api.generated'
@@ -108,8 +110,10 @@ export const api = {
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
-  startAgent: (agent: string, where: { thread: string } | { clone: string }) =>
-    request<string>('POST', '/api/agents/start', { agent, ...where }),
+  startAgent: (agent: string, where: { thread: string } | { clone: string }, options: Partial<StartOptions> = {}) =>
+    request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
+  status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false) => request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan }),
   setMode: (id: string, mode: string) => request<string>('POST', `${thread(id)}/agent/mode`, { mode }),
   setSetting: (id: string, setting: string, value: string) =>

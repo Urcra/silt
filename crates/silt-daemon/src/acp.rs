@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
-use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, TextKind};
+use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, StartOptions, TextKind};
 use crate::sessions::NewSession;
 
 pub(crate) struct AcpRun {
@@ -52,6 +52,9 @@ pub(crate) struct AcpRun {
     /// The mode Plan first switched away from, to go back to once the plan
     /// is approved.
     back_to: Option<String>,
+    /// The prompt to send once the agent is ready, and whether to plan
+    /// first.
+    first: Option<(String, bool)>,
 }
 
 /// What a Plan first prompt starts with when the agent has no plan mode.
@@ -118,13 +121,22 @@ impl Core {
         thread: Option<&str>,
         clone: Option<&Path>,
         agent: &str,
+        options: StartOptions,
     ) -> Result<String, CoreError> {
         let info = registry::all(&self.data_dir)
             .into_iter()
             .find(|candidate| candidate.id == agent)
             .ok_or_else(|| CoreError::Invalid(format!("no agent called {agent}")))?;
+        if options.prompt.as_ref().is_some_and(|prompt| prompt.trim().is_empty()) {
+            return Err(CoreError::Invalid("the first prompt is empty".into()));
+        }
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
+                if options.base.is_some() || options.here || options.visibility.is_some() {
+                    return Err(CoreError::Invalid(
+                        "a thread keeps its checkout and visibility; those are for a new thread".into(),
+                    ));
+                }
                 let thread = self.find_thread(selector)?;
                 if self.acp.get(&thread).is_some_and(|run| run.state.running()) {
                     return Err(CoreError::Invalid("an agent is already running in this thread".into()));
@@ -133,14 +145,24 @@ impl Core {
                 (thread, checkout_id, checkout)
             }
             (None, Some(clone)) => {
-                let created = self.create_thread(clone, true, false).await?;
+                let created = self.create_thread(clone, !options.here, false, options.base.as_deref()).await?;
                 if let Some(commit) = created.head {
                     self.record_bundle(created.family, created.thread, &created.repo, commit, &[]).await?;
+                }
+                if let Some(visibility) = options.visibility.clone() {
+                    self.register_thread_now(created.thread).await?;
+                    self.set_visibility(clone, Some(&created.thread.to_string()), visibility).await?;
                 }
                 (created.thread, created.checkout_id, created.checkout)
             }
             (None, None) => return Err(CoreError::Invalid("pick a thread or a clone to start the agent in".into())),
         };
+        if let Some(preset) = options.preset {
+            self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
+        }
+        if let Some(mode) = options.mode.clone() {
+            self.keep_choice(thread, |record| record.mode = Some(mode)).await?;
+        }
         self.next_token += 1;
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
@@ -186,10 +208,19 @@ impl Core {
                 settings: Vec::new(),
                 planning: false,
                 back_to: None,
+                first: options.prompt.map(|prompt| (prompt, options.plan)),
             },
         );
         self.agent_changed(thread).await;
         Ok(thread.to_string())
+    }
+
+    /// The branches a new thread of a clone this machine knows can start from.
+    pub(crate) fn branches(&self, clone: &Path) -> Result<Vec<String>, CoreError> {
+        if !self.clones.values().any(|known| known == clone) {
+            return Err(CoreError::Invalid(format!("this machine knows no clone at {}", clone.display())));
+        }
+        Ok(silt_git::Repo::discover(clone)?.branches()?)
     }
 
     async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
@@ -516,9 +547,18 @@ impl Core {
                         .as_ref()
                         .is_some_and(|modes| modes.current != *mode && modes.available.iter().any(|offered| offered.id == *mode))
                 }) {
-                    send(run, Command::SetMode(mode));
+                    send(run, Command::SetMode(mode.clone()));
+                    // Taken as set, so a Plan first prompt right after knows
+                    // which mode to come back to.
+                    if let Some(modes) = &mut run.modes {
+                        modes.current = mode;
+                    }
                 }
+                let first = run.first.take();
                 self.acp_ready(thread, &session, loaded, &agent).await?;
+                if let Some((prompt, plan)) = first {
+                    self.acp_prompt(&thread.to_string(), &prompt, plan).await?;
+                }
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::ModeChanged(mode)) => {

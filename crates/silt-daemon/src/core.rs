@@ -484,9 +484,10 @@ impl Core {
                 return answer_later(reply, self.presence(&thread, file, line, draft, leaving));
             }
             Request::AcpAgents => Response::ok(self.acp_agents()),
-            Request::AcpStart { thread, clone, agent } => {
-                to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
+            Request::AcpStart { thread, clone, agent, options } => {
+                to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
+            Request::Branches { clone } => to_response(self.branches(&clone)),
             Request::AcpPrompt { thread, text, plan } => to_response(self.acp_prompt(&thread, &text, plan).await),
             Request::AcpMode { thread, mode } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.set_mode(thread, &mode).await),

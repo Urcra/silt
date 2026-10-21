@@ -93,6 +93,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
         .route("/api/agents/start", post(agent_start))
+        .route("/api/clones/branches", get(branches))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
@@ -423,11 +424,22 @@ struct AgentStart {
     #[serde(default)]
     clone: Option<std::path::PathBuf>,
     agent: String,
+    #[serde(default, flatten)]
+    options: crate::protocol::StartOptions,
 }
 
 async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {
-    let request = Request::AcpStart { thread: body.thread, clone: body.clone, agent: body.agent };
+    let request = Request::AcpStart { thread: body.thread, clone: body.clone, agent: body.agent, options: body.options };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct CloneQuery {
+    path: std::path::PathBuf,
+}
+
+async fn branches(State(web): State<Web>, Query(query): Query<CloneQuery>) -> HttpResponse {
+    ask(&web, Request::Branches { clone: query.path }).await
 }
 
 #[derive(Deserialize)]

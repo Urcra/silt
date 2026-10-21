@@ -52,6 +52,23 @@ fn reads_head_branch_remote_and_tree() {
 }
 
 #[test]
+fn lists_branches_and_finds_the_commit_a_name_means() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    git(root, &["branch", "feature"]);
+    git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    let repo = Repo::discover(root).expect("repo");
+    assert_eq!(repo.branches().expect("branches"), ["feature", "main", "origin/main"]);
+
+    let head = repo.head_commit().expect("head");
+    assert_eq!(repo.commit_of("origin/main").expect("resolves"), head);
+    assert_eq!(repo.commit_of(&head.expect("commit").to_string()).expect("resolves"), head);
+    assert_eq!(repo.commit_of("nowhere").expect("resolves"), None);
+    assert_eq!(repo.commit_of("--all").expect("resolves"), None);
+}
+
+#[test]
 fn files_whose_names_are_not_utf8_are_left_out() {
     use std::os::unix::ffi::OsStrExt as _;
     let dir = repo_with_commit();

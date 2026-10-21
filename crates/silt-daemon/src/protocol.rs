@@ -241,6 +241,12 @@ pub enum Request {
         #[serde(default)]
         clone: Option<PathBuf>,
         agent: String,
+        #[serde(default)]
+        options: StartOptions,
+    },
+    /// The branches a new thread of `clone` can start from.
+    Branches {
+        clone: PathBuf,
     },
     /// Sends the person's draft, with teammates' drafts, as the next prompt,
     /// or queues it while the agent is busy (ADR 0022).
@@ -749,6 +755,27 @@ pub struct AgentStatus {
     pub settings: Vec<AgentSetting>,
 }
 
+/// How an agent starts, beyond which agent: for a new thread, where it
+/// works and who sees it, and for any, its mode, preset and first prompt.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(default)]
+pub struct StartOptions {
+    /// A branch, tag or commit for a new thread's checkout to start from,
+    /// rather than what the clone has checked out.
+    pub base: Option<String>,
+    /// A new thread works in the clone itself rather than a checkout of its
+    /// own.
+    pub here: bool,
+    pub mode: Option<String>,
+    pub preset: Option<Preset>,
+    pub visibility: Option<silt_proto::Visibility>,
+    /// Sent once the agent is ready.
+    pub prompt: Option<String>,
+    /// The first prompt is a Plan first one.
+    pub plan: bool,
+}
+
 /// A mode, or one value of a setting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -972,6 +999,7 @@ mod tests {
             SearchFilters::decl(&config),
             SearchResult::decl(&config),
             ShowLine::decl(&config),
+            StartOptions::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),
             TurnInfo::decl(&config),

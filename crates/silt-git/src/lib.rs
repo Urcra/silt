@@ -90,6 +90,38 @@ impl Repo {
         Ok(name.map(|name| name.shorten().to_str_lossy().into_owned()))
     }
 
+    /// Local branches, then remote-tracking ones such as `origin/main`, by
+    /// their short names.
+    pub fn branches(&self) -> Result<Vec<String>, GitError> {
+        let references = self.repo.references().map_err(GitError::gix)?;
+        let mut local = Vec::new();
+        let mut remote = Vec::new();
+        for reference in references.local_branches().map_err(GitError::gix)?.flatten() {
+            local.push(reference.name().shorten().to_str_lossy().into_owned());
+        }
+        for reference in references.remote_branches().map_err(GitError::gix)?.flatten() {
+            let name = reference.name().shorten().to_str_lossy().into_owned();
+            if !name.ends_with("/HEAD") {
+                remote.push(name);
+            }
+        }
+        local.sort();
+        remote.sort();
+        local.extend(remote);
+        Ok(local)
+    }
+
+    /// The commit `rev` (a branch, tag or commit id) names, if any.
+    pub fn commit_of(&self, rev: &str) -> Result<Option<GitOid>, GitError> {
+        if rev.starts_with('-') {
+            return Ok(None);
+        }
+        let Ok(out) = self.git(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], None) else {
+            return Ok(None);
+        };
+        Ok(String::from_utf8_lossy(&out).trim().parse().ok())
+    }
+
     /// Whether executable bits on disk mean anything here; git turns this
     /// off where the filesystem can't keep them (WSL's `/mnt/c`).
     pub fn tracks_file_mode(&self) -> bool {

@@ -213,6 +213,26 @@ owner: string | null, status: ThreadStatus | null, repo: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
+export type StartOptions = { 
+/**
+ * A branch, tag or commit for a new thread's checkout to start from,
+ * rather than what the clone has checked out.
+ */
+base: string | null, 
+/**
+ * A new thread works in the clone itself rather than a checkout of its
+ * own.
+ */
+here: boolean, mode: string | null, preset: Preset | null, visibility: Visibility | null, 
+/**
+ * Sent once the agent is ready.
+ */
+prompt: string | null, 
+/**
+ * The first prompt is a Plan first one.
+ */
+plan: boolean, };
+
 export type TextKind = "message" | "thought" | "tool";
 
 export type ThreadSummary = { id: string, repo: string, title: string | null, 
