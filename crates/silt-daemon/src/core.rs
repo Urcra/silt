@@ -237,11 +237,15 @@ impl Core {
             core.start_checkout(record, entries)?;
         }
         core.load_sessions().await?;
-        let ids: Vec<i64> = core.checkouts.keys().copied().collect();
-        for id in ids {
-            if let Err(error) = core.rescan(id).await {
-                warn!(%error, checkout = id, "could not look over the checkout at startup; changes are picked up as they happen");
-            }
+        // Queued rather than done here, so the socket is already taking
+        // requests while they run; they still come before any request.
+        for checkout in core.checkouts.values() {
+            let _ = core.events.send(Event::Changed {
+                checkout: checkout.record.id,
+                paths: vec![checkout.record.path.clone()],
+                noticed: Instant::now(),
+                settled: true,
+            });
         }
         Ok(core)
     }
@@ -547,7 +551,7 @@ impl Core {
     }
 
     fn files_under(&self, checkout: i64, relative: &str) -> Result<Vec<String>, CoreError> {
-        let files = self.checkout(checkout)?.repo.worktree_files()?;
+        let files = self.checkout(checkout)?.repo.worktree_files_under(relative)?;
         Ok(files
             .into_iter()
             .filter(|path| relative.is_empty() || path.starts_with(&format!("{relative}/")) || path == relative)
@@ -575,8 +579,21 @@ impl Core {
     /// meanwhile and need another pass.
     pub(crate) async fn ingest_file(&mut self, checkout_id: i64, path: &str) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
+        let entry = self.checkout(checkout_id)?.bridge.entries().get(path).cloned();
+        // Same size and modification time as recorded: unchanged, without
+        // reading and hashing it, which a rescan would do for every file.
+        // File times tick coarsely, so two quick writes can share one; a
+        // recent time isn't trusted, as git doesn't.
+        let settled = |mtime_ns: i64| mtime_ns != 0 && mtime_ns < (now_ms() - 2_000).saturating_mul(1_000_000);
+        if let (Some(entry), Ok(Some((size, mtime_ns, _)))) = (&entry, disk::stat(&root, path))
+            && entry.size == size
+            && entry.mtime_ns == mtime_ns
+            && settled(mtime_ns)
+        {
+            return Ok(Vec::new());
+        }
         let raw = disk::read(&root, path)?;
-        let entry_hash = self.checkout(checkout_id)?.bridge.entries().get(path).map(|entry| entry.hash);
+        let entry_hash = entry.map(|entry| entry.hash);
         let family_id = self.checkout(checkout_id)?.family;
         let thread = self.checkout(checkout_id)?.record.thread;
         let in_family = || {

@@ -648,7 +648,8 @@ impl Core {
             .filter(|session| session.record.thread == thread)
             .map(|session| session.record.checkout_id)
             .collect();
-        for id in ids {
+        for id in &ids {
+            let id = id.clone();
             let snapshot = self.session(&id).and_then(|session| {
                 let found = Found {
                     id: id.clone(),
@@ -669,12 +670,15 @@ impl Core {
                 }
                 None => self.tail_session_up_to(&id, u64::MAX).await?,
             }
-            for checkout in &checkouts {
-                if self.checkouts.contains_key(checkout) {
-                    self.rescan(*checkout).await?;
-                }
+        }
+        // Once for all the thread's sessions, with their last marks read.
+        for checkout in &checkouts {
+            if self.checkouts.contains_key(checkout) {
+                self.rescan(*checkout).await?;
             }
-            if let Some(session) = self.session_mut(&id) {
+        }
+        for id in &ids {
+            if let Some(session) = self.session_mut(id) {
                 session.live = false;
                 session.in_turn = false;
                 session.open_tool = None;

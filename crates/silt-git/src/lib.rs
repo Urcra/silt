@@ -145,7 +145,18 @@ impl Repo {
     /// Files in the worktree that Silt tracks: everything git tracks that
     /// still exists, plus untracked files that aren't ignored.
     pub fn worktree_files(&self) -> Result<Vec<String>, GitError> {
-        let output = self.git(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"], None)?;
+        self.worktree_files_under("")
+    }
+
+    /// `worktree_files` under the directory `dir` (relative, `""` for all),
+    /// without listing the rest of the worktree.
+    pub fn worktree_files_under(&self, dir: &str) -> Result<Vec<String>, GitError> {
+        let mut args = vec!["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"];
+        let pathspec = format!(":(literal){dir}");
+        if !dir.is_empty() {
+            args.extend(["--", &pathspec]);
+        }
+        let output = self.git(&args, None)?;
         let mut files: Vec<String> = output
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())

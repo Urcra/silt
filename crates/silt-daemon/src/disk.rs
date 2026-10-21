@@ -64,6 +64,26 @@ fn inside(root: &Path, path: &str, create: bool) -> io::Result<PathBuf> {
     Ok(full)
 }
 
+/// A regular file's size, modification time and executable bit, without
+/// reading it; `None` as for `read`.
+pub fn stat(root: &Path, path: &str) -> io::Result<Option<(u64, i64, bool)>> {
+    let full = match inside(root, path, false) {
+        Ok(full) => full,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match fs::symlink_metadata(&full) {
+        Ok(metadata) if metadata.is_file() => Ok(Some((
+            metadata.len(),
+            mtime_ns(&metadata),
+            metadata.permissions().mode() & 0o111 != 0,
+        ))),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Reads a regular file. Missing files, symlinks and paths Silt doesn't
 /// write give `None`.
 pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
