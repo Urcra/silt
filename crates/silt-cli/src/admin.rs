@@ -84,23 +84,36 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
         .create(&data)
         .or_raise(|| CliError(format!("cannot create {}", data.display())))?;
-    let mut config = Config::default();
+    // Replacing a config keeps what these options don't set, sign-in
+    // providers above all.
+    let mut config = if config_path.exists() {
+        Config::load(&data).or_raise(|| CliError(format!("cannot read {}", config_path.display())))?
+    } else {
+        Config::default()
+    };
     if let Some(listen) = options.listen {
         config.listen = listen;
     }
-    config.public_url = options.public_url.map(|url| url.trim_end_matches('/').to_owned());
-    fs::write(&config_path, config.to_toml()).or_raise(|| CliError(format!("cannot write {}", config_path.display())))?;
+    if let Some(url) = options.public_url {
+        config.public_url = Some(url.trim_end_matches('/').to_owned());
+    }
+    if config.listen.parse::<std::net::SocketAddr>().is_err() {
+        return Err(fail(format!("{} is not an address to listen on, such as 127.0.0.1:8090", config.listen)));
+    }
     let password = if options.password_stdin {
         read_password("", true)?
     } else {
         generated_password()
     };
+    // The admin is made first, which also checks the name and password, so
+    // a refused one leaves no config behind.
     runtime()?
         .block_on(async {
             let admin = Admin::open(&data).await?;
             admin.add_user(&options.admin, Some(&password), true).await
         })
         .or_raise(|| CliError("cannot create the admin".into()))?;
+    fs::write(&config_path, config.to_toml()).or_raise(|| CliError(format!("cannot write {}", config_path.display())))?;
     println!("wrote {}", config_path.display());
     println!("created admin {}", options.admin);
     if !options.password_stdin {
