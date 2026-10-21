@@ -123,6 +123,7 @@ pub struct Core {
     /// Blobs this daemon already sent the server, so a retried push doesn't
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
+    pub(crate) registry_checked: bool,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -181,6 +182,7 @@ impl Core {
             web: None,
             recoveries: Vec::new(),
             uploaded: std::sync::Arc::default(),
+            registry_checked: false,
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);

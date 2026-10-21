@@ -49,7 +49,14 @@ fn silt_exe() -> PathBuf {
 }
 
 impl Core {
-    pub(crate) fn acp_agents(&self) -> AgentChoices {
+    /// The agents the web UI can start. The registry's copy is brought up to
+    /// date in the background the first time someone looks, not whenever a
+    /// daemon starts; the bundled one answers meanwhile.
+    pub(crate) fn acp_agents(&mut self) -> AgentChoices {
+        if !self.registry_checked {
+            self.registry_checked = true;
+            tokio::spawn(registry::refresh(self.data_dir.clone()));
+        }
         AgentChoices {
             agents: registry::all(&self.data_dir, &silt_exe())
                 .into_iter()

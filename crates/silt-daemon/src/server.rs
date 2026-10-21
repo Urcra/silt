@@ -79,7 +79,6 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
     let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
-    tokio::spawn(silt_acp::registry::refresh(data_dir.to_owned()));
 
     if socket.exists() {
         fs::remove_file(socket)?;
