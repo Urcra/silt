@@ -13,7 +13,6 @@ use silt_log::{MrOp, Op};
 use silt_proto::Visibility;
 use silt_sync::Room;
 use silt_types::{Frontier, ThreadId};
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::{UserId, id_from};
@@ -69,65 +68,58 @@ fn level(text: Option<String>) -> Option<Visibility> {
 impl Facts {
     /// `forks` maps each fork to its source.
     async fn load(db: &SqlitePool, user: UserId, forks: &HashMap<ThreadId, ThreadId>) -> Result<Self, sqlx::Error> {
-        let projects: HashMap<String, Project> = sqlx::query("SELECT repo, org_id, visibility FROM projects")
+        let projects: HashMap<String, Project> = sqlx::query!("SELECT repo, org_id, visibility FROM projects")
             .fetch_all(db)
             .await?
             .into_iter()
-            .map(|row| (row.get("repo"), Project { org: row.get("org_id"), setting: level(row.get("visibility")) }))
+            .map(|row| (row.repo, Project { org: row.org_id, setting: level(row.visibility) }))
             .collect();
-        let defaults: HashMap<i64, Visibility> = sqlx::query("SELECT id, default_visibility FROM orgs")
+        let defaults: HashMap<i64, Visibility> = sqlx::query!(r#"SELECT id AS "id!", default_visibility FROM orgs"#)
             .fetch_all(db)
             .await?
             .into_iter()
-            .map(|row| (row.get("id"), level(row.get("default_visibility")).unwrap_or(Visibility::Org)))
+            .map(|row| (row.id, level(Some(row.default_visibility)).unwrap_or(Visibility::Org)))
             .collect();
-        let orgs: HashSet<i64> = sqlx::query("SELECT org_id FROM org_members WHERE user_id = ?")
-            .bind(user)
+        let orgs: HashSet<i64> = sqlx::query_scalar!("SELECT org_id FROM org_members WHERE user_id = ?", user)
             .fetch_all(db)
             .await?
             .into_iter()
-            .map(|row| row.get("org_id"))
             .collect();
-        let teams: HashSet<(i64, String)> =
-            sqlx::query("SELECT t.org_id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ?")
-                .bind(user)
-                .fetch_all(db)
-                .await?
-                .into_iter()
-                .map(|row| (row.get("org_id"), row.get("name")))
-                .collect();
-        let threads: HashMap<ThreadId, ThreadRow> =
-            sqlx::query("SELECT id, family_id, owner_id, visibility, repo FROM threads WHERE deleted_ms IS NULL")
-                .fetch_all(db)
-                .await?
-                .iter()
-                .map(|row| {
-                    let id = ThreadId(id_from(row.get("id")));
-                    (
-                        id,
-                        ThreadRow {
-                            owner: row.get("owner_id"),
-                            family: id_from(row.get("family_id")),
-                            setting: level(row.get("visibility")),
-                            forked_from: forks.get(&id).copied(),
-                            repo: row.get("repo"),
-                        },
-                    )
-                })
-                .collect();
-        let owned = sqlx::query("SELECT id FROM families WHERE owner_id = ?")
-            .bind(user)
+        let teams: HashSet<(i64, String)> = sqlx::query!(
+            "SELECT t.org_id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ?",
+            user
+        )
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.org_id, row.name))
+        .collect();
+        let threads: HashMap<ThreadId, ThreadRow> = sqlx::query!(
+            r#"SELECT id, family_id, owner_id AS "owner_id: UserId", visibility, repo FROM threads WHERE deleted_ms IS NULL"#
+        )
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let id = ThreadId(id_from(&row.id));
+            let thread = ThreadRow {
+                owner: row.owner_id,
+                family: id_from(&row.family_id),
+                setting: level(row.visibility),
+                forked_from: forks.get(&id).copied(),
+                repo: row.repo,
+            };
+            (id, thread)
+        })
+        .collect();
+        let owned = sqlx::query_scalar!("SELECT id FROM families WHERE owner_id = ?", user)
             .fetch_all(db)
             .await?
             .iter()
-            .map(|row| id_from(row.get("id")))
+            .map(|id| id_from(id))
             .collect();
-        let known_threads = sqlx::query("SELECT id FROM threads")
-            .fetch_all(db)
-            .await?
-            .iter()
-            .map(|row| ThreadId(id_from(row.get("id"))))
-            .collect();
+        let known_threads =
+            sqlx::query_scalar!("SELECT id FROM threads").fetch_all(db).await?.iter().map(|id| ThreadId(id_from(id))).collect();
         Ok(Self { projects, defaults, orgs, teams, threads, owned, known_threads })
     }
 

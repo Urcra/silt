@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_requests WHERE code_hash = ? AND user_id IS NOT NULL RETURNING name, user_id AS \"user_id!: UserId\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "device_requests",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "user_id!: UserId",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "device_requests",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "742bfe84cf4609374a2480b7c489fbc7348c6f7771bd16ce6d6e6f1ae49da8a4"
+}

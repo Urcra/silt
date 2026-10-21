@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT org_id FROM org_members WHERE user_id = ? ORDER BY rowid LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "org_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_members",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "08ca1489d026e6fd77e8af499b7d29ab599fd831e9bd5af3b4025912ce3681b7"
+}

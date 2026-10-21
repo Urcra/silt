@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notifications WHERE thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ee89dc17c800d9a98f847d3d4e6dd935b4e9a0c6d4cc67dd6b0fb66b820ba7be"
+}

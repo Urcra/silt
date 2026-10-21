@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO devices (id, name, token_hash, created_ms, last_used_ms, user_id) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f5cb883c919ec47cefb1e9112e117e8776ccc3b723507c582024d97f23e019d8"
+}

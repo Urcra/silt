@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sign_in_states (state_hash, provider, verifier, invite, next, expires_ms) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "5b9ae41479457356d72172c985b9060244770ff6de78b765358239a318d6588b"
+}

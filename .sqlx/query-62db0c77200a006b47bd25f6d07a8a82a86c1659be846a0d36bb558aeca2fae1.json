@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT org_id FROM projects WHERE repo = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "org_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "62db0c77200a006b47bd25f6d07a8a82a86c1659be846a0d36bb558aeca2fae1"
+}

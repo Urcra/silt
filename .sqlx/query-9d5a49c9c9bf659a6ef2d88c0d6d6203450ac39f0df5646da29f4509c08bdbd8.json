@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO thread_activity (thread_id, merged) VALUES (?, 1)\n                     ON CONFLICT (thread_id) DO UPDATE SET merged = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9d5a49c9c9bf659a6ef2d88c0d6d6203450ac39f0df5646da29f4509c08bdbd8"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO deltas (family_id, seq, format, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3 FROM deltas WHERE family_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a963c1c739af03a8c8faa71ac03e7df2d5edd35850841f7b19a53e5ecc7c9135"
+}

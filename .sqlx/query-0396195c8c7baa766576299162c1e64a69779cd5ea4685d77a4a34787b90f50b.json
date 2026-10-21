@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM deltas WHERE family_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0396195c8c7baa766576299162c1e64a69779cd5ea4685d77a4a34787b90f50b"
+}

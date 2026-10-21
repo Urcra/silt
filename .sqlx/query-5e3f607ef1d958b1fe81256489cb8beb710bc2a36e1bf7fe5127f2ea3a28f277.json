@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5e3f607ef1d958b1fe81256489cb8beb710bc2a36e1bf7fe5127f2ea3a28f277"
+}

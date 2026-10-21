@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 FROM projects WHERE repo = ? AND org_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "1",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a3f8b35f4bf5e6fd2578b14d6a3b4dbcb4ab9a224cd2147ee5131aaa8d377dab"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO leases (thread_id, device_id, epoch) VALUES (?, ?, 1)\n         ON CONFLICT (thread_id) DO UPDATE SET device_id = excluded.device_id, epoch = leases.epoch + 1\n         RETURNING epoch",
+  "describe": {
+    "columns": [
+      {
+        "name": "epoch",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leases",
+            "name": "epoch"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a3ddda4ab794f53b987e6183bc4f834018e1ecf2d17658a53d12a560d178f4a7"
+}

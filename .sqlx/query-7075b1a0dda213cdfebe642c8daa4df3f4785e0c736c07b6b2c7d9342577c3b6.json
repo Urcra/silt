@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, owner_id AS \"owner_id: UserId\", deleted_ms FROM threads WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "owner_id: UserId",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "owner_id"
+          }
+        }
+      },
+      {
+        "name": "deleted_ms",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "deleted_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7075b1a0dda213cdfebe642c8daa4df3f4785e0c736c07b6b2c7d9342577c3b6"
+}

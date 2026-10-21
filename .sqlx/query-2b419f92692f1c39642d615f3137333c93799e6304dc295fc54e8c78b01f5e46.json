@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2b419f92692f1c39642d615f3137333c93799e6304dc295fc54e8c78b01f5e46"
+}

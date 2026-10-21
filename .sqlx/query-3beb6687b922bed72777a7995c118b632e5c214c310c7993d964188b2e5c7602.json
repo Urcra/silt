@@ -1,0 +1,69 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.id, u.name AS owner, th.path, th.last_ms,\n                CASE WHEN COALESCE(a.merged, 0) = 1 THEN 'merged'\n                     WHEN COALESCE(a.last_ms, 0) >= ?1 THEN 'active' ELSE 'idle' END AS \"status!: String\"\n         FROM touches th\n         JOIN threads t ON t.id = th.thread_id\n         JOIN families f ON f.id = t.family_id\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN thread_activity a ON a.thread_id = t.id\n         WHERE t.repo = ?2\n           AND (?3 = '' OR th.path = ?3 OR th.path LIKE ?3 || '/%')\n         ORDER BY th.last_ms DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "touches",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "last_ms",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "touches",
+            "name": "last_ms"
+          }
+        }
+      },
+      {
+        "name": "status!: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3beb6687b922bed72777a7995c118b632e5c214c310c7993d964188b2e5c7602"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO projects (repo, org_id)\n         SELECT ?, org_id FROM org_members WHERE user_id = ? ORDER BY rowid LIMIT 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "40b2d5bf4ff4f41619635b6b6f32e18da6497939203085ab056083088d8a1934"
+}

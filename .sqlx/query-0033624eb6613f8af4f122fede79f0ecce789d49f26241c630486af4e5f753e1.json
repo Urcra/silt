@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO org_members (org_id, user_id, role) SELECT id, ?, ? FROM orgs WHERE name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "0033624eb6613f8af4f122fede79f0ecce789d49f26241c630486af4e5f753e1"
+}

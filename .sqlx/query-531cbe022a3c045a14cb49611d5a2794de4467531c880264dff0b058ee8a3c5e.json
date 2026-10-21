@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo, org_id, visibility FROM projects",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "org_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "visibility"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "531cbe022a3c045a14cb49611d5a2794de4467531c880264dff0b058ee8a3c5e"
+}

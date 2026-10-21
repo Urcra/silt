@@ -9,7 +9,6 @@ use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use silt_proto::{DevicePollReply, LoginReply};
 use silt_types::DeviceId;
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::{OpenError, Server, ServerError, UserId, hash, id_bytes, id_from, now_ms, open_db};
@@ -88,35 +87,40 @@ pub struct User {
     pub disabled: bool,
 }
 
-fn user_from(row: &sqlx::sqlite::SqliteRow) -> User {
-    User {
-        id: row.get("id"),
-        name: row.get("name"),
-        display_name: row.get("display_name"),
-        email: row.get("email"),
-        admin: row.get::<i64, _>("admin") != 0,
-        has_password: row.get::<Option<String>, _>("password_hash").is_some(),
-        disabled: row.get::<i64, _>("disabled") != 0,
-    }
-}
-
-/// A static query selecting the columns `user_from` reads.
-macro_rules! users_query {
-    ($rest:literal) => {
-        concat!("SELECT id, name, display_name, email, admin, password_hash, disabled FROM users ", $rest)
-    };
-}
-
 pub(crate) async fn user_by_id(db: &SqlitePool, id: UserId) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE id = ?")).bind(id).fetch_optional(db).await?.as_ref().map(user_from))
+    sqlx::query_as!(
+        User,
+        r#"SELECT id AS "id!: UserId", name, display_name, email, admin AS "admin: bool",
+                  password_hash IS NOT NULL AS "has_password!: bool", disabled AS "disabled: bool"
+           FROM users WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(db)
+    .await
 }
 
 pub(crate) async fn user_by_name(db: &SqlitePool, name: &str) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE name = ?")).bind(name).fetch_optional(db).await?.as_ref().map(user_from))
+    sqlx::query_as!(
+        User,
+        r#"SELECT id AS "id!: UserId", name, display_name, email, admin AS "admin: bool",
+                  password_hash IS NOT NULL AS "has_password!: bool", disabled AS "disabled: bool"
+           FROM users WHERE name = ?"#,
+        name
+    )
+    .fetch_optional(db)
+    .await
 }
 
 pub(crate) async fn user_by_email(db: &SqlitePool, email: &str) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE lower(email) = lower(?)")).bind(email).fetch_optional(db).await?.as_ref().map(user_from))
+    sqlx::query_as!(
+        User,
+        r#"SELECT id AS "id!: UserId", name, display_name, email, admin AS "admin: bool",
+                  password_hash IS NOT NULL AS "has_password!: bool", disabled AS "disabled: bool"
+           FROM users WHERE lower(email) = lower(?)"#,
+        email
+    )
+    .fetch_optional(db)
+    .await
 }
 
 pub(crate) struct NewUser<'a> {
@@ -136,19 +140,20 @@ pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<Us
     }
     let password_hash = new.password.map(hash_password);
     let mut tx = db.begin().await?;
-    let inserted = sqlx::query(
-        "INSERT INTO users (name, display_name, email, password_hash, admin, created_ms) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (name) DO NOTHING RETURNING id",
+    let now = now_ms();
+    let inserted = sqlx::query_scalar!(
+        r#"INSERT INTO users (name, display_name, email, password_hash, admin, created_ms) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (name) DO NOTHING RETURNING id AS "id!: UserId""#,
+        new.name,
+        new.display_name,
+        new.email,
+        password_hash,
+        new.admin,
+        now,
     )
-    .bind(new.name)
-    .bind(new.display_name)
-    .bind(new.email)
-    .bind(password_hash)
-    .bind(i64::from(new.admin))
-    .bind(now_ms())
     .fetch_optional(&mut *tx)
     .await?;
-    let id: UserId = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?.get("id");
+    let id = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?;
     crate::orgs::join_default_org(&mut *tx, id).await?;
     tx.commit().await?;
     Ok(id)
@@ -228,51 +233,57 @@ pub(crate) async fn check_password(server: &Server, name: &str, password: &str) 
     if checks.cooling_down(name) {
         return Err(PasswordError::TooManyFailures);
     }
-    let row = sqlx::query(users_query!("WHERE name = ?")).bind(name).fetch_optional(server.db()).await?;
-    let stored: Option<String> = row.as_ref().and_then(|row| row.get("password_hash"));
+    let stored =
+        sqlx::query_scalar!("SELECT password_hash FROM users WHERE name = ?", name).fetch_optional(server.db()).await?.flatten();
     let matches =
         checks.verify(stored.clone().unwrap_or_else(|| DUMMY_HASH.to_owned()), password.to_owned()).await && stored.is_some();
     checks.record(name, matches);
-    Ok(row.filter(|_| matches).map(|row| user_from(&row)).filter(|user| !user.disabled))
+    if !matches {
+        return Ok(None);
+    }
+    Ok(user_by_name(server.db(), name).await?.filter(|user| !user.disabled))
 }
 
 /// Registers a device of `user` and returns its token, shown only now.
 pub(crate) async fn issue_device(db: &SqlitePool, user: UserId, name: &str) -> Result<LoginReply, sqlx::Error> {
     let device = DeviceId(uuid::Uuid::new_v4().as_u128());
     let token = random_token();
-    sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, last_used_ms, user_id) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(id_bytes(device.0))
-        .bind(name)
-        .bind(hash(&token).to_vec())
-        .bind(now_ms())
-        .bind(now_ms())
-        .bind(user)
-        .execute(db)
-        .await?;
-    let name = sqlx::query("SELECT name FROM users WHERE id = ?").bind(user).fetch_one(db).await?.get("name");
+    let (device_id, token_hash, now) = (id_bytes(device.0), hash(&token), now_ms());
+    sqlx::query!(
+        "INSERT INTO devices (id, name, token_hash, created_ms, last_used_ms, user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        device_id,
+        name,
+        token_hash,
+        now,
+        now,
+        user,
+    )
+    .execute(db)
+    .await?;
+    let name = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", user).fetch_one(db).await?;
     Ok(LoginReply { device, token, user: name })
 }
 
 /// The device and user a device token stands for, unless the token lapsed
 /// from disuse or its user is disabled.
 pub(crate) async fn device_caller(db: &SqlitePool, token: &str) -> Result<Option<(DeviceId, UserId)>, sqlx::Error> {
-    let now = now_ms();
-    let row = sqlx::query(
-        "SELECT d.id, d.user_id, d.last_used_ms FROM devices d JOIN users u ON u.id = d.user_id
-         WHERE d.token_hash = ? AND d.last_used_ms > ? AND u.disabled = 0",
+    let (token_hash, now) = (hash(token), now_ms());
+    let idle_since = now - DEVICE_IDLE_MS;
+    let row = sqlx::query!(
+        r#"SELECT d.id, d.user_id AS "user_id: UserId", d.last_used_ms FROM devices d JOIN users u ON u.id = d.user_id
+         WHERE d.token_hash = ? AND d.last_used_ms > ? AND u.disabled = 0"#,
+        token_hash,
+        idle_since,
     )
-    .bind(hash(token).to_vec())
-    .bind(now - DEVICE_IDLE_MS)
     .fetch_optional(db)
     .await?;
     let Some(row) = row else {
         return Ok(None);
     };
-    let device: Vec<u8> = row.get("id");
-    if row.get::<i64, _>("last_used_ms") < now - DEVICE_USE_GRANULARITY_MS {
-        sqlx::query("UPDATE devices SET last_used_ms = ? WHERE id = ?").bind(now).bind(&device).execute(db).await?;
+    if row.last_used_ms < now - DEVICE_USE_GRANULARITY_MS {
+        sqlx::query!("UPDATE devices SET last_used_ms = ? WHERE id = ?", now, row.id).execute(db).await?;
     }
-    Ok(Some((DeviceId(id_from(&device)), row.get("user_id"))))
+    Ok(Some((DeviceId(id_from(&row.id)), row.user_id)))
 }
 
 /// A signed-in device, as its owner sees it.
@@ -284,17 +295,17 @@ pub(crate) struct DeviceInfo {
 }
 
 pub(crate) async fn devices_of(db: &SqlitePool, user: UserId) -> Result<Vec<DeviceInfo>, sqlx::Error> {
-    let rows = sqlx::query("SELECT id, name, created_ms, last_used_ms FROM devices WHERE user_id = ? ORDER BY last_used_ms DESC")
-        .bind(user)
-        .fetch_all(db)
-        .await?;
+    let rows =
+        sqlx::query!("SELECT id, name, created_ms, last_used_ms FROM devices WHERE user_id = ? ORDER BY last_used_ms DESC", user)
+            .fetch_all(db)
+            .await?;
     Ok(rows
-        .iter()
+        .into_iter()
         .map(|row| DeviceInfo {
-            id: DeviceId(id_from(row.get("id"))),
-            name: row.get("name"),
-            created_ms: row.get("created_ms"),
-            last_used_ms: row.get("last_used_ms"),
+            id: DeviceId(id_from(&row.id)),
+            name: row.name,
+            created_ms: row.created_ms,
+            last_used_ms: row.last_used_ms,
         })
         .collect())
 }
@@ -302,14 +313,11 @@ pub(crate) async fn devices_of(db: &SqlitePool, user: UserId) -> Result<Vec<Devi
 /// Signs out `device` if it belongs to `user`; returns whether it did.
 pub(crate) async fn revoke_device(db: &SqlitePool, user: UserId, device: DeviceId) -> Result<bool, sqlx::Error> {
     let mut tx = db.begin().await?;
-    let revoked = sqlx::query("DELETE FROM devices WHERE id = ? AND user_id = ?")
-        .bind(id_bytes(device.0))
-        .bind(user)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-        == 1;
-    sqlx::query("DELETE FROM leases WHERE device_id = ?").bind(id_bytes(device.0)).execute(&mut *tx).await?;
+    let device = id_bytes(device.0);
+    let revoked =
+        sqlx::query!("DELETE FROM devices WHERE id = ? AND user_id = ?", device, user).execute(&mut *tx).await?.rows_affected()
+            == 1;
+    sqlx::query!("DELETE FROM leases WHERE device_id = ?", device).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(revoked)
 }
@@ -317,51 +325,49 @@ pub(crate) async fn revoke_device(db: &SqlitePool, user: UserId, device: DeviceI
 /// Signs `user` out of every device and browser.
 pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: UserId) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)")
-        .bind(user)
+    sqlx::query!("DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)", user)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM devices WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM web_sessions WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM device_requests WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM devices WHERE user_id = ?", user).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM web_sessions WHERE user_id = ?", user).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM device_requests WHERE user_id = ?", user).execute(&mut *tx).await?;
     tx.commit().await
 }
 
 /// Signs `user` out of every browser except the one holding `keep`.
 pub(crate) async fn end_other_sessions(db: &SqlitePool, user: UserId, keep: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM web_sessions WHERE user_id = ? AND token_hash != ?")
-        .bind(user)
-        .bind(hash(keep).to_vec())
-        .execute(db)
-        .await?;
+    let keep = hash(keep);
+    sqlx::query!("DELETE FROM web_sessions WHERE user_id = ? AND token_hash != ?", user, keep).execute(db).await?;
     Ok(())
 }
 
 pub(crate) async fn create_session(db: &SqlitePool, user: UserId) -> Result<String, sqlx::Error> {
     let token = random_token();
-    sqlx::query("INSERT INTO web_sessions (token_hash, user_id, expires_ms) VALUES (?, ?, ?)")
-        .bind(hash(&token).to_vec())
-        .bind(user)
-        .bind(now_ms() + SESSION_TTL_MS)
+    let (token_hash, expires) = (hash(&token), now_ms() + SESSION_TTL_MS);
+    sqlx::query!("INSERT INTO web_sessions (token_hash, user_id, expires_ms) VALUES (?, ?, ?)", token_hash, user, expires)
         .execute(db)
         .await?;
     Ok(token)
 }
 
 pub(crate) async fn session_user(db: &SqlitePool, token: &str) -> Result<Option<User>, sqlx::Error> {
-    let row = sqlx::query("SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_ms > ?")
-        .bind(hash(token).to_vec())
-        .bind(now_ms())
-        .fetch_optional(db)
-        .await?;
-    match row {
-        Some(row) => Ok(user_by_id(db, row.get("user_id")).await?.filter(|user| !user.disabled)),
+    let (token_hash, now) = (hash(token), now_ms());
+    let user = sqlx::query_scalar!(
+        r#"SELECT user_id AS "user_id: UserId" FROM web_sessions WHERE token_hash = ? AND expires_ms > ?"#,
+        token_hash,
+        now,
+    )
+    .fetch_optional(db)
+    .await?;
+    match user {
+        Some(user) => Ok(user_by_id(db, user).await?.filter(|user| !user.disabled)),
         None => Ok(None),
     }
 }
 
 pub(crate) async fn end_session(db: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM web_sessions WHERE token_hash = ?").bind(hash(token).to_vec()).execute(db).await?;
+    let token_hash = hash(token);
+    sqlx::query!("DELETE FROM web_sessions WHERE token_hash = ?", token_hash).execute(db).await?;
     Ok(())
 }
 
@@ -390,35 +396,42 @@ pub(crate) fn normalize_user_code(code: &str) -> String {
 pub(crate) async fn start_device(db: &SqlitePool, name: &str) -> Result<(String, String), sqlx::Error> {
     let device_code = random_token();
     let user_code = user_code();
-    sqlx::query("INSERT INTO device_requests (code_hash, user_code, name, expires_ms) VALUES (?, ?, ?, ?)")
-        .bind(hash(&device_code).to_vec())
-        .bind(&user_code)
-        .bind(name)
-        .bind(now_ms() + DEVICE_REQUEST_TTL_MS)
-        .execute(db)
-        .await?;
+    let (code_hash, expires) = (hash(&device_code), now_ms() + DEVICE_REQUEST_TTL_MS);
+    sqlx::query!(
+        "INSERT INTO device_requests (code_hash, user_code, name, expires_ms) VALUES (?, ?, ?, ?)",
+        code_hash,
+        user_code,
+        name,
+        expires,
+    )
+    .execute(db)
+    .await?;
     Ok((device_code, user_code))
 }
 
 /// The device name waiting under `user_code`, if the request is current.
 pub(crate) async fn device_request(db: &SqlitePool, user_code: &str) -> Result<Option<String>, sqlx::Error> {
-    Ok(sqlx::query("SELECT name FROM device_requests WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
-        .bind(normalize_user_code(user_code))
-        .bind(now_ms())
-        .fetch_optional(db)
-        .await?
-        .map(|row| row.get("name")))
+    let (user_code, now) = (normalize_user_code(user_code), now_ms());
+    sqlx::query_scalar!(
+        "SELECT name FROM device_requests WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL",
+        user_code,
+        now,
+    )
+    .fetch_optional(db)
+    .await
 }
 
 pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: UserId) -> Result<bool, sqlx::Error> {
-    let updated =
-        sqlx::query("UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
-            .bind(user)
-            .bind(normalize_user_code(user_code))
-            .bind(now_ms())
-            .execute(db)
-            .await?
-            .rows_affected();
+    let (user_code, now) = (normalize_user_code(user_code), now_ms());
+    let updated = sqlx::query!(
+        "UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL",
+        user,
+        user_code,
+        now,
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
     Ok(updated == 1)
 }
 
@@ -426,23 +439,20 @@ pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: UserI
 /// are created without an account, so they must not pile up.
 pub(crate) async fn sweep_expired(db: &SqlitePool) -> Result<(), sqlx::Error> {
     let now = now_ms();
-    for statement in [
-        "DELETE FROM device_requests WHERE expires_ms <= ?",
-        "DELETE FROM sign_in_states WHERE expires_ms <= ?",
-        "DELETE FROM pairing_codes WHERE expires_ms <= ?",
-        "DELETE FROM web_sessions WHERE expires_ms <= ?",
-    ] {
-        sqlx::query(statement).bind(now).execute(db).await?;
-    }
-    sqlx::query("DELETE FROM devices WHERE last_used_ms <= ?").bind(now - DEVICE_IDLE_MS).execute(db).await?;
-    sqlx::query("DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)").execute(db).await?;
+    let idle_since = now - DEVICE_IDLE_MS;
+    sqlx::query!("DELETE FROM device_requests WHERE expires_ms <= ?", now).execute(db).await?;
+    sqlx::query!("DELETE FROM sign_in_states WHERE expires_ms <= ?", now).execute(db).await?;
+    sqlx::query!("DELETE FROM pairing_codes WHERE expires_ms <= ?", now).execute(db).await?;
+    sqlx::query!("DELETE FROM web_sessions WHERE expires_ms <= ?", now).execute(db).await?;
+    sqlx::query!("DELETE FROM devices WHERE last_used_ms <= ?", idle_since).execute(db).await?;
+    sqlx::query!("DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)").execute(db).await?;
     Ok(())
 }
 
 /// Refuses a waiting request; one already approved stays approved.
 pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<bool, sqlx::Error> {
-    let denied = sqlx::query("DELETE FROM device_requests WHERE user_code = ? AND user_id IS NULL")
-        .bind(normalize_user_code(user_code))
+    let user_code = normalize_user_code(user_code);
+    let denied = sqlx::query!("DELETE FROM device_requests WHERE user_code = ? AND user_id IS NULL", user_code)
         .execute(db)
         .await?
         .rows_affected();
@@ -450,22 +460,22 @@ pub(crate) async fn deny_device(db: &SqlitePool, user_code: &str) -> Result<bool
 }
 
 pub(crate) async fn poll_device(db: &SqlitePool, device_code: &str) -> Result<DevicePollReply, sqlx::Error> {
+    let code_hash = hash(device_code);
     // Taking an approved request and issuing its token happen once, however
     // many polls race for it.
-    let approved = sqlx::query("DELETE FROM device_requests WHERE code_hash = ? AND user_id IS NOT NULL RETURNING name, user_id")
-        .bind(hash(device_code).to_vec())
-        .fetch_optional(db)
-        .await?;
+    let approved = sqlx::query!(
+        r#"DELETE FROM device_requests WHERE code_hash = ? AND user_id IS NOT NULL RETURNING name, user_id AS "user_id!: UserId""#,
+        code_hash,
+    )
+    .fetch_optional(db)
+    .await?;
     if let Some(row) = approved {
-        let name: String = row.get("name");
-        return Ok(DevicePollReply::Approved { login: issue_device(db, row.get("user_id"), &name).await? });
+        return Ok(DevicePollReply::Approved { login: issue_device(db, row.user_id, &row.name).await? });
     }
-    let waiting = sqlx::query("SELECT expires_ms FROM device_requests WHERE code_hash = ?")
-        .bind(hash(device_code).to_vec())
-        .fetch_optional(db)
-        .await?;
-    match waiting {
-        Some(row) if row.get::<i64, _>("expires_ms") > now_ms() => Ok(DevicePollReply::Pending),
+    let expires =
+        sqlx::query_scalar!("SELECT expires_ms FROM device_requests WHERE code_hash = ?", code_hash).fetch_optional(db).await?;
+    match expires {
+        Some(expires) if expires > now_ms() => Ok(DevicePollReply::Pending),
         _ => Ok(DevicePollReply::Gone),
     }
 }
@@ -477,24 +487,25 @@ pub(crate) async fn create_invite(
     days: u32,
 ) -> Result<String, sqlx::Error> {
     let token = random_token();
-    sqlx::query("INSERT INTO invites (token_hash, created_by, org, expires_ms) VALUES (?, ?, ?, ?)")
-        .bind(hash(&token).to_vec())
-        .bind(by)
-        .bind(org)
-        .bind(now_ms() + i64::from(days) * 24 * 60 * 60 * 1000)
-        .execute(db)
-        .await?;
+    let (token_hash, expires) = (hash(&token), now_ms() + i64::from(days) * 24 * 60 * 60 * 1000);
+    sqlx::query!(
+        "INSERT INTO invites (token_hash, created_by, org, expires_ms) VALUES (?, ?, ?, ?)",
+        token_hash,
+        by,
+        org,
+        expires,
+    )
+    .execute(db)
+    .await?;
     Ok(token)
 }
 
 /// An unused, current invite: `Some(org)` with the org it joins, if any.
 pub(crate) async fn invite(db: &SqlitePool, token: &str) -> Result<Option<Option<String>>, sqlx::Error> {
-    Ok(sqlx::query("SELECT org FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
-        .bind(hash(token).to_vec())
-        .bind(now_ms())
+    let (token_hash, now) = (hash(token), now_ms());
+    sqlx::query_scalar!("SELECT org FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL", token_hash, now)
         .fetch_optional(db)
-        .await?
-        .map(|row| row.get("org")))
+        .await
 }
 
 /// An invite taken for one sign-up, until the account exists.
@@ -507,33 +518,33 @@ pub(crate) struct ClaimedInvite {
 /// Takes the invite for one sign-up: only one of two sign-ups racing for
 /// it gets it. Complete it once the account exists, or release it.
 pub(crate) async fn claim_invite(db: &SqlitePool, token: &str) -> Result<Option<ClaimedInvite>, sqlx::Error> {
-    let Some(row) =
-        sqlx::query("SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
-            .bind(hash(token).to_vec())
-            .bind(now_ms())
-            .fetch_optional(db)
-            .await?
+    let (token_hash, now) = (hash(token), now_ms());
+    let Some(row) = sqlx::query!(
+        "SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL",
+        token_hash,
+        now,
+    )
+    .fetch_optional(db)
+    .await?
     else {
         return Ok(None);
     };
-    let expires_ms: i64 = row.get("expires_ms");
-    let taken = sqlx::query("UPDATE invites SET expires_ms = 0 WHERE token_hash = ? AND expires_ms = ? AND used_by IS NULL")
-        .bind(hash(token).to_vec())
-        .bind(expires_ms)
-        .execute(db)
-        .await?
-        .rows_affected();
-    Ok((taken == 1).then(|| ClaimedInvite { token: token.to_owned(), org: row.get("org"), expires_ms }))
+    let taken = sqlx::query!(
+        "UPDATE invites SET expires_ms = 0 WHERE token_hash = ? AND expires_ms = ? AND used_by IS NULL",
+        token_hash,
+        row.expires_ms,
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
+    Ok((taken == 1).then(|| ClaimedInvite { token: token.to_owned(), org: row.org, expires_ms: row.expires_ms }))
 }
 
 impl ClaimedInvite {
     /// Marks the invite used by `user` and puts them in its org.
     pub(crate) async fn complete(self, db: &SqlitePool, user: UserId) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE invites SET used_by = ? WHERE token_hash = ?")
-            .bind(user)
-            .bind(hash(&self.token).to_vec())
-            .execute(db)
-            .await?;
+        let token_hash = hash(&self.token);
+        sqlx::query!("UPDATE invites SET used_by = ? WHERE token_hash = ?", user, token_hash).execute(db).await?;
         if let Some(org) = &self.org {
             crate::orgs::add_member(db, org, user, false).await?;
         }
@@ -542,9 +553,8 @@ impl ClaimedInvite {
 
     /// Gives the invite back after a sign-up that failed.
     pub(crate) async fn release(self, db: &SqlitePool) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE invites SET expires_ms = ? WHERE token_hash = ? AND used_by IS NULL")
-            .bind(self.expires_ms)
-            .bind(hash(&self.token).to_vec())
+        let token_hash = hash(&self.token);
+        sqlx::query!("UPDATE invites SET expires_ms = ? WHERE token_hash = ? AND used_by IS NULL", self.expires_ms, token_hash)
             .execute(db)
             .await?;
         Ok(())
@@ -552,19 +562,17 @@ impl ClaimedInvite {
 }
 
 pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str) -> Result<Option<UserId>, sqlx::Error> {
-    Ok(sqlx::query("SELECT user_id FROM identities WHERE provider = ? AND subject = ?")
-        .bind(provider)
-        .bind(subject)
-        .fetch_optional(db)
-        .await?
-        .map(|row| row.get("user_id")))
+    sqlx::query_scalar!(
+        r#"SELECT user_id AS "user_id: UserId" FROM identities WHERE provider = ? AND subject = ?"#,
+        provider,
+        subject,
+    )
+    .fetch_optional(db)
+    .await
 }
 
 pub(crate) async fn link_identity(db: &SqlitePool, provider: &str, subject: &str, user: UserId) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT OR REPLACE INTO identities (provider, subject, user_id) VALUES (?, ?, ?)")
-        .bind(provider)
-        .bind(subject)
-        .bind(user)
+    sqlx::query!("INSERT OR REPLACE INTO identities (provider, subject, user_id) VALUES (?, ?, ?)", provider, subject, user)
         .execute(db)
         .await?;
     Ok(())
@@ -579,15 +587,16 @@ pub(crate) struct SignInState {
 }
 
 pub(crate) async fn save_sign_in(db: &SqlitePool, provider: &str, state: &str, saved: &SignInState) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    let (state_hash, expires) = (hash(state), now_ms() + SIGN_IN_TTL_MS);
+    sqlx::query!(
         "INSERT INTO sign_in_states (state_hash, provider, verifier, invite, next, expires_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        state_hash,
+        provider,
+        saved.verifier,
+        saved.invite,
+        saved.next,
+        expires,
     )
-    .bind(hash(state).to_vec())
-    .bind(provider)
-    .bind(&saved.verifier)
-    .bind(&saved.invite)
-    .bind(&saved.next)
-    .bind(now_ms() + SIGN_IN_TTL_MS)
     .execute(db)
     .await?;
     Ok(())
@@ -595,15 +604,16 @@ pub(crate) async fn save_sign_in(db: &SqlitePool, provider: &str, state: &str, s
 
 /// The sign-in `state` names, used up by reading it.
 pub(crate) async fn take_sign_in(db: &SqlitePool, provider: &str, state: &str) -> Result<Option<SignInState>, sqlx::Error> {
-    Ok(sqlx::query(
+    let (state_hash, now) = (hash(state), now_ms());
+    sqlx::query_as!(
+        SignInState,
         "DELETE FROM sign_in_states WHERE state_hash = ? AND provider = ? AND expires_ms > ? RETURNING verifier, invite, next",
+        state_hash,
+        provider,
+        now,
     )
-    .bind(hash(state).to_vec())
-    .bind(provider)
-    .bind(now_ms())
     .fetch_optional(db)
-    .await?
-    .map(|row| SignInState { verifier: row.get("verifier"), invite: row.get("invite"), next: row.get("next") }))
+    .await
 }
 
 /// Account administration on the server's host, without the server
@@ -624,16 +634,22 @@ impl Admin {
     }
 
     pub async fn users(&self) -> Result<Vec<User>, AccountError> {
-        Ok(sqlx::query(users_query!("ORDER BY name")).fetch_all(&self.db).await?.iter().map(user_from).collect())
+        Ok(sqlx::query_as!(
+            User,
+            r#"SELECT id AS "id!: UserId", name, display_name, email, admin AS "admin: bool",
+                      password_hash IS NOT NULL AS "has_password!: bool", disabled AS "disabled: bool"
+               FROM users ORDER BY name"#
+        )
+        .fetch_all(&self.db)
+        .await?)
     }
 
     pub async fn set_password(&self, name: &str, password: &str) -> Result<(), AccountError> {
         if password.chars().count() < 10 {
             return Err(AccountError::WeakPassword);
         }
-        let updated = sqlx::query("UPDATE users SET password_hash = ? WHERE name = ?")
-            .bind(hash_password(password))
-            .bind(name)
+        let password_hash = hash_password(password);
+        let updated = sqlx::query!("UPDATE users SET password_hash = ? WHERE name = ?", password_hash, name)
             .execute(&self.db)
             .await?
             .rows_affected();
@@ -644,12 +660,8 @@ impl Admin {
     }
 
     pub async fn set_admin(&self, name: &str, admin: bool) -> Result<(), AccountError> {
-        let updated = sqlx::query("UPDATE users SET admin = ? WHERE name = ?")
-            .bind(i64::from(admin))
-            .bind(name)
-            .execute(&self.db)
-            .await?
-            .rows_affected();
+        let updated =
+            sqlx::query!("UPDATE users SET admin = ? WHERE name = ?", admin, name).execute(&self.db).await?.rows_affected();
         if updated == 0 {
             return Err(AccountError::NoUser(name.to_owned()));
         }
@@ -660,11 +672,7 @@ impl Admin {
     /// sign in again.
     pub async fn set_disabled(&self, name: &str, disabled: bool) -> Result<(), AccountError> {
         let user = user_by_name(&self.db, name).await?.ok_or_else(|| AccountError::NoUser(name.to_owned()))?;
-        sqlx::query("UPDATE users SET disabled = ? WHERE id = ?")
-            .bind(i64::from(disabled))
-            .bind(user.id)
-            .execute(&self.db)
-            .await?;
+        sqlx::query!("UPDATE users SET disabled = ? WHERE id = ?", disabled, user.id).execute(&self.db).await?;
         if disabled {
             sign_out_everywhere(&self.db, user.id).await?;
         }

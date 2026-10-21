@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO search (body, thread_id, kind, time_ms) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "85cc03c87a4fdbe2273ae52717b7ee67d2fd8cbfe3ea65b361ea255b68698429"
+}

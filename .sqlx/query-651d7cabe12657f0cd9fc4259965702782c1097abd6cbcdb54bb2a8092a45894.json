@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sign_in_states WHERE state_hash = ? AND provider = ? AND expires_ms > ? RETURNING verifier, invite, next",
+  "describe": {
+    "columns": [
+      {
+        "name": "verifier",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sign_in_states",
+            "name": "verifier"
+          }
+        }
+      },
+      {
+        "name": "invite",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sign_in_states",
+            "name": "invite"
+          }
+        }
+      },
+      {
+        "name": "next",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sign_in_states",
+            "name": "next"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "651d7cabe12657f0cd9fc4259965702782c1097abd6cbcdb54bb2a8092a45894"
+}

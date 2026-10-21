@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fe86b6b12b188cde5a340529d6ce68c26a22f76a52b28aabfa88855da8ee06a3"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT org_id FROM org_members WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "org_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "org_members",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bb6c41e2ab89e7b8651855b99c181e5ad8c3fe6d0e841df70733213fbc133b6d"
+}

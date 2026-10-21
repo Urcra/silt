@@ -1,0 +1,45 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.family_id, t.owner_id AS \"owner_id: UserId\",\n                        EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS \"shared!: bool\"\n                 FROM threads t WHERE t.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "owner_id: UserId",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "owner_id"
+          }
+        }
+      },
+      {
+        "name": "shared!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bb7f4d088bedbc7769e8bcf9d7b0093487c5338a738d103d1c3559ec2b38e8e6"
+}

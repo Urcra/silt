@@ -12,7 +12,6 @@ use serde::Deserialize;
 use silt_log::{CommentOp, Delta, MrOp, Op};
 use silt_proto::{InboxRead, InboxReply, Notification};
 use silt_types::ThreadId;
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::visibility::Viewer;
@@ -45,11 +44,8 @@ pub(crate) fn mentions(text: &str) -> Vec<String> {
 }
 
 async fn owner(db: &SqlitePool, thread: ThreadId) -> Result<Option<UserId>, sqlx::Error> {
-    Ok(sqlx::query("SELECT owner_id FROM threads WHERE id = ?")
-        .bind(id_bytes(thread.0))
-        .fetch_optional(db)
-        .await?
-        .map(|row| row.get("owner_id")))
+    let thread = id_bytes(thread.0);
+    sqlx::query_scalar!(r#"SELECT owner_id AS "owner_id: UserId" FROM threads WHERE id = ?"#, thread).fetch_optional(db).await
 }
 
 fn clip(text: &str) -> String {
@@ -75,8 +71,7 @@ impl Server {
     /// Writes the notifications `stored` deltas, pushed by `actor`, cause.
     pub(crate) async fn notify(&self, stored: &[Delta], actor: Caller) -> Result<(), sqlx::Error> {
         let db = self.db();
-        let actor_name: String =
-            sqlx::query("SELECT name FROM users WHERE id = ?").bind(actor.user).fetch_one(db).await?.get("name");
+        let actor_name = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", actor.user).fetch_one(db).await?;
         let mut viewers = Viewers::default();
         let mut notes = Vec::new();
         for delta in stored {
@@ -150,17 +145,18 @@ impl Server {
                 }
             }
             for note in notes.drain(..).filter(|note| note.user != actor.user) {
-                sqlx::query(
+                let (thread, delta_id, now) = (id_bytes(note.thread.0), delta.span.first().to_string(), now_ms());
+                sqlx::query!(
                     "INSERT OR IGNORE INTO notifications (user_id, kind, thread_id, delta, actor, text, created_ms)
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    note.user,
+                    note.kind,
+                    thread,
+                    delta_id,
+                    actor_name,
+                    note.text,
+                    now,
                 )
-                .bind(note.user)
-                .bind(note.kind)
-                .bind(id_bytes(note.thread.0))
-                .bind(delta.span.first().to_string())
-                .bind(&actor_name)
-                .bind(&note.text)
-                .bind(now_ms())
                 .execute(db)
                 .await?;
             }
@@ -180,26 +176,26 @@ pub(crate) async fn list(
     Extension(caller): Extension<Caller>,
     Query(query): Query<InboxQuery>,
 ) -> Result<Json<InboxReply>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT id, kind, thread_id, actor, text, created_ms, read_ms FROM notifications
-         WHERE user_id = ? AND (? OR read_ms IS NULL) ORDER BY id DESC LIMIT ?",
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!", kind, thread_id, actor, text, created_ms, read_ms FROM notifications
+         WHERE user_id = ? AND (? OR read_ms IS NULL) ORDER BY id DESC LIMIT ?"#,
+        caller.user,
+        query.all,
+        INBOX_LIMIT,
     )
-    .bind(caller.user)
-    .bind(query.all)
-    .bind(INBOX_LIMIT)
     .fetch_all(server.db())
     .await?;
     let viewer = server.viewer(caller.user).await?;
     let notifications = rows
-        .iter()
+        .into_iter()
         .map(|row| Notification {
-            id: row.get("id"),
-            kind: row.get("kind"),
-            thread: ThreadId(id_from(row.get("thread_id"))),
-            actor: row.get("actor"),
-            text: row.get("text"),
-            created_ms: row.get("created_ms"),
-            read: row.get::<Option<i64>, _>("read_ms").is_some(),
+            id: row.id,
+            kind: row.kind,
+            thread: ThreadId(id_from(&row.thread_id)),
+            actor: row.actor,
+            text: row.text,
+            created_ms: row.created_ms,
+            read: row.read_ms.is_some(),
         })
         .filter(|notification| viewer.sees_thread(notification.thread))
         .collect();
@@ -212,20 +208,21 @@ pub(crate) async fn read(
     Json(body): Json<InboxRead>,
 ) -> Result<StatusCode, ApiError> {
     let db = server.db();
+    let now = now_ms();
     if body.all {
-        sqlx::query("UPDATE notifications SET read_ms = ? WHERE user_id = ? AND read_ms IS NULL")
-            .bind(now_ms())
-            .bind(caller.user)
+        sqlx::query!("UPDATE notifications SET read_ms = ? WHERE user_id = ? AND read_ms IS NULL", now, caller.user)
             .execute(db)
             .await?;
     }
     for id in body.ids {
-        sqlx::query("UPDATE notifications SET read_ms = ? WHERE id = ? AND user_id = ? AND read_ms IS NULL")
-            .bind(now_ms())
-            .bind(id)
-            .bind(caller.user)
-            .execute(db)
-            .await?;
+        sqlx::query!(
+            "UPDATE notifications SET read_ms = ? WHERE id = ? AND user_id = ? AND read_ms IS NULL",
+            now,
+            id,
+            caller.user
+        )
+        .execute(db)
+        .await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

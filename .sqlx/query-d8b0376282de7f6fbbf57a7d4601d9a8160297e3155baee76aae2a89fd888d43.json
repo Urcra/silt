@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id FROM purged_threads",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "purged_threads",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d8b0376282de7f6fbbf57a7d4601d9a8160297e3155baee76aae2a89fd888d43"
+}

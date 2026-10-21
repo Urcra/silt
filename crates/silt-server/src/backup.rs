@@ -75,7 +75,8 @@ pub async fn backup(data_dir: &Path, dest: &Path) -> Result<Copied, BackupError>
     fs::create_dir_all(dest)?;
     let db = open_db(data_dir).await?;
     let database = dest.join(DATABASE);
-    sqlx::query("VACUUM INTO ?").bind(database.to_string_lossy().into_owned()).execute(&db).await?;
+    let target = database.to_string_lossy().into_owned();
+    sqlx::query!("VACUUM INTO ?", target).execute(&db).await?;
     db.close().await;
     let mut bytes = fs::metadata(&database)?.len();
     for dir in COPIED {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "0e2e60004c54edf5eaadc2968047a716786c1e88ccae49ca6f4be2fbeb2a57b2"
+}

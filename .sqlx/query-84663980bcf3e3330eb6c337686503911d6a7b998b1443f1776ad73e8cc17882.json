@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO org_members (org_id, user_id, role) SELECT id, ?, ? FROM orgs WHERE name = ?\n         ON CONFLICT (org_id, user_id) DO UPDATE SET role = excluded.role",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "84663980bcf3e3330eb6c337686503911d6a7b998b1443f1776ad73e8cc17882"
+}

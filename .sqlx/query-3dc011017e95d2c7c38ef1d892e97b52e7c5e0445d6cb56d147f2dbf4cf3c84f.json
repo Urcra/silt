@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE orgs SET default_visibility = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3dc011017e95d2c7c38ef1d892e97b52e7c5e0445d6cb56d147f2dbf4cf3c84f"
+}

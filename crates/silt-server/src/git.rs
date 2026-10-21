@@ -13,7 +13,6 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, he
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use silt_types::{FamilyId, ThreadId};
-use sqlx::Row;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, Command};
 use tokio_util::io::ReaderStream;
@@ -62,22 +61,24 @@ struct ThreadRights {
 
 async fn thread_rights(server: &Server, family: FamilyId, user: UserId) -> Result<ThreadRights, ApiError> {
     let viewer = server.viewer(user).await?;
-    let rows = sqlx::query(
-        "SELECT t.id, t.owner_id, EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
-         FROM threads t WHERE t.family_id = ?",
+    let family = crate::id_bytes(family.0);
+    let rows = sqlx::query!(
+        r#"SELECT t.id, t.owner_id AS "owner_id: UserId",
+                EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS "shared!: bool"
+         FROM threads t WHERE t.family_id = ?"#,
+        user,
+        family,
     )
-    .bind(user)
-    .bind(crate::id_bytes(family.0))
     .fetch_all(&server.shared.db)
     .await?;
     let mut rights = ThreadRights { visible: Vec::new(), writable: Vec::new(), known: Vec::new() };
     for row in rows {
-        let thread = ThreadId(crate::id_from(row.get("id")));
+        let thread = ThreadId(crate::id_from(&row.id));
         rights.known.push(thread);
         if viewer.sees_thread(thread) {
             rights.visible.push(thread);
         }
-        if row.get::<UserId, _>("owner_id") == user || row.get::<i64, _>("shared") != 0 {
+        if row.owner_id == user || row.shared {
             rights.writable.push(thread);
         }
     }

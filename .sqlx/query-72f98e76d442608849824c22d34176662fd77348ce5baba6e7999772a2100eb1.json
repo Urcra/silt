@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS \"device_id?\", l.epoch AS \"epoch?\", u.name AS owner\n         FROM threads t\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN leases l ON l.thread_id = t.id\n         ORDER BY t.created_ms",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "repo",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "device_id?",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "leases",
+            "name": "device_id"
+          }
+        }
+      },
+      {
+        "name": "epoch?",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leases",
+            "name": "epoch"
+          }
+        }
+      },
+      {
+        "name": "owner",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "72f98e76d442608849824c22d34176662fd77348ce5baba6e7999772a2100eb1"
+}

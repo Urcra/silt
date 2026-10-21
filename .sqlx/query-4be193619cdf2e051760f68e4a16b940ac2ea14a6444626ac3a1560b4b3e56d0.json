@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE threads SET visibility = 'private' WHERE repo = ? AND visibility LIKE 'team:%'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4be193619cdf2e051760f68e4a16b940ac2ea14a6444626ac3a1560b4b3e56d0"
+}

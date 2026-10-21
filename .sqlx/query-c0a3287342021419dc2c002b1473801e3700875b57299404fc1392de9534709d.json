@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET visibility = 'private' WHERE repo = ? AND visibility LIKE 'team:%'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c0a3287342021419dc2c002b1473801e3700875b57299404fc1392de9534709d"
+}

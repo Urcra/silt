@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO purged_threads (thread_id, family_id, purged_ms) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "104127aa64bef36c3f57ac55fda4d6996784eed95ff657f44ab2f4c8a3155afc"
+}

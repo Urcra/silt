@@ -13,7 +13,6 @@ use silt_log::{Content, ConvOp, Delta, GitOp, Op, kept_after_purge};
 use silt_proto::ThreadInfo;
 use silt_sync::Room;
 use silt_types::{BlobHash, FamilyId, ThreadId};
-use sqlx::Row;
 use tokio::sync::OwnedMutexGuard;
 
 use crate::index::{self, Index};
@@ -31,15 +30,16 @@ const RETENTION_CHECK: Duration = Duration::from_secs(60 * 60);
 /// The thread and its family, if `caller` owns it.
 async fn owned(server: &Server, thread: &str, caller: Caller) -> Result<(ThreadId, FamilyId, Option<i64>), ApiError> {
     let thread = ThreadId::from_str(thread).map_err(|_| bad_request("invalid thread id"))?;
-    let row = sqlx::query("SELECT family_id, owner_id, deleted_ms FROM threads WHERE id = ?")
-        .bind(id_bytes(thread.0))
-        .fetch_optional(server.db())
-        .await?
-        .ok_or_else(not_found)?;
-    if row.get::<UserId, _>("owner_id") != caller.user {
+    let thread_id = id_bytes(thread.0);
+    let row =
+        sqlx::query!(r#"SELECT family_id, owner_id AS "owner_id: UserId", deleted_ms FROM threads WHERE id = ?"#, thread_id)
+            .fetch_optional(server.db())
+            .await?
+            .ok_or_else(not_found)?;
+    if row.owner_id != caller.user {
         return Err(forbidden("only the thread's owner can delete, restore or purge it"));
     }
-    Ok((thread, FamilyId(id_from(row.get("family_id"))), row.get("deleted_ms")))
+    Ok((thread, FamilyId(id_from(&row.family_id)), row.deleted_ms))
 }
 
 pub(crate) async fn delete(
@@ -48,12 +48,11 @@ pub(crate) async fn delete(
     UrlPath(thread): UrlPath<String>,
 ) -> Result<StatusCode, ApiError> {
     let (thread, _, _) = owned(&server, &thread, caller).await?;
-    sqlx::query("UPDATE threads SET deleted_ms = ? WHERE id = ? AND deleted_ms IS NULL")
-        .bind(now_ms())
-        .bind(id_bytes(thread.0))
+    let (thread, now) = (id_bytes(thread.0), now_ms());
+    sqlx::query!("UPDATE threads SET deleted_ms = ? WHERE id = ? AND deleted_ms IS NULL", now, thread)
         .execute(server.db())
         .await?;
-    sqlx::query("DELETE FROM leases WHERE thread_id = ?").bind(id_bytes(thread.0)).execute(server.db()).await?;
+    sqlx::query!("DELETE FROM leases WHERE thread_id = ?", thread).execute(server.db()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -63,7 +62,8 @@ pub(crate) async fn restore(
     UrlPath(thread): UrlPath<String>,
 ) -> Result<StatusCode, ApiError> {
     let (thread, _, _) = owned(&server, &thread, caller).await?;
-    sqlx::query("UPDATE threads SET deleted_ms = NULL WHERE id = ?").bind(id_bytes(thread.0)).execute(server.db()).await?;
+    let thread = id_bytes(thread.0);
+    sqlx::query!("UPDATE threads SET deleted_ms = NULL WHERE id = ?", thread).execute(server.db()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -85,22 +85,22 @@ pub(crate) async fn trash(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Json<Vec<ThreadInfo>>, ApiError> {
-    let rows = sqlx::query(
+    let rows = sqlx::query!(
         "SELECT t.id, t.family_id, t.repo, t.created_ms, u.name AS owner FROM threads t JOIN users u ON u.id = t.owner_id
          WHERE t.owner_id = ? AND t.deleted_ms IS NOT NULL ORDER BY t.deleted_ms",
+        caller.user,
     )
-    .bind(caller.user)
     .fetch_all(server.db())
     .await?;
     Ok(Json(
-        rows.iter()
+        rows.into_iter()
             .map(|row| ThreadInfo {
-                id: ThreadId(id_from(row.get("id"))),
-                family: FamilyId(id_from(row.get("family_id"))),
-                repo: row.get("repo"),
-                created_ms: row.get("created_ms"),
+                id: ThreadId(id_from(&row.id)),
+                family: FamilyId(id_from(&row.family_id)),
+                repo: row.repo,
+                created_ms: row.created_ms,
                 lease: None,
-                owner: row.get("owner"),
+                owner: row.owner,
                 collaborators: Vec::new(),
             })
             .collect(),
@@ -123,22 +123,22 @@ impl Server {
     /// families they see, and purged ones whose family is gone altogether,
     /// so a device that had it still drops it.
     pub(crate) async fn lifecycle(&self, viewer: &Viewer) -> Result<(Vec<ThreadId>, Vec<ThreadId>), sqlx::Error> {
-        let deleted = sqlx::query("SELECT id, family_id FROM threads WHERE deleted_ms IS NOT NULL")
+        let deleted = sqlx::query!("SELECT id, family_id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(self.db())
             .await?
             .iter()
-            .filter(|row| viewer.sees_family(id_from(row.get("family_id"))))
-            .map(|row| ThreadId(id_from(row.get("id"))))
+            .filter(|row| viewer.sees_family(id_from(&row.family_id)))
+            .map(|row| ThreadId(id_from(&row.id)))
             .collect();
-        let purged = sqlx::query(
-            "SELECT p.thread_id, p.family_id, EXISTS (SELECT 1 FROM families f WHERE f.id = p.family_id) AS remains
-             FROM purged_threads p",
+        let purged = sqlx::query!(
+            r#"SELECT p.thread_id, p.family_id, EXISTS (SELECT 1 FROM families f WHERE f.id = p.family_id) AS "remains!: bool"
+             FROM purged_threads p"#
         )
         .fetch_all(self.db())
         .await?
         .iter()
-        .filter(|row| row.get::<i64, _>("remains") == 0 || viewer.sees_family(id_from(row.get("family_id"))))
-        .map(|row| ThreadId(id_from(row.get("thread_id"))))
+        .filter(|row| !row.remains || viewer.sees_family(id_from(&row.family_id)))
+        .map(|row| ThreadId(id_from(&row.thread_id)))
         .collect();
         Ok((deleted, purged))
     }
@@ -167,31 +167,28 @@ impl Server {
         let mut rebuilt: Vec<(FamilyId, Option<Room>)> = Vec::new();
         let mut tx = db.begin().await?;
         for (thread, family) in threads {
-            sqlx::query("INSERT OR IGNORE INTO purged_threads (thread_id, family_id, purged_ms) VALUES (?, ?, ?)")
-                .bind(id_bytes(thread.0))
-                .bind(id_bytes(family.0))
-                .bind(now_ms())
-                .execute(&mut *tx)
-                .await?;
-            for statement in [
-                "DELETE FROM leases WHERE thread_id = ?",
-                "DELETE FROM notifications WHERE thread_id = ?",
-                "DELETE FROM touches WHERE thread_id = ?",
-                "DELETE FROM thread_activity WHERE thread_id = ?",
-                "DELETE FROM search WHERE thread_id = ?",
-            ] {
-                sqlx::query(statement).bind(id_bytes(thread.0)).execute(&mut *tx).await?;
-            }
-            sqlx::query("DELETE FROM threads WHERE id = ?").bind(id_bytes(thread.0)).execute(&mut *tx).await?;
+            let (thread, family, now) = (id_bytes(thread.0), id_bytes(family.0), now_ms());
+            sqlx::query!(
+                "INSERT OR IGNORE INTO purged_threads (thread_id, family_id, purged_ms) VALUES (?, ?, ?)",
+                thread,
+                family,
+                now,
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query!("DELETE FROM leases WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM notifications WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM touches WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM thread_activity WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM search WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM threads WHERE id = ?", thread).execute(&mut *tx).await?;
         }
         let families: HashSet<FamilyId> = threads.iter().map(|(_, family)| *family).collect();
         let mut gone = Vec::new();
         for family in families {
-            let remaining: i64 = sqlx::query("SELECT COUNT(*) AS remaining FROM threads WHERE family_id = ?")
-                .bind(id_bytes(family.0))
-                .fetch_one(&mut *tx)
-                .await?
-                .get("remaining");
+            let family_id = id_bytes(family.0);
+            let remaining =
+                sqlx::query_scalar!("SELECT COUNT(*) FROM threads WHERE family_id = ?", family_id).fetch_one(&mut *tx).await?;
             // A fork whose device hasn't registered it yet still has deltas
             // here, and keeps the family alive.
             let kept: Vec<Delta> = slots
@@ -206,9 +203,9 @@ impl Server {
                         .collect()
                 })
                 .unwrap_or_default();
-            sqlx::query("DELETE FROM deltas WHERE family_id = ?").bind(id_bytes(family.0)).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM deltas WHERE family_id = ?", family_id).execute(&mut *tx).await?;
             if remaining == 0 && kept.is_empty() {
-                sqlx::query("DELETE FROM families WHERE id = ?").bind(id_bytes(family.0)).execute(&mut *tx).await?;
+                sqlx::query!("DELETE FROM families WHERE id = ?", family_id).execute(&mut *tx).await?;
                 rebuilt.push((family, None));
                 gone.push(family);
                 continue;
@@ -220,14 +217,17 @@ impl Server {
             if !kept.is_empty() {
                 room.push(kept.clone())?;
             }
-            for (seq, delta) in (1..).zip(&kept) {
-                sqlx::query("INSERT INTO deltas (family_id, seq, format, data) VALUES (?, ?, ?, ?)")
-                    .bind(id_bytes(family.0))
-                    .bind(seq)
-                    .bind(silt_log::DELTA_FORMAT)
-                    .bind(silt_log::encode_stored(delta)?)
-                    .execute(&mut *tx)
-                    .await?;
+            for (seq, delta) in (1_i64..).zip(&kept) {
+                let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta)?);
+                sqlx::query!(
+                    "INSERT INTO deltas (family_id, seq, format, data) VALUES (?, ?, ?, ?)",
+                    family_id,
+                    seq,
+                    format,
+                    data
+                )
+                .execute(&mut *tx)
+                .await?;
             }
             rebuilt.push((family, Some(room)));
         }
@@ -291,12 +291,11 @@ impl Server {
     /// Purges threads that have been in the trash longer than configured.
     pub(crate) async fn purge_expired(&self) -> Result<(), ServerError> {
         let cutoff = now_ms() - i64::from(self.config().trash_days) * DAY_MS;
-        let rows = sqlx::query("SELECT id, family_id FROM threads WHERE deleted_ms IS NOT NULL AND deleted_ms < ?")
-            .bind(cutoff)
+        let rows = sqlx::query!("SELECT id, family_id FROM threads WHERE deleted_ms IS NOT NULL AND deleted_ms < ?", cutoff)
             .fetch_all(self.db())
             .await?;
         let expired: Vec<(ThreadId, FamilyId)> =
-            rows.iter().map(|row| (ThreadId(id_from(row.get("id"))), FamilyId(id_from(row.get("family_id"))))).collect();
+            rows.iter().map(|row| (ThreadId(id_from(&row.id)), FamilyId(id_from(&row.family_id)))).collect();
         if !expired.is_empty() {
             tracing::info!(threads = expired.len(), "purging threads whose time in the trash is up");
         }
@@ -333,10 +332,10 @@ impl Server {
 
 /// Purged thread ids, loaded on start.
 pub(crate) async fn load_purged(db: &sqlx::sqlite::SqlitePool) -> Result<HashSet<ThreadId>, sqlx::Error> {
-    Ok(sqlx::query("SELECT thread_id FROM purged_threads")
+    Ok(sqlx::query_scalar!("SELECT thread_id FROM purged_threads")
         .fetch_all(db)
         .await?
         .iter()
-        .map(|row| ThreadId(id_from(row.get("thread_id"))))
+        .map(|thread| ThreadId(id_from(thread)))
         .collect())
 }

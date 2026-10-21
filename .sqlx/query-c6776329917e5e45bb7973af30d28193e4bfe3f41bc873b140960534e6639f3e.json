@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT expires_ms FROM device_requests WHERE code_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "expires_ms",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "device_requests",
+            "name": "expires_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6776329917e5e45bb7973af30d28193e4bfe3f41bc873b140960534e6639f3e"
+}

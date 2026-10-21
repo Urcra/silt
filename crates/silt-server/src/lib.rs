@@ -185,10 +185,10 @@ impl Server {
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let purged = lifecycle::load_purged(&db).await?;
         let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
-        let rows = sqlx::query("SELECT family_id, format, data FROM deltas ORDER BY family_id, seq").fetch_all(&db).await?;
+        let rows = sqlx::query!("SELECT family_id, format, data FROM deltas ORDER BY family_id, seq").fetch_all(&db).await?;
         for row in rows {
-            let family = FamilyId(id_from(row.get("family_id")));
-            let delta = silt_log::decode_stored(row.get("format"), row.get::<&[u8], _>("data"))?;
+            let family = FamilyId(id_from(&row.family_id));
+            let delta = silt_log::decode_stored(row.format, &row.data)?;
             stored.entry(family).or_default().push(delta);
         }
         let mut rooms: HashMap<FamilyId, Room> = HashMap::new();
@@ -318,12 +318,15 @@ pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, 
         .await?;
     }
     let code: String = uuid::Uuid::new_v4().simple().to_string()[..10].to_owned();
-    sqlx::query("INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?")
-        .bind(hash(&code).to_vec())
-        .bind(now_ms() + PAIRING_TTL_MS)
-        .bind(user)
-        .execute(&db)
-        .await?;
+    let (code_hash, expires) = (hash(&code), now_ms() + PAIRING_TTL_MS);
+    sqlx::query!(
+        "INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?",
+        code_hash,
+        expires,
+        user,
+    )
+    .execute(&db)
+    .await?;
     Ok(code)
 }
 
@@ -397,10 +400,8 @@ pub(crate) enum FamilyAccess {
 }
 
 pub(crate) async fn family_access(server: &Server, family: FamilyId, user: UserId) -> Result<FamilyAccess, ApiError> {
-    let row = sqlx::query("SELECT owner_id FROM families WHERE id = ?")
-        .bind(id_bytes(family.0))
-        .fetch_optional(&server.shared.db)
-        .await?;
+    let family_id = id_bytes(family.0);
+    let row = sqlx::query_scalar!("SELECT 1 FROM families WHERE id = ?", family_id).fetch_optional(&server.shared.db).await?;
     if row.is_none() {
         return Ok(FamilyAccess::Unknown);
     }
@@ -413,9 +414,8 @@ pub(crate) async fn claim_family(server: &Server, family: FamilyId, caller: Call
         FamilyAccess::Visible => Ok(()),
         FamilyAccess::Hidden => Err(not_found()),
         FamilyAccess::Unknown => {
-            sqlx::query("INSERT OR IGNORE INTO families (id, owner_id) VALUES (?, ?)")
-                .bind(id_bytes(family.0))
-                .bind(caller.user)
+            let family = id_bytes(family.0);
+            sqlx::query!("INSERT OR IGNORE INTO families (id, owner_id) VALUES (?, ?)", family, caller.user)
                 .execute(&server.shared.db)
                 .await?;
             Ok(())
@@ -463,15 +463,17 @@ async fn authenticate(State(server): State<Server>, mut request: Request, next: 
 
 async fn login(State(server): State<Server>, Json(body): Json<LoginRequest>) -> Result<Json<LoginReply>, ApiError> {
     let db = &server.shared.db;
-    let code = sqlx::query("DELETE FROM pairing_codes WHERE code_hash = ? AND expires_ms > ? RETURNING user_id")
-        .bind(hash(&body.code).to_vec())
-        .bind(now_ms())
-        .fetch_optional(db)
-        .await?;
-    let Some(code) = code else {
+    let (code_hash, now) = (hash(&body.code), now_ms());
+    let user = sqlx::query_scalar!(
+        r#"DELETE FROM pairing_codes WHERE code_hash = ? AND expires_ms > ? RETURNING user_id AS "user_id: UserId""#,
+        code_hash,
+        now,
+    )
+    .fetch_optional(db)
+    .await?;
+    let Some(user) = user else {
         return Err(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized));
     };
-    let user: UserId = code.get("user_id");
     Ok(Json(accounts::issue_device(db, user, &body.name).await?))
 }
 
@@ -533,30 +535,31 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
             families.push(FamilyInfo { id, seq: slot.room.seq(), view: slot.view(id, &viewer) });
         }
     }
-    let rows = sqlx::query(
-        "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id, l.epoch, u.name AS owner
+    let rows = sqlx::query!(
+        r#"SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS "device_id?", l.epoch AS "epoch?", u.name AS owner
          FROM threads t
          JOIN users u ON u.id = t.owner_id
          LEFT JOIN leases l ON l.thread_id = t.id
-         ORDER BY t.created_ms",
+         ORDER BY t.created_ms"#
     )
     .fetch_all(&server.shared.db)
     .await?;
     let mut shared = collab::collaborators(&server.shared.db).await?;
     let threads = rows
-        .iter()
-        .filter(|row| viewer.sees_thread(ThreadId(id_from(row.get("id")))))
-        .map(|row| ThreadInfo {
-            id: ThreadId(id_from(row.get("id"))),
-            family: FamilyId(id_from(row.get("family_id"))),
-            repo: row.get("repo"),
-            created_ms: row.get("created_ms"),
-            lease: row.get::<Option<&[u8]>, _>("device_id").map(|device| Lease {
-                device: DeviceId(id_from(device)),
-                epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default(),
+        .into_iter()
+        .map(|row| (ThreadId(id_from(&row.id)), row))
+        .filter(|(id, _)| viewer.sees_thread(*id))
+        .map(|(id, row)| ThreadInfo {
+            id,
+            family: FamilyId(id_from(&row.family_id)),
+            repo: row.repo,
+            created_ms: row.created_ms,
+            lease: row.device_id.zip(row.epoch).map(|(device, epoch)| Lease {
+                device: DeviceId(id_from(&device)),
+                epoch: u64::try_from(epoch).unwrap_or_default(),
             }),
-            owner: row.get("owner"),
-            collaborators: shared.remove(&ThreadId(id_from(row.get("id")))).unwrap_or_default(),
+            owner: row.owner,
+            collaborators: shared.remove(&id).unwrap_or_default(),
         })
         .collect();
     let (deleted, purged) = server.lifecycle(&viewer).await?;
@@ -570,21 +573,25 @@ async fn register_thread(
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
     claim_family(&server, thread.family, caller).await?;
-    sqlx::query("UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL")
-        .bind(id_bytes(thread.id.0))
-        .bind(&thread.repo)
-        .bind(id_bytes(thread.family.0))
-        .execute(db)
-        .await?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+    let (thread_id, family_id) = (id_bytes(thread.id.0), id_bytes(thread.family.0));
+    sqlx::query!(
+        "UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL",
+        thread_id,
+        thread.repo,
+        family_id,
     )
-    .bind(id_bytes(thread.id.0))
-    .bind(id_bytes(thread.family.0))
-    .bind(&thread.repo)
-    .bind(thread.created_ms)
-    .bind(caller.user)
-    .bind(visibility.map(|visibility| visibility.to_string()))
+    .execute(db)
+    .await?;
+    let visibility = visibility.map(|visibility| visibility.to_string());
+    sqlx::query!(
+        "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+        thread_id,
+        family_id,
+        thread.repo,
+        thread.created_ms,
+        caller.user,
+        visibility,
+    )
     .execute(db)
     .await?;
     orgs::place_project(db, &thread.repo, caller.user).await?;
@@ -599,27 +606,27 @@ async fn take_lease(
     UrlPath(thread): UrlPath<String>,
 ) -> Result<Json<Lease>, ApiError> {
     let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
-    let row = sqlx::query("SELECT family_id, owner_id FROM threads WHERE id = ?")
-        .bind(id_bytes(thread.0))
+    let (thread_id, device_id) = (id_bytes(thread.0), id_bytes(caller.device.0));
+    let owner = sqlx::query_scalar!(r#"SELECT owner_id AS "owner_id: UserId" FROM threads WHERE id = ?"#, thread_id)
         .fetch_optional(&server.shared.db)
         .await?
         .ok_or_else(not_found)?;
     if !server.viewer(caller.user).await?.sees_thread(thread) {
         return Err(not_found());
     }
-    if row.get::<UserId, _>("owner_id") != caller.user {
+    if owner != caller.user {
         return Err(forbidden("this thread belongs to another user; fork it to continue the work"));
     }
-    let row = sqlx::query(
+    let epoch = sqlx::query_scalar!(
         "INSERT INTO leases (thread_id, device_id, epoch) VALUES (?, ?, 1)
          ON CONFLICT (thread_id) DO UPDATE SET device_id = excluded.device_id, epoch = leases.epoch + 1
          RETURNING epoch",
+        thread_id,
+        device_id,
     )
-    .bind(id_bytes(thread.0))
-    .bind(id_bytes(caller.device.0))
     .fetch_one(&server.shared.db)
     .await?;
-    Ok(Json(Lease { device: caller.device, epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default() }))
+    Ok(Json(Lease { device: caller.device, epoch: u64::try_from(epoch).unwrap_or_default() }))
 }
 
 async fn push(
@@ -656,15 +663,17 @@ async fn push(
     let stored: Vec<Delta> = prepared.fresh().to_vec();
     let mut tx = server.shared.db.begin().await?;
     collab::claim_actors(&mut tx, caller.user, &claims).await?;
+    let family_id = id_bytes(family.0);
     for delta in &stored {
+        let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta).map_err(ServerError::from)?);
         // Numbered after what is stored rather than by the room, which may
         // have skipped a stored delta that no longer applies.
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO deltas (family_id, seq, format, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3 FROM deltas WHERE family_id = ?1",
+            family_id,
+            format,
+            data,
         )
-        .bind(id_bytes(family.0))
-        .bind(silt_log::DELTA_FORMAT)
-        .bind(silt_log::encode_stored(delta).map_err(ServerError::from)?)
         .execute(&mut *tx)
         .await?;
     }
@@ -754,12 +763,11 @@ async fn set_visibility(
             // its visibility; a refused request must not leave it placed
             // (ADR 0016).
             if !orgs::is_placed(db, &repo).await? {
-                let works_in_it = sqlx::query("SELECT 1 FROM threads WHERE repo = ? AND owner_id = ? LIMIT 1")
-                    .bind(&repo)
-                    .bind(caller.user)
-                    .fetch_optional(db)
-                    .await?
-                    .is_some();
+                let works_in_it =
+                    sqlx::query_scalar!("SELECT 1 FROM threads WHERE repo = ? AND owner_id = ? LIMIT 1", repo, caller.user)
+                        .fetch_optional(db)
+                        .await?
+                        .is_some();
                 if !works_in_it && !orgs::is_admin(db, caller.user).await? {
                     return Err(forbidden("this repository has no threads of yours on the server yet"));
                 }
@@ -771,19 +779,18 @@ async fn set_visibility(
             if !orgs::may_set_project(db, &repo, caller.user).await? {
                 return Err(forbidden("only the project's org owners and server admins can change its visibility"));
             }
-            sqlx::query("UPDATE projects SET visibility = ? WHERE repo = ?").bind(&visibility).bind(repo).execute(db).await?;
+            sqlx::query!("UPDATE projects SET visibility = ? WHERE repo = ?", visibility, repo).execute(db).await?;
         }
         (None, Some(thread)) => {
             if !server.viewer(caller.user).await?.sees_thread(thread) {
                 return Err(not_found());
             }
-            let updated = sqlx::query("UPDATE threads SET visibility = ? WHERE id = ? AND owner_id = ?")
-                .bind(&visibility)
-                .bind(id_bytes(thread.0))
-                .bind(caller.user)
-                .execute(db)
-                .await?
-                .rows_affected();
+            let thread = id_bytes(thread.0);
+            let updated =
+                sqlx::query!("UPDATE threads SET visibility = ? WHERE id = ? AND owner_id = ?", visibility, thread, caller.user)
+                    .execute(db)
+                    .await?
+                    .rows_affected();
             if updated == 0 {
                 return Err(forbidden("only the thread's owner can change its visibility"));
             }
@@ -810,6 +817,8 @@ async fn search(
     let visible: Vec<String> = viewer.visible_threads().map(|thread| hex_upper(&id_bytes(thread.0))).collect();
     let visible = serde_json::to_string(&visible).map_err(ServerError::from)?;
     let limit = i64::from(query.limit.unwrap_or(SEARCH_LIMIT).min(500));
+    // A runtime query: sqlx's macros crash the compiler describing FTS5
+    // matches.
     let rows = sqlx::query(
         "SELECT s.thread_id, s.kind, snippet(search, 0, '[', ']', '…', 12) AS snippet, CAST(s.time_ms AS INTEGER) AS time_ms,
                 t.repo, u.name AS owner, a.branch,
@@ -870,10 +879,11 @@ async fn in_flight(
     Query(query): Query<InFlightQuery>,
 ) -> Result<Json<InFlightReply>, ApiError> {
     let path = query.path.trim_matches('/');
-    let rows = sqlx::query(
-        "SELECT t.id, u.name AS owner, th.path, th.last_ms,
+    let active_since = now_ms() - ACTIVE_MS;
+    let rows = sqlx::query!(
+        r#"SELECT t.id, u.name AS owner, th.path, th.last_ms,
                 CASE WHEN COALESCE(a.merged, 0) = 1 THEN 'merged'
-                     WHEN COALESCE(a.last_ms, 0) >= ?1 THEN 'active' ELSE 'idle' END AS status
+                     WHEN COALESCE(a.last_ms, 0) >= ?1 THEN 'active' ELSE 'idle' END AS "status!: String"
          FROM touches th
          JOIN threads t ON t.id = th.thread_id
          JOIN families f ON f.id = t.family_id
@@ -881,29 +891,28 @@ async fn in_flight(
          LEFT JOIN thread_activity a ON a.thread_id = t.id
          WHERE t.repo = ?2
            AND (?3 = '' OR th.path = ?3 OR th.path LIKE ?3 || '/%')
-         ORDER BY th.last_ms DESC",
+         ORDER BY th.last_ms DESC"#,
+        active_since,
+        query.repo,
+        path,
     )
-    .bind(now_ms() - ACTIVE_MS)
-    .bind(&query.repo)
-    .bind(path)
     .fetch_all(&server.shared.db)
     .await?;
     let viewer = server.viewer(caller.user).await?;
     let mut threads: Vec<InFlightThread> = Vec::new();
-    for row in &rows {
-        let thread = ThreadId(id_from(row.get("id")));
+    for row in rows {
+        let thread = ThreadId(id_from(&row.id));
         if !viewer.sees_thread(thread) {
             continue;
         }
-        let path: String = row.get("path");
         match threads.iter_mut().find(|found| found.thread == thread) {
-            Some(found) => found.paths.push(path),
+            Some(found) => found.paths.push(row.path),
             None => threads.push(InFlightThread {
                 thread,
-                owner: row.get("owner"),
-                status: thread_status(row.get("status")),
-                paths: vec![path],
-                last_ms: row.get("last_ms"),
+                owner: row.owner,
+                status: thread_status(&row.status),
+                paths: vec![row.path],
+                last_ms: row.last_ms,
             }),
         }
     }
@@ -996,7 +1005,7 @@ impl Server {
     /// What `user` can see right now: the snapshot taken since nothing it is
     /// worked out from last changed, else a new one.
     async fn viewer(&self, user: UserId) -> Result<Arc<Viewer>, sqlx::Error> {
-        let epoch: i64 = sqlx::query_scalar("SELECT value FROM visibility_epoch").fetch_one(&self.shared.db).await?;
+        let epoch = sqlx::query_scalar!("SELECT value FROM visibility_epoch").fetch_one(&self.shared.db).await?;
         let key = VisibilityAt { epoch, forks: self.shared.index.lock().await.forks_version };
         let cached =
             self.shared.viewers.lock().await.get(&user).filter(|(at, _)| *at == key).map(|(_, viewer)| Arc::clone(viewer));
@@ -1094,8 +1103,9 @@ fn thread_status(text: &str) -> ThreadStatus {
     text.parse().unwrap_or(ThreadStatus::Idle)
 }
 
-pub(crate) fn hash(text: &str) -> [u8; 32] {
-    *blake3::hash(text.as_bytes()).as_bytes()
+/// What the database keeps of a token or code, as it is looked up by.
+pub(crate) fn hash(text: &str) -> Vec<u8> {
+    blake3::hash(text.as_bytes()).as_bytes().to_vec()
 }
 
 pub(crate) fn id_bytes(id: u128) -> Vec<u8> {

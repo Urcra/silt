@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "org",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "org"
+          }
+        }
+      },
+      {
+        "name": "expires_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "expires_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "840dba1938b9d5c0835bae456c4da2796ace9ef54bbb5f19e5136dc5635e085a"
+}

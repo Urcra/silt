@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5d2eb0c9e7ba3f36d7f6ed370f74811646b1aa6db2fdd424828294b5406e2f76"
+}

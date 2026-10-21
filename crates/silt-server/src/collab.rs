@@ -10,7 +10,6 @@ use axum::http::StatusCode;
 use silt_log::{Delta, Op};
 use silt_proto::ShareRequest;
 use silt_types::{ActorId, FamilyId, ThreadId};
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::visibility::Viewer;
@@ -24,29 +23,22 @@ pub(crate) async fn share(
 ) -> Result<StatusCode, ApiError> {
     let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
     let db = server.db();
-    let owner: UserId = sqlx::query("SELECT owner_id FROM threads WHERE id = ?")
-        .bind(id_bytes(thread.0))
+    let thread_id = id_bytes(thread.0);
+    let owner = sqlx::query_scalar!(r#"SELECT owner_id AS "owner_id: UserId" FROM threads WHERE id = ?"#, thread_id)
         .fetch_optional(db)
         .await?
-        .ok_or_else(not_found)?
-        .get("owner_id");
+        .ok_or_else(not_found)?;
     if owner != caller.user {
         return Err(forbidden("only the thread's owner shares it"));
     }
     let user = crate::orgs::named_user(&server, caller.user, &request.user).await?;
     if request.remove {
-        sqlx::query("DELETE FROM thread_collaborators WHERE thread_id = ? AND user_id = ?")
-            .bind(id_bytes(thread.0))
-            .bind(user)
-            .execute(db)
-            .await?;
+        sqlx::query!("DELETE FROM thread_collaborators WHERE thread_id = ? AND user_id = ?", thread_id, user).execute(db).await?;
     } else {
         if !server.viewer(user).await?.sees_thread(thread) {
             return Err(bad_request(format!("{} can't see this thread; change its visibility first", request.user)));
         }
-        sqlx::query("INSERT OR IGNORE INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)")
-            .bind(id_bytes(thread.0))
-            .bind(user)
+        sqlx::query!("INSERT OR IGNORE INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)", thread_id, user)
             .execute(db)
             .await?;
     }
@@ -57,11 +49,11 @@ pub(crate) async fn share(
 pub(crate) async fn collaborators(db: &SqlitePool) -> Result<HashMap<ThreadId, Vec<String>>, sqlx::Error> {
     let mut found: HashMap<ThreadId, Vec<String>> = HashMap::new();
     for row in
-        sqlx::query("SELECT c.thread_id, u.name FROM thread_collaborators c JOIN users u ON u.id = c.user_id ORDER BY u.name")
+        sqlx::query!("SELECT c.thread_id, u.name FROM thread_collaborators c JOIN users u ON u.id = c.user_id ORDER BY u.name")
             .fetch_all(db)
             .await?
     {
-        found.entry(ThreadId(id_from(row.get("thread_id")))).or_default().push(row.get("name"));
+        found.entry(ThreadId(id_from(&row.thread_id))).or_default().push(row.name);
     }
     Ok(found)
 }
@@ -106,29 +98,25 @@ impl Ledger {
     async fn load(db: &SqlitePool, user: UserId, deltas: &[&Delta]) -> Result<Self, sqlx::Error> {
         let mut ledger = Self::default();
         for actor in deltas.iter().map(|delta| delta.span.actor).collect::<HashSet<_>>() {
-            let owner = sqlx::query("SELECT user_id FROM actor_owners WHERE actor = ?")
-                .bind(id_bytes(actor.0))
+            let actor_id = id_bytes(actor.0);
+            let owner = sqlx::query_scalar!(r#"SELECT user_id AS "user_id: UserId" FROM actor_owners WHERE actor = ?"#, actor_id)
                 .fetch_optional(db)
-                .await?
-                .map(|row| row.get::<UserId, _>("user_id"));
+                .await?;
             ledger.actors.insert(actor, owner);
         }
         for thread in deltas.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
-            let row = sqlx::query(
-                "SELECT t.family_id, t.owner_id,
-                        EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
-                 FROM threads t WHERE t.id = ?",
+            let thread_id = id_bytes(thread.0);
+            let row = sqlx::query!(
+                r#"SELECT t.family_id, t.owner_id AS "owner_id: UserId",
+                        EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS "shared!: bool"
+                 FROM threads t WHERE t.id = ?"#,
+                user,
+                thread_id,
             )
-            .bind(user)
-            .bind(id_bytes(thread.0))
             .fetch_optional(db)
             .await?;
             if let Some(row) = row {
-                let registered = Registered {
-                    family: id_from(row.get("family_id")),
-                    owner: row.get("owner_id"),
-                    shared: row.get::<i64, _>("shared") != 0,
-                };
+                let registered = Registered { family: id_from(&row.family_id), owner: row.owner_id, shared: row.shared };
                 ledger.threads.insert(thread, registered);
             }
         }
@@ -182,9 +170,8 @@ fn admission<'d>(
 /// Records `actors` as written by `user`'s devices.
 pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: UserId, actors: &[ActorId]) -> Result<(), sqlx::Error> {
     for actor in actors {
-        sqlx::query("INSERT INTO actor_owners (actor, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
-            .bind(id_bytes(actor.0))
-            .bind(user)
+        let actor_id = id_bytes(actor.0);
+        sqlx::query!("INSERT INTO actor_owners (actor, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", actor_id, user)
             .execute(&mut *tx)
             .await?;
     }

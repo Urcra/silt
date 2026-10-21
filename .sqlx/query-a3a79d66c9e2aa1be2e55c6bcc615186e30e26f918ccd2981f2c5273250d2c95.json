@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM pairing_codes WHERE code_hash = ? AND expires_ms > ? RETURNING user_id AS \"user_id: UserId\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id: UserId",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "pairing_codes",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a3a79d66c9e2aa1be2e55c6bcc615186e30e26f918ccd2981f2c5273250d2c95"
+}

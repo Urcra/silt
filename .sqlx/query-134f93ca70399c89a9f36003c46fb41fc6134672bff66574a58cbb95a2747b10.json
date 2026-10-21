@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO notifications (user_id, kind, thread_id, delta, actor, text, created_ms)\n                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "134f93ca70399c89a9f36003c46fb41fc6134672bff66574a58cbb95a2747b10"
+}

@@ -1,0 +1,45 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.thread_id, p.family_id, EXISTS (SELECT 1 FROM families f WHERE f.id = p.family_id) AS \"remains!: bool\"\n             FROM purged_threads p",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "purged_threads",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "purged_threads",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "remains!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "055321173bda9f3092ecb4855270e650b5b5df2382b2dacb55aa8206f198d4e1"
+}

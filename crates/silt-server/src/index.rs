@@ -158,44 +158,50 @@ pub(crate) async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[Row]) -> Res
     for row in rows {
         match row {
             Row::Text { thread, kind, body, time_ms } => {
-                sqlx::query("INSERT INTO search (body, thread_id, kind, time_ms) VALUES (?, ?, ?, ?)")
-                    .bind(body)
-                    .bind(crate::id_bytes(thread.0))
-                    .bind(kind)
-                    .bind(time_ms)
-                    .execute(&mut **tx)
-                    .await?;
+                let thread = crate::id_bytes(thread.0);
+                sqlx::query!(
+                    "INSERT INTO search (body, thread_id, kind, time_ms) VALUES (?, ?, ?, ?)",
+                    body,
+                    thread,
+                    kind,
+                    time_ms
+                )
+                .execute(&mut **tx)
+                .await?;
             }
             Row::Touch { thread, path, time_ms } => {
-                sqlx::query(
+                let thread = crate::id_bytes(thread.0);
+                sqlx::query!(
                     "INSERT INTO touches (thread_id, path, last_ms) VALUES (?, ?, ?)
                      ON CONFLICT (thread_id, path) DO UPDATE SET last_ms = MAX(last_ms, excluded.last_ms)",
+                    thread,
+                    path,
+                    time_ms,
                 )
-                .bind(crate::id_bytes(thread.0))
-                .bind(path)
-                .bind(time_ms)
                 .execute(&mut **tx)
                 .await?;
             }
             Row::Activity { thread, time_ms, branch } => {
-                sqlx::query(
+                let thread = crate::id_bytes(thread.0);
+                sqlx::query!(
                     "INSERT INTO thread_activity (thread_id, branch, last_ms) VALUES (?, ?, ?)
                      ON CONFLICT (thread_id) DO UPDATE SET
                          last_ms = MAX(last_ms, excluded.last_ms),
                          branch = COALESCE(excluded.branch, thread_activity.branch)",
+                    thread,
+                    branch,
+                    time_ms,
                 )
-                .bind(crate::id_bytes(thread.0))
-                .bind(branch)
-                .bind(time_ms)
                 .execute(&mut **tx)
                 .await?;
             }
             Row::Merged { thread } => {
-                sqlx::query(
+                let thread = crate::id_bytes(thread.0);
+                sqlx::query!(
                     "INSERT INTO thread_activity (thread_id, merged) VALUES (?, 1)
                      ON CONFLICT (thread_id) DO UPDATE SET merged = 1",
+                    thread,
                 )
-                .bind(crate::id_bytes(thread.0))
                 .execute(&mut **tx)
                 .await?;
             }
@@ -206,9 +212,9 @@ pub(crate) async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[Row]) -> Res
 
 /// Empties the derived tables before they are rebuilt from the deltas.
 pub(crate) async fn clear(tx: &mut Transaction<'_, Sqlite>) -> Result<(), sqlx::Error> {
-    for table in ["DELETE FROM search", "DELETE FROM touches", "DELETE FROM thread_activity"] {
-        sqlx::query(table).execute(&mut **tx).await?;
-    }
+    sqlx::query!("DELETE FROM search").execute(&mut **tx).await?;
+    sqlx::query!("DELETE FROM touches").execute(&mut **tx).await?;
+    sqlx::query!("DELETE FROM thread_activity").execute(&mut **tx).await?;
     Ok(())
 }
 

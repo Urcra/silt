@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT owner_id AS \"owner_id: UserId\" FROM threads WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_id: UserId",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "owner_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "133ddf81f476784d4a4a0ebc10c5e545dc15cb9ee28654e0188ed22615a99b9d"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET visibility = 'private' WHERE org_id = ? AND visibility = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b6c2089bf30f7f4f0cfdebb09b1e85e858255310bfec0dbebe85282ba2fee02a"
+}
