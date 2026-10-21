@@ -488,6 +488,34 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
             }
             Request::AcpPrompt { thread, text } => to_response(self.acp_prompt(&thread, &text).await),
+            Request::AcpSteer { thread, text } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.acp_steer(thread, &text).await),
+                Err(error) => Response::error(error),
+            },
+            Request::Queue { thread } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.queue(thread).await),
+                Err(error) => Response::error(error),
+            },
+            Request::QueueAdd { thread, text } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.enqueue(thread, &text, false).await),
+                Err(error) => Response::error(error),
+            },
+            Request::QueueEdit { thread, id, text } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.queue_edit(thread, id, &text).await),
+                Err(error) => Response::error(error),
+            },
+            Request::QueueMove { thread, id, to } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.queue_move(thread, id, to).await),
+                Err(error) => Response::error(error),
+            },
+            Request::QueueRemove { thread, id } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.queue_remove(thread, id).await),
+                Err(error) => Response::error(error),
+            },
+            Request::QueueSend { thread, id } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.queue_send(thread, id).await),
+                Err(error) => Response::error(error),
+            },
             Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel).await),
             Request::AcpAnswer { thread, id, option } => {
                 to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }).await)

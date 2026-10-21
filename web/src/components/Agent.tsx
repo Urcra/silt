@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { api, type AgentStatus, type Presence } from '../api'
 import { STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
+import { PromptQueue } from './Queue'
 
 function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
@@ -157,13 +158,27 @@ export function AgentPanel({
           ))}
           <div className="flex gap-2">
             <button
-              disabled={status.state !== 'idle'}
+              disabled={!draft.trim()}
               className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
               onClick={() => act(api.prompt(thread, draft), onSent)}
-              title="Sends your draft together with everyone else's"
+              title={
+                status.state === 'idle'
+                  ? "Sends your draft together with everyone else's"
+                  : 'Queues your draft for when the agent is ready'
+              }
             >
-              Send
+              {status.state === 'idle' ? 'Send' : 'Queue'}
             </button>
+            {(status.state === 'working' || status.state === 'awaiting_permission') && (
+              <button
+                disabled={!draft.trim()}
+                className="rounded border border-line px-2 py-1 disabled:opacity-40"
+                onClick={() => act(api.steer(thread, draft), onSent)}
+                title="Interrupts the agent's turn to tell it your draft"
+              >
+                Steer now
+              </button>
+            )}
             {(status.state === 'working' || status.state === 'awaiting_permission') && (
               <button className="rounded border border-line px-2 py-1" onClick={() => act(api.cancelTurn(thread))}>
                 Cancel turn
@@ -177,6 +192,7 @@ export function AgentPanel({
         </div>
       )}
       {error && <p className="text-danger">{error}</p>}
+      <PromptQueue thread={thread} />
     </section>
   )
 }

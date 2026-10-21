@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE prompt_queue SET position = ? WHERE id = ? AND thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9d4750ad1bbf3c20efeb23c18ed122659ff3fa91dc55608a3fa8738ed6d3d64d"
+}

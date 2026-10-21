@@ -15,6 +15,7 @@ mod live;
 mod load;
 pub mod paths;
 pub mod protocol;
+mod queue;
 mod recorder;
 mod recovery;
 pub mod remote;

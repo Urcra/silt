@@ -98,6 +98,9 @@ export function useBusInvalidation() {
       case 'thread':
         void queries.invalidateQueries({ queryKey: keys.thread(event.thread) })
         break
+      case 'queue':
+        void queries.invalidateQueries({ queryKey: keys.queue(event.thread) })
+        break
       case 'inbox':
         void queries.invalidateQueries({ queryKey: ['inbox'] })
         break

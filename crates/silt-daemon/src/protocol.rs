@@ -242,10 +242,44 @@ pub enum Request {
         clone: Option<PathBuf>,
         agent: String,
     },
-    /// Sends the person's draft, with teammates' drafts, as the next prompt.
+    /// Sends the person's draft, with teammates' drafts, as the next prompt,
+    /// or queues it while the agent is busy (ADR 0022).
     AcpPrompt {
         thread: String,
         text: String,
+    },
+    /// Interrupts the agent's turn to tell it `text`.
+    AcpSteer {
+        thread: String,
+        text: String,
+    },
+    /// The prompts waiting for the thread's agent, next first.
+    Queue {
+        thread: String,
+    },
+    QueueAdd {
+        thread: String,
+        text: String,
+    },
+    QueueEdit {
+        thread: String,
+        id: i64,
+        text: String,
+    },
+    QueueMove {
+        thread: String,
+        id: i64,
+        /// The place to move it to, from the front.
+        to: usize,
+    },
+    QueueRemove {
+        thread: String,
+        id: i64,
+    },
+    /// Sends a queued prompt now, interrupting the agent if it works.
+    QueueSend {
+        thread: String,
+        id: i64,
     },
     AcpCancel {
         thread: String,
@@ -661,6 +695,16 @@ pub struct AgentStatus {
     pub error: Option<String>,
 }
 
+/// A prompt waiting for the thread's agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Queued {
+    pub id: i64,
+    pub author: String,
+    pub text: String,
+    pub created_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PermissionAsked {
@@ -703,6 +747,8 @@ pub enum BusEvent {
     Thread { thread: String, deltas: usize },
     /// The agent the web UI started in the thread; `None` once it's gone.
     Agent { thread: String, status: Option<AgentStatus> },
+    /// The thread's queue of prompts changed.
+    Queue { thread: String },
     /// A piece of what the agent says, thinks or a tool prints, as it comes.
     /// A tool's pieces name the tool call; one that `restart`s replaces
     /// what came before it rather than following it.
@@ -738,9 +784,10 @@ impl BusEvent {
     pub fn topic(&self) -> Option<String> {
         match self {
             Self::Threads => Some("threads".to_owned()),
-            Self::Thread { thread, .. } | Self::Agent { thread, .. } | Self::AgentText { thread, .. } => {
-                Some(format!("thread:{thread}"))
-            }
+            Self::Thread { thread, .. }
+            | Self::Agent { thread, .. }
+            | Self::AgentText { thread, .. }
+            | Self::Queue { thread } => Some(format!("thread:{thread}")),
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
             Self::Lagged => None,
@@ -803,6 +850,7 @@ mod tests {
             MrDetails::decl(&config),
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
+            Queued::decl(&config),
             Pulled::decl(&config),
             ReplicaDeltas::decl(&config),
             Resumed::decl(&config),

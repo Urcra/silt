@@ -14,7 +14,7 @@ use axum::extract::{Path, Query, Request as HttpRequest, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response as HttpResponse};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -97,6 +97,11 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
+        .route("/api/threads/{id}/agent/steer", post(agent_steer))
+        .route("/api/threads/{id}/queue", get(queue).post(queue_add))
+        .route("/api/threads/{id}/queue/{item}", put(queue_edit).delete(queue_remove))
+        .route("/api/threads/{id}/queue/{item}/move", post(queue_move))
+        .route("/api/threads/{id}/queue/{item}/send", post(queue_send))
         .route("/api/inbox", get(inbox))
         .route("/api/inbox/read", post(inbox_read))
         .route("/api/mrs", get(merge_requests))
@@ -445,6 +450,47 @@ struct AgentAnswer {
 async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentAnswer>) -> HttpResponse {
     let request = Request::AcpAnswer { thread, id: body.id, option: body.option };
     ask(&web, request).await
+}
+
+async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
+    ask(&web, Request::AcpSteer { thread, text: body.text }).await
+}
+
+async fn queue(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::Queue { thread }).await
+}
+
+async fn queue_add(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
+    ask(&web, Request::QueueAdd { thread, text: body.text }).await
+}
+
+async fn queue_edit(
+    State(web): State<Web>,
+    Path((thread, id)): Path<(String, i64)>,
+    Json(body): Json<AgentPrompt>,
+) -> HttpResponse {
+    ask(&web, Request::QueueEdit { thread, id, text: body.text }).await
+}
+
+async fn queue_remove(State(web): State<Web>, Path((thread, id)): Path<(String, i64)>) -> HttpResponse {
+    ask(&web, Request::QueueRemove { thread, id }).await
+}
+
+#[derive(Deserialize)]
+struct QueueMove {
+    to: usize,
+}
+
+async fn queue_move(
+    State(web): State<Web>,
+    Path((thread, id)): Path<(String, i64)>,
+    Json(body): Json<QueueMove>,
+) -> HttpResponse {
+    ask(&web, Request::QueueMove { thread, id, to: body.to }).await
+}
+
+async fn queue_send(State(web): State<Web>, Path((thread, id)): Path<(String, i64)>) -> HttpResponse {
+    ask(&web, Request::QueueSend { thread, id }).await
 }
 
 async fn agent_stop(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

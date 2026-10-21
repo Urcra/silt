@@ -82,6 +82,25 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 }
 
 #[tokio::test]
+async fn a_queue_keeps_its_order_through_edits_moves_and_takes() {
+    let (_dir, store) = store_with_thread().await;
+    let texts = |queue: Vec<silt_store::QueuedPrompt>| queue.into_iter().map(|queued| queued.text).collect::<Vec<_>>();
+    let first = store.enqueue(THREAD, "ada", "first", 1, false).await.expect("adds");
+    let second = store.enqueue(THREAD, "ada", "second", 2, false).await.expect("adds");
+    store.enqueue(THREAD, "bob", "urgent", 3, true).await.expect("adds at the front");
+    assert_eq!(texts(store.queue(THREAD).await.expect("reads")), ["urgent", "first", "second"]);
+
+    assert!(store.edit_queued(THREAD, first, "first, edited").await.expect("edits"));
+    assert!(store.move_queued(THREAD, second, 0).await.expect("moves"));
+    assert_eq!(texts(store.queue(THREAD).await.expect("reads")), ["second", "urgent", "first, edited"]);
+
+    assert_eq!(store.take_next(THREAD).await.expect("takes").map(|queued| queued.text), Some("second".into()));
+    assert!(store.take_queued(THREAD, second).await.expect("takes").is_none(), "taken once");
+    assert!(!store.edit_queued(THREAD, second, "too late").await.expect("edits"), "a sent prompt can't change");
+    assert_eq!(texts(store.queue(THREAD).await.expect("reads")), ["urgent", "first, edited"]);
+}
+
+#[tokio::test]
 async fn a_thread_s_agent_run_is_kept_and_replaced() {
     let (dir, store) = store_with_thread().await;
     assert!(store.agent_runs().await.expect("reads").is_empty());

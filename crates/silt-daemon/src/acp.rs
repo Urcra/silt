@@ -40,6 +40,8 @@ pub(crate) struct AcpRun {
     error: Option<String>,
     /// Each running tool call's output so far, to tell browsers what's new.
     tool_output: HashMap<String, String>,
+    /// What to tell the agent once the turn being cancelled for it ends.
+    steering: Option<String>,
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -149,6 +151,7 @@ impl Core {
                 asking: Vec::new(),
                 error: None,
                 tool_output: HashMap::new(),
+                steering: None,
             },
         );
         self.agent_changed(thread).await;
@@ -183,17 +186,60 @@ impl Core {
         })
     }
 
+    /// Sends `text` to the thread's agent when it's ready for a prompt, and
+    /// queues it otherwise (ADR 0022).
     pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
-        let run = self.running(thread)?;
-        if run.state == AgentState::Starting {
-            return Err(CoreError::Invalid("the agent is still starting".into()));
+        if text.trim().is_empty() {
+            return Err(CoreError::Invalid("there is nothing to send".into()));
         }
-        if run.state == AgentState::Working {
-            return Err(CoreError::Invalid("the agent is still working; wait for it or stop it".into()));
+        let idle = self.acp.get(&thread).is_some_and(|run| run.state == AgentState::Idle);
+        if !idle {
+            self.enqueue(thread, text, false).await?;
+            return Ok("queued");
         }
         let me = self.own_user();
-        let mut authors = vec![me];
+        self.send_prompt(thread, &me, text).await?;
+        Ok("sent")
+    }
+
+    /// Interrupts the agent's turn to tell it `text`: ACP can't add to a
+    /// running turn, so the turn is cancelled and `text` goes first once it
+    /// ends. An agent that isn't working hears it as its next prompt.
+    pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str) -> Result<&'static str, CoreError> {
+        let run = self.running(thread)?;
+        if !matches!(run.state, AgentState::Working) {
+            return self.acp_prompt(&thread.to_string(), text).await;
+        }
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        run.steering = Some(text.to_owned());
+        send(run, Command::Cancel);
+        self.agent_changed(thread).await;
+        Ok("steering")
+    }
+
+    /// Sends the next prompt once a turn ended: a steer first, then the
+    /// queue's front.
+    async fn next_prompt(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let Some(run) = self.acp.get_mut(&thread).filter(|run| run.state == AgentState::Idle) else {
+            return Ok(());
+        };
+        if let Some(steer) = run.steering.take() {
+            let me = self.own_user();
+            let said = format!("I interrupted your last turn to say: {steer}");
+            return self.send_prompt(thread, &me, &said).await;
+        }
+        let Some(next) = self.store.take_next(thread).await? else {
+            return Ok(());
+        };
+        self.announce(crate::protocol::BusEvent::Queue { thread: thread.to_string() });
+        self.send_prompt(thread, &next.author, &next.text).await
+    }
+
+    /// Records and sends a prompt by `author`, with teammates' drafts, the
+    /// thread's notices and, first in a new session, its conversation.
+    async fn send_prompt(&mut self, thread: ThreadId, author: &str, text: &str) -> Result<(), CoreError> {
+        let mut authors = vec![author.to_owned()];
         let mut said = text.trim().to_owned();
         for (user, draft) in self.teammates_draft_list(thread).await {
             said.push_str(&format!("\n\n{user}: {draft}"));
@@ -210,12 +256,12 @@ impl Core {
             prompt = format!("{primer}\n\n{prompt}");
         }
         self.record_acp(thread, &acp::prompt(&said, &authors.join(", "))).await?;
-        let run = self.acp.get_mut(&thread).expect("checked above");
+        let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
         send(run, Command::Prompt(prompt));
         self.agent_changed(thread).await;
-        Ok("sent")
+        Ok(())
     }
 
     pub(crate) async fn acp_command(&mut self, selector: &str, command: Command) -> Result<&'static str, CoreError> {
@@ -238,7 +284,7 @@ impl Core {
         Ok("ok")
     }
 
-    fn running(&self, thread: ThreadId) -> Result<&AcpRun, CoreError> {
+    pub(crate) fn running(&self, thread: ThreadId) -> Result<&AcpRun, CoreError> {
         self.acp
             .get(&thread)
             .filter(|run| run.state.running())
@@ -341,7 +387,8 @@ impl Core {
                 run.state = AgentState::Error;
             }
             AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => {
-                self.acp_ready(thread, &session, loaded, &agent).await?
+                self.acp_ready(thread, &session, loaded, &agent).await?;
+                self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => run.asking.push(permission),
@@ -351,6 +398,7 @@ impl Core {
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.state = AgentState::Idle;
                 run.asking.clear();
+                self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {

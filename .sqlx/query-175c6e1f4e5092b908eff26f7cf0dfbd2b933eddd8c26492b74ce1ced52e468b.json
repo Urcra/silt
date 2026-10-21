@@ -1,0 +1,28 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MIN(position), 0) AS \"first!: i64\", COALESCE(MAX(position), 0) AS \"last!: i64\"\n               FROM prompt_queue WHERE thread_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "first!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "last!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "175c6e1f4e5092b908eff26f7cf0dfbd2b933eddd8c26492b74ce1ced52e468b"
+}

@@ -160,3 +160,31 @@ test('a new thread starts with an agent in a known clone', async ({ page }) => {
   await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: hello')).toBeVisible()
 })
+
+test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  const draft = page.getByLabel('draft')
+  const permission = page.getByRole('group', { name: 'permission' })
+
+  await draft.fill('first')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(permission).toBeVisible()
+  await draft.fill('second')
+  await page.getByRole('button', { name: 'Queue', exact: true }).click()
+  const queued = page.getByRole('region', { name: 'queued prompts' })
+  await expect(queued).toContainText('second')
+  await permission.getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('Done: first')).toBeVisible()
+  // The queue's next prompt went out when the turn ended.
+  await expect(queued).toBeHidden()
+  await expect(permission).toBeVisible()
+
+  await draft.fill('change of plan')
+  await page.getByRole('button', { name: 'Steer now' }).click()
+  await expect(page.getByText('I was not allowed to edit.')).toBeVisible()
+  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('Done: I interrupted your last turn to say: change of plan')).toBeVisible()
+})
