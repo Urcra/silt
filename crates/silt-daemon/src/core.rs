@@ -288,7 +288,7 @@ impl Core {
         Ok(core)
     }
 
-    /// Handles a request; `None` means the reply is sent later.
+    /// Handles a request. Some answer `reply` later, off the event loop.
     pub async fn request(&mut self, request: Request, reply: oneshot::Sender<Response>) {
         let response = match request {
             Request::Ping => Response::ok("pong"),
@@ -630,8 +630,8 @@ impl Core {
         let ingested = checkout.bridge.ingest(family, &mut RepoBases(&checkout.repo), path, disk_file, &author, now_ms())?;
         self.persist(family_id, &ingested.deltas).await?;
         self.persist_entry(checkout_id, path).await?;
-        let mut again = self.perform(checkout_id, ingested.actions).await?;
-        again.extend(self.propagate(checkout_id, &ingested.deltas).await?);
+        let again = self.perform(checkout_id, ingested.actions).await?;
+        self.propagate(checkout_id, &ingested.deltas).await?;
         Ok(again)
     }
 
@@ -665,8 +665,9 @@ impl Core {
         Ok(DiskFile { content, executable, hash: raw.hash, size: raw.size(), mtime_ns: raw.mtime_ns })
     }
 
-    /// Brings other checkouts of the family up to date with `deltas`.
-    async fn propagate(&mut self, from: i64, deltas: &[Delta]) -> Result<Vec<String>, CoreError> {
+    /// Brings other checkouts of the family up to date with `deltas`, taking
+    /// in what changed in them meanwhile.
+    async fn propagate(&mut self, from: i64, deltas: &[Delta]) -> Result<(), CoreError> {
         let family_id = self.checkout(from)?.family;
         let others: Vec<i64> = self
             .checkouts
@@ -683,7 +684,7 @@ impl Core {
             let again = self.perform(other, actions).await?;
             self.ingest_changed_meanwhile(other, again).await?;
         }
-        Ok(Vec::new())
+        Ok(())
     }
 
     /// Applies disk actions, skipping files that changed on disk since they
@@ -1056,8 +1057,6 @@ impl Core {
         })
     }
 
-    /// Threads whose lease moved to another device stop taking writes from
-    /// this one.
     /// Threads whose lease moved to another device stop taking writes from
     /// this one. `before` holds the heads the moved threads had here before
     /// `deltas` arrived, which is where this device's work continues.

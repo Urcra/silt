@@ -414,7 +414,6 @@ impl TextDoc {
         Ok(Anchor { char_id, bias })
     }
 
-    /// Where `anchor` is in the current text.
     /// An anchor at `pos` in the text as of `version`.
     pub fn anchor_at(&self, graph: &CausalGraph, version: &Frontier, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
         let vv = graph.version_vector(version);
@@ -440,6 +439,7 @@ impl TextDoc {
         Err(TextError::AnchorOutOfBounds { pos, len })
     }
 
+    /// Where `anchor` is in the current text.
     pub fn resolve(&self, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
         let Some(char_id) = anchor.char_id else {
             let pos = match anchor.bias {
