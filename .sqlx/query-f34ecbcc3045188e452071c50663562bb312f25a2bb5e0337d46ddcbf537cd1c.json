@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "f34ecbcc3045188e452071c50663562bb312f25a2bb5e0337d46ddcbf537cd1c"
+}

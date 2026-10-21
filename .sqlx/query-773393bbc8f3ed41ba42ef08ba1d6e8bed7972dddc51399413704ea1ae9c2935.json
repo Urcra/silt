@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM disk_files WHERE checkout_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "773393bbc8f3ed41ba42ef08ba1d6e8bed7972dddc51399413704ea1ae9c2935"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM search_threads WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "48d5b333bb870382540e4e5cd5cb45bdea04c9cc31c33d9cd35e057ed75f4ad6"
+}

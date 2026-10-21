@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo, path FROM clones",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clones",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clones",
+            "name": "path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4f948ccc922511f1c3a56a5917294bb6888fd488ed77b3a55a09030dfd05ceb0"
+}

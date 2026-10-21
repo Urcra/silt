@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "generation",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sync_state",
+            "name": "generation"
+          }
+        }
+      },
+      {
+        "name": "pushed",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sync_state",
+            "name": "pushed"
+          }
+        }
+      },
+      {
+        "name": "pulled",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sync_state",
+            "name": "pulled"
+          }
+        }
+      },
+      {
+        "name": "last_pulled",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sync_state",
+            "name": "last_pulled"
+          }
+        }
+      },
+      {
+        "name": "view",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sync_state",
+            "name": "view"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "4b5ae5d05f15c6e182c10a83a2a5a5df30a13052e48eeadafb7f1305b9aa70a1"
+}

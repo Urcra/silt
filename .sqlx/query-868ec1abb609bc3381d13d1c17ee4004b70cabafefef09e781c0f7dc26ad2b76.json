@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO secret_overlay (secret) VALUES (?) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "868ec1abb609bc3381d13d1c17ee4004b70cabafefef09e781c0f7dc26ad2b76"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent, session_id, thread_id, checkout_id FROM sessions ORDER BY created_ms",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "checkout_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "checkout_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "df830688e92fb1be8e7b52d0b53e9ff5dabcfc1a20aeaa2de6ff3d9664343bba"
+}

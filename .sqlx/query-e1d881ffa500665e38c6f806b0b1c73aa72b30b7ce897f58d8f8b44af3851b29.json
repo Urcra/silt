@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions SET thread_id = ? WHERE checkout_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e1d881ffa500665e38c6f806b0b1c73aa72b30b7ce897f58d8f8b44af3851b29"
+}

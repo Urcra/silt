@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT file, path, offset FROM session_files WHERE agent = ? AND session_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "file",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_files",
+            "name": "file"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_files",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "offset",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_files",
+            "name": "offset"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e68dd1de22ed0873052deb5033ed141e090e7e5b00c416a4e97cfece05bae256"
+}

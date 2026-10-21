@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions\n             WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "96fde99baf9f306cc273642ef4d44d515a3d35d8594fd1b677c7ccc195cd7c3d"
+}

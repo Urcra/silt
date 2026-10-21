@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO threads (id, family_id, repo_root, repo, created_ms, owner) VALUES (?, ?, ?, ?, ?, ?)\n             ON CONFLICT (id) DO UPDATE SET\n                 repo_root = CASE WHEN excluded.repo_root != '' THEN excluded.repo_root ELSE threads.repo_root END,\n                 owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE threads.owner END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "b329f6942560af068ce99ecdf163417d932f1ffcfb1f1f032ba29fbff868094f"
+}

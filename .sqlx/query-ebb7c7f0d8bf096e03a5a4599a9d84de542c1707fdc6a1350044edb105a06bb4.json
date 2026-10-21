@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE checkouts SET thread_id = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ebb7c7f0d8bf096e03a5a4599a9d84de542c1707fdc6a1350044edb105a06bb4"
+}

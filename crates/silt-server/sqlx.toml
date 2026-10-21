@@ -1,2 +1,5 @@
+[common]
+database-url-var = "SILT_SERVER_DATABASE_URL"
+
 [migrate]
 table-name = "_silt_server_migrations"

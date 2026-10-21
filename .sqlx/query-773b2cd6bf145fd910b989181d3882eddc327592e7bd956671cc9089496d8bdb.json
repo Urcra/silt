@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq",
+  "describe": {
+    "columns": [
+      {
+        "name": "format",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "deltas",
+            "name": "format"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "deltas",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "773b2cd6bf145fd910b989181d3882eddc327592e7bd956671cc9089496d8bdb"
+}

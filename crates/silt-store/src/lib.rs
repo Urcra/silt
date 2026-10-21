@@ -152,64 +152,64 @@ impl Store {
 
     pub async fn create_thread(&self, thread: &ThreadRecord) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        sqlx::query("INSERT OR IGNORE INTO families (id, created_ms) VALUES (?, ?)")
-            .bind(id_bytes(thread.family.0))
-            .bind(thread.created_ms)
+        let (id, family) = (id_bytes(thread.id.0), id_bytes(thread.family.0));
+        sqlx::query!("INSERT OR IGNORE INTO families (id, created_ms) VALUES (?, ?)", family, thread.created_ms)
             .execute(&mut *tx)
             .await?;
-        sqlx::query(
+        let repo_root = path_text(&thread.repo_root);
+        sqlx::query!(
             "INSERT INTO threads (id, family_id, repo_root, repo, created_ms, owner) VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO UPDATE SET
                  repo_root = CASE WHEN excluded.repo_root != '' THEN excluded.repo_root ELSE threads.repo_root END,
                  owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE threads.owner END",
+            id,
+            family,
+            repo_root,
+            thread.repo,
+            thread.created_ms,
+            thread.owner,
         )
-            .bind(id_bytes(thread.id.0))
-            .bind(id_bytes(thread.family.0))
-            .bind(path_text(&thread.repo_root))
-            .bind(&thread.repo)
-            .bind(thread.created_ms)
-            .bind(&thread.owner)
-            .execute(&mut *tx)
-            .await?;
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
 
     pub async fn threads(&self) -> Result<Vec<ThreadRecord>, StoreError> {
-        let rows = sqlx::query("SELECT id, family_id, repo_root, repo, created_ms, owner FROM threads ORDER BY created_ms")
+        let rows = sqlx::query!("SELECT id, family_id, repo_root, repo, created_ms, owner FROM threads ORDER BY created_ms")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter()
+        rows.into_iter()
             .map(|row| {
                 Ok(ThreadRecord {
-                    id: ThreadId(id_from(row.get("id"))?),
-                    family: FamilyId(id_from(row.get("family_id"))?),
-                    repo_root: PathBuf::from(row.get::<String, _>("repo_root")),
-                    repo: row.get("repo"),
-                    created_ms: row.get("created_ms"),
-                    owner: row.get("owner"),
+                    id: ThreadId(id_from(&row.id)?),
+                    family: FamilyId(id_from(&row.family_id)?),
+                    repo_root: PathBuf::from(row.repo_root),
+                    repo: row.repo,
+                    created_ms: row.created_ms,
+                    owner: row.owner,
                 })
             })
             .collect()
     }
 
     pub async fn sync_state(&self, family: FamilyId) -> Result<SyncState, StoreError> {
-        let row = sqlx::query("SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?")
-            .bind(id_bytes(family.0))
+        let family = id_bytes(family.0);
+        let row = sqlx::query!("SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?", family)
             .fetch_optional(&self.pool)
             .await?;
         let Some(row) = row else {
             return Ok(SyncState::default());
         };
         Ok(SyncState {
-            generation: row.get::<Option<i64>, _>("generation").map(i64::cast_unsigned),
-            pushed: u64::try_from(row.get::<i64, _>("pushed")).unwrap_or_default(),
-            pulled: u64::try_from(row.get::<i64, _>("pulled")).unwrap_or_default(),
-            last_pulled: match row.get::<Option<&[u8]>, _>("last_pulled") {
-                Some(bytes) => Some(postcard::from_bytes(bytes)?),
+            generation: row.generation.map(i64::cast_unsigned),
+            pushed: u64::try_from(row.pushed).unwrap_or_default(),
+            pulled: u64::try_from(row.pulled).unwrap_or_default(),
+            last_pulled: match row.last_pulled {
+                Some(bytes) => Some(postcard::from_bytes(&bytes)?),
                 None => None,
             },
-            view: row.get::<i64, _>("view").cast_unsigned(),
+            view: row.view.cast_unsigned(),
         })
     }
 
@@ -218,27 +218,29 @@ impl Store {
             Some(id) => Some(postcard::to_allocvec(&id)?),
             None => None,
         };
-        sqlx::query(
+        let family = id_bytes(family.0);
+        let generation = state.generation.map(u64::cast_signed);
+        let (pushed, pulled) = (i64::try_from(state.pushed).unwrap_or(i64::MAX), i64::try_from(state.pulled).unwrap_or(i64::MAX));
+        let view = state.view.cast_signed();
+        sqlx::query!(
             "INSERT INTO sync_state (family_id, generation, pushed, pulled, last_pulled, view) VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (family_id) DO UPDATE SET generation = excluded.generation, pushed = excluded.pushed,
                  pulled = excluded.pulled, last_pulled = excluded.last_pulled, view = excluded.view",
+            family,
+            generation,
+            pushed,
+            pulled,
+            last_pulled,
+            view,
         )
-        .bind(id_bytes(family.0))
-        .bind(state.generation.map(u64::cast_signed))
-        .bind(i64::try_from(state.pushed).unwrap_or(i64::MAX))
-        .bind(i64::try_from(state.pulled).unwrap_or(i64::MAX))
-        .bind(last_pulled)
-        .bind(state.view.cast_signed())
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     pub async fn families(&self) -> Result<Vec<FamilyId>, StoreError> {
-        let rows = sqlx::query("SELECT id FROM families ORDER BY created_ms")
-            .fetch_all(&self.pool)
-            .await?;
-        rows.iter().map(|row| Ok(FamilyId(id_from(row.get("id"))?))).collect()
+        let rows = sqlx::query!("SELECT id FROM families ORDER BY created_ms").fetch_all(&self.pool).await?;
+        rows.into_iter().map(|row| Ok(FamilyId(id_from(&row.id)?))).collect()
     }
 
     /// Appends deltas after the family's existing ones, keeping their order.
@@ -271,9 +273,8 @@ impl Store {
 
     /// Marks a thread as in the trash (`Some`) or back out of it (`None`).
     pub async fn set_thread_deleted(&self, thread: ThreadId, deleted_ms: Option<i64>) -> Result<(), StoreError> {
-        sqlx::query("UPDATE threads SET deleted_ms = ? WHERE id = ?")
-            .bind(deleted_ms)
-            .bind(id_bytes(thread.0))
+        let thread = id_bytes(thread.0);
+        sqlx::query!("UPDATE threads SET deleted_ms = ? WHERE id = ?", deleted_ms, thread)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -283,8 +284,7 @@ impl Store {
     pub async fn learn_secrets(&self, secrets: &[String]) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         for secret in secrets {
-            sqlx::query("INSERT INTO secret_overlay (secret) VALUES (?) ON CONFLICT DO NOTHING")
-                .bind(secret)
+            sqlx::query!("INSERT INTO secret_overlay (secret) VALUES (?) ON CONFLICT DO NOTHING", secret)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -293,18 +293,12 @@ impl Store {
     }
 
     pub async fn secrets(&self) -> Result<Vec<String>, StoreError> {
-        Ok(sqlx::query("SELECT secret FROM secret_overlay")
-            .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(|row| row.get("secret"))
-            .collect())
+        Ok(sqlx::query_scalar!("SELECT secret FROM secret_overlay").fetch_all(&self.pool).await?)
     }
 
     pub async fn remember_clone(&self, repo: &str, path: &Path) -> Result<(), StoreError> {
-        sqlx::query("INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path")
-            .bind(repo)
-            .bind(path.to_string_lossy())
+        let path = path_text(path);
+        sqlx::query!("INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path", repo, path)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -312,20 +306,20 @@ impl Store {
 
     /// Clones remembered by repository.
     pub async fn clones(&self) -> Result<Vec<(String, PathBuf)>, StoreError> {
-        Ok(sqlx::query("SELECT repo, path FROM clones")
+        Ok(sqlx::query!("SELECT repo, path FROM clones")
             .fetch_all(&self.pool)
             .await?
-            .iter()
-            .map(|row| (row.get("repo"), PathBuf::from(row.get::<String, _>("path"))))
+            .into_iter()
+            .map(|row| (row.repo, PathBuf::from(row.path)))
             .collect())
     }
 
     pub async fn deleted_threads(&self) -> Result<Vec<ThreadId>, StoreError> {
-        sqlx::query("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
+        sqlx::query_scalar!("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(&self.pool)
             .await?
             .iter()
-            .map(|row| Ok(ThreadId(id_from(row.get("id"))?)))
+            .map(|id| Ok(ThreadId(id_from(id)?)))
             .collect()
     }
 
@@ -336,30 +330,37 @@ impl Store {
         let mut tx = self.write_transaction().await?;
         // Sessions go by their thread and by their checkout: a checkout
         // rebound to this thread may still hold sessions of another.
-        for statement in [
+        sqlx::query!(
             "DELETE FROM session_files WHERE (agent, session_id) IN (SELECT agent, session_id FROM sessions
              WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1))",
-            "DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
-            "DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
-            "DELETE FROM checkouts WHERE thread_id = ?1",
-            "DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads WHERE thread_id = ?1)",
-            "DELETE FROM search_threads WHERE thread_id = ?1",
-            "DELETE FROM threads WHERE id = ?1",
-        ] {
-            sqlx::query(statement).bind(&id).execute(&mut *tx).await?;
-        }
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!("DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query!("DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query!("DELETE FROM checkouts WHERE thread_id = ?1", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads WHERE thread_id = ?1)", id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query!("DELETE FROM search_threads WHERE thread_id = ?1", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM threads WHERE id = ?1", id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
 
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
-        let rows = sqlx::query("SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq")
-            .bind(id_bytes(family.0))
+        let family = id_bytes(family.0);
+        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq", family)
             .fetch_all(&self.pool)
             .await?;
-        rows.iter()
-            .map(|row| Ok(silt_log::decode_stored(row.get("format"), row.get::<&[u8], _>("data"))?))
+        rows.into_iter()
+            .map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?))
             .collect()
     }
 
@@ -371,14 +372,15 @@ impl Store {
         managed: bool,
         now_ms: i64,
     ) -> Result<CheckoutRecord, StoreError> {
-        let id = sqlx::query(
+        let (thread_id, path_text, actor_id) = (id_bytes(thread.0), path_text(path), id_bytes(actor.0));
+        let id = sqlx::query!(
             "INSERT INTO checkouts (thread_id, path, actor, managed, created_ms) VALUES (?, ?, ?, ?, ?)",
+            thread_id,
+            path_text,
+            actor_id,
+            managed,
+            now_ms,
         )
-        .bind(id_bytes(thread.0))
-        .bind(path_text(path))
-        .bind(id_bytes(actor.0))
-        .bind(managed)
-        .bind(now_ms)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
@@ -395,16 +397,11 @@ impl Store {
     /// recorded about the disk for the previous one.
     pub async fn rebind_checkout(&self, checkout: i64, thread: ThreadId, actor: ActorId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        sqlx::query("UPDATE checkouts SET thread_id = ?, actor = ? WHERE id = ?")
-            .bind(id_bytes(thread.0))
-            .bind(id_bytes(actor.0))
-            .bind(checkout)
+        let (thread, actor) = (id_bytes(thread.0), id_bytes(actor.0));
+        sqlx::query!("UPDATE checkouts SET thread_id = ?, actor = ? WHERE id = ?", thread, actor, checkout)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM disk_files WHERE checkout_id = ?")
-            .bind(checkout)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ?", checkout).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -413,14 +410,11 @@ impl Store {
     /// of the same family, keeping what it knows about the disk.
     pub async fn move_checkout(&self, checkout: i64, thread: ThreadId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        sqlx::query("UPDATE checkouts SET thread_id = ? WHERE id = ?")
-            .bind(id_bytes(thread.0))
-            .bind(checkout)
+        let thread = id_bytes(thread.0);
+        sqlx::query!("UPDATE checkouts SET thread_id = ? WHERE id = ?", thread, checkout)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?")
-            .bind(id_bytes(thread.0))
-            .bind(checkout)
+        sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -428,39 +422,36 @@ impl Store {
     }
 
     pub async fn checkouts(&self) -> Result<Vec<CheckoutRecord>, StoreError> {
-        let rows = sqlx::query("SELECT id, thread_id, path, actor, managed FROM checkouts ORDER BY id")
+        let rows = sqlx::query!(r#"SELECT id AS "id!", thread_id, path, actor, managed AS "managed: bool" FROM checkouts ORDER BY id"#)
             .fetch_all(&self.pool)
             .await?;
-        rows.iter()
+        rows.into_iter()
             .map(|row| {
                 Ok(CheckoutRecord {
-                    id: row.get("id"),
-                    thread: ThreadId(id_from(row.get("thread_id"))?),
-                    path: PathBuf::from(row.get::<String, _>("path")),
-                    actor: ActorId(id_from(row.get("actor"))?),
-                    managed: row.get("managed"),
+                    id: row.id,
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    path: PathBuf::from(row.path),
+                    actor: ActorId(id_from(&row.actor)?),
+                    managed: row.managed,
                 })
             })
             .collect()
     }
 
     pub async fn disk_files(&self, checkout: i64) -> Result<HashMap<String, DiskFile>, StoreError> {
-        let rows =
-            sqlx::query("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?")
-            .bind(checkout)
+        let rows = sqlx::query!("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?", checkout)
             .fetch_all(&self.pool)
             .await?;
-        rows.iter()
+        rows.into_iter()
             .map(|row| {
-                let hash: &[u8] = row.get("hash");
                 Ok((
-                    row.get("path"),
+                    row.path,
                     DiskFile {
-                        inode: postcard::from_bytes(row.get::<&[u8], _>("inode"))?,
-                        hash: hash.try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?,
-                        size: u64::try_from(row.get::<i64, _>("size")).unwrap_or_default(),
-                        mtime_ns: row.get("mtime_ns"),
-                        version: postcard::from_bytes(row.get::<&[u8], _>("version"))?,
+                        inode: postcard::from_bytes(&row.inode)?,
+                        hash: row.hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?,
+                        size: u64::try_from(row.size).unwrap_or_default(),
+                        mtime_ns: row.mtime_ns,
+                        version: postcard::from_bytes(&row.version)?,
                     },
                 ))
             })
@@ -468,75 +459,74 @@ impl Store {
     }
 
     pub async fn put_disk_file(&self, checkout: i64, path: &str, file: &DiskFile) -> Result<(), StoreError> {
-        sqlx::query(
+        let (inode, hash, version) = (postcard::to_allocvec(&file.inode)?, file.hash.as_slice(), postcard::to_allocvec(&file.version)?);
+        let size = i64::try_from(file.size).unwrap_or(i64::MAX);
+        sqlx::query!(
             "INSERT INTO disk_files (checkout_id, path, inode, hash, size, mtime_ns, version) VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (checkout_id, path) DO UPDATE SET inode = excluded.inode,
                  hash = excluded.hash, size = excluded.size, mtime_ns = excluded.mtime_ns, version = excluded.version",
+            checkout,
+            path,
+            inode,
+            hash,
+            size,
+            file.mtime_ns,
+            version,
         )
-        .bind(checkout)
-        .bind(path)
-        .bind(postcard::to_allocvec(&file.inode)?)
-        .bind(file.hash.as_slice())
-        .bind(i64::try_from(file.size).unwrap_or(i64::MAX))
-        .bind(file.mtime_ns)
-        .bind(postcard::to_allocvec(&file.version)?)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     pub async fn remove_disk_file(&self, checkout: i64, path: &str) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?")
-            .bind(checkout)
-            .bind(path)
+        sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?", checkout, path)
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
     pub async fn add_session(&self, session: &SessionRecord, now_ms: i64) -> Result<(), StoreError> {
-        sqlx::query(
+        let thread = id_bytes(session.thread.0);
+        sqlx::query!(
             "INSERT INTO sessions (agent, session_id, thread_id, checkout_id, created_ms) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (agent, session_id) DO NOTHING",
+            session.agent,
+            session.session_id,
+            thread,
+            session.checkout_id,
+            now_ms,
         )
-        .bind(&session.agent)
-        .bind(&session.session_id)
-        .bind(id_bytes(session.thread.0))
-        .bind(session.checkout_id)
-        .bind(now_ms)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     pub async fn sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
-        let rows = sqlx::query("SELECT agent, session_id, thread_id, checkout_id FROM sessions ORDER BY created_ms")
+        let rows = sqlx::query!("SELECT agent, session_id, thread_id, checkout_id FROM sessions ORDER BY created_ms")
             .fetch_all(&self.pool)
             .await?;
-        rows.iter()
+        rows.into_iter()
             .map(|row| {
                 Ok(SessionRecord {
-                    agent: row.get("agent"),
-                    session_id: row.get("session_id"),
-                    thread: ThreadId(id_from(row.get("thread_id"))?),
-                    checkout_id: row.get("checkout_id"),
+                    agent: row.agent,
+                    session_id: row.session_id,
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    checkout_id: row.checkout_id,
                 })
             })
             .collect()
     }
 
     pub async fn session_offsets(&self, agent: &str, session_id: &str) -> Result<Vec<SessionFileOffset>, StoreError> {
-        let rows = sqlx::query("SELECT file, path, offset FROM session_files WHERE agent = ? AND session_id = ?")
-            .bind(agent)
-            .bind(session_id)
+        let rows = sqlx::query!("SELECT file, path, offset FROM session_files WHERE agent = ? AND session_id = ?", agent, session_id)
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
-            .iter()
+            .into_iter()
             .map(|row| SessionFileOffset {
-                file: row.get("file"),
-                path: PathBuf::from(row.get::<String, _>("path")),
-                offset: u64::try_from(row.get::<i64, _>("offset")).unwrap_or_default(),
+                file: row.file,
+                path: PathBuf::from(row.path),
+                offset: u64::try_from(row.offset).unwrap_or_default(),
             })
             .collect())
     }
@@ -566,17 +556,19 @@ impl Store {
         let mut tx = self.write_transaction().await?;
         append_deltas_in(&mut tx, family, deltas).await?;
         for row in rows {
-            let inserted = sqlx::query("INSERT INTO search (body, thread_id, actor, lamport, kind) VALUES (?, ?, ?, ?, ?)")
-                .bind(&row.body)
-                .bind(id_bytes(row.thread.0))
-                .bind(id_bytes(row.delta.actor.0))
-                .bind(lamport_i64(row.delta.lamport))
-                .bind(&row.kind)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO search_threads (row_id, thread_id) VALUES (?, ?)")
-                .bind(inserted.last_insert_rowid())
-                .bind(id_bytes(row.thread.0))
+            let (thread, actor, lamport) = (id_bytes(row.thread.0), id_bytes(row.delta.actor.0), lamport_i64(row.delta.lamport));
+            let inserted = sqlx::query!(
+                "INSERT INTO search (body, thread_id, actor, lamport, kind) VALUES (?, ?, ?, ?, ?)",
+                row.body,
+                thread,
+                actor,
+                lamport,
+                row.kind,
+            )
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
+            sqlx::query!("INSERT INTO search_threads (row_id, thread_id) VALUES (?, ?)", inserted, thread)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -594,6 +586,8 @@ impl Store {
         if query.is_empty() {
             return Ok(Vec::new());
         }
+        // Checked at runtime: sqlx can't describe an FTS5 match, and its
+        // macro crashes the compiler on this one.
         let rows = sqlx::query(
             "SELECT thread_id, actor, lamport, kind, snippet(search, 0, '[', ']', '…', 12) AS snippet
              FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?",
@@ -619,21 +613,25 @@ impl Store {
 }
 
 async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
-    let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM deltas WHERE family_id = ?")
-        .bind(id_bytes(family.0))
+    let family = id_bytes(family.0);
+    let next = sqlx::query_scalar!(r#"SELECT COALESCE(MAX(seq) + 1, 0) AS "next!: i64" FROM deltas WHERE family_id = ?"#, family)
         .fetch_one(&mut *tx)
         .await?;
     for (seq, delta) in (next..).zip(deltas) {
-        sqlx::query("INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(id_bytes(family.0))
-            .bind(seq)
-            .bind(id_bytes(delta.span.actor.0))
-            .bind(lamport_i64(delta.span.start))
-            .bind(i64::try_from(delta.span.len).unwrap_or(i64::MAX))
-            .bind(silt_log::DELTA_FORMAT)
-            .bind(silt_log::encode_stored(delta)?)
-            .execute(&mut *tx)
-            .await?;
+        let (actor, lamport, len) = (id_bytes(delta.span.actor.0), lamport_i64(delta.span.start), i64::try_from(delta.span.len).unwrap_or(i64::MAX));
+        let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta)?);
+        sqlx::query!(
+            "INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            family,
+            seq,
+            actor,
+            lamport,
+            len,
+            format,
+            data,
+        )
+        .execute(&mut *tx)
+        .await?;
     }
     Ok(())
 }
@@ -644,15 +642,16 @@ async fn set_session_offset_in(
     session_id: &str,
     file: &SessionFileOffset,
 ) -> Result<(), StoreError> {
-    sqlx::query(
+    let (path, offset) = (path_text(&file.path), i64::try_from(file.offset).unwrap_or(i64::MAX));
+    sqlx::query!(
         "INSERT INTO session_files (agent, session_id, file, path, offset) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (agent, session_id, file) DO UPDATE SET path = excluded.path, offset = excluded.offset",
+        agent,
+        session_id,
+        file.file,
+        path,
+        offset,
     )
-    .bind(agent)
-    .bind(session_id)
-    .bind(&file.file)
-    .bind(path_text(&file.path))
-    .bind(i64::try_from(file.offset).unwrap_or(i64::MAX))
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -661,15 +660,19 @@ async fn set_session_offset_in(
 /// Also forgets the family's search rows: the deltas they came from are
 /// indexed again when they come back.
 async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> Result<(), StoreError> {
-    for statement in [
+    let family = id_bytes(family.0);
+    sqlx::query!(
         "DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads
          WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1))",
-        "DELETE FROM search_threads WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1)",
-        "DELETE FROM deltas WHERE family_id = ?1",
-        "DELETE FROM sync_state WHERE family_id = ?1",
-    ] {
-        sqlx::query(statement).bind(id_bytes(family.0)).execute(&mut *tx).await?;
-    }
+        family
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!("DELETE FROM search_threads WHERE thread_id IN (SELECT id FROM threads WHERE family_id = ?1)", family)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query!("DELETE FROM deltas WHERE family_id = ?1", family).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM sync_state WHERE family_id = ?1", family).execute(&mut *tx).await?;
     Ok(())
 }
 

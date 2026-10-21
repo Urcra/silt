@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM checkouts WHERE thread_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ae5d7a841d9f8b245260cbea9f468c5cb144aeb96ef78d39ef69533af87bd476"
+}

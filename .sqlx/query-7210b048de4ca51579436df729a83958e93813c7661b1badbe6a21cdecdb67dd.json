@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT secret FROM secret_overlay",
+  "describe": {
+    "columns": [
+      {
+        "name": "secret",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "secret_overlay",
+            "name": "secret"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7210b048de4ca51579436df729a83958e93813c7661b1badbe6a21cdecdb67dd"
+}
