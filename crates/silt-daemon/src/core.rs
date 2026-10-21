@@ -248,6 +248,11 @@ impl Core {
     pub async fn request(&mut self, request: Request, reply: oneshot::Sender<Response>) {
         let response = match request {
             Request::Ping => Response::ok("pong"),
+            Request::AgentHomes => {
+                let homes: Vec<(&str, Option<String>)> =
+                    silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
+                Response::ok(homes)
+            }
             Request::StartSession {
                 cwd,
                 agent,

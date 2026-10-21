@@ -201,6 +201,9 @@ pub trait Agent: Send + Sync {
     fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch>;
 }
 
+/// The environment variables that say where agents keep their sessions.
+pub const HOME_VARIABLES: [&str; 5] = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
+
 pub const AGENTS: [&dyn Agent; 5] = [
     &claude::ClaudeCode,
     &codex::Codex,

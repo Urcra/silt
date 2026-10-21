@@ -46,6 +46,7 @@ pub(crate) fn is_running() -> bool {
 /// Starts the daemon in the background unless it already runs.
 pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     if is_running() {
+        warn_of_other_agent_homes();
         return Ok(false);
     }
     if silt_daemon::holds_lock(&paths::data_dir()) {
@@ -61,8 +62,12 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
     {
         use std::os::unix::process::CommandExt;
+        // The daemon outlives this command: it starts from `/`, not from
+        // wherever this ran, and without settings meant for one command.
         Command::new(exe)
             .args(["daemon", "run"])
+            .current_dir("/")
+            .env_remove("SILT_HARNESS_UNSANDBOXED")
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(log_err)
@@ -81,6 +86,25 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
         "the Silt daemon did not start; see {}",
         paths::log_path().display()
     )))
+}
+
+/// The daemon finds agents' sessions where its own environment says, which
+/// is the environment of the command that started it. Says so when this
+/// command's agent homes differ, as its sessions would then go unseen.
+fn warn_of_other_agent_homes() {
+    let Ok(homes) = call::<Vec<(String, Option<String>)>>(&Request::AgentHomes) else {
+        return;
+    };
+    for (name, daemons) in homes {
+        let mine = env::var(&name).ok();
+        if mine != daemons {
+            eprintln!(
+                "silt: the daemon runs with {name}={}, this command with {name}={}; restart it with `silt daemon stop` to use this one",
+                daemons.as_deref().unwrap_or("(unset)"),
+                mine.as_deref().unwrap_or("(unset)")
+            );
+        }
+    }
 }
 
 /// How long to wait for a daemon that runs but doesn't answer yet, say

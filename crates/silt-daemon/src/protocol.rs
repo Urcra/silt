@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "request", rename_all = "snake_case")]
 pub enum Request {
     Ping,
+    /// Where this daemon looks for agents' sessions: each of
+    /// `silt_agents::HOME_VARIABLES` with its value here.
+    AgentHomes,
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
