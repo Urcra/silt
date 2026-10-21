@@ -494,6 +494,23 @@ fn a_renamed_file_keeps_its_history() {
     assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
 }
 
+/// A busy watcher may report a rename's two halves apart; a file gone and
+/// its bytes back elsewhere moments later is still a move.
+#[test]
+fn a_file_gone_and_back_elsewhere_moments_later_is_a_rename() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    let bytes = fs::read(env.repo.join("src/main.rs")).expect("reads");
+    fs::remove_file(env.repo.join("src/main.rs")).expect("removes");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    fs::write(env.repo.join("src/app.rs"), bytes).expect("writes");
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("rename to src/app.rs")));
+    let diff = env.stdout(&["diff", &thread]);
+    assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
+}
+
 /// Talks to the MCP server Silt configured for the session, the way
 /// Claude Code would.
 struct McpClient {

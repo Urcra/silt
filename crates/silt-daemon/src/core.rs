@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
@@ -218,6 +218,19 @@ pub struct Core {
     pub(crate) personal: crate::personal::Personal,
     /// The control channel to the server (ADR 0026).
     pub(crate) control: crate::control::Control,
+    /// Files that vanished from each checkout, waiting a moment for the
+    /// other half of a rename.
+    rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
+}
+
+/// How long a vanished file waits for the file it was renamed to.
+const RENAME_WAIT: Duration = Duration::from_millis(1000);
+
+#[derive(Debug, Clone)]
+struct RenameWait {
+    path: String,
+    hash: BlobHash,
+    at: Instant,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -375,6 +388,7 @@ impl Core {
             agent_runs: HashMap::new(),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
+            rename_waits: HashMap::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -732,7 +746,9 @@ impl Core {
     }
 
     /// Records each vanished file whose exact bytes reappeared at a new path
-    /// in the same batch as a move. Returns the paths it handled.
+    /// as a move: in the same batch, or in one soon after, as a busy watcher
+    /// may report the two halves of a rename apart. Returns the paths it
+    /// handled, a vanished file still waiting for its other half among them.
     /// `listed` are files git just listed, so they are there.
     async fn ingest_renames(
         &mut self,
@@ -741,30 +757,40 @@ impl Core {
         listed: &HashSet<String>,
     ) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
-        let mut vanished: BTreeMap<BlobHash, Vec<&String>> = BTreeMap::new();
+        let mut vanished: BTreeMap<BlobHash, Vec<String>> = BTreeMap::new();
         let mut unrecorded = Vec::new();
         let entries = self.checkout(checkout_id)?.bridge.entries();
         for path in paths {
             // An unreadable file is left to `ingest_file`, which reports it.
             match entries.get(path) {
                 Some(entry) if !listed.contains(path) && matches!(disk::is_file(&root, path), Ok(false)) => {
-                    vanished.entry(entry.hash).or_default().push(path);
+                    vanished.entry(entry.hash).or_default().push(path.clone());
                 }
                 Some(_) => {}
                 None => unrecorded.push(path),
             }
         }
+        let waiting = self.rename_waits.entry(checkout_id).or_default();
+        waiting.retain(|wait| wait.at.elapsed() < RENAME_WAIT * 4);
         // Reading every new file only pays when a file went.
-        if vanished.is_empty() {
+        if vanished.is_empty() && waiting.is_empty() {
             return Ok(Vec::new());
         }
         let appeared: Vec<_> =
             unrecorded.into_iter().filter_map(|path| Some((path, disk::read(&root, path).ok().flatten()?))).collect();
         let mut handled = Vec::new();
         for (to, raw) in appeared {
-            let Some(from) = vanished.get_mut(&raw.hash).and_then(Vec::pop) else {
-                continue;
+            let from = match vanished.get_mut(&raw.hash).and_then(Vec::pop) {
+                Some(from) => from,
+                None => {
+                    let waiting = self.rename_waits.entry(checkout_id).or_default();
+                    let Some(index) = waiting.iter().position(|wait| wait.hash == raw.hash) else {
+                        continue;
+                    };
+                    waiting.remove(index).path
+                }
             };
+            let from = &from;
             let disk_file = self.disk_file(checkout_id, to, raw).await?;
             let author = self.author_for(checkout_id);
             let family_id = self.checkout(checkout_id)?.family;
@@ -787,7 +813,45 @@ impl Core {
             self.propagate(checkout_id, &ingested.deltas).await?;
             handled.extend([from.clone(), to.clone()]);
         }
+        if self.resident {
+            handled.extend(self.wait_for_renames(checkout_id, &root, vanished.into_iter()));
+        }
         Ok(handled)
+    }
+
+    /// Holds back recording the deletion of files that vanished with nothing
+    /// to match them yet, for a moment, and looks again then. Returns those
+    /// it holds back; one it already waited for is recorded as deleted.
+    fn wait_for_renames(
+        &mut self,
+        checkout_id: CheckoutId,
+        root: &Path,
+        vanished: impl Iterator<Item = (BlobHash, Vec<String>)>,
+    ) -> Vec<String> {
+        let waiting = self.rename_waits.entry(checkout_id).or_default();
+        let mut held = Vec::new();
+        for (hash, paths) in vanished {
+            for path in paths {
+                match waiting.iter().position(|wait| wait.path == path) {
+                    Some(index) if waiting[index].at.elapsed() >= RENAME_WAIT => {
+                        waiting.remove(index);
+                    }
+                    Some(_) => held.push(path),
+                    None => {
+                        waiting.push(RenameWait { path: path.clone(), hash, at: Instant::now() });
+                        held.push(path);
+                    }
+                }
+            }
+        }
+        if !held.is_empty() {
+            let (events, paths) = (self.events.clone(), held.iter().map(|path| root.join(path)).collect());
+            tokio::spawn(async move {
+                tokio::time::sleep(RENAME_WAIT).await;
+                let _ = events.send(Event::Changed { checkout: checkout_id, paths, noticed: Instant::now(), settled: true });
+            });
+        }
+        held
     }
 
     fn files_under(&self, checkout: CheckoutId, relative: &str) -> Result<Vec<String>, CoreError> {
