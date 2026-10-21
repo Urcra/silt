@@ -820,6 +820,7 @@ mod tests {
             silt_proto::AgentActivity::decl(&config),
             silt_proto::AgentState::decl(&config),
             silt_proto::Capabilities::decl(&config),
+            silt_proto::Startable::decl(&config),
             silt_proto::InboxRead::decl(&config),
             silt_proto::OrgChange::decl(&config),
             silt_proto::OrgInfo::decl(&config),

@@ -35,6 +35,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/agent/mode", post(mode))
         .route("/app/api/threads/{id}/agent/setting", post(setting))
         .route("/app/api/threads/{id}/queue", post(enqueue))
+        .route("/app/api/threads/{id}/continue", post(continue_on))
 }
 
 /// A refusal as the web app reads one.
@@ -160,6 +161,49 @@ async fn live(
         })
     });
     Ok(Json(json!({ "deltas": 0, "agent": agent, "preset": preset.unwrap_or_else(|| "ask_before_commands".into()) })))
+}
+
+#[derive(Deserialize)]
+struct ContinueBody {
+    device: String,
+    agent: String,
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// Starts an agent in the thread on the person's chosen device, which takes
+/// the thread over from wherever it ran: its checkout there, and the
+/// conversation so far for the agent to go on from.
+async fn continue_on(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<ContinueBody>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let (device, name) = crate::devices::own_device(&server, browser.user, &body.device).await?;
+    if let Some((running_on, true, report)) = server.shared.control.runs(thread).await
+        && running_on != device
+        && report.state.running()
+    {
+        return Err(Refused(
+            StatusCode::CONFLICT,
+            format!("{} runs in this thread elsewhere; stop it there first", report.agent),
+        ));
+    }
+    if !server.shared.control.heard(device).await.0 {
+        return Err(Refused(StatusCode::CONFLICT, format!("{name} is offline")));
+    }
+    let command = RemoteCommand::Start { agent: body.agent, preset: body.preset, mode: body.mode };
+    let id =
+        control::relay(&server, Relay { device, thread, sender: browser.user, from: None, command, ttl: ANSWER_WAIT }).await?;
+    match control::answer_of(&server, id, ANSWER_WAIT).await? {
+        Some(answer) if answer.ok => Ok(Json(answer.data)),
+        Some(answer) => Err(Refused(StatusCode::CONFLICT, answer.message)),
+        None => Err(Refused(StatusCode::GATEWAY_TIMEOUT, format!("{name} didn't answer"))),
+    }
 }
 
 #[derive(Deserialize)]

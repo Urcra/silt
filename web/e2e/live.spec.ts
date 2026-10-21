@@ -205,6 +205,36 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   await hosted.context().close()
 })
 
+test('the server-hosted app continues a thread on a chosen device', async ({ browser }) => {
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('draft').fill('first turn')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  await expect(machine.getByText('Done: first turn')).toBeVisible()
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  const thread = new URL(machine.url()).pathname.split('/t/')[1]
+
+  const hosted = await (await browser.newContext()).newPage()
+  await hosted.goto(`${live.server}/app/t/${thread}`)
+  await hosted.getByLabel('User').fill('alice')
+  await hosted.getByLabel('Password').fill('correct horse battery')
+  await hosted.getByRole('button', { name: 'Sign in' }).click()
+  const there = hosted.getByRole('region', { name: 'live' })
+  await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
+  await there.getByRole('button', { name: 'Continue there' }).click()
+  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+
+  await there.getByLabel('draft').fill('second turn')
+  await there.getByRole('button', { name: 'Send' }).click()
+  await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible()
+  await there.getByRole('button', { name: 'Stop agent' }).click()
+  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await machine.context().close()
+  await hosted.context().close()
+})
+
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByRole('banner').getByRole('link', { name: 'Devices' }).click()

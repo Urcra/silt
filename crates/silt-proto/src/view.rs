@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentState, Capabilities, Snooze, ThreadStatus, Visibility};
+use crate::{AgentState, Capabilities, Snooze, Startable, ThreadStatus, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -380,6 +380,8 @@ pub struct DeviceView {
     pub capabilities: Capabilities,
     /// The agents it runs, as it last reported them.
     pub agents: Vec<DeviceAgent>,
+    /// The agents it could start, to continue a thread there.
+    pub startable: Vec<Startable>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

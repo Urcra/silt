@@ -135,6 +135,8 @@ export const api = {
   changeDevice: (id: string, change: DeviceChange) =>
     request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}`, change),
   revokeDevice: (id: string) => request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke`),
+  continueOn: (id: string, device: string, agent: string) =>
+    request<string>('POST', `${thread(id)}/continue`, { device, agent }),
   setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
   addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),

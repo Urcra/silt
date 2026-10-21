@@ -102,6 +102,53 @@ function AgentChoices({ thread, status, act }: { thread: string; status: AgentSt
   )
 }
 
+/** Starts an agent in the thread on one of the person's online devices, which takes it over (ADR 0026). */
+function ContinueOn({ thread, act }: { thread: string; act: (action: Promise<unknown>) => void }) {
+  const devices = useQuery({ queryKey: keys.devices, queryFn: api.devices })
+  const [device, setDevice] = useState('')
+  const [agent, setAgent] = useState('')
+  const online = (devices.data ?? []).filter((candidate) => candidate.online && candidate.startable.length > 0)
+  const chosen = online.find((candidate) => candidate.id === device) ?? online[0]
+  if (!chosen) return <p className="text-fg-2">No agent runs in this thread, and none of your devices is online to continue it on.</p>
+  const chosenAgent = chosen.startable.find((candidate) => candidate.id === agent) ?? chosen.startable[0]
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span>Continue on</span>
+      <select
+        aria-label="device to continue on"
+        value={chosen.id}
+        onChange={(event) => setDevice(event.target.value)}
+        className="rounded border border-line px-2 py-1"
+      >
+        {online.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.name}
+          </option>
+        ))}
+      </select>
+      <span>with</span>
+      <select
+        aria-label="agent to continue with"
+        value={chosenAgent.id}
+        onChange={(event) => setAgent(event.target.value)}
+        className="rounded border border-line px-2 py-1"
+      >
+        {chosen.startable.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.name}
+          </option>
+        ))}
+      </select>
+      <button
+        className="rounded bg-accent px-2 py-1 text-on-accent"
+        onClick={() => act(api.continueOn(thread, chosen.id, chosenAgent.id))}
+      >
+        Continue there
+      </button>
+    </div>
+  )
+}
+
 /**
  * The agent working in the thread from the web UI (ADR 0014): starting it,
  * sending everyone's drafts as the prompt, answering its permission requests.
@@ -163,9 +210,7 @@ export function AgentPanel({
           <p className="text-xs text-fg-3">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
         </div>
       )}
-      {!live && !elsewhere && hosted() && (
-        <p className="text-fg-2">No device of yours runs an agent in this thread right now.</p>
-      )}
+      {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {!live && !elsewhere && !hosted() && (
         <div className="flex flex-wrap items-center gap-2">
           <span>Run an agent here:</span>

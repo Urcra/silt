@@ -492,6 +492,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
             queued: 0,
             preset: "ask_for_everything".into(),
         }],
+        startable: Vec::new(),
     };
     let machine = &world.alice;
     assert_eq!(machine.send(machine.request(Method::PUT, "/v1/control/agents").json(&report)).await, StatusCode::NO_CONTENT);
@@ -544,7 +545,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
 
 #[tokio::test]
 async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do() {
-    use silt_proto::{AgentReport, AgentState, AgentsReport};
+    use silt_proto::{AgentReport, AgentState, AgentsReport, Startable};
     let world = world(Visibility::Private).await;
     let machine = &world.alice;
     let report = AgentsReport {
@@ -556,6 +557,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
             queued: 0,
             preset: String::new(),
         }],
+        startable: vec![Startable { id: "fake".into(), name: "Fake agent".into() }],
     };
     assert_eq!(machine.send(machine.request(Method::PUT, "/v1/control/agents").json(&report)).await, StatusCode::NO_CONTENT);
 
@@ -569,6 +571,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
     assert_eq!(reporting["agents"][0]["state"], "working");
     assert_eq!(reporting["agents"][0]["thread"], THREAD.to_string());
     assert_eq!(reporting["capabilities"]["send_prompts"], true, "a new device may do everything");
+    assert_eq!(reporting["startable"], serde_json::json!([{ "id": "fake", "name": "Fake agent" }]));
     assert!(devices.iter().all(|device| device["this"] == false), "a browser is none of them");
     let id = reporting["id"].as_str().expect("an id").to_owned();
 
@@ -610,6 +613,64 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
 
     assert_eq!(alice.post(&format!("/devices/{id}/revoke"), serde_json::json!({})).await.0, StatusCode::NO_CONTENT);
     assert_eq!(alice.get("/devices").await.1.as_array().expect("a list").len(), 1);
+}
+
+#[tokio::test]
+async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_stops_elsewhere() {
+    use silt_proto::{AgentReport, AgentState, AgentsReport, ControlReply, RemoteCommand};
+    let world = world(Visibility::Team("core".into())).await;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let devices = alice.get("/devices").await.1.as_array().expect("a list").clone();
+    let (workstation, laptop) = (&world.alice, &world.people[0].1);
+    let id_of = |index: usize| devices[index]["id"].as_str().expect("an id").to_owned();
+    let report = |state| AgentsReport {
+        agents: vec![AgentReport {
+            thread: THREAD,
+            agent: "Fake agent".into(),
+            state,
+            permissions: Vec::new(),
+            queued: 0,
+            preset: String::new(),
+        }],
+        startable: Vec::new(),
+    };
+    async fn continue_on(alice: &Browser, device: String) -> (StatusCode, serde_json::Value) {
+        alice.post(&format!("/threads/{THREAD}/continue"), serde_json::json!({ "device": device, "agent": "fake" })).await
+    }
+    async fn put(client: &Client, report: AgentsReport) -> StatusCode {
+        client.send(client.request(Method::PUT, "/v1/control/agents").json(&report)).await
+    }
+
+    let (status, refused) = continue_on(&alice, id_of(0)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(refused["error"].as_str().is_some_and(|error| error.ends_with("is offline")), "{refused}");
+    let bob = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1, "bob").await;
+    let bobs = bob.get("/devices").await.1[0]["id"].as_str().expect("an id").to_owned();
+    assert_eq!(continue_on(&alice, bobs).await.0, StatusCode::NOT_FOUND, "only on one's own devices");
+
+    // The workstation runs the agent; the laptop is online with nothing running.
+    assert_eq!(put(workstation, report(AgentState::Working)).await, StatusCode::NO_CONTENT);
+    assert_eq!(put(laptop, AgentsReport::default()).await, StatusCode::NO_CONTENT);
+    let listed: Vec<silt_proto::view::DeviceView> =
+        laptop.request(Method::GET, "/v1/devices").send().await.expect("sends").json().await.expect("devices");
+    let laptop_id = listed.iter().find(|device| device.this).expect("itself").id.clone();
+    let (status, refused) = continue_on(&alice, laptop_id.clone()).await;
+    assert_eq!(
+        (status, refused["error"].as_str()),
+        (StatusCode::CONFLICT, Some("Fake agent runs in this thread elsewhere; stop it there first"))
+    );
+
+    assert_eq!(put(workstation, report(AgentState::Stopped)).await, StatusCode::NO_CONTENT);
+    let daemon = async {
+        let reply: ControlReply =
+            laptop.request(Method::GET, "/v1/control?wait_ms=10000").send().await.expect("sends").json().await.expect("reply");
+        assert_eq!(reply.commands[0].command, RemoteCommand::Start { agent: "fake".into(), preset: None, mode: None });
+        let answer = silt_proto::CommandAnswer { ok: true, message: String::new(), data: THREAD.to_string().into() };
+        let answered = laptop.request(Method::POST, &format!("/v1/control/{}", reply.commands[0].id)).json(&answer);
+        assert_eq!(laptop.send(answered).await, StatusCode::NO_CONTENT);
+    };
+    let ((), (status, started)) = tokio::join!(daemon, continue_on(&alice, laptop_id));
+    assert_eq!((status, started), (StatusCode::OK, serde_json::json!(THREAD.to_string())));
 }
 
 #[tokio::test]

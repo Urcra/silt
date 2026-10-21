@@ -892,13 +892,25 @@ pub struct AskedPermission {
     pub options: Vec<(String, String)>,
 }
 
-/// Every agent a daemon runs; sent when they change and as a heartbeat.
+/// Every agent a daemon runs, and those it could start; sent when they
+/// change and as a heartbeat.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentsReport {
     pub agents: Vec<AgentReport>,
+    #[serde(default)]
+    pub startable: Vec<Startable>,
 }
 
-/// What a person asks a daemon to do from elsewhere (ADR 0026).
+/// An agent a device can start, by the id it knows it by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Startable {
+    pub id: String,
+    pub name: String,
+}
+
+/// What a person asks a daemon to do from elsewhere (ADR 0026). `Start` in
+/// a thread that ran elsewhere continues it on this device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -939,8 +951,6 @@ pub enum RemoteCommand {
         id: String,
         value: String,
     },
-    /// Takes the thread up on this device.
-    Resume,
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -970,8 +980,7 @@ impl Capabilities {
             | RemoteCommand::Stop
             | RemoteCommand::Preset { .. }
             | RemoteCommand::Mode { .. }
-            | RemoteCommand::Setting { .. }
-            | RemoteCommand::Resume => (self.run_agents, "start and stop agents"),
+            | RemoteCommand::Setting { .. } => (self.run_agents, "start and stop agents"),
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

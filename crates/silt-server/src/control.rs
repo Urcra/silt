@@ -9,7 +9,9 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use silt_proto::{AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand};
+use silt_proto::{
+    AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand, Startable,
+};
 use silt_types::{DeviceId, ThreadId};
 use tokio::sync::{Mutex, Notify};
 
@@ -31,6 +33,7 @@ pub(crate) struct Control {
 
 struct Heard {
     agents: Vec<AgentReport>,
+    startable: Vec<Startable>,
     at: Instant,
 }
 
@@ -41,11 +44,13 @@ struct Board {
 }
 
 impl Board {
-    fn hear(&mut self, device: DeviceId, agents: Option<Vec<AgentReport>>) {
-        let heard = self.devices.entry(device).or_insert_with(|| Heard { agents: Vec::new(), at: Instant::now() });
+    fn hear(&mut self, device: DeviceId, report: Option<AgentsReport>) {
+        let heard =
+            self.devices.entry(device).or_insert_with(|| Heard { agents: Vec::new(), startable: Vec::new(), at: Instant::now() });
         heard.at = Instant::now();
-        if let Some(agents) = agents {
-            heard.agents = agents;
+        if let Some(report) = report {
+            heard.agents = report.agents;
+            heard.startable = report.startable;
         }
     }
 
@@ -60,10 +65,16 @@ impl Control {
         self.board.lock().await.online().any(|(online, _)| *online == device)
     }
 
-    /// Whether `device` is online, and the agents it last reported.
-    pub(crate) async fn heard(&self, device: DeviceId) -> (bool, Vec<AgentReport>) {
+    /// Whether `device` is online, and what it last reported.
+    pub(crate) async fn heard(&self, device: DeviceId) -> (bool, AgentsReport) {
         let board = self.board.lock().await;
-        board.devices.get(&device).map_or((false, Vec::new()), |heard| (heard.at.elapsed() < OFFLINE_AFTER, heard.agents.clone()))
+        board.devices.get(&device).map_or_else(
+            || (false, AgentsReport::default()),
+            |heard| {
+                let report = AgentsReport { agents: heard.agents.clone(), startable: heard.startable.clone() };
+                (heard.at.elapsed() < OFFLINE_AFTER, report)
+            },
+        )
     }
 
     /// The device that last reported running an agent in `thread`, whether
@@ -169,7 +180,8 @@ pub(crate) async fn report(
 ) -> Result<StatusCode, ApiError> {
     let viewer = server.viewer(caller.user).await?;
     let agents = report.agents.into_iter().filter(|agent| viewer.sees_thread(agent.thread)).take(MAX_AGENTS).collect();
-    server.shared.control.board.lock().await.hear(caller.device, Some(agents));
+    let startable = report.startable.into_iter().take(MAX_AGENTS).collect();
+    server.shared.control.board.lock().await.hear(caller.device, Some(AgentsReport { agents, startable }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -402,7 +414,7 @@ mod tests {
             preset: "full_access".into(),
         };
         // A thread Alice doesn't see isn't hers to report.
-        let report = AgentsReport { agents: vec![agent(ThreadId(7)), agent(ThreadId(99))] };
+        let report = AgentsReport { agents: vec![agent(ThreadId(7)), agent(ThreadId(99))], startable: Vec::new() };
         let sent = laptop.request(reqwest::Method::PUT, "/v1/control/agents").json(&report).send().await.expect("sends");
         assert_eq!(sent.status(), StatusCode::NO_CONTENT);
         assert!(server.shared.control.online(device).await);

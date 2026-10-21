@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use silt_proto::{AgentReport, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, RemoteCommand};
+use silt_proto::{AgentReport, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, RemoteCommand, Startable};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -63,8 +63,12 @@ impl Core {
         }
         self.control.reporting = true;
         let events = self.events.clone();
+        let startable = silt_acp::registry::all(&self.data_dir)
+            .into_iter()
+            .map(|agent| Startable { id: agent.id, name: agent.name })
+            .collect();
         tokio::spawn(async move {
-            let report = AgentsReport { agents };
+            let report = AgentsReport { agents, startable };
             let reported = remote.report_agents(&report).await.map(|()| report.agents).map_err(|error| error.to_string());
             let _ = events.send(Event::Control(ControlEvent::Reported(reported)));
         });
@@ -191,7 +195,6 @@ impl Core {
                 agent,
                 options: StartOptions { mode, preset: chosen.map(preset).transpose()?, ..StartOptions::default() },
             },
-            RemoteCommand::Resume => return Err("resuming a thread from elsewhere isn't supported yet".into()),
         })
     }
 }

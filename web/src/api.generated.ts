@@ -11,6 +11,8 @@ export type AgentState = "starting" | "idle" | "working" | "awaiting_permission"
 
 export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
 
+export type Startable = { id: string, name: string, };
+
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
 export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
@@ -128,7 +130,11 @@ this: boolean, capabilities: Capabilities,
 /**
  * The agents it runs, as it last reported them.
  */
-agents: Array<DeviceAgent>, };
+agents: Array<DeviceAgent>, 
+/**
+ * The agents it could start, to continue a thread there.
+ */
+startable: Array<Startable>, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 
