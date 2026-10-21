@@ -326,6 +326,32 @@ pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<
 }
 
 /// Milliseconds since the epoch of a file's last change.
+/// Links each skill directory into `dir` under its directory name, made
+/// safe as a file name. Of skills sharing a name the first is kept, as Silt
+/// lists the repository's before the personal ones.
+pub(crate) fn link_skills(dir: &Path, skills: &[PathBuf]) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for skill in skills {
+        let name: String = skill
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default()
+            .chars()
+            .map(|char| if char.is_ascii_alphanumeric() || matches!(char, '-' | '_' | '.') { char } else { '-' })
+            .collect();
+        let name = name.trim_start_matches('.');
+        if name.is_empty() {
+            continue;
+        }
+        let link = dir.join(name);
+        // A link already there, even a dangling one, is a skill of that name.
+        if std::fs::symlink_metadata(&link).is_err() {
+            std::os::unix::fs::symlink(skill, link)?;
+        }
+    }
+    Ok(())
+}
+
 /// A transcript's first line, which agents start with a record of where
 /// the session runs, read without reading the rest.
 pub(crate) fn first_line(path: &Path) -> Option<String> {
@@ -363,6 +389,23 @@ mod tests {
             .flatten()
             .filter(|entry| entry.file_name().to_string_lossy().contains(".before-silt-"))
             .count()
+    }
+
+    #[test]
+    fn skills_sharing_a_name_link_once() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let skill = |path: &str| {
+            let dir = root.path().join(path);
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            dir
+        };
+        let skills = [skill("repo/review"), skill("home/review"), skill("home/odd name"), root.path().join("gone/stale")];
+        let linked = root.path().join("plugin/skills");
+        link_skills(&linked, &skills).expect("links");
+        link_skills(&linked, &skills).expect("links again over dangling links");
+        assert_eq!(std::fs::read_link(linked.join("review")).expect("link"), skills[0]);
+        assert!(linked.join("odd-name").is_dir());
+        assert!(std::fs::symlink_metadata(linked.join("stale")).is_ok());
     }
 
     #[test]

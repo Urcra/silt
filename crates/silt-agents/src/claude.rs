@@ -288,15 +288,7 @@ fn skills_plugin(scratch: &Path, skills: &[PathBuf]) -> io::Result<PathBuf> {
         dir.join(".claude-plugin/plugin.json"),
         json!({"name": "silt", "description": "Skills Silt found in this repository and your ~/.agents/skills"}).to_string(),
     )?;
-    fs::create_dir_all(dir.join("skills"))?;
-    for skill in skills {
-        if let Some(name) = skill.file_name() {
-            let link = dir.join("skills").join(name);
-            if !link.exists() {
-                std::os::unix::fs::symlink(skill, link)?;
-            }
-        }
-    }
+    crate::link_skills(&dir.join("skills"), skills)?;
     Ok(dir)
 }
 /// The conversation steps recorded in one transcript line.

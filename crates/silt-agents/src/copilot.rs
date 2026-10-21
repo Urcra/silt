@@ -314,12 +314,7 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
         dir.join(".plugin/plugin.json"),
         json!({"name": "silt", "description": "Silt's skills, instructions and notices", "version": env!("CARGO_PKG_VERSION")}).to_string(),
     )?;
-    fs::create_dir_all(dir.join("skills"))?;
-    for skill in &plan.skills {
-        if let Some(name) = skill.file_name() {
-            std::os::unix::fs::symlink(skill, dir.join("skills").join(name))?;
-        }
-    }
+    crate::link_skills(&dir.join("skills"), &plan.skills)?;
     let command = |bash: String| json!([{"type": "command", "bash": bash, "timeoutSec": 30}]);
     let mut hooks = serde_json::Map::new();
     if let Some(instructions) = &plan.instructions {
