@@ -736,13 +736,21 @@ struct Continue {
     agent: Option<String>,
     #[serde(default)]
     private: bool,
+    #[serde(default)]
+    turn: Option<usize>,
 }
 
 /// A fork in a checkout of its own, to start an agent in from the UI.
 async fn fork(State(web): State<Web>, Path(thread): Path<String>, body: Option<Json<Continue>>) -> HttpResponse {
     let body = body.map(|Json(body)| body).unwrap_or_default();
-    let request =
-        |cwd| Request::Fork { thread: thread.clone(), cwd, here: false, agent: body.agent.clone(), private: body.private };
+    let request = |cwd| Request::Fork {
+        thread: thread.clone(),
+        cwd,
+        here: false,
+        agent: body.agent.clone(),
+        private: body.private,
+        turn: body.turn,
+    };
     ask_in_clone(&web, &thread, request).await
 }
 

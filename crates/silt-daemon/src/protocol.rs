@@ -90,6 +90,9 @@ pub enum Request {
         /// Private from the start, not made private afterwards.
         #[serde(default)]
         private: bool,
+        /// From where this turn ended rather than from now (ADR 0029).
+        #[serde(default)]
+        turn: Option<usize>,
     },
     /// Merges a fork's source into it; `thread` defaults to the one checked
     /// out at `cwd`.

@@ -229,6 +229,16 @@ impl Core {
             .collect()
     }
 
+    /// Where the thread's turn `turn` ended (ADR 0029), knowing its prompts
+    /// from its transcripts.
+    pub(crate) fn turn_point(&self, thread: ThreadId, turn: usize) -> Option<silt_types::Frontier> {
+        let family = self.families.get(&self.threads.get(&thread)?.family)?;
+        let mut transcripts = Transcripts::default();
+        silt_log::turn_point_by(family.log(), family.graph(), thread, turn, |delta| {
+            entry_texts(&mut transcripts, delta).iter().any(|(kind, _)| kind == "user")
+        })
+    }
+
     /// The history graph over the families here, as `query` asks: turns,
     /// commits, forks, merge requests and merges, newest first.
     pub(crate) fn graph(&self, query: &GraphQuery) -> Vec<GraphRow> {

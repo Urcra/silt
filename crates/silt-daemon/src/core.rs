@@ -473,8 +473,8 @@ impl Core {
                 recovered: self.recoveries.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
-            Request::Fork { thread, cwd, here, agent, private } => {
-                to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private).await)
+            Request::Fork { thread, cwd, here, agent, private, turn } => {
+                to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private, turn).await)
             }
             Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
             Request::MrCreate { thread, cwd, title, summary } => {

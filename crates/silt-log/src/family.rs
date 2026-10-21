@@ -544,6 +544,42 @@ pub fn thread_head_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId) -> F
     head
 }
 
+/// Where the thread's turn `turn` (from 1) ended (ADR 0029): its head just
+/// before the next turn began, or its head now for its last turn. `None`
+/// when it has no such turn.
+///
+/// The next turn begins at its prompt-submitted mark or at the line with its
+/// prompt, whichever the log took first: agents record them in either order.
+/// `is_prompt` says which of the thread's deltas hold a prompt; it sees them
+/// in order.
+pub fn turn_point_by(
+    log: &[Delta],
+    graph: &CausalGraph,
+    thread: ThreadId,
+    turn: usize,
+    mut is_prompt: impl FnMut(&Delta) -> bool,
+) -> Option<Frontier> {
+    let (mut marks, mut prompts) = (Vec::new(), Vec::new());
+    for (index, delta) in log.iter().enumerate().filter(|(_, delta)| delta.thread == thread) {
+        if matches!(delta.op, Op::Conv(crate::delta::ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })) {
+            marks.push(index);
+        }
+        if is_prompt(delta) {
+            prompts.push(index);
+        }
+    }
+    if turn == 0 || turn > marks.len() {
+        return None;
+    }
+    let next = [marks.get(turn), prompts.get(turn)].into_iter().flatten().min();
+    Some(thread_head_in(next.map_or(log, |next| &log[..*next]), graph, thread))
+}
+
+/// [`turn_point_by`] where turns begin at their marks alone.
+pub fn turn_point(log: &[Delta], graph: &CausalGraph, thread: ThreadId, turn: usize) -> Option<Frontier> {
+    turn_point_by(log, graph, thread, turn, |_| false)
+}
+
 /// [`Family::merge_requests`] over any deltas of a family.
 pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
     let mut ops: Vec<(&Delta, &MrOp)> = log

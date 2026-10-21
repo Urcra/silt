@@ -43,18 +43,34 @@ function Copy({ command }: { command: string }) {
 }
 
 function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const diff = useQuery({
     queryKey: keys.diff(thread, { turn: turn.number }),
     queryFn: () => api.diff(thread, { turn: turn.number }),
     enabled: open,
   })
+  // Where this turn ended: its code and the conversation up to it (ADR 0029).
+  const forkHere = () =>
+    api.fork(thread, turn.number).then(
+      (made) => void navigate({ to: '/t/$id', params: { id: made.thread } }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
   return (
-    <div className="my-1">
+    <div className="my-1 flex flex-wrap items-center gap-3">
       <button className="text-xs text-accent-fg" onClick={() => setOpen(!open)}>
         {open ? 'hide' : 'show'} what turn {turn.number} changed
       </button>
-      {open && diff.data !== undefined && <Diff text={diff.data} />}
+      {!hosted() && (
+        <button className="text-xs text-accent-fg" onClick={() => void forkHere()} title="A fork with the code and conversation as this turn left them">
+          fork from turn {turn.number}
+        </button>
+      )}
+      {open && diff.data !== undefined && (
+        <div className="w-full">
+          <Diff text={diff.data} />
+        </div>
+      )}
     </div>
   )
 }

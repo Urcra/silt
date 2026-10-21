@@ -183,7 +183,7 @@ export const api = {
   subscribePush: (subscription: PushSubscriptionJSON) => request<null>('POST', '/api/push/subscriptions', subscription),
   notificationSettings: () => request<KindSetting[]>('GET', '/api/me/notifications'),
   setNotification: (setting: KindSetting) => request<KindSetting[]>('PUT', '/api/me/notifications', setting),
-  fork: (id: string) => request<Resumed>('POST', `${thread(id)}/fork`, {}),
+  fork: (id: string, turn?: number) => request<Resumed>('POST', `${thread(id)}/fork`, turn === undefined ? {} : { turn }),
   setVisibility: (id: string, visibility: string) => request<string>('POST', `${thread(id)}/visibility`, { visibility }),
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),

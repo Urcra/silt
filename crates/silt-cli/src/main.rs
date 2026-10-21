@@ -54,6 +54,9 @@ enum Command {
         /// Only you see the fork, until a merge request offers it back
         #[arg(long)]
         private: bool,
+        /// Fork from where this turn ended, as the thread's page numbers them
+        #[arg(long)]
+        turn: Option<usize>,
         #[command(flatten)]
         continued: Continue,
     },
@@ -588,8 +591,8 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Resume { thread, continued } => {
             commands::resume(&thread, continued.here, continued.agent.as_deref(), &continued.args)
         }
-        Command::Fork { thread, private, continued } => {
-            commands::fork(&thread, private, continued.here, continued.agent.as_deref(), &continued.args)
+        Command::Fork { thread, private, turn, continued } => {
+            commands::fork(&thread, private, turn, continued.here, continued.agent.as_deref(), &continued.args)
         }
         Command::Pull { thread } => commands::pull(thread),
         Command::Mr { command } => match command {

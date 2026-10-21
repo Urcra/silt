@@ -132,6 +132,60 @@ fn conversation_is_recorded_per_thread() {
 }
 
 #[test]
+fn a_fork_from_a_turn_inherits_the_conversation_up_to_it() {
+    let mut family = Family::new();
+    let session = SessionRef { agent: "claude-code".into(), id: "s1".into() };
+    let turn = |family: &mut Family, said: &str| {
+        write_on_head(family, DAEMON, Op::Conv(ConvOp::Turn { session: session.clone(), mark: TurnMark::PromptSubmitted }));
+        let line = format!("{{\"type\":\"user\",\"said\":\"{said}\"}}");
+        write_on_head(family, DAEMON, Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line }));
+    };
+    turn(&mut family, "first");
+    turn(&mut family, "second");
+    let graph = family.graph().clone();
+    let after_first = silt_log::turn_point(family.log(), &graph, THREAD, 1).expect("turn 1");
+    assert_eq!(
+        silt_log::turn_point(family.log(), &graph, THREAD, 2),
+        Some(family.thread_head(THREAD)),
+        "the last turn ends at the head"
+    );
+    assert_eq!(silt_log::turn_point(family.log(), &graph, THREAD, 3), None);
+    assert_eq!(silt_log::turn_point(family.log(), &graph, THREAD, 0), None);
+
+    let fork = ThreadId(8);
+    let delta = family.delta(CHECKOUT_A, fork, Author::User, 0, after_first, Op::Fork { from: THREAD });
+    assert_eq!(family.apply(delta, &mut bases()), Ok(Applied::New));
+    let said: Vec<String> = family
+        .history(fork)
+        .into_iter()
+        .filter_map(|item| match &item.delta.op {
+            Op::Conv(ConvOp::Native { line, .. }) => Some(line.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("first"));
+
+    // An agent that records its prompt before the mark: the turn still
+    // ends before the next prompt.
+    let mut family = Family::new();
+    let line = |said: &str| {
+        Op::Conv(ConvOp::Native {
+            session: session.clone(),
+            file: SessionFile::Main,
+            line: format!("{{\"type\":\"user\",\"said\":\"{said}\"}}"),
+        })
+    };
+    let mark = || Op::Conv(ConvOp::Turn { session: session.clone(), mark: TurnMark::PromptSubmitted });
+    for op in [line("first"), mark(), line("second"), mark()] {
+        write_on_head(&mut family, DAEMON, op);
+    }
+    let prompts = |delta: &silt_log::Delta| matches!(&delta.op, Op::Conv(ConvOp::Native { line, .. }) if line.contains("said"));
+    let point = silt_log::turn_point_by(family.log(), &family.graph().clone(), THREAD, 1, prompts).expect("turn 1");
+    assert_eq!(point, silt_types::Frontier::single(family.log()[1].span.last()), "before the second prompt's line");
+}
+
+#[test]
 fn missing_base_text_rejects_without_changes() {
     let mut family = Family::new();
     let main = create_main(&mut family);

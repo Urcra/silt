@@ -457,6 +457,25 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
   await hosted.context().close()
 })
 
+test('a fork from an earlier turn has the conversation up to it', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('the first turn')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText(/^Done: [\s\S]*the first turn$/)).toBeVisible()
+  await page.getByLabel('draft').fill('the second turn')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText(/^Done: [\s\S]*the second turn$/)).toBeVisible()
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  const source = new URL(page.url()).pathname
+
+  await page.getByRole('button', { name: 'fork from turn 1' }).click()
+  await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
+  expect(new URL(page.url()).pathname).not.toBe(source)
+  const history = page.getByTestId('history')
+  await expect(history).toContainText('the first turn')
+  await expect(history).not.toContainText('the second turn')
+})
+
 test('a read-only link opens the conversation without signing in, until revoked', async ({ browser }) => {
   const owner = await (await browser.newContext()).newPage()
   await owner.goto(live.alice)

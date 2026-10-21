@@ -36,8 +36,8 @@ impl Core {
     }
 
     /// Starts a fork of a thread on this machine (ADR 0010), with the
-    /// source's code and conversation as of now and its agent session
-    /// restored under a new id.
+    /// source's code and conversation as of now, or as of the end of `turn`
+    /// (ADR 0029), and its agent session restored under a new id.
     pub(crate) async fn fork(
         &mut self,
         selector: &str,
@@ -45,11 +45,15 @@ impl Core {
         here: bool,
         agent: Option<&str>,
         private: bool,
+        turn: Option<usize>,
     ) -> Result<Resumed, CoreError> {
         let target = agent.map(resolve_agent).transpose()?;
         let source = self.find_thread(selector)?;
         let (repo, base) = self.prepare_thread(source, cwd, here).await?;
-        let fork = self.fork_thread_at(source, None, private.then_some(silt_proto::Visibility::Private)).await?;
+        let at = turn
+            .map(|turn| self.turn_point(source, turn).ok_or_else(|| CoreError::Invalid(format!("the thread has no turn {turn}"))))
+            .transpose()?;
+        let fork = self.fork_thread_at(source, at, private.then_some(silt_proto::Visibility::Private)).await?;
         self.register_thread_now(fork).await?;
         self.take_lease(fork).await?;
         let resumed = self.check_out(fork, &repo, base, here, true, target).await?;
