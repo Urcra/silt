@@ -80,7 +80,11 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     if config_path.exists() && !options.force {
         return Err(fail(format!("{} exists; pass --force to replace it", config_path.display())));
     }
-    fs::create_dir_all(&data).or_raise(|| CliError(format!("cannot create {}", data.display())))?;
+    // The service user may own an existing directory, so only a new one is
+    // made private here.
+    std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
+        .create(&data)
+        .or_raise(|| CliError(format!("cannot create {}", data.display())))?;
     let mut config = Config::default();
     if let Some(listen) = options.listen {
         config.listen = listen;

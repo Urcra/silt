@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -47,7 +48,13 @@ pub fn holds_lock(data_dir: &Path) -> bool {
 
 /// Runs the daemon for the data in `data_dir` until asked to shut down.
 pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
-    fs::create_dir_all(data_dir)?;
+    // The data dir holds the device's token and everyone's work. Closing it
+    // to other users covers every file in it, whatever its own mode; a
+    // process-wide umask would also reach files written into checkouts.
+    crate::paths::make_private(data_dir)?;
+    if let Some(dir) = socket.parent() {
+        crate::paths::make_private(dir)?;
+    }
     // One daemon per data directory: a second would take over the socket
     // and fight the first over the store.
     let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(lock_path(data_dir))?;
@@ -70,11 +77,17 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         path: socket.display().to_string(),
         source,
     })?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let accept_events = events.clone();
     let (answered, mut answered_rx) = mpsc::unbounded_channel();
+    let me = crate::paths::uid();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(serve(stream, accept_events.clone(), answered.clone()));
+            // Whoever reaches the socket controls the daemon, so only this
+            // user's own processes may.
+            if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
+                tokio::spawn(serve(stream, accept_events.clone(), answered.clone()));
+            }
         }
     });
     let tick_events = events.clone();

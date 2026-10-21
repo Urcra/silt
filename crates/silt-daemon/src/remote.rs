@@ -75,9 +75,15 @@ impl From<LegacyConfig> for RemoteConfig {
     }
 }
 
+/// Saves the settings, with the device's token, for this user's eyes only.
 pub fn save_config(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteError> {
-    fs::create_dir_all(data_dir)?;
-    fs::write(config_path(data_dir), serde_json::to_vec_pretty(config)?)?;
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    crate::paths::make_private(data_dir)?;
+    let path = config_path(data_dir);
+    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    file.write_all(&serde_json::to_vec_pretty(config)?)?;
     Ok(())
 }
 

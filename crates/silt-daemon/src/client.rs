@@ -17,6 +17,13 @@ pub enum ClientError {
 
 /// Sends one request and waits for its response.
 pub fn send(socket: &Path, request: &Request, timeout: Duration) -> Result<Response, ClientError> {
+    // Someone else's socket in a shared directory would be an impostor.
+    if socket.exists() && !crate::paths::owned_by_me(socket) {
+        return Err(ClientError::Connect(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} belongs to another user", socket.display()),
+        )));
+    }
     let mut stream = UnixStream::connect(socket).map_err(ClientError::Connect)?;
     stream.set_read_timeout(Some(timeout))?;
     let mut line = serde_json::to_vec(request)?;
