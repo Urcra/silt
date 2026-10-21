@@ -6,6 +6,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { api, type InboxEntry } from './api'
 import { keys } from './query'
+import { hosted } from './served'
 
 const POLL_MS = 15_000
 
@@ -30,6 +31,26 @@ export function notificationsAllowed(): boolean {
   return typeof Notification !== 'undefined' && Notification.permission === 'granted'
 }
 
+/** Pushes reach this browser, so an open tab needn't notify again. */
+let pushing = false
+
+/** `applicationServerKey` takes the key as bytes, the server gives base64url. */
+function keyBytes(key: string): Uint8Array<ArrayBuffer> {
+  const base64 = key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (key.length % 4)) % 4)
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+}
+
+/** Subscribes this browser to the server's pushes, when the server serves the app and notifications are allowed. */
+export async function subscribeToPush(): Promise<void> {
+  if (!hosted() || !notificationsAllowed() || !('serviceWorker' in navigator) || !('PushManager' in window)) return
+  const registration = await navigator.serviceWorker.register('sw.js')
+  const subscription =
+    (await registration.pushManager.getSubscription()) ??
+    (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(await api.pushKey()) }))
+  await api.subscribePush(subscription.toJSON())
+  pushing = true
+}
+
 /** An item is new again when the server brings it up to date. */
 const keyOf = (item: InboxEntry) => `${item.id}:${item.created_ms}`
 
@@ -38,6 +59,9 @@ export function useNotifier() {
   const navigate = useNavigate()
   const inbox = useQuery({ queryKey: keys.inbox(false), queryFn: () => api.inbox(false), refetchInterval: POLL_MS, retry: false })
   const known = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    subscribeToPush().catch(() => undefined)
+  }, [])
   useEffect(() => {
     const items = inbox.data
     if (!items) return
@@ -49,7 +73,7 @@ export function useNotifier() {
     for (const item of items) {
       if (known.current.has(keyOf(item))) continue
       known.current.add(keyOf(item))
-      if (!item.notify || item.read || !notificationsAllowed() || document.hasFocus()) continue
+      if (pushing || !item.notify || item.read || !notificationsAllowed() || document.hasFocus()) continue
       const shown = new Notification(KIND_LABEL[item.kind] ?? 'Silt', { body: item.text, tag: `silt-${item.id}` })
       shown.onclick = () => {
         window.focus()

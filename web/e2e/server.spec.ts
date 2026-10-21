@@ -172,6 +172,12 @@ test('the hosted app lists the threads a device shared', async ({ page }) => {
   await expect(page.getByRole('link', { name: /untitled/i }).first()).toBeVisible()
   await page.getByRole('link', { name: /untitled/i }).first().click()
   await expect(page).toHaveURL(new RegExp(`/app/t/${thread}`))
+
+  // The service worker that shows pushes lives under the app, as JavaScript.
+  const worker = await page.request.get(`${base}/app/sw.js`)
+  expect(worker.headers()['content-type']).toContain('javascript')
+  const key = (await (await page.request.get(`${base}/app/api/push/key`)).json()) as string
+  expect(key.length).toBeGreaterThan(80)
 })
 
 test('a device is approved in the browser', async ({ page }) => {

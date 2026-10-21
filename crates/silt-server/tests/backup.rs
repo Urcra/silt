@@ -92,6 +92,8 @@ async fn a_backup_taken_while_running_restores() {
     let restored = tempfile::tempdir().expect("temp dir");
     restore(&target, restored.path(), false).expect("restores");
     assert!(restore(&target, restored.path(), false).is_err(), "existing data needs --replace");
+    let key = |dir: &std::path::Path| std::fs::read_to_string(dir.join("vapid.key")).expect("the push key");
+    assert_eq!(key(restored.path()), key(data.path()), "browsers subscribed to the server's key go on receiving");
     let base = serve(restored.path()).await;
     let token = sign_in(&base).await;
     let pulled: PullReply = http

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { APPROVED } from '../agentState'
 import { api, short, type InboxEntry, type InboxRead, type KindSetting } from '../api'
 import { useTopic } from '../bus'
-import { KIND_LABEL, notificationsAllowed } from '../notifier'
+import { KIND_LABEL, notificationsAllowed, subscribeToPush } from '../notifier'
 import { keys, message } from '../query'
 import { Button, toast } from '../ui'
 
@@ -46,7 +46,15 @@ function NotificationSettings() {
     <details className="mb-4 rounded border border-line p-3 text-sm">
       <summary className="cursor-pointer">Notifications</summary>
       {!allowed && typeof Notification !== 'undefined' && (
-        <Button className="mt-2" onClick={() => void Notification.requestPermission().then(() => setAllowed(notificationsAllowed()))}>
+        <Button
+          className="mt-2"
+          onClick={() =>
+            void Notification.requestPermission().then(() => {
+              setAllowed(notificationsAllowed())
+              return subscribeToPush().catch((failure: unknown) => toast(message(failure), 'danger'))
+            })
+          }
+        >
           Allow browser notifications
         </Button>
       )}

@@ -12,6 +12,9 @@ use crate::{OpenError, ServerError, now_ms, open_db};
 
 const DATABASE: &str = "server.sqlite";
 const COPIED: [&str; 2] = ["blobs", "git"];
+/// Kept beside the data when there: the settings, and the key pushes are
+/// signed with, which browsers subscribed against.
+const FILES: [&str; 2] = [CONFIG_FILE, crate::push::KEY_FILE];
 const MARKER: &str = "SILT-BACKUP";
 
 #[derive(Debug, thiserror::Error)]
@@ -82,8 +85,8 @@ pub async fn backup(data_dir: &Path, dest: &Path) -> Result<Copied, BackupError>
     for dir in COPIED {
         bytes += copy_tree(&data_dir.join(dir), &dest.join(dir))?;
     }
-    if data_dir.join(CONFIG_FILE).exists() {
-        bytes += fs::copy(data_dir.join(CONFIG_FILE), dest.join(CONFIG_FILE))?;
+    for file in FILES.into_iter().filter(|file| data_dir.join(file).exists()) {
+        bytes += fs::copy(data_dir.join(file), dest.join(file))?;
     }
     fs::write(dest.join(MARKER), format!("silt {} backup at {} ms\n", env!("CARGO_PKG_VERSION"), now_ms()))?;
     Ok(Copied { bytes })
@@ -113,8 +116,8 @@ pub fn restore(backup: &Path, data_dir: &Path, replace: bool) -> Result<Copied, 
         }
         bytes += copy_tree(&backup.join(dir), &target)?;
     }
-    if backup.join(CONFIG_FILE).exists() {
-        bytes += fs::copy(backup.join(CONFIG_FILE), data_dir.join(CONFIG_FILE))?;
+    for file in FILES.into_iter().filter(|file| backup.join(file).exists()) {
+        bytes += fs::copy(backup.join(file), data_dir.join(file))?;
     }
     Ok(Copied { bytes })
 }

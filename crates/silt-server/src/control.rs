@@ -226,7 +226,7 @@ pub(crate) async fn report(
         let device = device_name(&server, caller.device).await?;
         for change in changes(&before, &now) {
             let note = change.note(caller.user, &device);
-            crate::inbox::notify_person(server.db(), note).await?;
+            crate::inbox::notify_person(&server, note).await?;
         }
     }
     Ok(StatusCode::NO_CONTENT)
@@ -344,7 +344,7 @@ pub(crate) async fn note_offline(server: &Server) -> Result<(), sqlx::Error> {
         for agent in busy {
             let text = format!("{name} went offline while {} was at work there", agent.agent);
             let note = crate::inbox::PersonNote { user, kind: "offline", thread: agent.thread, actor: &name, text, action: None };
-            crate::inbox::notify_person(server.db(), note).await?;
+            crate::inbox::notify_person(server, note).await?;
         }
     }
     Ok(())

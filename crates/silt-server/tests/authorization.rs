@@ -875,6 +875,100 @@ async fn each_person_chooses_which_notifications_notify_them() {
 }
 
 #[tokio::test]
+async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use silt_proto::{AgentReport, AgentState, AgentsReport, AskedPermission};
+    use web_push_native::p256::SecretKey;
+
+    // A push service standing in for a browser vendor's: it takes two pushes,
+    // then says the browser went away.
+    let (pushed, mut received) = tokio::sync::mpsc::unbounded_channel::<(axum::http::HeaderMap, Vec<u8>)>();
+    let count = Arc::new(AtomicUsize::new(0));
+    let service = axum::Router::new().route(
+        "/push/browser",
+        axum::routing::post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+            let (pushed, count) = (pushed.clone(), count.clone());
+            async move {
+                let _ = pushed.send((headers, body.to_vec()));
+                if count.fetch_add(1, Ordering::SeqCst) == 0 { StatusCode::CREATED } else { StatusCode::GONE }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let endpoint = format!("http://{}/push/browser", listener.local_addr().expect("address"));
+    tokio::spawn(async move { axum::serve(listener, service).await });
+
+    let world = world(Visibility::Private).await;
+    let machine = &world.alice;
+    let alice = Browser::sign_in(machine, "alice").await;
+    let (_, key) = alice.get("/push/key").await;
+    assert_eq!(URL_SAFE_NO_PAD.decode(key.as_str().expect("a key")).expect("base64url").len(), 65, "an uncompressed P-256 key");
+
+    let browser_secret = SecretKey::from_slice(&[7; 32]).expect("a key");
+    let auth = [1u8; 16];
+    let subscription = serde_json::json!({
+        "endpoint": endpoint,
+        "keys": {
+            "p256dh": URL_SAFE_NO_PAD.encode(browser_secret.public_key().to_sec1_bytes()),
+            "auth": URL_SAFE_NO_PAD.encode(auth),
+        }
+    });
+    assert_eq!(alice.post("/push/subscriptions", subscription).await.0, StatusCode::NO_CONTENT);
+
+    let report = |state, asked: Option<u64>| AgentsReport {
+        agents: vec![AgentReport {
+            thread: THREAD,
+            agent: "Fake agent".into(),
+            state,
+            permissions: asked
+                .map(|id| AskedPermission { id, title: "Edit a.rs".into(), options: vec![("allow".into(), "Allow".into())] })
+                .into_iter()
+                .collect(),
+            queued: 0,
+            preset: String::new(),
+        }],
+        startable: Vec::new(),
+    };
+    let put = |report: AgentsReport| machine.send(machine.request(Method::PUT, "/v1/control/agents").json(&report));
+    assert_eq!(put(report(AgentState::Working, None)).await, StatusCode::NO_CONTENT);
+    assert_eq!(put(report(AgentState::AwaitingPermission, Some(1))).await, StatusCode::NO_CONTENT);
+    let (headers, body) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), received.recv()).await.expect("pushed").expect("a push");
+    assert_eq!(headers["content-encoding"], "aes128gcm");
+    assert!(headers["authorization"].to_str().expect("ascii").starts_with("vapid t="), "{headers:?}");
+    let payload = web_push_native::decrypt(body, &browser_secret, &auth.into()).expect("only the browser reads it");
+    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("json");
+    assert_eq!(payload["title"], "An agent asks for a permission");
+    assert!(payload["body"].as_str().is_some_and(|body| body.ends_with("asks to run: Edit a.rs")));
+    assert_eq!(payload["url"], format!("t/{THREAD}"));
+
+    // A kind that only lists isn't pushed; one that notifies is, until the
+    // push service says the browser is gone.
+    assert_eq!(put(report(AgentState::Idle, None)).await, StatusCode::NO_CONTENT);
+    assert_eq!(put(report(AgentState::Error, None)).await, StatusCode::NO_CONTENT);
+    let (_, body) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), received.recv()).await.expect("pushed").expect("a push");
+    let payload = web_push_native::decrypt(body, &browser_secret, &auth.into()).expect("decrypts");
+    assert!(String::from_utf8_lossy(&payload).contains("An agent stopped with an error"), "finishing didn't push");
+    // The server drops the subscription once it reads the answer, in the
+    // background, so a push or two may still go out meanwhile.
+    let mut dropped = false;
+    for asked in 2..12 {
+        assert_eq!(put(report(AgentState::Working, None)).await, StatusCode::NO_CONTENT);
+        assert_eq!(put(report(AgentState::AwaitingPermission, Some(asked))).await, StatusCode::NO_CONTENT);
+        if tokio::time::timeout(std::time::Duration::from_millis(500), received.recv()).await.is_err() {
+            dropped = true;
+            break;
+        }
+    }
+    assert!(dropped, "the gone browser's subscription was dropped");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

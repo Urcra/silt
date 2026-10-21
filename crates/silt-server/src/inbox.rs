@@ -182,7 +182,7 @@ impl Server {
             }
             for note in notes.drain(..).filter(|note| note.user != actor.user) {
                 let (thread, delta_id, now) = (id_bytes(note.thread.0), delta.span.first().to_string(), now_ms());
-                sqlx::query!(
+                let written = sqlx::query!(
                     "INSERT OR IGNORE INTO notifications (user_id, kind, thread_id, delta, actor, text, created_ms)
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                     note.user,
@@ -195,6 +195,9 @@ impl Server {
                 )
                 .execute(db)
                 .await?;
+                if written.rows_affected() == 1 {
+                    push_if_wanted(self, note.user, note.kind, note.thread, &note.text).await?;
+                }
             }
         }
         Ok(())
@@ -212,9 +215,36 @@ pub(crate) struct PersonNote<'a> {
     pub(crate) action: Option<InboxAction>,
 }
 
+/// What a push of a notification of `kind` says first.
+fn title_of(kind: &str) -> &'static str {
+    match kind {
+        "permission" => "An agent asks for a permission",
+        "plan" => "An agent wrote a plan to approve",
+        "errored" => "An agent stopped with an error",
+        "offline" => "A machine went offline with an agent at work",
+        "finished" => "An agent finished its turn",
+        "recovered" => "A recovery thread was made",
+        "mr_opened" => "A merge request into your thread",
+        "comment" | "reply" => "A comment on your thread",
+        "mention" => "You were mentioned",
+        _ => "Your merge request",
+    }
+}
+
+/// Pushes the notification to the person's browsers when its kind notifies
+/// them (ADR 0028).
+async fn push_if_wanted(server: &Server, user: UserId, kind: &str, thread: ThreadId, text: &str) -> Result<(), sqlx::Error> {
+    if settings_of(server.db(), user).await?.iter().any(|setting| setting.kind == kind && setting.notify) {
+        crate::push::push_soon(server, user, title_of(kind), text, thread);
+    }
+    Ok(())
+}
+
 /// Writes `note`, bringing an unread one of the same kind and thread up to
 /// date rather than repeating it.
-pub(crate) async fn notify_person(db: &SqlitePool, note: PersonNote<'_>) -> Result<(), sqlx::Error> {
+pub(crate) async fn notify_person(server: &Server, note: PersonNote<'_>) -> Result<(), sqlx::Error> {
+    let db = server.db();
+    push_if_wanted(server, note.user, note.kind, note.thread, &note.text).await?;
     let (thread, now) = (id_bytes(note.thread.0), now_ms());
     let action = note.action.as_ref().and_then(|action| serde_json::to_string(action).ok());
     let updated = sqlx::query!(

@@ -47,6 +47,7 @@ mod orgs;
 mod pages;
 mod presence;
 mod projects;
+mod push;
 mod relayed;
 mod sign_in;
 mod visibility;
@@ -173,6 +174,8 @@ struct Shared {
     control: control::Control,
     /// Held while the server writes a delta for someone (`writes`).
     writes: Mutex<()>,
+    /// Signs Web Push requests (ADR 0028).
+    vapid: web_push_native::jwt_simple::algorithms::ES256KeyPair,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
 }
@@ -225,6 +228,7 @@ impl Server {
         index::write(&mut tx, &index_rows).await?;
         tx.commit().await?;
         let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+        let vapid = push::load_or_make_key(data_dir)?;
         Ok(Self {
             shared: Arc::new(Shared {
                 db,
@@ -242,6 +246,7 @@ impl Server {
                 presence: Mutex::new(presence::Board::default()),
                 control: control::Control::default(),
                 writes: Mutex::new(()),
+                vapid,
                 passwords: accounts::PasswordChecks::default(),
                 config,
                 http,
@@ -642,7 +647,7 @@ async fn register_thread(
         );
         let note =
             inbox::PersonNote { user: caller.user, kind: "recovered", thread: thread.id, actor: &device, text, action: None };
-        inbox::notify_person(db, note).await?;
+        inbox::notify_person(&server, note).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

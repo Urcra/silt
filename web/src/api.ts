@@ -161,6 +161,8 @@ export const api = {
   sendQueued: (id: string, item: number) => request<string>('POST', `${thread(id)}/queue/${item}/send`),
   inbox: (all: boolean) => request<InboxEntry[]>('GET', `/api/inbox${all ? '?all=true' : ''}`),
   readNotifications: (read: Partial<InboxRead>) => request<string>('POST', '/api/inbox/read', read),
+  pushKey: () => request<string>('GET', '/api/push/key'),
+  subscribePush: (subscription: PushSubscriptionJSON) => request<null>('POST', '/api/push/subscriptions', subscription),
   notificationSettings: () => request<KindSetting[]>('GET', '/api/me/notifications'),
   setNotification: (setting: KindSetting) => request<KindSetting[]>('PUT', '/api/me/notifications', setting),
   fork: (id: string) => request<Resumed>('POST', `${thread(id)}/fork`, {}),
