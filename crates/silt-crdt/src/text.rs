@@ -270,6 +270,8 @@ pub struct TextDoc {
     insertions: BTreeMap<CharId, Insertion>,
     deletes: BTreeMap<DeltaId, Vec<(CharId, u32)>>,
     applied: Vec<Applied>,
+    /// Each applied event's position in `applied`.
+    applied_index: BTreeMap<DeltaId, usize>,
     prepare: Frontier,
     /// The latest applied events, none an ancestor of another; `None` when
     /// unknown, as after deserializing.
@@ -295,6 +297,7 @@ impl From<TextDocState> for TextDoc {
             fragments: SumTree::from_iter(state.fragments, ()),
             insertions: state.insertions,
             deletes: state.deletes,
+            applied_index: state.applied.iter().enumerate().map(|(index, applied)| (applied.id, index)).collect(),
             applied: state.applied,
             prepare: state.prepare,
             heads: None,
@@ -322,6 +325,7 @@ impl Default for TextDoc {
             insertions: BTreeMap::new(),
             deletes: BTreeMap::new(),
             applied: Vec::new(),
+            applied_index: BTreeMap::new(),
             prepare: Frontier::root(),
             heads: Some(Vec::new()),
             complete: true,
@@ -367,7 +371,7 @@ impl TextDoc {
         );
         let len = run_len(content.chars().count());
         if len > 0 {
-            doc.applied.push(Applied {
+            doc.record_applied(Applied {
                 id: source,
                 kind: AppliedKind::Insert { start: key, len },
             });
@@ -571,7 +575,7 @@ impl TextDoc {
                 AppliedKind::Delete
             }
         };
-        self.applied.push(Applied {
+        self.record_applied(Applied {
             id: event.span.first(),
             kind,
         });
@@ -618,28 +622,38 @@ impl TextDoc {
             self.prepare = target.clone();
             return;
         }
-        let in_prepare = graph.version_vector(&self.prepare);
-        let in_target = graph.version_vector(target);
-        let applied = std::mem::take(&mut self.applied);
-        for event in applied.iter().rev() {
-            if in_prepare.contains(event.id) && !in_target.contains(event.id) {
-                self.shift_prepare(event, -1);
-            }
+        let (retreat, advance) = graph.diff_frontiers(&self.prepare, target);
+        for index in self.applied_within(&retreat).into_iter().rev() {
+            self.shift_prepare(self.applied[index], -1);
         }
-        for event in &applied {
-            if !in_prepare.contains(event.id) && in_target.contains(event.id) {
-                self.shift_prepare(event, 1);
-            }
+        for index in self.applied_within(&advance) {
+            self.shift_prepare(self.applied[index], 1);
         }
-        self.applied = applied;
         self.prepare = target.clone();
         self.complete = self
             .heads
             .as_ref()
-            .is_some_and(|heads| heads.iter().all(|head| in_target.contains(*head)));
+            .is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)));
     }
 
-    fn shift_prepare(&mut self, event: &Applied, step: i32) {
+    /// Positions in `applied` of this document's events that start inside
+    /// `spans`, in the order they were applied.
+    fn applied_within(&self, spans: &[DeltaSpan]) -> Vec<usize> {
+        let mut found: Vec<usize> = spans
+            .iter()
+            .flat_map(|span| self.applied_index.range(span.first()..=span.last()).map(|(_, index)| *index))
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    fn record_applied(&mut self, applied: Applied) {
+        self.applied_index.insert(applied.id, self.applied.len());
+        self.applied.push(applied);
+    }
+
+    fn shift_prepare(&mut self, event: Applied, step: i32) {
         let ranges: Vec<(CharId, u32)> = match event.kind {
             AppliedKind::Insert { start, len } => vec![(start, len)],
             AppliedKind::Delete => self.deletes[&event.id].clone(),

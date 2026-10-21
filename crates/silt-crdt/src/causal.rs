@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 
 use silt_types::{ActorId, DeltaId, DeltaSpan, Frontier, Lamport};
 
@@ -199,6 +199,52 @@ impl CausalGraph {
             }
         }
         spans
+    }
+
+    /// Spans in `a` but not `b`, and in `b` but not `a`. Walks back from
+    /// both versions only until what is left is history they share, so it
+    /// costs what they differ by, not the whole history.
+    pub fn diff_frontiers(&self, a: &Frontier, b: &Frontier) -> (Vec<DeltaSpan>, Vec<DeltaSpan>) {
+        const IN_A: u8 = 1;
+        const IN_B: u8 = 2;
+        const SHARED: u8 = IN_A | IN_B;
+        let mut queue: BinaryHeap<(Lamport, ActorId, u8)> = BinaryHeap::new();
+        queue.extend(a.ids().iter().map(|id| (id.lamport, id.actor, IN_A)));
+        queue.extend(b.ids().iter().map(|id| (id.lamport, id.actor, IN_B)));
+        let (mut only_a, mut only_b) = (Vec::new(), Vec::new());
+        while queue.iter().any(|(_, _, side)| *side != SHARED) {
+            let Some((lamport, actor, mut side)) = queue.pop() else {
+                break;
+            };
+            while let Some(&(next, next_actor, next_side)) = queue.peek()
+                && (next, next_actor) == (lamport, actor)
+            {
+                side |= next_side;
+                queue.pop();
+            }
+            let Some((run_index, _)) = self.find(DeltaId::new(actor, lamport)) else {
+                continue;
+            };
+            let run = &self.runs[run_index];
+            // Only down to the next queued id: a delta reached later may name
+            // a parent inside this run, below which both sides then share.
+            let lowest = match queue.peek() {
+                Some(&(next, _, _)) => run.span.start.max(Lamport(next.0.saturating_add(1)).min(lamport)),
+                None => run.span.start,
+            };
+            let span = DeltaSpan::new(actor, lowest, lamport.0 - lowest.0 + 1);
+            match side {
+                IN_A => only_a.push(span),
+                IN_B => only_b.push(span),
+                _ => {}
+            }
+            if lowest > run.span.start {
+                queue.push((Lamport(lowest.0 - 1), actor, side));
+            } else {
+                queue.extend(run.parents.ids().iter().map(|parent| (parent.lamport, parent.actor, side)));
+            }
+        }
+        (only_a, only_b)
     }
 
     /// Removes ids that are ancestors of other ids in the set.
@@ -427,6 +473,40 @@ mod tests {
         let base = graph.version_vector(&frontier(&[id(1, 5)]));
         let a_side = graph.version_vector(&frontier(&[id(1, 8)]));
         assert_eq!(graph.diff(&base, &a_side), vec![span(1, 6, 3)]);
+    }
+
+    fn ids_of(spans: &[DeltaSpan]) -> HashSet<DeltaId> {
+        spans
+            .iter()
+            .flat_map(|span| (span.start.0..span.end().0).map(|lamport| id(span.actor.0, lamport)))
+            .collect()
+    }
+
+    #[test]
+    fn diff_frontiers_agrees_with_version_vectors() {
+        let mut graph = diamond();
+        graph.add(span(3, 7, 2), &frontier(&[id(1, 6), id(2, 6)])).expect("c");
+        graph.add(span(2, 10, 1), &frontier(&[id(1, 9), id(3, 8)])).expect("b merges");
+        graph.add(span(4, 7, 1), &frontier(&[id(1, 3)])).expect("d from inside the base run");
+        let versions = [
+            Frontier::root(),
+            frontier(&[id(1, 3)]),
+            frontier(&[id(1, 7)]),
+            frontier(&[id(2, 6)]),
+            frontier(&[id(1, 8), id(2, 6)]),
+            frontier(&[id(3, 8)]),
+            frontier(&[id(4, 7)]),
+            frontier(&[id(2, 10), id(4, 7)]),
+            graph.frontier().clone(),
+        ];
+        for a in &versions {
+            for b in &versions {
+                let (only_a, only_b) = graph.diff_frontiers(a, b);
+                let (vv_a, vv_b) = (graph.version_vector(a), graph.version_vector(b));
+                assert_eq!(ids_of(&only_a), ids_of(&graph.diff(&vv_b, &vv_a)), "{a:?} minus {b:?}");
+                assert_eq!(ids_of(&only_b), ids_of(&graph.diff(&vv_a, &vv_b)), "{b:?} minus {a:?}");
+            }
+        }
     }
 
     #[test]
