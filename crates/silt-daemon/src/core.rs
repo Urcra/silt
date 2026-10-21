@@ -103,6 +103,25 @@ pub enum CoreError {
     Invalid(String),
 }
 
+/// A working directory with its symlinks resolved, as checkout paths are
+/// recorded, so the two compare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalCwd(PathBuf);
+
+impl CanonicalCwd {
+    pub(crate) fn new(cwd: &Path) -> std::io::Result<Self> {
+        cwd.canonicalize().map(Self)
+    }
+}
+
+impl std::ops::Deref for CanonicalCwd {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
 pub(crate) struct Checkout {
     pub(crate) record: CheckoutRecord,
     pub(crate) family: FamilyId,
@@ -1192,10 +1211,12 @@ impl Core {
             line,
             draft: self.redactor.replace(&draft),
             leaving,
-            agent: self.agent_status(thread).filter(|status| status.state != "exited").map(|status| silt_proto::AgentActivity {
-                name: status.agent,
-                state: status.state,
-                streaming: self.redactor.replace(&status.streaming),
+            agent: self.agent_status(thread).filter(|status| status.state != silt_proto::AgentState::Exited).map(|status| {
+                silt_proto::AgentActivity {
+                    name: status.agent,
+                    state: status.state,
+                    streaming: self.redactor.replace(&status.streaming),
+                }
             }),
         };
         Ok(async move {

@@ -4,34 +4,35 @@
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
-use silt_proto::{ErrorReply, OrgChange, OrgInfo, OrgMember, OrgsReply, TeamInfo, Visibility};
+use silt_proto::{ErrorReply, OrgChange, OrgInfo, OrgMember, OrgRole, OrgsReply, TeamInfo, Visibility};
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, SqliteConnection, SqliteExecutor};
 
 use crate::accounts::{self, valid_name};
-use crate::{ApiError, Caller, Server, bad_request, forbidden, now_ms};
+use crate::{ApiError, Caller, Server, UserId, bad_request, forbidden, now_ms};
 
 /// The org new users join unless an invite names another; it holds what
 /// existed before orgs.
 pub(crate) const DEFAULT_ORG: &str = "default";
 
-pub(crate) async fn join_default_org(db: impl SqliteExecutor<'_>, user: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO org_members (org_id, user_id, role) SELECT id, ?, 'member' FROM orgs WHERE name = ?")
+pub(crate) async fn join_default_org(db: impl SqliteExecutor<'_>, user: UserId) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT OR IGNORE INTO org_members (org_id, user_id, role) SELECT id, ?, ? FROM orgs WHERE name = ?")
         .bind(user)
+        .bind(OrgRole::Member.as_str())
         .bind(DEFAULT_ORG)
         .execute(db)
         .await?;
     Ok(())
 }
 
-pub(crate) async fn add_member(db: impl SqliteExecutor<'_>, org: &str, user: i64, owner: bool) -> Result<bool, sqlx::Error> {
-    let role = if owner { "owner" } else { "member" };
+pub(crate) async fn add_member(db: impl SqliteExecutor<'_>, org: &str, user: UserId, owner: bool) -> Result<bool, sqlx::Error> {
+    let role = if owner { OrgRole::Owner } else { OrgRole::Member };
     let added = sqlx::query(
         "INSERT INTO org_members (org_id, user_id, role) SELECT id, ?, ? FROM orgs WHERE name = ?
          ON CONFLICT (org_id, user_id) DO UPDATE SET role = excluded.role",
     )
     .bind(user)
-    .bind(role)
+    .bind(role.as_str())
     .bind(org)
     .execute(db)
     .await?
@@ -41,7 +42,7 @@ pub(crate) async fn add_member(db: impl SqliteExecutor<'_>, org: &str, user: i64
 
 /// Puts a project nobody placed yet into its first thread's owner's org:
 /// their only org, or else the first they joined.
-pub(crate) async fn place_project(db: &SqlitePool, repo: &str, owner: i64) -> Result<(), sqlx::Error> {
+pub(crate) async fn place_project(db: &SqlitePool, repo: &str, owner: UserId) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT OR IGNORE INTO projects (repo, org_id)
          SELECT ?, org_id FROM org_members WHERE user_id = ? ORDER BY rowid LIMIT 1",
@@ -64,7 +65,7 @@ async fn org_id(db: &SqlitePool, name: &str) -> Result<i64, ApiError> {
 
 /// The id of the user `asker` named. Unknown names count against the asker,
 /// so nobody signed in can use this to list the server's accounts.
-pub(crate) async fn named_user(server: &Server, asker: i64, name: &str) -> Result<i64, ApiError> {
+pub(crate) async fn named_user(server: &Server, asker: UserId, name: &str) -> Result<UserId, ApiError> {
     let guesses = format!("user-names:{asker}");
     let checks = &server.shared.passwords;
     if checks.cooling_down(&guesses) {
@@ -82,26 +83,31 @@ pub(crate) async fn named_user(server: &Server, asker: i64, name: &str) -> Resul
     }
 }
 
-pub(crate) async fn is_admin(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
+pub(crate) async fn is_admin(db: &SqlitePool, user: UserId) -> Result<bool, ApiError> {
     Ok(accounts::user_by_id(db, user).await?.is_some_and(|user| user.admin))
 }
 
-async fn role(db: &SqlitePool, org: i64, user: i64) -> Result<Option<String>, sqlx::Error> {
+/// What a stored role says; an unknown one counts as a plain member.
+fn stored_role(text: &str) -> OrgRole {
+    text.parse().unwrap_or(OrgRole::Member)
+}
+
+async fn role(db: &SqlitePool, org: i64, user: UserId) -> Result<Option<OrgRole>, sqlx::Error> {
     Ok(sqlx::query("SELECT role FROM org_members WHERE org_id = ? AND user_id = ?")
         .bind(org)
         .bind(user)
         .fetch_optional(db)
         .await?
-        .map(|row| row.get("role")))
+        .map(|row| stored_role(row.get("role"))))
+}
+
+async fn owns(db: &SqlitePool, org: i64, user: UserId) -> Result<bool, ApiError> {
+    Ok(role(db, org, user).await? == Some(OrgRole::Owner) || is_admin(db, user).await?)
 }
 
 /// Fails unless `user` owns `org` or administers the server.
-async fn require_owner(db: &SqlitePool, org: i64, user: i64) -> Result<(), ApiError> {
-    if role(db, org, user).await?.as_deref() == Some("owner") || is_admin(db, user).await? {
-        Ok(())
-    } else {
-        Err(forbidden("only the org's owners and server admins can change it"))
-    }
+async fn require_owner(db: &SqlitePool, org: i64, user: UserId) -> Result<(), ApiError> {
+    if owns(db, org, user).await? { Ok(()) } else { Err(forbidden("only the org's owners and server admins can change it")) }
 }
 
 async fn team_id(db: &SqlitePool, org: i64, name: &str) -> Result<i64, ApiError> {
@@ -132,8 +138,8 @@ pub(crate) async fn list(
     for row in rows {
         let role: Option<String> = row.get("role");
         let role = match (role, admin) {
-            (Some(role), _) => role,
-            (None, true) => "admin".to_owned(),
+            (Some(role), _) => stored_role(&role),
+            (None, true) => OrgRole::Admin,
             (None, false) => continue,
         };
         let id: i64 = row.get("id");
@@ -144,7 +150,7 @@ pub(crate) async fn list(
         .fetch_all(db)
         .await?
         .iter()
-        .map(|row| OrgMember { user: row.get("name"), role: row.get("role") })
+        .map(|row| OrgMember { user: row.get("name"), role: stored_role(row.get("role")) })
         .collect();
         let mut teams = Vec::new();
         for team in sqlx::query("SELECT id, name FROM teams WHERE org_id = ? ORDER BY name").bind(id).fetch_all(db).await? {
@@ -201,9 +207,10 @@ pub(crate) async fn change(
                     .fetch_optional(&mut *tx)
                     .await?;
             let id: i64 = created.ok_or_else(|| bad_request(format!("an org named {org} exists")))?.get("id");
-            sqlx::query("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')")
+            sqlx::query("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)")
                 .bind(id)
                 .bind(caller.user)
+                .bind(OrgRole::Owner.as_str())
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await?;
@@ -328,8 +335,9 @@ pub(crate) async fn change(
 /// same transaction, which then holds the write lock, so two concurrent
 /// changes can't both remove an owner.
 async fn keep_an_owner(tx: &mut SqliteConnection, org: i64) -> Result<(), ApiError> {
-    let owners: i64 = sqlx::query("SELECT COUNT(*) AS owners FROM org_members WHERE org_id = ? AND role = 'owner'")
+    let owners: i64 = sqlx::query("SELECT COUNT(*) AS owners FROM org_members WHERE org_id = ? AND role = ?")
         .bind(org)
+        .bind(OrgRole::Owner.as_str())
         .fetch_one(&mut *tx)
         .await?
         .get("owners");
@@ -368,28 +376,28 @@ pub(crate) async fn is_placed(db: &SqlitePool, repo: &str) -> Result<bool, sqlx:
 
 /// Whether placing a project in `user`'s first org would let them decide
 /// its visibility: they own that org, or administer the server.
-pub(crate) async fn may_place_project(db: &SqlitePool, user: i64) -> Result<bool, ApiError> {
+pub(crate) async fn may_place_project(db: &SqlitePool, user: UserId) -> Result<bool, ApiError> {
     let first: Option<i64> = sqlx::query("SELECT org_id FROM org_members WHERE user_id = ? ORDER BY rowid LIMIT 1")
         .bind(user)
         .fetch_optional(db)
         .await?
         .map(|row| row.get("org_id"));
     match first {
-        Some(org) => Ok(role(db, org, user).await?.as_deref() == Some("owner") || is_admin(db, user).await?),
+        Some(org) => owns(db, org, user).await,
         None => is_admin(db, user).await,
     }
 }
 
 /// Whether `user` may set the visibility of every thread of `repo`: an
 /// owner of its org or a server admin.
-pub(crate) async fn may_set_project(db: &SqlitePool, repo: &str, user: i64) -> Result<bool, ApiError> {
+pub(crate) async fn may_set_project(db: &SqlitePool, repo: &str, user: UserId) -> Result<bool, ApiError> {
     let org: Option<i64> = sqlx::query("SELECT org_id FROM projects WHERE repo = ?")
         .bind(repo)
         .fetch_optional(db)
         .await?
         .and_then(|row| row.get("org_id"));
     match org {
-        Some(org) => Ok(role(db, org, user).await?.as_deref() == Some("owner") || is_admin(db, user).await?),
+        Some(org) => owns(db, org, user).await,
         None => is_admin(db, user).await,
     }
 }

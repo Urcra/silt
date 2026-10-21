@@ -9,7 +9,7 @@ use silt_crdt::InodeId;
 use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
 use silt_types::{DeltaId, ThreadId};
 
-use crate::core::{Core, CoreError, touched_inode};
+use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
 use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
 use crate::transcripts::native_entries;
 
@@ -148,10 +148,10 @@ impl Core {
     /// The repository identity at `cwd`, `path` relative to the checkout
     /// root, and the thread checked out there.
     fn repo_path(&self, cwd: &std::path::Path, path: &str) -> Result<(String, String, Option<ThreadId>), CoreError> {
-        let cwd = cwd.canonicalize()?;
+        let cwd = CanonicalCwd::new(cwd)?;
         let repo = silt_git::Repo::discover(&cwd)?;
         let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
-        let here = self.thread_at(None, &cwd).ok();
+        let here = self.thread_checked_out_at(&cwd);
         let root = here
             .and_then(|_| {
                 self.checkouts

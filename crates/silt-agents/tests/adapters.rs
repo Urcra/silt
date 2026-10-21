@@ -4,11 +4,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use silt_agents::{Agent, Entry, Found, RecordedSession};
+use silt_agents::{Agent, CheckedSession, Entry, Found, RecordedSession};
 
-fn recorded(agent: &dyn Agent, cwd: &Path, id: &str) -> RecordedSession {
+fn recorded(agent: &dyn Agent, cwd: &Path, id: &str) -> CheckedSession {
     let entries = [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }];
     RecordedSession { id: id.into(), main: agent.translate(&entries, cwd, id).expect("translates"), ..Default::default() }
+        .checked()
+        .expect("safe")
 }
 
 /// What the agent reads back from the file, as conversation.

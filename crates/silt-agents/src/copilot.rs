@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role,
-    SessionIds, Start, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
+    Start, Write, translated_text,
 };
 
 pub const AGENT: &str = "copilot-cli";
@@ -143,14 +143,14 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
 }
 
 /// Writes `session` as a session directory in the Copilot home `home`.
-pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
     let restore = plan_restore(home, root, cwd, session);
     restore.apply()?;
     Ok(restore.transcript)
 }
 
 /// The files restoring `session` into the Copilot home `home` writes.
-pub fn plan_restore(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Restore {
+pub fn plan_restore(home: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Restore {
     let dir = session_dir(home, &session.id);
     let rewrites = Rewrites::new(session, Some(&dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
     let events = dir.join("events.jsonl");
@@ -267,7 +267,7 @@ impl Agent for Copilot {
         discover_in(&home()?, cwd, since_ms, known)
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let home = home().ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
     }
@@ -339,14 +339,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_restore_plans_the_session_directory_and_only_safe_side_files() {
-        let session = RecordedSession {
+    fn a_restore_plans_the_session_directory_with_its_side_files() {
+        let session = crate::RecordedSession {
             id: "new".into(),
             former_ids: vec!["old".into()],
             main: vec![r#"{"sessionId":"old"}"#.into()],
-            attachments: vec![("files/notes.md".into(), b"notes".to_vec()), ("../escape".into(), b"no".to_vec())],
+            attachments: vec![("files/notes.md".into(), b"notes".to_vec())],
             ..Default::default()
-        };
+        }
+        .checked()
+        .expect("safe");
         let restore = plan_restore(Path::new("/home"), Path::new("/repo"), Path::new("/repo"), &session);
         let dir = session_dir(Path::new("/home"), "new");
         assert_eq!(restore.transcript, dir.join("events.jsonl"));

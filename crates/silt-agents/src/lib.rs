@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 pub use entry::Entry;
 pub use error::AgentError;
 pub use render::{Role, render_transcript, translated_text};
-pub use rewrite::{RecordedSession, Rewrites, is_safe_id, is_side_file_name};
+pub use rewrite::{CheckedSession, RecordedSession, Rewrites, is_safe_id, is_side_file_name};
 pub use tail::{complete_lines, complete_lines_ending};
 
 use conventions::NativeConventions;
@@ -82,10 +82,9 @@ impl Restore {
         Ok(())
     }
 
-    /// Side files of the session, kept under `dir` and only with names that
-    /// stay inside it.
-    pub(crate) fn side_files(&mut self, dir: &Path, session: &RecordedSession) {
-        for (name, bytes) in session.attachments.iter().filter(|(name, _)| is_side_file_name(name)) {
+    /// Side files of the session, kept under `dir`.
+    pub(crate) fn side_files(&mut self, dir: &Path, session: &CheckedSession) {
+        for (name, bytes) in &session.attachments {
             self.writes.push(Write::File { path: dir.join(name), bytes: bytes.clone() });
         }
     }
@@ -251,7 +250,7 @@ pub trait Agent: Send + Sync {
     }
     /// Writes a recorded session so the agent continues it in `cwd`.
     /// Returns the main transcript to keep tailing.
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError>;
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError>;
     /// A native session holding `entries`, recorded by any agent, or `None`
     /// when this agent has no translation and needs a primed session.
     fn translate(&self, _entries: &[Entry], _cwd: &Path, _id: &str) -> Option<Vec<String>> {

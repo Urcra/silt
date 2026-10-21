@@ -18,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, Command};
 use tokio_util::io::ReaderStream;
 
-use crate::{ApiError, Caller, FamilyAccess, Server, bad_request, claim_family, family_access, not_found};
+use crate::{ApiError, Caller, FamilyAccess, Server, UserId, bad_request, claim_family, family_access, not_found};
 
 pub(crate) async fn serve(
     State(server): State<Server>,
@@ -60,7 +60,7 @@ struct ThreadRights {
     known: Vec<ThreadId>,
 }
 
-async fn thread_rights(server: &Server, family: FamilyId, user: i64) -> Result<ThreadRights, ApiError> {
+async fn thread_rights(server: &Server, family: FamilyId, user: UserId) -> Result<ThreadRights, ApiError> {
     let viewer = server.viewer(user).await?;
     let rows = sqlx::query(
         "SELECT t.id, t.owner_id, EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
@@ -77,7 +77,7 @@ async fn thread_rights(server: &Server, family: FamilyId, user: i64) -> Result<T
         if viewer.sees_thread(thread) {
             rights.visible.push(thread);
         }
-        if row.get::<i64, _>("owner_id") == user || row.get::<i64, _>("shared") != 0 {
+        if row.get::<UserId, _>("owner_id") == user || row.get::<i64, _>("shared") != 0 {
             rights.writable.push(thread);
         }
     }

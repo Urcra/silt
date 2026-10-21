@@ -244,7 +244,7 @@ impl Core {
                 q: query.to_owned(),
                 repo: filters.repo.clone(),
                 author: filters.author.clone(),
-                status: filters.status.clone(),
+                status: filters.status,
                 branch: filters.branch.clone(),
                 file: filters.file.clone(),
                 since: filters.since,

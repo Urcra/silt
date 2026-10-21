@@ -16,7 +16,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::visibility::Viewer;
-use crate::{ApiError, Caller, Server, id_bytes, id_from, now_ms};
+use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from, now_ms};
 
 const INBOX_LIMIT: i64 = 200;
 /// Mentions past this many in one message notify nobody, so one message
@@ -25,7 +25,7 @@ const MENTIONS_LIMIT: usize = 20;
 
 /// One notification to write.
 struct Note {
-    user: i64,
+    user: UserId,
     kind: &'static str,
     thread: ThreadId,
     text: String,
@@ -44,7 +44,7 @@ pub(crate) fn mentions(text: &str) -> Vec<String> {
     names
 }
 
-async fn owner(db: &SqlitePool, thread: ThreadId) -> Result<Option<i64>, sqlx::Error> {
+async fn owner(db: &SqlitePool, thread: ThreadId) -> Result<Option<UserId>, sqlx::Error> {
     Ok(sqlx::query("SELECT owner_id FROM threads WHERE id = ?")
         .bind(id_bytes(thread.0))
         .fetch_optional(db)
@@ -59,10 +59,10 @@ fn clip(text: &str) -> String {
 
 /// Viewers loaded once per notified user within one push.
 #[derive(Default)]
-struct Viewers(HashMap<i64, std::sync::Arc<Viewer>>);
+struct Viewers(HashMap<UserId, std::sync::Arc<Viewer>>);
 
 impl Viewers {
-    async fn sees(&mut self, server: &Server, user: i64, thread: ThreadId) -> Result<bool, sqlx::Error> {
+    async fn sees(&mut self, server: &Server, user: UserId, thread: ThreadId) -> Result<bool, sqlx::Error> {
         let viewer = match self.0.entry(user) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => entry.insert(server.viewer(user).await?),

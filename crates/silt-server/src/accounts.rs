@@ -12,7 +12,7 @@ use silt_types::DeviceId;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
-use crate::{OpenError, Server, ServerError, hash, id_bytes, id_from, now_ms, open_db};
+use crate::{OpenError, Server, ServerError, UserId, hash, id_bytes, id_from, now_ms, open_db};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const DEVICE_IDLE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
@@ -79,7 +79,7 @@ pub(crate) fn name_from(text: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
-    pub id: i64,
+    pub id: UserId,
     pub name: String,
     pub display_name: Option<String>,
     pub email: Option<String>,
@@ -107,7 +107,7 @@ macro_rules! users_query {
     };
 }
 
-pub(crate) async fn user_by_id(db: &SqlitePool, id: i64) -> Result<Option<User>, sqlx::Error> {
+pub(crate) async fn user_by_id(db: &SqlitePool, id: UserId) -> Result<Option<User>, sqlx::Error> {
     Ok(sqlx::query(users_query!("WHERE id = ?")).bind(id).fetch_optional(db).await?.as_ref().map(user_from))
 }
 
@@ -127,7 +127,7 @@ pub(crate) struct NewUser<'a> {
     pub(crate) admin: bool,
 }
 
-pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<i64, AccountError> {
+pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<UserId, AccountError> {
     if !valid_name(new.name) {
         return Err(AccountError::BadName);
     }
@@ -148,7 +148,7 @@ pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<i6
     .bind(now_ms())
     .fetch_optional(&mut *tx)
     .await?;
-    let id: i64 = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?.get("id");
+    let id: UserId = inserted.ok_or_else(|| AccountError::Taken(new.name.to_owned()))?.get("id");
     crate::orgs::join_default_org(&mut *tx, id).await?;
     tx.commit().await?;
     Ok(id)
@@ -237,7 +237,7 @@ pub(crate) async fn check_password(server: &Server, name: &str, password: &str) 
 }
 
 /// Registers a device of `user` and returns its token, shown only now.
-pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Result<LoginReply, sqlx::Error> {
+pub(crate) async fn issue_device(db: &SqlitePool, user: UserId, name: &str) -> Result<LoginReply, sqlx::Error> {
     let device = DeviceId(uuid::Uuid::new_v4().as_u128());
     let token = random_token();
     sqlx::query("INSERT INTO devices (id, name, token_hash, created_ms, last_used_ms, user_id) VALUES (?, ?, ?, ?, ?, ?)")
@@ -255,7 +255,7 @@ pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Resu
 
 /// The device and user a device token stands for, unless the token lapsed
 /// from disuse or its user is disabled.
-pub(crate) async fn device_caller(db: &SqlitePool, token: &str) -> Result<Option<(DeviceId, i64)>, sqlx::Error> {
+pub(crate) async fn device_caller(db: &SqlitePool, token: &str) -> Result<Option<(DeviceId, UserId)>, sqlx::Error> {
     let now = now_ms();
     let row = sqlx::query(
         "SELECT d.id, d.user_id, d.last_used_ms FROM devices d JOIN users u ON u.id = d.user_id
@@ -283,7 +283,7 @@ pub(crate) struct DeviceInfo {
     pub(crate) last_used_ms: i64,
 }
 
-pub(crate) async fn devices_of(db: &SqlitePool, user: i64) -> Result<Vec<DeviceInfo>, sqlx::Error> {
+pub(crate) async fn devices_of(db: &SqlitePool, user: UserId) -> Result<Vec<DeviceInfo>, sqlx::Error> {
     let rows = sqlx::query("SELECT id, name, created_ms, last_used_ms FROM devices WHERE user_id = ? ORDER BY last_used_ms DESC")
         .bind(user)
         .fetch_all(db)
@@ -300,7 +300,7 @@ pub(crate) async fn devices_of(db: &SqlitePool, user: i64) -> Result<Vec<DeviceI
 }
 
 /// Signs out `device` if it belongs to `user`; returns whether it did.
-pub(crate) async fn revoke_device(db: &SqlitePool, user: i64, device: DeviceId) -> Result<bool, sqlx::Error> {
+pub(crate) async fn revoke_device(db: &SqlitePool, user: UserId, device: DeviceId) -> Result<bool, sqlx::Error> {
     let mut tx = db.begin().await?;
     let revoked = sqlx::query("DELETE FROM devices WHERE id = ? AND user_id = ?")
         .bind(id_bytes(device.0))
@@ -315,7 +315,7 @@ pub(crate) async fn revoke_device(db: &SqlitePool, user: i64, device: DeviceId) 
 }
 
 /// Signs `user` out of every device and browser.
-pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: i64) -> Result<(), sqlx::Error> {
+pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: UserId) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
     sqlx::query("DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)")
         .bind(user)
@@ -328,7 +328,7 @@ pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: i64) -> Result<()
 }
 
 /// Signs `user` out of every browser except the one holding `keep`.
-pub(crate) async fn end_other_sessions(db: &SqlitePool, user: i64, keep: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn end_other_sessions(db: &SqlitePool, user: UserId, keep: &str) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM web_sessions WHERE user_id = ? AND token_hash != ?")
         .bind(user)
         .bind(hash(keep).to_vec())
@@ -337,7 +337,7 @@ pub(crate) async fn end_other_sessions(db: &SqlitePool, user: i64, keep: &str) -
     Ok(())
 }
 
-pub(crate) async fn create_session(db: &SqlitePool, user: i64) -> Result<String, sqlx::Error> {
+pub(crate) async fn create_session(db: &SqlitePool, user: UserId) -> Result<String, sqlx::Error> {
     let token = random_token();
     sqlx::query("INSERT INTO web_sessions (token_hash, user_id, expires_ms) VALUES (?, ?, ?)")
         .bind(hash(&token).to_vec())
@@ -410,7 +410,7 @@ pub(crate) async fn device_request(db: &SqlitePool, user_code: &str) -> Result<O
         .map(|row| row.get("name")))
 }
 
-pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: i64) -> Result<bool, sqlx::Error> {
+pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: UserId) -> Result<bool, sqlx::Error> {
     let updated =
         sqlx::query("UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
             .bind(user)
@@ -470,7 +470,12 @@ pub(crate) async fn poll_device(db: &SqlitePool, device_code: &str) -> Result<De
     }
 }
 
-pub(crate) async fn create_invite(db: &SqlitePool, by: Option<i64>, org: Option<&str>, days: u32) -> Result<String, sqlx::Error> {
+pub(crate) async fn create_invite(
+    db: &SqlitePool,
+    by: Option<UserId>,
+    org: Option<&str>,
+    days: u32,
+) -> Result<String, sqlx::Error> {
     let token = random_token();
     sqlx::query("INSERT INTO invites (token_hash, created_by, org, expires_ms) VALUES (?, ?, ?, ?)")
         .bind(hash(&token).to_vec())
@@ -523,7 +528,7 @@ pub(crate) async fn claim_invite(db: &SqlitePool, token: &str) -> Result<Option<
 
 impl ClaimedInvite {
     /// Marks the invite used by `user` and puts them in its org.
-    pub(crate) async fn complete(self, db: &SqlitePool, user: i64) -> Result<(), sqlx::Error> {
+    pub(crate) async fn complete(self, db: &SqlitePool, user: UserId) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE invites SET used_by = ? WHERE token_hash = ?")
             .bind(user)
             .bind(hash(&self.token).to_vec())
@@ -546,7 +551,7 @@ impl ClaimedInvite {
     }
 }
 
-pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str) -> Result<Option<i64>, sqlx::Error> {
+pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str) -> Result<Option<UserId>, sqlx::Error> {
     Ok(sqlx::query("SELECT user_id FROM identities WHERE provider = ? AND subject = ?")
         .bind(provider)
         .bind(subject)
@@ -555,7 +560,7 @@ pub(crate) async fn identity_user(db: &SqlitePool, provider: &str, subject: &str
         .map(|row| row.get("user_id")))
 }
 
-pub(crate) async fn link_identity(db: &SqlitePool, provider: &str, subject: &str, user: i64) -> Result<(), sqlx::Error> {
+pub(crate) async fn link_identity(db: &SqlitePool, provider: &str, subject: &str, user: UserId) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT OR REPLACE INTO identities (provider, subject, user_id) VALUES (?, ?, ?)")
         .bind(provider)
         .bind(subject)

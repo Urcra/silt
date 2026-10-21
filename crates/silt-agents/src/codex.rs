@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role,
-    SessionIds, Start, Stateless, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
+    Start, Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "codex";
@@ -99,7 +99,7 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
 /// Writes `session` as a rollout in the Codex home `home`. Codex trusts its
 /// database's path for an id over any other file, so an existing rollout
 /// of this id is replaced in place.
-pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
     let existing = rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id));
     let restore = plan_restore(home, existing, root, cwd, session, crate::now_ms());
     restore.apply()?;
@@ -113,7 +113,7 @@ pub fn plan_restore(
     existing: Option<PathBuf>,
     root: &Path,
     cwd: &Path,
-    session: &RecordedSession,
+    session: &CheckedSession,
     now_ms: i64,
 ) -> Restore {
     let path = existing.unwrap_or_else(|| {
@@ -324,7 +324,7 @@ impl Agent for Codex {
         discover_in(&home()?, cwd, since_ms, known)
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let home = home().ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
     }
@@ -366,7 +366,8 @@ mod tests {
 
     #[test]
     fn a_restore_replaces_codex_s_own_rollout_of_the_id_or_dates_a_new_one() {
-        let session = RecordedSession { id: "id".into(), main: vec!["{}".into()], ..Default::default() };
+        let session =
+            crate::RecordedSession { id: "id".into(), main: vec!["{}".into()], ..Default::default() }.checked().expect("safe");
         let home = Path::new("/codex");
         let existing = PathBuf::from("/codex/sessions/2026/01/02/rollout-x-id.jsonl");
         let replaced = plan_restore(home, Some(existing.clone()), Path::new("/r"), Path::new("/r"), &session, 0);

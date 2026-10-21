@@ -19,7 +19,8 @@ use tokio::sync::OwnedMutexGuard;
 use crate::index::{self, Index};
 use crate::visibility::Viewer;
 use crate::{
-    ApiError, Caller, RoomSlot, Server, ServerError, SharedRoom, bad_request, forbidden, id_bytes, id_from, not_found, now_ms,
+    ApiError, Caller, RoomSlot, Server, ServerError, SharedRoom, UserId, bad_request, forbidden, id_bytes, id_from, not_found,
+    now_ms,
 };
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -35,7 +36,7 @@ async fn owned(server: &Server, thread: &str, caller: Caller) -> Result<(ThreadI
         .fetch_optional(server.db())
         .await?
         .ok_or_else(not_found)?;
-    if row.get::<i64, _>("owner_id") != caller.user {
+    if row.get::<UserId, _>("owner_id") != caller.user {
         return Err(forbidden("only the thread's owner can delete, restore or purge it"));
     }
     Ok((thread, FamilyId(id_from(row.get("family_id"))), row.get("deleted_ms")))

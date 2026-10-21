@@ -8,11 +8,11 @@ use silt_acp::registry::{self, AgentInfo};
 use silt_acp::{AgentHandle, Command, Permission, Start, Update};
 use silt_agents::acp;
 use silt_log::{ConvOp, Op};
+use silt_proto::AgentState;
+use silt_store::CheckoutId;
 use silt_types::ThreadId;
 use tokio::sync::mpsc;
 use tracing::warn;
-
-use silt_store::CheckoutId;
 
 use crate::core::{Core, CoreError, Event};
 use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked};
@@ -32,31 +32,11 @@ pub(crate) struct AcpRun {
     /// The conversation so far, for the first prompt of a session that
     /// could not be loaded.
     primer: Option<String>,
-    state: RunState,
+    state: AgentState,
     text: String,
     thought: String,
     asking: Vec<Permission>,
     error: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RunState {
-    Starting,
-    Ready,
-    Working,
-    Exited,
-}
-
-impl RunState {
-    /// The name the web UI shows.
-    fn name(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Ready => "ready",
-            Self::Working => "working",
-            Self::Exited => "exited",
-        }
-    }
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -103,7 +83,7 @@ impl Core {
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
                 let thread = self.find_thread(selector)?;
-                if self.acp.get(&thread).is_some_and(|run| run.state != RunState::Exited) {
+                if self.acp.get(&thread).is_some_and(|run| run.state != AgentState::Exited) {
                     return Err(CoreError::Invalid("an agent is already running in this thread".into()));
                 }
                 let (checkout_id, checkout) = self.checkout_for_agent(thread).await?;
@@ -151,7 +131,7 @@ impl Core {
                 session: None,
                 load,
                 primer: None,
-                state: RunState::Starting,
+                state: AgentState::Starting,
                 text: String::new(),
                 thought: String::new(),
                 asking: Vec::new(),
@@ -192,10 +172,10 @@ impl Core {
     pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         let run = self.running(thread)?;
-        if run.state == RunState::Starting {
+        if run.state == AgentState::Starting {
             return Err(CoreError::Invalid("the agent is still starting".into()));
         }
-        if run.state == RunState::Working {
+        if run.state == AgentState::Working {
             return Err(CoreError::Invalid("the agent is still working; wait for it or stop it".into()));
         }
         let me = self.own_user();
@@ -217,7 +197,7 @@ impl Core {
         }
         self.record_acp(thread, &acp::prompt(&said, &authors.join(", "))).await?;
         let run = self.acp.get_mut(&thread).expect("checked above");
-        run.state = RunState::Working;
+        run.state = AgentState::Working;
         run.error = None;
         send(run, Command::Prompt(prompt));
         Ok("sent")
@@ -245,7 +225,7 @@ impl Core {
     fn running(&self, thread: ThreadId) -> Result<&AcpRun, CoreError> {
         self.acp
             .get(&thread)
-            .filter(|run| run.state != RunState::Exited)
+            .filter(|run| run.state != AgentState::Exited)
             .ok_or_else(|| CoreError::Invalid("no agent is running in this thread".into()))
     }
 
@@ -253,7 +233,7 @@ impl Core {
         let run = self.acp.get(&thread)?;
         Some(AgentStatus {
             agent: run.info.name.clone(),
-            state: run.state.name().to_owned(),
+            state: run.state,
             streaming: run.text.clone(),
             thinking: run.thought.clone(),
             permissions: run
@@ -292,7 +272,7 @@ impl Core {
             }
             AcpEvent::Started(Err(error)) => {
                 run.error = Some(error);
-                run.state = RunState::Exited;
+                run.state = AgentState::Exited;
             }
             AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => {
                 self.acp_ready(thread, &session, loaded, &agent).await?
@@ -303,14 +283,14 @@ impl Core {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = RunState::Ready;
+                run.state = AgentState::Ready;
                 run.asking.clear();
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = RunState::Exited;
+                run.state = AgentState::Exited;
                 run.handle = None;
                 run.asking.clear();
                 let session = run.session.clone();
@@ -328,7 +308,7 @@ impl Core {
     /// new one starts its own, primed with the thread's conversation.
     async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool, name: &str) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
-        run.state = RunState::Ready;
+        run.state = AgentState::Ready;
         let (checkout_id, checkout, agent_id) = (run.checkout_id, run.checkout.clone(), run.info.id.clone());
         let earlier = run.load.take().filter(|(_, earlier)| loaded && earlier == native);
         if let Some(session) = earlier.and_then(|(id, _)| self.session_mut(&id)) {

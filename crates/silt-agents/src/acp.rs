@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, SessionIds, Stateless};
+use crate::{Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, SessionIds, Stateless};
 
 pub const AGENT: &str = "acp";
 
@@ -127,7 +127,7 @@ impl Agent for Acp {
         None
     }
 
-    fn restore(&self, _root: &Path, _cwd: &Path, _session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, _root: &Path, _cwd: &Path, _session: &CheckedSession) -> Result<PathBuf, AgentError> {
         Err(AgentError::AcpSession)
     }
 

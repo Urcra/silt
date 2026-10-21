@@ -10,7 +10,7 @@ use serde::Deserialize;
 use silt_proto::{AgentActivity, Presence, PresenceReply, PresenceUpdate};
 use silt_types::{DeviceId, ThreadId};
 
-use crate::{ApiError, Caller, Server, not_found};
+use crate::{ApiError, Caller, Server, UserId, not_found};
 
 const TTL: Duration = Duration::from_secs(15);
 /// Longest draft or other text one viewer's presence carries.
@@ -54,7 +54,7 @@ impl Board {
     }
 }
 
-async fn user_name(server: &Server, user: i64) -> Result<String, ApiError> {
+async fn user_name(server: &Server, user: UserId) -> Result<String, ApiError> {
     Ok(crate::accounts::user_by_id(server.db(), user).await?.map(|user| user.name).unwrap_or_default())
 }
 
@@ -82,7 +82,7 @@ pub(crate) async fn update(
                 draft: clip(update.draft),
                 agent: update.agent.map(|agent| silt_proto::AgentActivity {
                     name: clip(agent.name),
-                    state: clip(agent.state),
+                    state: agent.state,
                     streaming: clip(agent.streaming),
                 }),
                 at: Instant::now(),

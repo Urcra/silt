@@ -16,10 +16,10 @@ use silt_types::{Frontier, ThreadId};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
-use crate::id_from;
+use crate::{UserId, id_from};
 
 struct ThreadRow {
-    owner: i64,
+    owner: UserId,
     family: u128,
     setting: Option<Visibility>,
     forked_from: Option<ThreadId>,
@@ -68,7 +68,7 @@ fn level(text: Option<String>) -> Option<Visibility> {
 
 impl Facts {
     /// `forks` maps each fork to its source.
-    async fn load(db: &SqlitePool, user: i64, forks: &HashMap<ThreadId, ThreadId>) -> Result<Self, sqlx::Error> {
+    async fn load(db: &SqlitePool, user: UserId, forks: &HashMap<ThreadId, ThreadId>) -> Result<Self, sqlx::Error> {
         let projects: HashMap<String, Project> = sqlx::query("SELECT repo, org_id, visibility FROM projects")
             .fetch_all(db)
             .await?
@@ -158,7 +158,7 @@ impl Facts {
         (org, Visibility::Private)
     }
 
-    fn sees(&self, user: i64, thread: ThreadId, row: &ThreadRow) -> bool {
+    fn sees(&self, user: UserId, thread: ThreadId, row: &ThreadRow) -> bool {
         row.owner == user
             || match self.effective(thread) {
                 (Some(org), visibility) if self.orgs.contains(&org) => match visibility {
@@ -175,14 +175,14 @@ impl Viewer {
     /// `forks` maps each fork to its source.
     pub(crate) async fn load(
         db: &SqlitePool,
-        user: i64,
+        user: UserId,
         forks: &HashMap<ThreadId, ThreadId>,
         serial: u64,
     ) -> Result<Self, sqlx::Error> {
         Ok(Self::decide(user, Facts::load(db, user, forks).await?, serial))
     }
 
-    fn decide(user: i64, facts: Facts, serial: u64) -> Self {
+    fn decide(user: UserId, facts: Facts, serial: u64) -> Self {
         let (threads, families) =
             facts.threads.iter().filter(|(id, row)| facts.sees(user, **id, row)).map(|(id, row)| (*id, row.family)).unzip();
         // Deleted threads are known too: an unknown thread counts as its
@@ -280,11 +280,11 @@ impl Viewer {
 mod tests {
     use super::*;
 
-    const ME: i64 = 1;
-    const OTHER: i64 = 2;
+    const ME: UserId = UserId(1);
+    const OTHER: UserId = UserId(2);
     const ORG: i64 = 10;
 
-    fn thread(owner: i64, repo: &str, setting: Option<Visibility>, forked_from: Option<ThreadId>) -> ThreadRow {
+    fn thread(owner: UserId, repo: &str, setting: Option<Visibility>, forked_from: Option<ThreadId>) -> ThreadRow {
         ThreadRow { owner, family: 7, setting, forked_from, repo: repo.to_owned() }
     }
 

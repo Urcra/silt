@@ -11,7 +11,7 @@ use silt_proto::Visibility;
 use silt_types::{DeltaId, FamilyId, Frontier, ThreadId};
 use similar::{DiffTag, TextDiff};
 
-use crate::core::{Core, CoreError, touched_inode};
+use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
 use crate::protocol::{MrDetails, MrSummary, Pulled};
 use crate::transcripts::native_entries;
 use crate::views::FileChange;
@@ -25,13 +25,17 @@ impl Core {
         if let Some(selector) = selector {
             return self.find_thread(selector);
         }
-        let cwd = cwd.canonicalize()?;
+        self.thread_checked_out_at(&CanonicalCwd::new(cwd)?)
+            .ok_or_else(|| CoreError::Invalid("no thread is checked out here; name one".into()))
+    }
+
+    /// The thread of the innermost checkout holding `cwd`.
+    pub(crate) fn thread_checked_out_at(&self, cwd: &CanonicalCwd) -> Option<ThreadId> {
         self.checkouts
             .values()
             .filter(|checkout| cwd.starts_with(&checkout.record.path))
             .max_by_key(|checkout| checkout.record.path.as_os_str().len())
             .map(|checkout| checkout.record.thread)
-            .ok_or_else(|| CoreError::Invalid("no thread is checked out here; name one".into()))
     }
 
     fn loaded_family(&self, thread: ThreadId) -> Result<(FamilyId, &Family), CoreError> {
@@ -309,7 +313,7 @@ impl Core {
                 Ok(format!("thread {} is now {visibility}; forks without a setting of their own follow it", thread.short(),))
             }
             None => {
-                let repo = silt_git::Repo::discover(&cwd.canonicalize()?)?;
+                let repo = silt_git::Repo::discover(&CanonicalCwd::new(cwd)?)?;
                 let identity = repo
                     .remote_url("origin")?
                     .map(|url| silt_git::normalize_remote(&url))

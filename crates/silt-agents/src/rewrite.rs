@@ -37,9 +37,10 @@ pub fn is_safe_id(id: &str) -> bool {
 }
 
 impl RecordedSession {
-    /// Refuses a session whose id, subagent names or side files would lead
-    /// outside its agent's session store.
-    pub fn check(&self) -> Result<(), AgentError> {
+    /// The session, once its id, subagent names and side files are known
+    /// to stay inside its agent's session store; only such a session is
+    /// restored.
+    pub fn checked(self) -> Result<CheckedSession, AgentError> {
         if !is_safe_id(&self.id) {
             return Err(AgentError::Unsafe("id"));
         }
@@ -49,7 +50,25 @@ impl RecordedSession {
         if self.attachments.iter().any(|(name, _)| !is_side_file_name(name)) {
             return Err(AgentError::Unsafe("side file"));
         }
-        Ok(())
+        Ok(CheckedSession(self))
+    }
+}
+
+/// A [`RecordedSession`] whose names are safe to write files under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedSession(RecordedSession);
+
+impl CheckedSession {
+    pub fn into_inner(self) -> RecordedSession {
+        self.0
+    }
+}
+
+impl std::ops::Deref for CheckedSession {
+    type Target = RecordedSession;
+
+    fn deref(&self) -> &RecordedSession {
+        &self.0
     }
 }
 
@@ -196,9 +215,9 @@ mod tests {
             attachments: vec![(attachment.to_owned(), Vec::new())],
             ..Default::default()
         };
-        assert!(session("s1", "agent-1", "tool-results/x.txt").check().is_ok());
-        assert!(session("../..", "agent-1", "x").check().is_err());
-        assert!(session("s1", "../x", "x").check().is_err());
-        assert!(session("s1", "agent-1", "../../.bashrc").check().is_err());
+        assert!(session("s1", "agent-1", "tool-results/x.txt").checked().is_ok());
+        assert!(session("../..", "agent-1", "x").checked().is_err());
+        assert!(session("s1", "../x", "x").checked().is_err());
+        assert!(session("s1", "agent-1", "../../.bashrc").checked().is_err());
     }
 }

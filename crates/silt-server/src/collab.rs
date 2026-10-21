@@ -14,7 +14,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
 use crate::visibility::Viewer;
-use crate::{ApiError, Caller, Server, bad_request, forbidden, id_bytes, id_from, not_found};
+use crate::{ApiError, Caller, Server, UserId, bad_request, forbidden, id_bytes, id_from, not_found};
 
 pub(crate) async fn share(
     State(server): State<Server>,
@@ -24,7 +24,7 @@ pub(crate) async fn share(
 ) -> Result<StatusCode, ApiError> {
     let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
     let db = server.db();
-    let owner: i64 = sqlx::query("SELECT owner_id FROM threads WHERE id = ?")
+    let owner: UserId = sqlx::query("SELECT owner_id FROM threads WHERE id = ?")
         .bind(id_bytes(thread.0))
         .fetch_optional(db)
         .await?
@@ -77,7 +77,7 @@ pub(crate) async fn collaborators(db: &SqlitePool) -> Result<HashMap<ThreadId, V
 ///   belong to whoever writes them.
 pub(crate) async fn admit(
     server: &Server,
-    user: i64,
+    user: UserId,
     family: FamilyId,
     deltas: Vec<&Delta>,
 ) -> Result<(Vec<Delta>, Vec<ActorId>), ApiError> {
@@ -91,26 +91,26 @@ pub(crate) async fn admit(
 #[derive(Default)]
 struct Ledger {
     /// The user whose devices own each actor, when one does.
-    actors: HashMap<ActorId, Option<i64>>,
+    actors: HashMap<ActorId, Option<UserId>>,
     threads: HashMap<ThreadId, Registered>,
 }
 
 struct Registered {
     family: u128,
-    owner: i64,
+    owner: UserId,
     /// Whether its owner shares it with the pushing user.
     shared: bool,
 }
 
 impl Ledger {
-    async fn load(db: &SqlitePool, user: i64, deltas: &[&Delta]) -> Result<Self, sqlx::Error> {
+    async fn load(db: &SqlitePool, user: UserId, deltas: &[&Delta]) -> Result<Self, sqlx::Error> {
         let mut ledger = Self::default();
         for actor in deltas.iter().map(|delta| delta.span.actor).collect::<HashSet<_>>() {
             let owner = sqlx::query("SELECT user_id FROM actor_owners WHERE actor = ?")
                 .bind(id_bytes(actor.0))
                 .fetch_optional(db)
                 .await?
-                .map(|row| row.get::<i64, _>("user_id"));
+                .map(|row| row.get::<UserId, _>("user_id"));
             ledger.actors.insert(actor, owner);
         }
         for thread in deltas.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
@@ -139,7 +139,7 @@ impl Ledger {
 /// The deltas of a push that `user` may add, and the actors to record as
 /// theirs.
 fn admission<'d>(
-    user: i64,
+    user: UserId,
     family: FamilyId,
     deltas: Vec<&'d Delta>,
     ledger: &Ledger,
@@ -180,7 +180,7 @@ fn admission<'d>(
 }
 
 /// Records `actors` as written by `user`'s devices.
-pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: i64, actors: &[ActorId]) -> Result<(), sqlx::Error> {
+pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: UserId, actors: &[ActorId]) -> Result<(), sqlx::Error> {
     for actor in actors {
         sqlx::query("INSERT INTO actor_owners (actor, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
             .bind(id_bytes(actor.0))
@@ -198,8 +198,8 @@ mod tests {
 
     use super::*;
 
-    const ME: i64 = 1;
-    const OTHER: i64 = 2;
+    const ME: UserId = UserId(1);
+    const OTHER: UserId = UserId(2);
     const FAMILY: FamilyId = FamilyId(7);
 
     fn delta(actor: u128, thread: u128, op: Op) -> Delta {
@@ -216,7 +216,7 @@ mod tests {
         delta(actor, thread, Op::Comment(CommentOp::Added { target, text: "nice".to_owned(), by: "me".to_owned() }))
     }
 
-    fn ledger(threads: Vec<(u128, u128, i64, bool)>) -> Ledger {
+    fn ledger(threads: Vec<(u128, u128, UserId, bool)>) -> Ledger {
         Ledger {
             actors: HashMap::from([(ActorId(1), Some(ME)), (ActorId(2), Some(OTHER)), (ActorId(3), None)]),
             threads: threads

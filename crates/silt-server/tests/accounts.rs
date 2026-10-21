@@ -624,7 +624,7 @@ async fn orgs_and_teams_decide_who_sees_a_project() {
         .await
         .expect("orgs");
     let acme_org = orgs.orgs.iter().find(|org| org.name == "acme").expect("bob sees acme");
-    assert_eq!(acme_org.role, "member");
+    assert_eq!(acme_org.role, silt_proto::OrgRole::Member);
     assert_eq!(acme_org.projects, vec!["github.com/acme/app".to_owned()]);
     assert_eq!(acme_org.teams[0].members, vec!["alice".to_owned()]);
     let carol_orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs"))

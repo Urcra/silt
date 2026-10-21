@@ -14,8 +14,7 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, Capture, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, SessionIds,
-    Start,
+    Agent, AgentError, Capture, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Rewrites, SessionIds, Start,
 };
 
 pub const AGENT: &str = "opencode";
@@ -159,7 +158,7 @@ impl Reader for OpenCodeReader {
 
 /// The export restoring `session` imports. A fork's records get ids of
 /// their own, as OpenCode keeps one copy of each id.
-pub fn restored_export(root: &Path, cwd: &Path, session: &RecordedSession) -> Value {
+pub fn restored_export(root: &Path, cwd: &Path, session: &CheckedSession) -> Value {
     let mut rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
     if !session.former_ids.contains(&session.id) {
         for id in record_ids(&session.main) {
@@ -314,7 +313,7 @@ impl Agent for OpenCode {
         forked_id(from, &crate::now_ms().to_string())
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let export = restored_export(root, cwd, session);
         let mut file = tempfile::Builder::new().prefix("silt-opencode-").suffix(".json").tempfile()?;
         io::Write::write_all(&mut file, export.to_string().as_bytes())?;

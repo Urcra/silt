@@ -359,11 +359,17 @@ pub fn orgs() -> Result<(), Exn<CliError>> {
     let reply = runtime()?.block_on(remote.orgs()).map_err(|error| fail(error.to_string()))?;
     for org in reply.orgs {
         println!("{} ({}; new projects default to {})", org.name, org.role, org.default_visibility);
-        let members: Vec<String> = org
-            .members
-            .iter()
-            .map(|member| if member.role == "owner" { format!("{} (owner)", member.user) } else { member.user.clone() })
-            .collect();
+        let members: Vec<String> =
+            org.members
+                .iter()
+                .map(|member| {
+                    if member.role == silt_proto::OrgRole::Owner {
+                        format!("{} (owner)", member.user)
+                    } else {
+                        member.user.clone()
+                    }
+                })
+                .collect();
         println!("  members: {}", members.join(", "));
         for team in &org.teams {
             println!("  team {}: {}", team.name, team.members.join(", "));

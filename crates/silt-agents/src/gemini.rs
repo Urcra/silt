@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role,
-    SessionIds, Start, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
+    Start, Write, translated_text,
 };
 
 pub const AGENT: &str = "gemini-cli";
@@ -138,7 +138,7 @@ pub fn discover_in(gemini: &Path, cwd: &Path, since_ms: i64, known: &[String]) -
 
 /// Writes `session` where the `.gemini` directory `gemini` finds it for
 /// `cwd`, with its subagents' sessions.
-pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
     let dir = claim_chats_dir(gemini, cwd)?;
     let existing = session_files(&dir).into_iter().find(|path| file_session_id(path).as_deref() == Some(&*session.id));
     let restore = plan_restore(&dir, existing, root, cwd, session, crate::now_ms());
@@ -154,7 +154,7 @@ pub fn plan_restore(
     existing: Option<PathBuf>,
     root: &Path,
     cwd: &Path,
-    session: &RecordedSession,
+    session: &CheckedSession,
     now_ms: i64,
 ) -> Restore {
     let path = existing.unwrap_or_else(|| {
@@ -452,7 +452,7 @@ impl Agent for Gemini {
         discover_in(&gemini_dir()?, cwd, since_ms, known)
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let gemini = gemini_dir().ok_or(AgentError::NoHome)?;
         restore_into(&gemini, root, cwd, session)
     }
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn subagent_sessions_are_listed_and_restored_with_their_parent() {
         let gemini = tempfile::tempdir().expect("temp dir");
-        let session = RecordedSession {
+        let session = crate::RecordedSession {
             id: "new-session".into(),
             former_ids: vec!["old-session".into()],
             former_cwds: vec!["/old/repo".into()],
@@ -631,7 +631,9 @@ mod tests {
                 vec![r#"{"sessionId":"helper-1","kind":"subagent","directories":["/old/repo"]}"#.into()],
             )],
             ..Default::default()
-        };
+        }
+        .checked()
+        .expect("safe");
         let main = restore_into(gemini.path(), Path::new("/new"), Path::new("/new/repo"), &session).expect("restores");
         let side = Gemini.side_transcripts(&main);
         assert_eq!(side.len(), 1);

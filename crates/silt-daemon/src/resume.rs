@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use silt_agents::{Agent, Entry, RecordedSession, Rewrites, SessionIds, Transcripts, render_transcript};
+use silt_agents::{Agent, CheckedSession, Entry, RecordedSession, Rewrites, SessionIds, Transcripts, render_transcript};
 use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, LogError, Op, SessionFile, SessionRef};
@@ -9,7 +9,7 @@ use silt_store::{CheckoutId, ThreadRecord};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
-use crate::core::{Core, CoreError, RepoBases, now_ms};
+use crate::core::{CanonicalCwd, Core, CoreError, RepoBases, now_ms};
 use crate::disk;
 use crate::protocol::{AgentStart, Resumed};
 use crate::remote::Remote;
@@ -80,7 +80,7 @@ impl Core {
     /// the base commit.
     async fn prepare_thread(&mut self, thread: ThreadId, cwd: &Path, here: bool) -> Result<(Repo, Option<GitOid>), CoreError> {
         let record = self.threads[&thread].clone();
-        let cwd = cwd.canonicalize()?;
+        let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
         let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
         if identity != record.repo {
@@ -406,8 +406,9 @@ impl Core {
             .expect("attached above");
         if target.id() == source.id() {
             let recorded = self.recorded_session(&history, &session, as_fork, target).await?;
-            recorded.check().map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
+            let recorded = recorded.checked().map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
+            let recorded = recorded.into_inner();
             let new_id = recorded.id.clone();
             self.register_session(NewSession {
                 agent: target,
@@ -435,7 +436,9 @@ impl Core {
         let new_id = uuid::Uuid::now_v7().to_string();
         if let Some(lines) = target.translate(&entries, &agent_cwd, &new_id) {
             let lines = self.relocate_side_files(&history, &session, source, &new_id, lines).await?;
-            let recorded = RecordedSession { id: new_id.clone(), main: lines.clone(), ..Default::default() };
+            let recorded = RecordedSession { id: new_id.clone(), main: lines.clone(), ..Default::default() }
+                .checked()
+                .map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             // Blobs reach the server as they are, so secrets go first.
             let (redacted, found) = self.redactor.replace_found(&lines.join("\n"));
@@ -575,7 +578,7 @@ impl Core {
 
 /// Writes a session into the agent's own store, off the event loop: a long
 /// transcript, or OpenCode's import, takes a while.
-async fn restore(agent: &'static dyn Agent, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, CoreError> {
+async fn restore(agent: &'static dyn Agent, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, CoreError> {
     let (root, cwd, session) = (root.to_owned(), cwd.to_owned(), session.clone());
     tokio::task::spawn_blocking(move || agent.restore(&root, &cwd, &session))
         .await?

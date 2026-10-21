@@ -386,7 +386,7 @@ pub struct SearchResult {
     #[serde(default)]
     pub owner: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
+    pub status: Option<silt_proto::ThreadStatus>,
     #[serde(default)]
     pub repo: Option<String>,
 }
@@ -396,7 +396,7 @@ pub struct SearchResult {
 pub struct SearchFilters {
     pub repo: Option<String>,
     pub author: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<silt_proto::ThreadStatus>,
     pub branch: Option<String>,
     pub file: Option<String>,
     pub since: Option<i64>,
@@ -615,8 +615,7 @@ pub struct LiveState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStatus {
     pub agent: String,
-    /// `starting`, `ready`, `working` or `exited`.
-    pub state: String,
+    pub state: silt_proto::AgentState,
     /// What the agent is saying or thinking right now, not recorded yet.
     pub streaming: String,
     pub thinking: String,

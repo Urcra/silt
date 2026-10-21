@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
 use crate::{
-    Agent, AgentError, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds,
+    Agent, AgentError, Capture, CheckedSession, Found, Launch, LaunchPlan, Read, Reader, Restore, Rewrites, Role, SessionIds,
     Start, Stateless, Write, translated_text,
 };
 
@@ -55,14 +55,14 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
 /// it, rewriting every former session directory, working directory and
 /// session id to the new ones (docs/research/probes.md).
-pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<SessionPaths, AgentError> {
+pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<SessionPaths, AgentError> {
     let paths = session_paths(config_dir, cwd, &session.id);
     plan_restore(&paths, root, cwd, session).apply()?;
     Ok(paths)
 }
 
 /// The files restoring `session` at `paths` writes.
-pub fn plan_restore(paths: &SessionPaths, root: &Path, cwd: &Path, session: &RecordedSession) -> Restore {
+pub fn plan_restore(paths: &SessionPaths, root: &Path, cwd: &Path, session: &CheckedSession) -> Restore {
     let rewrites =
         Rewrites::new(session, Some(&paths.session_dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
     let mut restore = Restore {
@@ -217,7 +217,7 @@ impl Agent for ClaudeCode {
             })
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let config = config_dir().ok_or(AgentError::NoHome)?;
         Ok(restore_into(&config, root, cwd, session)?.transcript)
     }
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn restore_relocates_the_session() {
         let config = tempfile::tempdir().expect("temp dir");
-        let session = RecordedSession {
+        let session = crate::RecordedSession {
             id: "abc".into(),
             former_ids: vec!["old".into()],
             former_cwds: vec!["/home/a/repo".into(), "/home/a/repo/.silt/checkouts/t".into()],
@@ -458,11 +458,10 @@ mod tests {
                 r#"{"result":"saved to /home/a/.claude/projects/-home-a-repo/abc/tool-results/t1.txt"}"#.to_owned(),
             ],
             subagents: vec![("agent-1".to_owned(), vec![r#"{"cwd":"/home/a/repo/src"}"#.to_owned()])],
-            attachments: vec![
-                ("tool-results/t1.txt".to_owned(), b"big output".to_vec()),
-                ("../escape.txt".to_owned(), b"no".to_vec()),
-            ],
-        };
+            attachments: vec![("tool-results/t1.txt".to_owned(), b"big output".to_vec())],
+        }
+        .checked()
+        .expect("safe");
         let paths =
             restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
@@ -474,7 +473,6 @@ mod tests {
             )
         );
         assert_eq!(fs::read(paths.tool_results.join("t1.txt")).expect("attachment"), b"big output");
-        assert!(!config.path().join("projects/-home-b-repo/escape.txt").exists());
         assert_eq!(
             fs::read_to_string(paths.subagents.join("agent-1.jsonl")).expect("subagent"),
             "{\"cwd\":\"/home/b/repo/src\"}\n"

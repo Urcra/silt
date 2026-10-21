@@ -64,9 +64,9 @@ proptest! {
         let config = root.path().join("claude");
         let outside = root.path().join("outside");
         fs::create_dir_all(&outside).expect("mkdir");
-        if session.check().is_err() {
+        let Ok(session) = session.checked() else {
             return Ok(());
-        }
+        };
         let restored = silt_agents::claude::restore_into(&config, Path::new("/new"), Path::new("/new/repo"), &session);
         prop_assert!(restored.is_ok(), "{:?}", restored);
         prop_assert!(files_under(&outside).is_empty());

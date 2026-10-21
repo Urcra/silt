@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::attribution;
-use crate::core::{Core, CoreError, Event, now_ms, to_response};
+use crate::core::{CanonicalCwd, Core, CoreError, Event, now_ms, to_response};
 use crate::protocol::{HookReply, Response, SessionStarted};
 
 /// How long after a tool finishes its file changes still count as its own;
@@ -205,7 +205,7 @@ impl Core {
         isolated: bool,
         already_ran: bool,
     ) -> Result<CreatedThread, CoreError> {
-        let cwd = cwd.canonicalize()?;
+        let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
         self.remember_clone(&cwd).await;
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();

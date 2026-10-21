@@ -14,7 +14,7 @@ use silt_types::DeviceId;
 use crate::accounts::{self, AccountError, NewUser, SignInState, User};
 use crate::config::SignupPolicy;
 use crate::sign_in;
-use crate::{Server, now_ms};
+use crate::{Server, UserId, now_ms};
 
 const SESSION_COOKIE: &str = "silt_session";
 
@@ -92,7 +92,7 @@ fn same_origin(server: &Server, headers: &HeaderMap) -> bool {
 }
 
 /// Starts a browser session for `user` and continues to `next`.
-async fn start_session(server: &Server, user: i64, next: &str) -> Response {
+async fn start_session(server: &Server, user: UserId, next: &str) -> Response {
     match accounts::user_by_id(server.db(), user).await {
         Ok(Some(user)) if !user.disabled => {}
         Ok(_) => return error_page(StatusCode::FORBIDDEN, "This account is disabled."),
@@ -536,7 +536,7 @@ async fn account_for(
     server: &Server,
     identity: &sign_in::Identity,
     invite: Option<&str>,
-) -> Result<Option<i64>, accounts::AccountError> {
+) -> Result<Option<UserId>, accounts::AccountError> {
     let db = server.db();
     if let Some(user) = accounts::identity_user(db, &identity.provider, &identity.subject).await? {
         return Ok(Some(user));

@@ -259,7 +259,7 @@ async fn search(State(web): State<Web>, Query(query): Query<HashMap<String, Stri
         filters: SearchFilters {
             repo: text("repo"),
             author: text("author"),
-            status: text("status"),
+            status: text("status").and_then(|status| status.parse().ok()),
             branch: text("branch"),
             file: text("file"),
             since: number("since"),

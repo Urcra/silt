@@ -135,7 +135,7 @@ enum Command {
         author: Option<String>,
         /// active, idle or merged
         #[arg(long)]
-        status: Option<String>,
+        status: Option<silt_proto::ThreadStatus>,
         #[arg(long)]
         branch: Option<String>,
         /// Threads that changed this file, or anything under this directory

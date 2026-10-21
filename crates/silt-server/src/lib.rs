@@ -20,7 +20,7 @@ use silt_proto::{
     DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, FamilyInfo, GENERATION_HEADER,
     InFlightQuery, InFlightReply, InFlightThread, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
     PasswordLoginRequest, PullReply, PushReply, PushRequest, RegisterThread, SearchHit, SearchQuery, SearchReply, ThreadInfo,
-    VisibilityRequest,
+    ThreadStatus, VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -154,7 +154,7 @@ struct Shared {
     waiters: Waiters,
     index: Mutex<Index>,
     /// Each user's latest visibility snapshot, with when it was taken.
-    viewers: Mutex<HashMap<i64, (VisibilityAt, Arc<Viewer>)>>,
+    viewers: Mutex<HashMap<UserId, (VisibilityAt, Arc<Viewer>)>>,
     viewer_serial: std::sync::atomic::AtomicU64,
     data_dir: std::path::PathBuf,
     config: Config,
@@ -371,11 +371,22 @@ pub(crate) fn not_found() -> ApiError {
     ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound)
 }
 
+/// A user's row in the server's database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, sqlx::Type)]
+#[sqlx(transparent)]
+pub struct UserId(pub i64);
+
+impl std::fmt::Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// The authenticated device and the user it belongs to.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Caller {
     device: DeviceId,
-    user: i64,
+    user: UserId,
 }
 
 pub(crate) enum FamilyAccess {
@@ -385,7 +396,7 @@ pub(crate) enum FamilyAccess {
     Hidden,
 }
 
-pub(crate) async fn family_access(server: &Server, family: FamilyId, user: i64) -> Result<FamilyAccess, ApiError> {
+pub(crate) async fn family_access(server: &Server, family: FamilyId, user: UserId) -> Result<FamilyAccess, ApiError> {
     let row = sqlx::query("SELECT owner_id FROM families WHERE id = ?")
         .bind(id_bytes(family.0))
         .fetch_optional(&server.shared.db)
@@ -460,7 +471,7 @@ async fn login(State(server): State<Server>, Json(body): Json<LoginRequest>) -> 
     let Some(code) = code else {
         return Err(ApiError(StatusCode::UNAUTHORIZED, ErrorReply::Unauthorized));
     };
-    let user: i64 = code.get("user_id");
+    let user: UserId = code.get("user_id");
     Ok(Json(accounts::issue_device(db, user, &body.name).await?))
 }
 
@@ -596,7 +607,7 @@ async fn take_lease(
     if !server.viewer(caller.user).await?.sees_thread(thread) {
         return Err(not_found());
     }
-    if row.get::<i64, _>("owner_id") != caller.user {
+    if row.get::<UserId, _>("owner_id") != caller.user {
         return Err(forbidden("this thread belongs to another user; fork it to continue the work"));
     }
     let row = sqlx::query(
@@ -830,7 +841,7 @@ async fn search(
     .bind(query.since)
     .bind(query.until)
     .bind(query.file.as_deref().map(|file| file.trim_end_matches('/')))
-    .bind(&query.status)
+    .bind(query.status.map(ThreadStatus::as_str))
     .bind(visible)
     .bind(limit)
     .fetch_all(&server.shared.db)
@@ -841,7 +852,7 @@ async fn search(
             thread: ThreadId(id_from(row.get("thread_id"))),
             repo: row.get("repo"),
             owner: row.get("owner"),
-            status: row.get("status"),
+            status: thread_status(row.get("status")),
             branch: row.get("branch"),
             kind: row.get("kind"),
             snippet: row.get("snippet"),
@@ -890,7 +901,7 @@ async fn in_flight(
             None => threads.push(InFlightThread {
                 thread,
                 owner: row.get("owner"),
-                status: row.get("status"),
+                status: thread_status(row.get("status")),
                 paths: vec![path],
                 last_ms: row.get("last_ms"),
             }),
@@ -984,7 +995,7 @@ impl Server {
 
     /// What `user` can see right now: the snapshot taken since nothing it is
     /// worked out from last changed, else a new one.
-    async fn viewer(&self, user: i64) -> Result<Arc<Viewer>, sqlx::Error> {
+    async fn viewer(&self, user: UserId) -> Result<Arc<Viewer>, sqlx::Error> {
         let epoch: i64 = sqlx::query_scalar("SELECT value FROM visibility_epoch").fetch_one(&self.shared.db).await?;
         let key = VisibilityAt { epoch, forks: self.shared.index.lock().await.forks_version };
         let cached =
@@ -1076,6 +1087,11 @@ impl Drop for Waiter<'_> {
             waiters.remove(&self.family);
         }
     }
+}
+
+/// The status the search and in-flight queries work out in SQL.
+fn thread_status(text: &str) -> ThreadStatus {
+    text.parse().unwrap_or(ThreadStatus::Idle)
 }
 
 pub(crate) fn hash(text: &str) -> [u8; 32] {

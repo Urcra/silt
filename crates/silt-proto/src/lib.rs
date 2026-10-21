@@ -252,8 +252,7 @@ pub struct SearchQuery {
     pub repo: Option<String>,
     /// The owning user's name.
     pub author: Option<String>,
-    /// `active`, `idle` or `merged`.
-    pub status: Option<String>,
+    pub status: Option<ThreadStatus>,
     pub branch: Option<String>,
     /// A path, or a directory to match everything under it.
     pub file: Option<String>,
@@ -268,7 +267,7 @@ pub struct SearchHit {
     pub thread: ThreadId,
     pub repo: String,
     pub owner: String,
-    pub status: String,
+    pub status: ThreadStatus,
     pub branch: Option<String>,
     pub kind: String,
     pub snippet: String,
@@ -292,7 +291,7 @@ pub struct InFlightQuery {
 pub struct InFlightThread {
     pub thread: ThreadId,
     pub owner: String,
-    pub status: String,
+    pub status: ThreadStatus,
     pub paths: Vec<String>,
     pub last_ms: i64,
 }
@@ -338,9 +337,7 @@ mod tests {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrgInfo {
     pub name: String,
-    /// The caller's role: `owner`, `member`, or `admin` for a server admin
-    /// outside the org.
-    pub role: String,
+    pub role: OrgRole,
     pub default_visibility: Visibility,
     pub members: Vec<OrgMember>,
     pub teams: Vec<TeamInfo>,
@@ -350,7 +347,107 @@ pub struct OrgInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrgMember {
     pub user: String,
-    pub role: String,
+    pub role: OrgRole,
+}
+
+/// How a thread stands, for search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadStatus {
+    /// Changed lately.
+    Active,
+    Idle,
+    /// Merged into the thread it was forked from.
+    Merged,
+}
+
+impl ThreadStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Idle => "idle",
+            Self::Merged => "merged",
+        }
+    }
+}
+
+impl std::fmt::Display for ThreadStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ThreadStatus {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "active" => Ok(Self::Active),
+            "idle" => Ok(Self::Idle),
+            "merged" => Ok(Self::Merged),
+            other => Err(format!("a thread's status is active, idle or merged, not {other:?}")),
+        }
+    }
+}
+
+/// What an agent the web UI started is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentState {
+    Starting,
+    Ready,
+    Working,
+    Exited,
+}
+
+impl std::fmt::Display for AgentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Working => "working",
+            Self::Exited => "exited",
+        })
+    }
+}
+
+/// Someone's place in an org.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrgRole {
+    Owner,
+    Member,
+    /// A server admin outside the org, who may still change it.
+    Admin,
+}
+
+impl OrgRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+            Self::Admin => "admin",
+        }
+    }
+}
+
+impl std::fmt::Display for OrgRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for OrgRole {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            "admin" => Ok(Self::Admin),
+            other => Err(format!("unknown org role {other:?}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,7 +561,7 @@ pub struct PresenceUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentActivity {
     pub name: String,
-    pub state: String,
+    pub state: AgentState,
     /// What it is saying right now, not recorded yet.
     #[serde(default)]
     pub streaming: String,
