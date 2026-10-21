@@ -7,7 +7,7 @@ use silt_crdt::InodeId;
 use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
 use silt_proto::{Listing, Visibility};
-use silt_redact::{Overlay, Redactor};
+use silt_redact::Redactor;
 use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
 use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
@@ -154,9 +154,9 @@ pub struct Core {
     /// made before aren't taken as answers to new ones.
     pub(crate) sync_epochs: HashMap<FamilyId, u64>,
     pub(crate) redactor: Redactor,
-    /// The secrets this machine knows, put back into what arrives redacted
-    /// (ADR 0015).
-    pub(crate) overlay: Overlay,
+    /// Secrets already remembered in the store, which keeps redacting them
+    /// after they leave the environment (ADR 0019).
+    pub(crate) known_secrets: HashSet<String>,
     pub(crate) last_listing: Option<Instant>,
     pub(crate) sync_error: Option<String>,
     /// The HEAD commit each checkout was last seen at.
@@ -220,7 +220,7 @@ impl Core {
             syncs: HashMap::new(),
             sync_epochs: HashMap::new(),
             redactor: redactor(data_dir),
-            overlay: Overlay::default(),
+            known_secrets: HashSet::new(),
             last_listing: None,
             sync_error: None,
             heads: HashMap::new(),
@@ -234,12 +234,12 @@ impl Core {
             core.threads.insert(thread.id, thread);
         }
         core.deleted = core.store.deleted_threads().await?.into_iter().collect();
-        // The overlay's secrets are redacted too, so deltas recorded while a
+        // Remembered secrets are redacted too, so deltas recorded while a
         // secret was in the environment stay redacted after it's gone.
         let stored = core.store.secrets().await?;
         core.store.learn_secrets(core.redactor.secrets()).await?;
         core.redactor = core.redactor.clone().with(stored.iter().cloned());
-        core.overlay = Overlay::new(stored.into_iter().chain(core.redactor.secrets().iter().cloned()));
+        core.known_secrets = stored.into_iter().chain(core.redactor.secrets().iter().cloned()).collect();
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
@@ -643,13 +643,7 @@ impl Core {
                 Err(error) => DiskContent::Blob(self.store.blobs().put(error.as_bytes()).await?),
             }
         } else {
-            // Too large to merge as text, yet text all the same: its secrets
-            // are masked before it can leave the machine, like any edit's.
-            let bytes = match std::str::from_utf8(&raw.bytes) {
-                Ok(text) => self.redactor.mask_text(text).into_bytes(),
-                Err(_) => raw.bytes.clone(),
-            };
-            DiskContent::Blob(self.store.blobs().put(&bytes).await?)
+            DiskContent::Blob(self.store.blobs().put(&raw.bytes).await?)
         };
         let checkout = self.checkout(checkout)?;
         let executable = if checkout.repo.tracks_file_mode() {
@@ -1219,24 +1213,9 @@ impl Core {
         })
     }
 
-    /// Whether this machine's secrets go back into `delta` (ADR 0015, 0016):
-    /// only into what this user's own devices could have written. A thread
-    /// is written by its owner and collaborators only, so that means one of
-    /// this user's threads without collaborators, and never a comment, which
-    /// anyone who sees the thread may add. Otherwise someone could plant a
-    /// placeholder and have this machine fill in the secret for them.
-    pub(crate) fn reveals(&self, delta: &Delta) -> bool {
-        if matches!(delta.op, Op::Comment(_)) {
-            return false;
-        }
-        let me = self.own_user();
-        self.threads.get(&delta.thread).is_some_and(|thread| thread.owner == me)
-            && self.collaborators.get(&delta.thread).is_none_or(Vec::is_empty)
-    }
-
-    /// Adds secrets just redacted to the overlay, here and in the store.
+    /// Remembers secrets just redacted, so they stay redacted (ADR 0019).
     pub(crate) fn learn_secrets(&mut self, found: Vec<String>) {
-        let new: Vec<String> = found.into_iter().filter(|secret| self.overlay.learn(secret.clone())).collect();
+        let new: Vec<String> = found.into_iter().filter(|secret| self.known_secrets.insert(secret.clone())).collect();
         if new.is_empty() {
             return;
         }

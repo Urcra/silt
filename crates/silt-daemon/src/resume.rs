@@ -535,7 +535,7 @@ impl Core {
             ..Default::default()
         };
         let mut subagents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut attachments: BTreeMap<String, (BlobHash, bool)> = BTreeMap::new();
+        let mut attachments: BTreeMap<String, BlobHash> = BTreeMap::new();
         for part in &lineage {
             for delta in history {
                 match &delta.op {
@@ -548,7 +548,6 @@ impl Core {
                     }
                     Op::Conv(ConvOp::SessionTranslated { session: from, lines }) if from == part => {
                         let text = String::from_utf8_lossy(&self.blob(*lines).await?).into_owned();
-                        let text = if self.reveals(delta) { self.overlay.reveal_json(&text) } else { text };
                         recorded.main.extend(text.lines().map(str::to_owned));
                     }
                     Op::Conv(ConvOp::Native { session: from, file, line }) if from == part => match file {
@@ -556,7 +555,7 @@ impl Core {
                         SessionFile::Subagent(name) => subagents.entry(name.clone()).or_default().push(line.clone()),
                     },
                     Op::Conv(ConvOp::Attachment { session: from, name, blob }) if from == part => {
-                        attachments.insert(name.clone(), (*blob, self.reveals(delta)));
+                        attachments.insert(name.clone(), *blob);
                     }
                     _ => {}
                 }
@@ -567,14 +566,8 @@ impl Core {
             former.dedup();
         }
         recorded.subagents = subagents.into_iter().collect();
-        for (name, (blob, reveals)) in attachments {
-            let bytes = self.blob(blob).await?;
-            let bytes = match String::from_utf8(bytes) {
-                Ok(text) if reveals => self.overlay.reveal(&text).into_bytes(),
-                Ok(text) => text.into_bytes(),
-                Err(error) => error.into_bytes(),
-            };
-            recorded.attachments.push((name, bytes));
+        for (name, blob) in attachments {
+            recorded.attachments.push((name, self.blob(blob).await?));
         }
         Ok(recorded)
     }

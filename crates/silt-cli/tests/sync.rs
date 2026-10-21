@@ -93,30 +93,17 @@ fn a_thread_continues_on_another_machine() {
     );
     assert!(!fs::read_to_string(laptop.repo.join("src/main.rs")).expect("read").contains("fn home"));
 
-    // A machine that knows the token from its secrets file sees it again.
+    // Knowing the token puts nothing back (ADR 0019).
     let desk_home = world.root.path().join("desk").join("silt");
     fs::create_dir_all(&desk_home).expect("mkdir");
     fs::write(desk_home.join("secrets"), format!("# deploy token\n{token}\n")).expect("write");
     let desk = Machine::new(world.root.path(), "desk", &world.root.path().join("origin.git"), &world.server);
     assert!(
-        eventually(|| desk.try_stdout(&["show", &thread]).contains(&format!("I used {token} to fetch it"))),
+        eventually(|| desk.try_stdout(&["show", &thread]).contains(&silt_redact::placeholder(token))),
         "{}",
         desk.try_stdout(&["show", &thread])
     );
-    assert!(!dir_contains(&world.server.data, token.as_bytes()), "secrets stay off the server");
-
-    // Someone else who happens to know the token gets nothing filled in: a
-    // placeholder from another person may be planted (ADR 0016).
-    let eve_home = world.root.path().join("eve").join("silt");
-    fs::create_dir_all(&eve_home).expect("mkdir");
-    fs::write(eve_home.join("secrets"), format!("{token}\n")).expect("write");
-    let eve = Machine::new_for(world.root.path(), "eve", "eve", &world.root.path().join("origin.git"), &world.server);
-    assert!(
-        eventually(|| eve.try_stdout(&["show", &thread]).contains(&silt_redact::placeholder(token))),
-        "{}",
-        eve.try_stdout(&["show", &thread])
-    );
-    assert!(!eve.stdout(&["show", &thread]).contains(token));
+    assert!(!desk.stdout(&["show", &thread]).contains(token));
 }
 
 #[test]

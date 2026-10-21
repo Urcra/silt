@@ -276,7 +276,8 @@ impl Store {
         Ok(())
     }
 
-    /// Adds secrets to this machine's overlay (ADR 0015).
+    /// Remembers secrets this machine redacts, so they stay redacted after
+    /// they leave its environment (ADR 0019).
     pub async fn learn_secrets(&self, secrets: &[String]) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         for secret in secrets {
