@@ -323,11 +323,11 @@ impl Core {
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
-            Request::OpenWeb { cwd } => {
+            Request::OpenWeb { cwd, once } => {
                 if let Some(cwd) = cwd {
                     self.remember_clone(&cwd).await;
                 }
-                to_response(self.open_web().await)
+                to_response(self.open_web(once).await)
             }
             Request::HistoryRead { thread, offset, limit } => {
                 to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
@@ -1130,12 +1130,14 @@ impl Core {
         });
     }
 
-    /// The web UI's URL, starting it first if needed.
-    async fn open_web(&mut self) -> Result<String, CoreError> {
+    /// The web UI's URL, starting it first if needed; with `once`, one that
+    /// works a single time, to hand to another program.
+    async fn open_web(&mut self, once: bool) -> Result<String, CoreError> {
         if self.web.is_none() {
             self.web = Some(crate::web::start(self.events.clone()).await?);
         }
-        Ok(self.web.as_ref().expect("started above").url())
+        let web = self.web.as_ref().expect("started above");
+        Ok(if once { web.one_time_url() } else { web.url() })
     }
 
     /// The actor for this daemon's own deltas in one thread. Threads of a

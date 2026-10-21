@@ -90,6 +90,10 @@ pub enum Request {
         /// be opened from the web UI even when they started elsewhere.
         #[serde(default)]
         cwd: Option<PathBuf>,
+        /// A URL that works once, for a browser's command line, where other
+        /// users could read a lasting token.
+        #[serde(default)]
+        once: bool,
     },
     /// The turns that changed a file of the thread.
     FileHistory { thread: String, path: String },

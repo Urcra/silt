@@ -6,7 +6,6 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use exn::{Exn, ResultExt};
@@ -281,17 +280,7 @@ fn save(config: &RemoteConfig) -> Result<(), Exn<CliError>> {
 
 /// Tries to open `url` in a browser; the URL is printed either way.
 fn open_browser(url: &str) {
-    for opener in ["xdg-open", "wslview", "open"] {
-        let opened = Command::new(opener)
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if opened.is_ok_and(|status| status.success()) {
-            return;
-        }
-    }
+    crate::commands::open_in_browser(url);
 }
 
 pub struct LoginOptions {

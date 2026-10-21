@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request as HttpRequest, State};
@@ -29,18 +31,37 @@ struct Web {
     events: mpsc::UnboundedSender<Event>,
     token: String,
     port: u16,
+    codes: OneTimeCodes,
 }
+
+/// Codes that each stand in for the token once, shortly. Shared between the
+/// daemon, which hands them out, and the web server, which trades them in.
+type OneTimeCodes = Arc<Mutex<HashMap<String, Instant>>>;
+
+/// How long a one-time code may wait for its browser.
+const CODE_TTL: Duration = Duration::from_secs(60);
 
 /// A running web UI.
 #[derive(Debug, Clone)]
 pub(crate) struct WebInfo {
     pub(crate) port: u16,
     pub(crate) token: String,
+    codes: OneTimeCodes,
 }
 
 impl WebInfo {
     pub(crate) fn url(&self) -> String {
         format!("http://127.0.0.1:{}/#token={}", self.port, self.token)
+    }
+
+    /// A URL for a browser's command line, which other users can read: it
+    /// carries a code the page trades for the token once, within a minute.
+    pub(crate) fn one_time_url(&self) -> String {
+        let code = uuid::Uuid::new_v4().simple().to_string();
+        let mut codes = self.codes.lock().expect("lock");
+        codes.retain(|_, made| made.elapsed() < CODE_TTL);
+        codes.insert(code.clone(), Instant::now());
+        format!("http://127.0.0.1:{}/#code={code}", self.port)
     }
 }
 
@@ -50,10 +71,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let codes = OneTimeCodes::default();
     let web = Web {
         events,
         token: token.clone(),
         port,
+        codes: codes.clone(),
     };
     let api = Router::new()
         .route("/api/status", get(status))
@@ -83,6 +106,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
         .route("/api/mrs/{id}/decline", post(decline))
         .layer(middleware::from_fn_with_state(web.clone(), authenticate));
     let app = api
+        .route("/api/exchange", post(exchange))
         .fallback(asset)
         .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
         .with_state(web);
@@ -91,7 +115,27 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
             tracing::warn!(%error, "the web UI stopped");
         }
     });
-    Ok(WebInfo { port, token })
+    Ok(WebInfo { port, token, codes })
+}
+
+#[derive(Deserialize)]
+struct Exchange {
+    code: String,
+}
+
+/// Trades a one-time code from `silt open` for the token.
+async fn exchange(State(web): State<Web>, Json(body): Json<Exchange>) -> HttpResponse {
+    let fresh = web
+        .codes
+        .lock()
+        .expect("lock")
+        .remove(&body.code)
+        .is_some_and(|made| made.elapsed() < CODE_TTL);
+    if fresh {
+        Json(json!({ "token": web.token })).into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, Json(json!({"error": "this link was used already or is too old; run `silt open` again"}))).into_response()
+    }
 }
 
 /// Refuses requests addressed to any other host, so a web page elsewhere
@@ -428,6 +472,20 @@ async fn decline(State(web): State<Web>, Path(mr): Path<String>, body: Option<Js
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_one_time_code_gives_the_token_once() {
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let codes = OneTimeCodes::default();
+        let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
+        let web = Web { events, token: info.token.clone(), port: 1, codes };
+        let url = info.one_time_url();
+        assert!(!url.contains("secret"), "{url}");
+        let code = url.split("code=").nth(1).expect("a code").to_owned();
+        let trade = || exchange(State(web.clone()), Json(Exchange { code: code.clone() }));
+        assert_eq!(trade().await.status(), StatusCode::OK);
+        assert_eq!(trade().await.status(), StatusCode::UNAUTHORIZED, "a code works once");
+    }
 
     #[test]
     fn tokens_match_only_exactly() {

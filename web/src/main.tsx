@@ -4,10 +4,10 @@ import './index.css'
 import App from './App.tsx'
 import { takeTokenFromUrl } from './api'
 
-takeTokenFromUrl()
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+void takeTokenFromUrl().finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+})

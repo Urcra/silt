@@ -1,14 +1,26 @@
 // Talks to the daemon that served this page (ADR 0011). The token arrives
-// once in the URL fragment from `silt open` and is kept for the tab.
+// once in the URL fragment from `silt open`, or is traded for the one-time
+// code a browser opened by `silt open` carries, and is kept for the tab.
 
 const TOKEN_KEY = 'silt-token'
 
-export function takeTokenFromUrl(): void {
-  const match = window.location.hash.match(/token=([0-9a-f]+)/)
-  if (match) {
-    sessionStorage.setItem(TOKEN_KEY, match[1])
-    window.location.hash = '#/'
+export async function takeTokenFromUrl(): Promise<void> {
+  const token = window.location.hash.match(/token=([0-9a-f]+)/)
+  const code = window.location.hash.match(/code=([0-9a-f]+)/)
+  if (token) {
+    sessionStorage.setItem(TOKEN_KEY, token[1])
+  } else if (code) {
+    const response = await fetch('/api/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code[1] }),
+    })
+    if (response.ok) {
+      const { token } = (await response.json()) as { token: string }
+      sessionStorage.setItem(TOKEN_KEY, token)
+    }
   }
+  if (token || code) window.location.hash = '#/'
 }
 
 export class ApiError extends Error {}

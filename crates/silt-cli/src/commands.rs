@@ -643,26 +643,33 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
 
 pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
+    // A browser's arguments are visible to other users, so it gets an
+    // address that works once rather than one with the lasting token.
     let url: String = call(&Request::OpenWeb {
         cwd: env::current_dir().ok(),
+        once: !no_browser,
     })?;
     println!("{url}");
-    if !no_browser {
-        // `wslview` opens the Windows browser from WSL; the others are the
-        // usual desktop openers.
-        let opened = ["xdg-open", "wslview", "open"].iter().any(|opener| {
-            Command::new(opener)
-                .arg(&url)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        });
-        if !opened {
-            eprintln!("silt: could not open a browser; open the address above");
-        }
+    if !no_browser && !open_in_browser(&url) {
+        eprintln!("silt: could not open a browser; open the address above within a minute");
     }
     Ok(())
+}
+
+/// Opens `url` with the desktop's opener. `wslview` opens the Windows
+/// browser from WSL. `open` is only tried on macOS: elsewhere it can be
+/// another program entirely, such as Debian's `openvt`.
+pub fn open_in_browser(url: &str) -> bool {
+    let openers: &[&str] = if cfg!(target_os = "macos") { &["open"] } else { &["xdg-open", "wslview"] };
+    openers.iter().any(|opener| {
+        Command::new(opener)
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
 }
 
 pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
