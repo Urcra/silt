@@ -136,6 +136,31 @@ fn a_daemon_stopped_while_a_tool_runs_loses_nothing() {
 }
 
 #[test]
+fn a_hook_kept_waiting_too_long_is_recorded_by_the_next_one() {
+    let world = world();
+    let laptop = &world.laptop;
+    laptop.silt(&["daemon", "stop"]);
+    let marker = world.root.path().join("in-tool");
+    let agent = in_tool(laptop, &["claude"], &marker, &[("SILT_DAEMONLESS_CAPTURE", "1")]);
+    let holder = fs::OpenOptions::new().write(true).open(laptop.silt_home.join("capture.lock")).expect("opens");
+    holder.lock().expect("holds the capture lock, as a stopped writer would");
+    let_go(&marker);
+    let spooled = laptop.silt_home.join("spooled-hooks");
+    assert!(
+        eventually(|| fs::read_dir(&spooled).is_ok_and(|mut entries| entries.next().is_some())),
+        "the hook that waited too long left itself for later"
+    );
+    holder.unlock().expect("lets go");
+    let finished = agent.wait_with_output().expect("waits");
+    let stderr = String::from_utf8_lossy(&finished.stderr);
+    assert!(finished.status.success() && stderr.contains("recorded once it lets go"), "{stderr}");
+
+    let thread = thread_of(laptop);
+    recorded_once(laptop, &thread, "fn farewell() {}");
+    assert!(fs::read_dir(&spooled).expect("lists").next().is_none(), "nothing is left");
+}
+
+#[test]
 fn two_sessions_of_one_family_record_side_by_side_without_a_daemon() {
     let world = world();
     let laptop = &world.laptop;

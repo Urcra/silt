@@ -80,9 +80,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
     let capture_lock = CaptureLock::open(data_dir)?;
-    let turn = capture_lock.turn().await?;
+    // Without a turn, so hooks capturing meanwhile don't wait on a long
+    // load; what they store is taken in at the first turn.
     let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
-    drop(turn);
 
     if socket.exists() {
         fs::remove_file(socket)?;
@@ -117,6 +117,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         let _turn = capture_lock.turn().await?;
         if let Err(error) = core.catch_up_with_store().await {
             warn!(%error, "could not take in what was recorded without the daemon");
+        }
+        if let Err(error) = core.capture_spooled().await {
+            warn!(%error, "could not record a hook left for later");
         }
         match event {
             Event::Request(Request::Shutdown, reply) => {

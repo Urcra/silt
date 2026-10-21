@@ -229,6 +229,9 @@ impl Core {
         events: mpsc::UnboundedSender<Event>,
     ) -> Result<Self, CoreError> {
         let mut core = Self::open(store, actor, data_dir, events, true).await?;
+        // Before reading anything, as loading doesn't hold up other writers:
+        // catching up afterwards takes in what they stored meanwhile.
+        core.positions = core.store.positions().await?;
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
@@ -261,7 +264,6 @@ impl Core {
                 settled: true,
             });
         }
-        core.end_turn().await?;
         Ok(core)
     }
 

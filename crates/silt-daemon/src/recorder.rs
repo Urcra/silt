@@ -77,6 +77,7 @@ impl Recorder {
         }
         let _turn = turn_in_time(&self.lock).await?;
         self.core.catch_up_with_store().await?;
+        self.core.capture_spooled().await?;
         let stepped = self.core.record_step(self.thread).await;
         self.core.end_turn().await?;
         stepped
@@ -92,6 +93,7 @@ impl Recorder {
     pub async fn end(mut self) -> Result<(), CoreError> {
         let _turn = turn_in_time(&self.lock).await?;
         self.core.catch_up_with_store().await?;
+        self.core.capture_spooled().await?;
         self.core.end_session(self.thread).await?;
         self.core.end_turn().await
     }

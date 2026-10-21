@@ -30,23 +30,33 @@ pub struct Captured {
     pub reply: HookReply,
     /// The session's thread, when Silt records the session.
     pub thread: Option<String>,
+    /// Another writer kept its turn too long; the hook was left for the
+    /// next writer to capture.
+    pub deferred: bool,
 }
 
 /// Runs a hook's capture step in this process, without the daemon, for the
 /// data in `data_dir`.
 pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value) -> Result<Captured, CoreError> {
-    let input: HookInput = serde_json::from_value(input).map_err(CoreError::HookInput)?;
+    let parsed: HookInput = serde_json::from_value(input.clone()).map_err(CoreError::HookInput)?;
     let lock = CaptureLock::open(data_dir)?;
-    let _turn = turn_in_time(&lock).await?;
+    let _turn = match turn_in_time(&lock).await {
+        Err(CoreError::LockTimeout) => {
+            crate::spool::spool(data_dir, event, &input)?;
+            return Ok(Captured { deferred: true, ..Captured::default() });
+        }
+        turn => turn?,
+    };
     let store = Store::open(data_dir).await?;
-    let Some(record) = store.sessions().await?.into_iter().find(|record| record.session_id == input.session_id) else {
+    let Some(record) = store.sessions().await?.into_iter().find(|record| record.session_id == parsed.session_id) else {
         return Ok(Captured::default());
     };
     let thread = record.thread.to_string();
     let actor = crate::server::load_actor(data_dir)?;
     let mut core = Core::for_session(store, actor, data_dir, record).await?;
-    let reply = core.capture(event, &input).await?;
-    Ok(Captured { reply, thread: Some(thread) })
+    core.capture_spooled().await?;
+    let reply = core.capture(event, &parsed).await?;
+    Ok(Captured { reply, thread: Some(thread), deferred: false })
 }
 
 /// Waits for this process's turn at writing, for at most `TURN_WAIT`.

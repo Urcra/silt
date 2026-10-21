@@ -7,9 +7,9 @@
 use std::collections::HashSet;
 
 use silt_checkout::Bridge;
-use silt_log::Delta;
+use silt_log::{Applied, Delta};
 use silt_sync::ClientSync;
-use silt_types::{FamilyId, ThreadId};
+use silt_types::{DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, RepoBases, stored_entries};
@@ -32,9 +32,9 @@ impl Core {
                 continue;
             }
             let deltas = self.store.deltas_after(family_id, known.unwrap_or(-1)).await?;
-            self.take_in(family_id, known.is_none(), &deltas).await?;
+            let fresh = self.take_in(family_id, known.is_none(), deltas).await?;
             self.positions.insert(family_id, position);
-            grown.push((family_id, deltas));
+            grown.push((family_id, fresh));
         }
         // A checkout held already may have been given to another thread.
         for record in self.store.checkouts().await? {
@@ -88,8 +88,9 @@ impl Core {
     }
 
     /// Adds `deltas`, stored by another writer, to the family here, or loads
-    /// a family `new` to this daemon.
-    async fn take_in(&mut self, family_id: FamilyId, new: bool, deltas: &[Delta]) -> Result<(), CoreError> {
+    /// a family `new` to this daemon. Returns those it didn't hold yet: a
+    /// daemon loading without its turn may have read some already.
+    async fn take_in(&mut self, family_id: FamilyId, new: bool, deltas: Vec<Delta>) -> Result<Vec<Delta>, CoreError> {
         if new || !(self.families.contains_key(&family_id) || self.raw.contains_key(&family_id)) {
             let repo = self.family_repo(family_id).ok();
             let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
@@ -98,20 +99,25 @@ impl Core {
             self.syncs
                 .entry(family_id)
                 .or_insert_with(|| ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
-            return Ok(());
+            return Ok(Vec::new());
         }
         if let Some(raw) = self.raw.get_mut(&family_id) {
-            raw.extend_from_slice(deltas);
-            return Ok(());
+            let held: HashSet<DeltaId> = raw.iter().map(|delta| delta.span.first()).collect();
+            let fresh: Vec<Delta> = deltas.into_iter().filter(|delta| !held.contains(&delta.span.first())).collect();
+            raw.extend_from_slice(&fresh);
+            return Ok(fresh);
         }
         let repo = self.family_repo(family_id)?;
         let family = self.families.get_mut(&family_id).expect("checked above");
+        let mut fresh = Vec::new();
         for delta in deltas {
-            if let Err(error) = family.apply(delta.clone(), &mut RepoBases(&repo)) {
-                warn!(%error, "skipping a delta another writer stored that doesn't apply here");
+            match family.apply(delta.clone(), &mut RepoBases(&repo)) {
+                Ok(Applied::New) => fresh.push(delta),
+                Ok(Applied::AlreadyKnown) => {}
+                Err(error) => warn!(%error, "skipping a delta another writer stored that doesn't apply here"),
             }
         }
-        Ok(())
+        Ok(fresh)
     }
 
     /// Brings what this daemon keeps beside a family in line with the store
@@ -166,8 +172,8 @@ mod tests {
         family.delta(ActorId(2), THREAD, Author::User, 0, head, Op::Conv(ConvOp::Title(title.into())))
     }
 
-    #[tokio::test]
-    async fn what_another_writer_stored_is_taken_in_once() {
+    /// A store with one thread in a clone; the directories go with it.
+    async fn store_with_thread() -> (tempfile::TempDir, tempfile::TempDir, Store) {
         let (data, repo) = (tempfile::tempdir().expect("temp dir"), tempfile::tempdir().expect("temp dir"));
         assert!(Command::new("git").args(["init", "-q"]).current_dir(repo.path()).status().expect("git").success());
         let store = Store::open(data.path()).await.expect("opens");
@@ -180,6 +186,25 @@ mod tests {
             owner: String::new(),
         };
         store.create_thread(&thread).await.expect("thread");
+        (data, repo, store)
+    }
+
+    #[tokio::test]
+    async fn what_a_load_read_already_is_not_taken_in_again() {
+        let (data, _repo, store) = store_with_thread().await;
+        let early = titled(&[], "stored while the daemon loaded");
+        store.append_deltas(FAMILY, std::slice::from_ref(&early)).await.expect("appends");
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        // As if the load noted the store's positions before that was stored.
+        core.positions.insert(FAMILY, -1);
+        core.catch_up_with_store().await.expect("takes in");
+        assert_eq!(core.families[&FAMILY].log(), [early]);
+    }
+
+    #[tokio::test]
+    async fn what_another_writer_stored_is_taken_in_once() {
+        let (data, _repo, store) = store_with_thread().await;
         let (events, _inbox) = mpsc::unbounded_channel();
         let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
         core.catch_up_with_store().await.expect("nothing to take in");

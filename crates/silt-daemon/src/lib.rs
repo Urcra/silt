@@ -20,6 +20,7 @@ pub mod remote;
 mod resume;
 mod server;
 mod sessions;
+mod spool;
 mod sync;
 mod sync_once;
 mod transcripts;

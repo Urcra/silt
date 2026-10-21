@@ -544,6 +544,9 @@ fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
         .and_then(|runtime| runtime.block_on(silt_daemon::capture_here(&paths::data_dir(), event, input)));
     match captured {
         Ok(captured) => {
+            if captured.deferred {
+                eprintln!("silt: another process kept Silt's data busy; the {event} hook is recorded once it lets go");
+            }
             if let (Some(thread), "Stop") = (&captured.thread, event) {
                 push_in_background(thread);
             }
