@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
+pub mod view;
+
 /// 4: comment replies and requested changes (ADR 0025).
 pub const PROTOCOL: u32 = 4;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
