@@ -6,8 +6,10 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
 
-/// The protocol version answered when the client asks for none.
-const DEFAULT_PROTOCOL: &str = "2025-06-18";
+/// The protocol versions this server speaks, newest first.
+const SUPPORTED_PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+/// Most bytes of text one tool answer carries.
+const MAX_OUTPUT: usize = 64 * 1024;
 
 /// Runs the tools for the server.
 pub trait Backend {
@@ -118,20 +120,67 @@ pub fn tools() -> Value {
     ])
 }
 
-/// Serves newline-delimited JSON-RPC from `input` until it ends.
+/// Serves newline-delimited JSON-RPC from `input` until it ends. A line
+/// that isn't UTF-8 gets an error reply like any other unreadable message.
 pub fn serve(input: impl BufRead, mut output: impl Write, backend: &mut impl Backend) -> io::Result<()> {
-    for line in input.lines() {
+    for line in input.split(b'\n') {
         let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(response) = respond(&line, backend) else {
+        let response = match std::str::from_utf8(&line) {
+            Ok(line) if line.trim().is_empty() => continue,
+            Ok(line) => respond(line, backend),
+            Err(_) => Some(error_response(&Value::Null, -32700, "parse error: the message is not UTF-8")),
+        };
+        let Some(response) = response else {
             continue;
         };
         writeln!(output, "{response}")?;
         output.flush()?;
     }
     Ok(())
+}
+
+/// The version to speak: the client's when it is one of these, else the
+/// newest.
+fn protocol_version(requested: Option<&str>) -> &'static str {
+    SUPPORTED_PROTOCOLS.iter().copied().find(|version| Some(*version) == requested).unwrap_or(SUPPORTED_PROTOCOLS[0])
+}
+
+/// Checks a call's integer arguments against the bounds its tool declares.
+fn check_arguments(tool: &str, arguments: &Value) -> Result<(), String> {
+    let tools = tools();
+    let Some(properties) = tools
+        .as_array()
+        .and_then(|tools| tools.iter().find(|candidate| candidate["name"] == tool))
+        .and_then(|found| found.pointer("/inputSchema/properties"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    for (name, schema) in properties {
+        let Some(value) = arguments.get(name).filter(|_| schema["type"] == "integer") else {
+            continue;
+        };
+        let number = value.as_i64().ok_or_else(|| format!("{name} must be a whole number"))?;
+        if let Some(minimum) = schema["minimum"].as_i64().filter(|minimum| number < *minimum) {
+            return Err(format!("{name} must be at least {minimum}"));
+        }
+        if let Some(maximum) = schema["maximum"].as_i64().filter(|maximum| number > *maximum) {
+            return Err(format!("{name} must be at most {maximum}"));
+        }
+    }
+    Ok(())
+}
+
+/// A tool's text, clipped so one answer can't fill the agent's context.
+fn bounded(text: String) -> String {
+    if text.len() <= MAX_OUTPUT {
+        return text;
+    }
+    let mut end = MAX_OUTPUT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n… (cut at {MAX_OUTPUT} bytes; ask for less, such as a smaller limit)", &text[..end])
 }
 
 /// The response to one message; `None` for notifications.
@@ -145,7 +194,7 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
         "initialize" => json!({
-            "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(DEFAULT_PROTOCOL),
+            "protocolVersion": protocol_version(params.get("protocolVersion").and_then(Value::as_str)),
             "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "silt", "version": env!("CARGO_PKG_VERSION")},
             "instructions": INSTRUCTIONS
@@ -170,9 +219,9 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            match backend.call(name, &arguments) {
-                Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
-                Err(text) => json!({"content": [{"type": "text", "text": text}], "isError": true}),
+            match check_arguments(name, &arguments).and_then(|()| backend.call(name, &arguments)) {
+                Ok(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": false}),
+                Err(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": true}),
             }
         }
         other => return Some(error_response(&id, -32601, &format!("unknown method {other}"))),
@@ -229,6 +278,34 @@ mod tests {
         assert_eq!(replies[2]["result"]["content"][0]["text"], "searched \"lexer\"");
         assert_eq!(replies[3]["result"]["isError"], true);
         assert_eq!(replies[4]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn holds_calls_to_their_declared_bounds() {
+        let replies = exchange(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"silt_history_search","arguments":{"query":"x","limit":51}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"silt_history_read","arguments":{"limit":0}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"silt_history_search","arguments":{"query":"x","limit":50}}}"#,
+        ]);
+        assert_eq!(replies[0]["result"]["protocolVersion"], SUPPORTED_PROTOCOLS[0], "not a version it can't speak");
+        assert_eq!(replies[1]["result"]["isError"], true);
+        assert_eq!(replies[1]["result"]["content"][0]["text"], "limit must be at most 50");
+        assert_eq!(replies[2]["result"]["content"][0]["text"], "limit must be at least 1");
+        assert_eq!(replies[3]["result"]["isError"], false);
+        assert!(bounded("é".repeat(MAX_OUTPUT)).len() < MAX_OUTPUT + 100);
+    }
+
+    #[test]
+    fn a_line_that_isnt_utf8_is_answered_and_serving_goes_on() {
+        let mut input = b"\xff\xfe\n".to_vec();
+        input.extend_from_slice(br#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
+        let mut output = Vec::new();
+        serve(input.as_slice(), &mut output, &mut Echo).expect("serves");
+        let replies: Vec<Value> =
+            String::from_utf8(output).expect("utf-8").lines().map(|line| serde_json::from_str(line).expect("json")).collect();
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(replies[1]["id"], 2);
     }
 
     #[test]
