@@ -14,6 +14,7 @@ use similar::{DiffTag, TextDiff};
 use crate::core::{Core, CoreError, touched_inode};
 use crate::protocol::{MrDetails, MrSummary, Pulled};
 use crate::transcripts::native_entries;
+use crate::views::FileChange;
 
 /// Longest agent message quoted in a generated merge request summary.
 const QUOTE_CHARS: usize = 600;
@@ -218,20 +219,7 @@ impl Core {
         let base = offered.intersection(&target);
         let ours = self.changes(family_id, &base, &target);
         let theirs = self.changes(family_id, &base, &offered);
-        let mut conflicts = Vec::new();
-        for change in &theirs {
-            let Some(other) = ours.iter().find(|other| other.inode == change.inode) else {
-                continue;
-            };
-            for (start, end) in overlapping_lines(&change.old_text, &other.new_text, &change.new_text) {
-                conflicts.push(format!(
-                    "{}: both changed lines {}-{} of the merge base",
-                    change.path(),
-                    start + 1,
-                    end.max(start + 1)
-                ));
-            }
-        }
+        let conflicts = conflicts(&ours, &theirs);
         let conversation = self.show_items(
             family,
             request.fork,
@@ -379,6 +367,25 @@ fn files_note(files: &[String]) -> String {
     }
 }
 
+/// Where both sides changed the same lines of a file since the merge base.
+fn conflicts(ours: &[FileChange], theirs: &[FileChange]) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    for change in theirs {
+        let Some(other) = ours.iter().find(|other| other.inode == change.inode) else {
+            continue;
+        };
+        for (start, end) in overlapping_lines(&change.old_text, &other.new_text, &change.new_text) {
+            conflicts.push(format!(
+                "{}: both changed lines {}-{} of the merge base",
+                change.path(),
+                start + 1,
+                end.max(start + 1)
+            ));
+        }
+    }
+    conflicts
+}
+
 /// Line ranges of `base` that both `ours` and `theirs` changed, as
 /// half-open ranges.
 fn overlapping_lines(base: &str, ours: &str, theirs: &str) -> Vec<(usize, usize)> {
@@ -433,6 +440,8 @@ fn mr_summary(request: &MergeRequest) -> MrSummary {
 
 #[cfg(test)]
 mod tests {
+    use silt_crdt::InodeId;
+
     use super::*;
 
     #[test]
@@ -441,5 +450,20 @@ mod tests {
         assert_eq!(overlapping_lines(base, "a\nB\nc\nd\ne\n", "a\nb\nc\nd\nE\n"), vec![]);
         assert_eq!(overlapping_lines(base, "a\nB\nc\nd\ne\n", "a\nb2\nc\nd\ne\n"), vec![(1, 2)]);
         assert_eq!(overlapping_lines(base, "a\nb\nc\nd\ne\n", "x\n"), vec![]);
+    }
+
+    #[test]
+    fn conflicts_name_the_file_and_lines_both_sides_changed() {
+        let change = |actor: u128, path: &str, new_text: &str| FileChange {
+            inode: InodeId(DeltaId::new(silt_types::ActorId(actor), silt_types::Lamport(0))),
+            old_path: Some(path.to_owned()),
+            new_path: Some(path.to_owned()),
+            old_text: "a\nb\nc\n".to_owned(),
+            new_text: new_text.to_owned(),
+            binary: false,
+        };
+        let ours = [change(1, "x.rs", "a\nB\nc\n"), change(2, "y.rs", "a\nB\nc\n")];
+        let theirs = [change(1, "x.rs", "a\nb2\nc\n"), change(3, "z.rs", "a\nb2\nc\n")];
+        assert_eq!(conflicts(&ours, &theirs), ["x.rs: both changed lines 2-2 of the merge base"]);
     }
 }

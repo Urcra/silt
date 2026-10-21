@@ -10,7 +10,7 @@ use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
 use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
-use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, DeviceId, FamilyId, Frontier, GitOid, ThreadId};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
@@ -478,30 +478,27 @@ impl Core {
         if paths.iter().any(|path| *path == root || path.file_name() == Some(".gitattributes".as_ref())) {
             checkout.repo.attributes_changed();
         }
-        let mut candidates: Vec<String> = Vec::new();
+        let mut probes = Vec::new();
         for path in paths {
             let Ok(relative) = path.strip_prefix(&root) else {
                 continue;
             };
             let relative = relative.to_string_lossy().replace('\\', "/");
-            if path.is_dir() {
-                candidates.extend(self.files_under(checkout_id, &relative)?);
-                if relative.is_empty() {
-                    candidates.extend(self.checkout(checkout_id)?.bridge.entries().keys().cloned());
-                    candidates.extend(self.family_paths(checkout_id));
-                }
-            } else if !relative.is_empty() {
-                if !path.exists() {
-                    let prefix = format!("{relative}/");
-                    let recorded = self.checkout(checkout_id)?.bridge.entries().keys();
-                    candidates.extend(recorded.filter(|path| path.starts_with(&prefix)).cloned());
-                }
-                candidates.push(relative);
-            }
+            probes.push(if path.is_dir() {
+                let files = self.files_under(checkout_id, &relative)?;
+                if relative.is_empty() { Probe::Root(files) } else { Probe::Dir(files) }
+            } else if relative.is_empty() {
+                continue;
+            } else if path.exists() {
+                Probe::File(relative)
+            } else {
+                Probe::Gone(relative)
+            });
         }
-        candidates.sort();
-        candidates.dedup();
-        let mut worklist = self.trackable(checkout_id, candidates)?;
+        let thread_paths =
+            if probes.iter().any(|probe| matches!(probe, Probe::Root(_))) { self.family_paths(checkout_id) } else { Vec::new() };
+        let recorded = self.checkout(checkout_id)?.bridge.entries().keys();
+        let mut worklist = self.trackable(checkout_id, candidates(probes, recorded, &thread_paths))?;
         for path in self.ingest_renames(checkout_id, &worklist).await? {
             worklist.retain(|candidate| *candidate != path);
         }
@@ -1062,21 +1059,16 @@ impl Core {
         let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
             return Ok(());
         };
-        let leased: HashSet<ThreadId> =
-            deltas.iter().filter(|delta| matches!(delta.op, Op::Lease { .. })).map(|delta| delta.thread).collect();
-        for thread in leased {
-            // The lease with the highest epoch holds; an older one arriving
-            // late moves nothing.
-            let holder = self
-                .threads
+        let holder = |thread: ThreadId| {
+            self.threads
                 .get(&thread)
                 .and_then(|record| self.families.get(&record.family))
                 .and_then(|family| family.thread(thread))
                 .and_then(|state| state.lease)
-                .map(|(holder, _)| holder);
-            if holder.is_some_and(|holder| holder != device) {
-                self.thread_moved(thread, before.get(&thread).cloned()).await?;
-            }
+                .map(|(holder, _)| holder)
+        };
+        for thread in moved_threads(deltas, device, holder) {
+            self.thread_moved(thread, before.get(&thread).cloned()).await?;
         }
         Ok(())
     }
@@ -1362,6 +1354,59 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
     }
 }
 
+/// What was found at a path that changed in a checkout.
+enum Probe {
+    /// The checkout's root, with the files under it.
+    Root(Vec<String>),
+    /// Another directory, with the files under it.
+    Dir(Vec<String>),
+    File(String),
+    Gone(String),
+}
+
+/// The files to look at again after changes at `probes`. A rescan of the
+/// root also looks at every file recorded on disk or in the thread, and a
+/// path that is gone takes the recorded files under it along, since either
+/// may have disappeared.
+fn candidates<'a>(
+    probes: Vec<Probe>,
+    recorded: impl Iterator<Item = &'a String> + Clone,
+    thread_paths: &[String],
+) -> Vec<String> {
+    let mut found = Vec::new();
+    for probe in probes {
+        match probe {
+            Probe::Root(files) => {
+                found.extend(files);
+                found.extend(recorded.clone().cloned());
+                found.extend_from_slice(thread_paths);
+            }
+            Probe::Dir(files) => found.extend(files),
+            Probe::File(path) => found.push(path),
+            Probe::Gone(path) => {
+                let prefix = format!("{path}/");
+                found.extend(recorded.clone().filter(|recorded| recorded.starts_with(&prefix)).cloned());
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Threads whose lease `deltas` moved to a device other than `device`. The
+/// lease with the highest epoch holds, so an older one arriving late moves
+/// nothing.
+fn moved_threads(deltas: &[Delta], device: DeviceId, holder: impl Fn(ThreadId) -> Option<DeviceId>) -> Vec<ThreadId> {
+    let mut leased: Vec<ThreadId> =
+        deltas.iter().filter(|delta| matches!(delta.op, Op::Lease { .. })).map(|delta| delta.thread).collect();
+    leased.sort();
+    leased.dedup();
+    leased.retain(|thread| holder(*thread).is_some_and(|holder| holder != device));
+    leased
+}
+
 /// What the store says a checkout's files on disk were last recorded as.
 async fn stored_entries(store: &Store, checkout: i64) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
     Ok(store
@@ -1422,4 +1467,41 @@ pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> 
 
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_types::{DeltaSpan, Lamport};
+
+    use super::*;
+
+    #[test]
+    fn a_rescan_looks_at_what_changed_and_what_may_be_gone() {
+        let recorded = ["a/one".to_owned(), "a/two".to_owned(), "ab".to_owned(), "b".to_owned()];
+        let found = candidates(
+            vec![Probe::Gone("a".into()), Probe::File("c".into()), Probe::Dir(vec!["d/x".into()])],
+            recorded.iter(),
+            &["thread-only".to_owned()],
+        );
+        assert_eq!(found, ["a", "a/one", "a/two", "c", "d/x"]);
+        let root = candidates(vec![Probe::Root(vec!["new".into(), "b".into()])], recorded.iter(), &["thread-only".to_owned()]);
+        assert_eq!(root, ["a/one", "a/two", "ab", "b", "new", "thread-only"]);
+    }
+
+    #[test]
+    fn only_threads_leased_elsewhere_move() {
+        let (here, there) = (DeviceId(1), DeviceId(2));
+        let lease = |thread: u128, device: DeviceId| Delta {
+            span: DeltaSpan::new(ActorId(1), Lamport(thread as u64), 1),
+            parents: Frontier::default(),
+            thread: ThreadId(thread),
+            author: Author::User,
+            time_ms: 0,
+            op: Op::Lease { device, epoch: 1 },
+        };
+        let deltas = [lease(1, there), lease(1, there), lease(2, here), lease(3, there)];
+        // Thread 3's newer lease is held here, so the one arriving late moves nothing.
+        let holder = |thread: ThreadId| Some(if thread.0 == 1 { there } else { here });
+        assert_eq!(moved_threads(&deltas, here, holder), [ThreadId(1)]);
+    }
 }

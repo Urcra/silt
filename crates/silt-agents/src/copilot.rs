@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start,
-    translated_text,
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
+    Write, translated_text,
 };
 
 pub const AGENT: &str = "copilot-cli";
@@ -144,19 +144,25 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
 
 /// Writes `session` as a session directory in the Copilot home `home`.
 pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+    let restore = plan_restore(home, root, cwd, session);
+    restore.apply()?;
+    Ok(restore.transcript)
+}
+
+/// The files restoring `session` into the Copilot home `home` writes.
+pub fn plan_restore(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Restore {
     let dir = session_dir(home, &session.id);
     let rewrites = Rewrites::new(session, Some(&dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
-    fs::create_dir_all(&dir)?;
-    crate::replace_transcript(&dir.join("events.jsonl"), &rewrites.lines(&session.main))?;
-    fs::write(dir.join("workspace.yaml"), workspace_yaml(&session.id, cwd, root))?;
-    for (name, bytes) in &session.attachments {
-        if crate::is_side_file_name(name) {
-            let path = dir.join(name);
-            fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
-            fs::write(path, bytes)?;
-        }
-    }
-    Ok(dir.join("events.jsonl"))
+    let events = dir.join("events.jsonl");
+    let mut restore = Restore {
+        transcript: events.clone(),
+        writes: vec![
+            Write::Transcript { path: events, lines: rewrites.lines(&session.main) },
+            Write::File { path: dir.join("workspace.yaml"), bytes: workspace_yaml(&session.id, cwd, root).into_bytes() },
+        ],
+    };
+    restore.side_files(&dir, session);
+    restore
 }
 
 fn workspace_yaml(id: &str, cwd: &Path, root: &Path) -> String {
@@ -331,6 +337,29 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restore_plans_the_session_directory_and_only_safe_side_files() {
+        let session = RecordedSession {
+            id: "new".into(),
+            former_ids: vec!["old".into()],
+            main: vec![r#"{"sessionId":"old"}"#.into()],
+            attachments: vec![("files/notes.md".into(), b"notes".to_vec()), ("../escape".into(), b"no".to_vec())],
+            ..Default::default()
+        };
+        let restore = plan_restore(Path::new("/home"), Path::new("/repo"), Path::new("/repo"), &session);
+        let dir = session_dir(Path::new("/home"), "new");
+        assert_eq!(restore.transcript, dir.join("events.jsonl"));
+        let paths: Vec<&Path> = restore
+            .writes
+            .iter()
+            .map(|write| match write {
+                Write::Transcript { path, .. } | Write::File { path, .. } => path.as_path(),
+            })
+            .collect();
+        assert_eq!(paths, [dir.join("events.jsonl"), dir.join("workspace.yaml"), dir.join("files/notes.md")]);
+        assert!(matches!(&restore.writes[0], Write::Transcript { lines, .. } if lines.contains(r#""sessionId":"new""#)));
+    }
 
     #[test]
     fn a_model_call_without_tools_ends_the_turn_when_it_ends() {

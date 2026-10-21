@@ -155,6 +155,20 @@ impl Reader for OpenCodeReader {
     }
 }
 
+/// The export restoring `session` imports. A fork's records get ids of
+/// their own, as OpenCode keeps one copy of each id.
+pub fn restored_export(root: &Path, cwd: &Path, session: &RecordedSession) -> Value {
+    let mut rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
+    if !session.former_ids.contains(&session.id) {
+        for id in record_ids(&session.main) {
+            let new = forked_id(&id, &session.id);
+            rewrites = rewrites.with(&id, &new);
+        }
+    }
+    let lines: Vec<String> = session.main.iter().map(|line| rewrites.apply(line)).collect();
+    export_from_records(&lines)
+}
+
 /// Rebuilds an export from records, in the order they were recorded.
 pub fn export_from_records(lines: &[String]) -> Value {
     let mut info = Value::Null;
@@ -299,15 +313,7 @@ impl Agent for OpenCode {
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
-        let mut rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
-        if !session.former_ids.contains(&session.id) {
-            for id in record_ids(&session.main) {
-                let new = forked_id(&id, &session.id);
-                rewrites = rewrites.with(&id, &new);
-            }
-        }
-        let lines: Vec<String> = session.main.iter().map(|line| rewrites.apply(line)).collect();
-        let export = export_from_records(&lines);
+        let export = restored_export(root, cwd, session);
         let mut file = tempfile::Builder::new().prefix("silt-opencode-").suffix(".json").tempfile()?;
         io::Write::write_all(&mut file, export.to_string().as_bytes())?;
         opencode(&["import", &file.path().to_string_lossy()], Some(cwd))?;

@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
 use crate::{
-    Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless,
-    translated_text,
+    Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
+    Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "claude-code";
@@ -57,25 +57,24 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
 /// session id to the new ones (docs/research/probes.md).
 pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
     let paths = session_paths(config_dir, cwd, &session.id);
+    plan_restore(&paths, root, cwd, session).apply()?;
+    Ok(paths)
+}
+
+/// The files restoring `session` at `paths` writes.
+pub fn plan_restore(paths: &SessionPaths, root: &Path, cwd: &Path, session: &RecordedSession) -> Restore {
     let rewrites =
         Rewrites::new(session, Some(&paths.session_dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
-    fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
-    crate::replace_transcript(&paths.transcript, &rewrites.lines(&session.main))?;
-    if !session.subagents.is_empty() {
-        fs::create_dir_all(&paths.subagents)?;
-        for (name, lines) in &session.subagents {
-            crate::replace_transcript(&paths.subagents.join(format!("{name}.jsonl")), &rewrites.lines(lines))?;
-        }
+    let mut restore = Restore {
+        transcript: paths.transcript.clone(),
+        writes: vec![Write::Transcript { path: paths.transcript.clone(), lines: rewrites.lines(&session.main) }],
+    };
+    for (name, lines) in &session.subagents {
+        let path = paths.subagents.join(format!("{name}.jsonl"));
+        restore.writes.push(Write::Transcript { path, lines: rewrites.lines(lines) });
     }
-    for (name, bytes) in &session.attachments {
-        if !crate::is_side_file_name(name) {
-            continue;
-        }
-        let path = paths.session_dir.join(name);
-        fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
-        fs::write(path, bytes)?;
-    }
-    Ok(paths)
+    restore.side_files(&paths.session_dir, session);
+    restore
 }
 
 /// Claude Code transcript lines holding `messages` as plain text, chained

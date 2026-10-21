@@ -45,6 +45,51 @@ pub struct Read {
     pub marks: Vec<Mark>,
 }
 
+/// A file that restoring a session writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Write {
+    /// A transcript, which replaces the agent's own and keeps a copy of it
+    /// when it has lines the recording lacks.
+    Transcript {
+        path: PathBuf,
+        lines: String,
+    },
+    File {
+        path: PathBuf,
+        bytes: Vec<u8>,
+    },
+}
+
+/// What restoring a session writes, decided before anything is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restore {
+    /// The transcript the agent resumes from.
+    pub transcript: PathBuf,
+    pub writes: Vec<Write>,
+}
+
+impl Restore {
+    pub fn apply(&self) -> io::Result<()> {
+        for write in &self.writes {
+            let (Write::Transcript { path, .. } | Write::File { path, .. }) = write;
+            std::fs::create_dir_all(path.parent().ok_or_else(|| io::Error::other("a restored file has a directory"))?)?;
+            match write {
+                Write::Transcript { path, lines } => replace_transcript(path, lines)?,
+                Write::File { path, bytes } => std::fs::write(path, bytes)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Side files of the session, kept under `dir` and only with names that
+    /// stay inside it.
+    pub(crate) fn side_files(&mut self, dir: &Path, session: &RecordedSession) {
+        for (name, bytes) in session.attachments.iter().filter(|(name, _)| is_side_file_name(name)) {
+            self.writes.push(Write::File { path: dir.join(name), bytes: bytes.clone() });
+        }
+    }
+}
+
 impl Read {
     pub fn unparseable() -> Self {
         Self { entries: vec![Entry::unparseable()], marks: Vec::new() }

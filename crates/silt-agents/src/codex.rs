@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless,
-    translated_text,
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
+    Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "codex";
@@ -101,21 +101,32 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
 /// database's path for an id over any other file, so an existing rollout
 /// of this id is replaced in place.
 pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
-    let path = match rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id)) {
-        Some(path) => path,
-        None => {
-            let stamp = crate::time::file_stamp(crate::now_ms());
-            home.join("sessions")
-                .join(&stamp[..4])
-                .join(&stamp[5..7])
-                .join(&stamp[8..10])
-                .join(format!("rollout-{stamp}-{}.jsonl", session.id))
-        }
-    };
+    let existing = rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id));
+    let restore = plan_restore(home, existing, root, cwd, session, crate::now_ms());
+    restore.apply()?;
+    Ok(restore.transcript)
+}
+
+/// The rollout restoring `session` writes: over `existing`, the rollout
+/// Codex has of this id, or else a new one dated `now_ms`.
+pub fn plan_restore(
+    home: &Path,
+    existing: Option<PathBuf>,
+    root: &Path,
+    cwd: &Path,
+    session: &RecordedSession,
+    now_ms: i64,
+) -> Restore {
+    let path = existing.unwrap_or_else(|| {
+        let stamp = crate::time::file_stamp(now_ms);
+        home.join("sessions")
+            .join(&stamp[..4])
+            .join(&stamp[5..7])
+            .join(&stamp[8..10])
+            .join(format!("rollout-{stamp}-{}.jsonl", session.id))
+    });
     let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
-    fs::create_dir_all(path.parent().expect("dated directory"))?;
-    crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
-    Ok(path)
+    Restore { transcript: path.clone(), writes: vec![Write::Transcript { path, lines: rewrites.lines(&session.main) }] }
 }
 
 /// The first line's `session_meta` payload.
@@ -353,6 +364,18 @@ impl Agent for Codex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restore_replaces_codex_s_own_rollout_of_the_id_or_dates_a_new_one() {
+        let session = RecordedSession { id: "id".into(), main: vec!["{}".into()], ..Default::default() };
+        let home = Path::new("/codex");
+        let existing = PathBuf::from("/codex/sessions/2026/01/02/rollout-x-id.jsonl");
+        let replaced = plan_restore(home, Some(existing.clone()), Path::new("/r"), Path::new("/r"), &session, 0);
+        assert_eq!(replaced.transcript, existing);
+        let new = plan_restore(home, None, Path::new("/r"), Path::new("/r"), &session, 0);
+        assert!(new.transcript.starts_with("/codex/sessions/1970/01/01"), "{}", new.transcript.display());
+        assert_eq!(new.writes.len(), 1);
+    }
 
     #[test]
     fn looking_for_new_rollouts_skips_older_days() {

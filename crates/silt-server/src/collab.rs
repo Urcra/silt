@@ -73,43 +73,110 @@ pub(crate) async fn collaborators(db: &SqlitePool) -> Result<HashMap<ThreadId, V
 ///   deltas, but taking an actor's ids would wedge its owner's sync.
 /// - Every delta's thread must belong to `family`.
 /// - Comments need only that `user` sees the thread; other deltas that they
-///   may write it (`check_writes`).
+///   own it or that it is shared with them. Threads nobody registered yet
+///   belong to whoever writes them.
 pub(crate) async fn admit(
     server: &Server,
     user: i64,
     family: FamilyId,
     deltas: Vec<&Delta>,
 ) -> Result<(Vec<Delta>, Vec<ActorId>), ApiError> {
-    let db = server.db();
-    let mut owners: HashMap<ActorId, Option<i64>> = HashMap::new();
-    for actor in deltas.iter().map(|delta| delta.span.actor).collect::<HashSet<_>>() {
-        let owner = sqlx::query("SELECT user_id FROM actor_owners WHERE actor = ?")
-            .bind(id_bytes(actor.0))
+    let ledger = Ledger::load(server.db(), user, &deltas).await?;
+    let viewer = server.viewer(user).await?;
+    let (admitted, claims) = admission(user, family, deltas, &ledger, &viewer)?;
+    Ok((admitted.into_iter().cloned().collect(), claims))
+}
+
+/// What the server knows of the actors and threads in a push.
+#[derive(Default)]
+struct Ledger {
+    /// The user whose devices own each actor, when one does.
+    actors: HashMap<ActorId, Option<i64>>,
+    threads: HashMap<ThreadId, Registered>,
+}
+
+struct Registered {
+    family: u128,
+    owner: i64,
+    /// Whether its owner shares it with the pushing user.
+    shared: bool,
+}
+
+impl Ledger {
+    async fn load(db: &SqlitePool, user: i64, deltas: &[&Delta]) -> Result<Self, sqlx::Error> {
+        let mut ledger = Self::default();
+        for actor in deltas.iter().map(|delta| delta.span.actor).collect::<HashSet<_>>() {
+            let owner = sqlx::query("SELECT user_id FROM actor_owners WHERE actor = ?")
+                .bind(id_bytes(actor.0))
+                .fetch_optional(db)
+                .await?
+                .map(|row| row.get::<i64, _>("user_id"));
+            ledger.actors.insert(actor, owner);
+        }
+        for thread in deltas.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
+            let row = sqlx::query(
+                "SELECT t.family_id, t.owner_id,
+                        EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
+                 FROM threads t WHERE t.id = ?",
+            )
+            .bind(user)
+            .bind(id_bytes(thread.0))
             .fetch_optional(db)
-            .await?
-            .map(|row| row.get::<i64, _>("user_id"));
-        owners.insert(actor, owner);
+            .await?;
+            if let Some(row) = row {
+                let registered = Registered {
+                    family: id_from(row.get("family_id")),
+                    owner: row.get("owner_id"),
+                    shared: row.get::<i64, _>("shared") != 0,
+                };
+                ledger.threads.insert(thread, registered);
+            }
+        }
+        Ok(ledger)
     }
-    let admitted: Vec<&Delta> =
-        deltas.into_iter().filter(|delta| owners[&delta.span.actor].is_none_or(|owner| owner == user)).collect();
-    for thread in admitted.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
-        let registered =
-            sqlx::query("SELECT family_id FROM threads WHERE id = ?").bind(id_bytes(thread.0)).fetch_optional(db).await?;
-        if registered.is_some_and(|row| id_from(row.get("family_id")) != family.0) {
-            return Err(forbidden(format!("thread {thread} is not part of family {family}")));
+}
+
+/// The deltas of a push that `user` may add, and the actors to record as
+/// theirs.
+fn admission<'d>(
+    user: i64,
+    family: FamilyId,
+    deltas: Vec<&'d Delta>,
+    ledger: &Ledger,
+    viewer: &Viewer,
+) -> Result<(Vec<&'d Delta>, Vec<ActorId>), ApiError> {
+    let theirs = |actor: &ActorId| ledger.actors.get(actor).copied().flatten().is_none_or(|owner| owner == user);
+    let admitted: Vec<&Delta> = deltas.into_iter().filter(|delta| theirs(&delta.span.actor)).collect();
+    for delta in &admitted {
+        if ledger.threads.get(&delta.thread).is_some_and(|registered| registered.family != family.0) {
+            return Err(forbidden(format!("thread {} is not part of family {family}", delta.thread)));
         }
     }
-    let viewer = server.viewer(user).await?;
     if let Some(delta) = admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_)) && !viewer.sees_thread(delta.thread)) {
         return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
     }
-    check_writes(db, &viewer, user, &admitted).await?;
-    let claims = owners
-        .into_iter()
-        .filter(|(actor, owner)| owner.is_none() && admitted.iter().any(|delta| delta.span.actor == *actor))
-        .map(|(actor, _)| actor)
+    for delta in admitted.iter().filter(|delta| !matches!(delta.op, Op::Comment(_))) {
+        let Some(registered) = ledger.threads.get(&delta.thread) else {
+            continue;
+        };
+        // A collaborator the thread was hidden from since sharing writes no
+        // more than anyone else who can't see it.
+        let collaborator = registered.shared && viewer.sees_thread(delta.thread);
+        if registered.owner != user && !collaborator {
+            return Err(forbidden(format!(
+                "thread {} belongs to someone else; fork it, or ask its owner to share it with you",
+                delta.thread
+            )));
+        }
+    }
+    let mut claims: Vec<ActorId> = admitted
+        .iter()
+        .map(|delta| delta.span.actor)
+        .filter(|actor| ledger.actors.get(actor).copied().flatten().is_none())
         .collect();
-    Ok((admitted.into_iter().cloned().collect(), claims))
+    claims.sort();
+    claims.dedup();
+    Ok((admitted, claims))
 }
 
 /// Records `actors` as written by `user`'s devices.
@@ -124,31 +191,74 @@ pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: i64, act
     Ok(())
 }
 
-/// Fails unless `user` may write every one of `deltas`, which are new to
-/// the server. Threads nobody registered yet belong to whoever writes them.
-pub(crate) async fn check_writes(db: &SqlitePool, viewer: &Viewer, user: i64, deltas: &[&Delta]) -> Result<(), ApiError> {
-    let threads: HashSet<ThreadId> =
-        deltas.iter().filter(|delta| !matches!(delta.op, Op::Comment(_))).map(|delta| delta.thread).collect();
-    for thread in threads {
-        let row = sqlx::query(
-            "SELECT t.owner_id, EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared
-             FROM threads t WHERE t.id = ?",
-        )
-        .bind(user)
-        .bind(id_bytes(thread.0))
-        .fetch_optional(db)
-        .await?;
-        let Some(row) = row else {
-            continue;
-        };
-        // A collaborator the thread was hidden from since sharing writes no
-        // more than anyone else who can't see it.
-        let collaborator = row.get::<i64, _>("shared") != 0 && viewer.sees_thread(thread);
-        if row.get::<i64, _>("owner_id") != user && !collaborator {
-            return Err(forbidden(format!(
-                "thread {thread} belongs to someone else; fork it, or ask its owner to share it with you"
-            )));
+#[cfg(test)]
+mod tests {
+    use silt_log::{Author, CommentOp, CommentTarget};
+    use silt_types::{DeltaId, DeltaSpan, Frontier, Lamport};
+
+    use super::*;
+
+    const ME: i64 = 1;
+    const OTHER: i64 = 2;
+    const FAMILY: FamilyId = FamilyId(7);
+
+    fn delta(actor: u128, thread: u128, op: Op) -> Delta {
+        let span = DeltaSpan::new(ActorId(actor), Lamport(0), 1);
+        Delta { span, parents: Frontier::default(), thread: ThreadId(thread), author: Author::User, time_ms: 0, op }
+    }
+
+    fn write(actor: u128, thread: u128) -> Delta {
+        delta(actor, thread, Op::Fork { from: ThreadId(99) })
+    }
+
+    fn comment(actor: u128, thread: u128) -> Delta {
+        let target = CommentTarget::Message { delta: DeltaId::new(ActorId(actor), Lamport(0)) };
+        delta(actor, thread, Op::Comment(CommentOp::Added { target, text: "nice".to_owned(), by: "me".to_owned() }))
+    }
+
+    fn ledger(threads: Vec<(u128, u128, i64, bool)>) -> Ledger {
+        Ledger {
+            actors: HashMap::from([(ActorId(1), Some(ME)), (ActorId(2), Some(OTHER)), (ActorId(3), None)]),
+            threads: threads
+                .into_iter()
+                .map(|(thread, family, owner, shared)| (ThreadId(thread), Registered { family, owner, shared }))
+                .collect(),
         }
     }
-    Ok(())
+
+    #[test]
+    fn deltas_of_other_people_s_actors_are_dropped_and_new_actors_claimed() {
+        let deltas = [write(1, 10), write(2, 10), write(3, 10)];
+        let Ok((admitted, claims)) = admission(ME, FAMILY, deltas.iter().collect(), &ledger(vec![]), &Viewer::default()) else {
+            panic!("refused");
+        };
+        assert_eq!(admitted.iter().map(|delta| delta.span.actor).collect::<Vec<_>>(), [ActorId(1), ActorId(3)]);
+        assert_eq!(claims, [ActorId(3)]);
+    }
+
+    #[test]
+    fn only_owners_and_collaborators_who_still_see_it_write_a_thread() {
+        let threads = ledger(vec![(10, 7, ME, false), (11, 7, OTHER, false), (12, 7, OTHER, true)]);
+        let sees_shared = Viewer::seeing([ThreadId(12)]);
+        let admit = |thread, viewer: &Viewer| admission(ME, FAMILY, vec![&write(1, thread)], &threads, viewer).is_ok();
+        assert!(admit(10, &Viewer::default()));
+        assert!(!admit(11, &Viewer::seeing([ThreadId(11)])));
+        assert!(admit(12, &sees_shared));
+        assert!(!admit(12, &Viewer::default()), "hidden since it was shared");
+        assert!(admit(13, &Viewer::default()), "unregistered threads belong to their writer");
+    }
+
+    #[test]
+    fn comments_need_only_that_the_thread_is_seen() {
+        let threads = ledger(vec![(11, 7, OTHER, false)]);
+        let admit = |viewer: &Viewer| admission(ME, FAMILY, vec![&comment(1, 11)], &threads, viewer).is_ok();
+        assert!(admit(&Viewer::seeing([ThreadId(11)])));
+        assert!(!admit(&Viewer::default()));
+    }
+
+    #[test]
+    fn threads_of_another_family_are_refused() {
+        let threads = ledger(vec![(10, 8, ME, false)]);
+        assert!(admission(ME, FAMILY, vec![&write(1, 10)], &threads, &Viewer::default()).is_err());
+    }
 }

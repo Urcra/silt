@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start,
-    translated_text,
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
+    Write, translated_text,
 };
 
 pub const AGENT: &str = "gemini-cli";
@@ -140,25 +140,36 @@ pub fn discover_in(gemini: &Path, cwd: &Path, since_ms: i64, known: &[String]) -
 /// `cwd`, with its subagents' sessions.
 pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
     let dir = claim_chats_dir(gemini, cwd)?;
-    let path = session_files(&dir)
-        .into_iter()
-        .find(|path| file_session_id(path).as_deref() == Some(&*session.id))
-        .unwrap_or_else(|| {
-            let stamp = crate::time::file_stamp(crate::now_ms());
-            let short: String = session.id.chars().take(8).collect();
-            dir.join(format!("session-{}-{short}.jsonl", &stamp[..16]))
-        });
+    let existing = session_files(&dir).into_iter().find(|path| file_session_id(path).as_deref() == Some(&*session.id));
+    let restore = plan_restore(&dir, existing, root, cwd, session, crate::now_ms());
+    restore.apply()?;
+    Ok(restore.transcript)
+}
+
+/// The files restoring `session` into the chats directory `dir` writes:
+/// over `existing`, the file Gemini has of this id, or else a new one
+/// dated `now_ms`.
+pub fn plan_restore(
+    dir: &Path,
+    existing: Option<PathBuf>,
+    root: &Path,
+    cwd: &Path,
+    session: &RecordedSession,
+    now_ms: i64,
+) -> Restore {
+    let path = existing.unwrap_or_else(|| {
+        let stamp = crate::time::file_stamp(now_ms);
+        let short: String = session.id.chars().take(8).collect();
+        dir.join(format!("session-{}-{short}.jsonl", &stamp[..16]))
+    });
     let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
-    fs::create_dir_all(&dir)?;
-    crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
-    if !session.subagents.is_empty() {
-        let subagents = dir.join(&session.id);
-        fs::create_dir_all(&subagents)?;
-        for (name, lines) in &session.subagents {
-            crate::replace_transcript(&subagents.join(format!("{name}.jsonl")), &rewrites.lines(lines))?;
-        }
+    let mut restore =
+        Restore { transcript: path.clone(), writes: vec![Write::Transcript { path, lines: rewrites.lines(&session.main) }] };
+    for (name, lines) in &session.subagents {
+        let path = dir.join(&session.id).join(format!("{name}.jsonl"));
+        restore.writes.push(Write::Transcript { path, lines: rewrites.lines(lines) });
     }
-    Ok(path)
+    restore
 }
 
 /// Where the session in `transcript` keeps its subagents' sessions.

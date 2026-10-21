@@ -44,18 +44,31 @@ pub(crate) struct Viewer {
     known_threads: HashSet<ThreadId>,
 }
 
+/// What one user's visibility is decided from.
+#[derive(Default)]
+struct Facts {
+    projects: HashMap<String, Project>,
+    /// Each org's default visibility.
+    defaults: HashMap<i64, Visibility>,
+    /// The user's orgs.
+    orgs: HashSet<i64>,
+    /// The user's teams, by org.
+    teams: HashSet<(i64, String)>,
+    /// Threads that aren't deleted.
+    threads: HashMap<ThreadId, ThreadRow>,
+    /// Families the user started.
+    owned: HashSet<u128>,
+    /// Every thread, deleted ones too.
+    known_threads: HashSet<ThreadId>,
+}
+
 fn level(text: Option<String>) -> Option<Visibility> {
     text.and_then(|text| text.parse().ok())
 }
 
-impl Viewer {
+impl Facts {
     /// `forks` maps each fork to its source.
-    pub(crate) async fn load(
-        db: &SqlitePool,
-        user: i64,
-        forks: &HashMap<ThreadId, ThreadId>,
-        serial: u64,
-    ) -> Result<Self, sqlx::Error> {
+    async fn load(db: &SqlitePool, user: i64, forks: &HashMap<ThreadId, ThreadId>) -> Result<Self, sqlx::Error> {
         let projects: HashMap<String, Project> = sqlx::query("SELECT repo, org_id, visibility FROM projects")
             .fetch_all(db)
             .await?
@@ -102,66 +115,80 @@ impl Viewer {
                     )
                 })
                 .collect();
-        let effective = |mut thread: ThreadId| -> (Option<i64>, Visibility) {
-            let org = threads.get(&thread).and_then(|row| projects.get(&row.repo)).and_then(|project| project.org);
-            let fallback = |repo: &str| {
-                let project = projects.get(repo);
-                project
-                    .and_then(|project| project.setting.clone())
-                    .or_else(|| project.and_then(|project| project.org).and_then(|org| defaults.get(&org).cloned()))
-                    .unwrap_or(Visibility::Org)
+        let owned = sqlx::query("SELECT id FROM families WHERE owner_id = ?")
+            .bind(user)
+            .fetch_all(db)
+            .await?
+            .iter()
+            .map(|row| id_from(row.get("id")))
+            .collect();
+        let known_threads = sqlx::query("SELECT id FROM threads")
+            .fetch_all(db)
+            .await?
+            .iter()
+            .map(|row| ThreadId(id_from(row.get("id"))))
+            .collect();
+        Ok(Self { projects, defaults, orgs, teams, threads, owned, known_threads })
+    }
+
+    /// The thread's org and the visibility it takes, following forks to
+    /// their source and then the project and its org.
+    fn effective(&self, mut thread: ThreadId) -> (Option<i64>, Visibility) {
+        let org = self.threads.get(&thread).and_then(|row| self.projects.get(&row.repo)).and_then(|project| project.org);
+        let fallback = |repo: &str| {
+            let project = self.projects.get(repo);
+            project
+                .and_then(|project| project.setting.clone())
+                .or_else(|| project.and_then(|project| project.org).and_then(|org| self.defaults.get(&org).cloned()))
+                .unwrap_or(Visibility::Org)
+        };
+        // Fork chains are short and acyclic, but stay safe against bad data.
+        for _ in 0..64 {
+            let Some(row) = self.threads.get(&thread) else {
+                break;
             };
-            // Fork chains are short and acyclic, but stay safe against bad data.
-            for _ in 0..64 {
-                let Some(row) = threads.get(&thread) else {
-                    break;
-                };
-                if let Some(setting) = &row.setting {
-                    return (org, setting.clone());
-                }
-                match row.forked_from {
-                    Some(source) if threads.contains_key(&source) => thread = source,
-                    _ => return (org, fallback(&row.repo)),
-                }
+            if let Some(setting) = &row.setting {
+                return (org, setting.clone());
             }
-            (org, Visibility::Private)
-        };
-        let mut viewer = Self {
-            serial,
-            owned: sqlx::query("SELECT id FROM families WHERE owner_id = ?")
-                .bind(user)
-                .fetch_all(db)
-                .await?
-                .iter()
-                .map(|row| id_from(row.get("id")))
-                .collect(),
-            // Deleted threads are known too: an unknown thread counts as its
-            // family owner's, which would hand them someone's deleted
-            // private thread.
-            known_threads: sqlx::query("SELECT id FROM threads")
-                .fetch_all(db)
-                .await?
-                .iter()
-                .map(|row| ThreadId(id_from(row.get("id"))))
-                .collect(),
-            ..Self::default()
-        };
-        for (id, row) in &threads {
-            let visible = row.owner == user
-                || match effective(*id) {
-                    (Some(org), visibility) if orgs.contains(&org) => match visibility {
-                        Visibility::Private => false,
-                        Visibility::Org => true,
-                        Visibility::Team(team) => teams.contains(&(org, team)),
-                    },
-                    _ => false,
-                };
-            if visible {
-                viewer.threads.insert(*id);
-                viewer.families.insert(row.family);
+            match row.forked_from {
+                Some(source) if self.threads.contains_key(&source) => thread = source,
+                _ => return (org, fallback(&row.repo)),
             }
         }
-        Ok(viewer)
+        (org, Visibility::Private)
+    }
+
+    fn sees(&self, user: i64, thread: ThreadId, row: &ThreadRow) -> bool {
+        row.owner == user
+            || match self.effective(thread) {
+                (Some(org), visibility) if self.orgs.contains(&org) => match visibility {
+                    Visibility::Private => false,
+                    Visibility::Org => true,
+                    Visibility::Team(team) => self.teams.contains(&(org, team)),
+                },
+                _ => false,
+            }
+    }
+}
+
+impl Viewer {
+    /// `forks` maps each fork to its source.
+    pub(crate) async fn load(
+        db: &SqlitePool,
+        user: i64,
+        forks: &HashMap<ThreadId, ThreadId>,
+        serial: u64,
+    ) -> Result<Self, sqlx::Error> {
+        Ok(Self::decide(user, Facts::load(db, user, forks).await?, serial))
+    }
+
+    fn decide(user: i64, facts: Facts, serial: u64) -> Self {
+        let (threads, families) =
+            facts.threads.iter().filter(|(id, row)| facts.sees(user, **id, row)).map(|(id, row)| (*id, row.family)).unzip();
+        // Deleted threads are known too: an unknown thread counts as its
+        // family owner's, which would hand them someone's deleted private
+        // thread.
+        Self { serial, threads, families, owned: facts.owned, known_threads: facts.known_threads }
     }
 
     pub(crate) fn serial(&self) -> u64 {
@@ -241,5 +268,83 @@ impl Viewer {
         shared.dedup();
         let reachable = room.graph().version_vector(&shared.into_iter().collect::<Frontier>());
         deltas.iter().map(|delta| self.sees_thread_in(family, delta.thread) || reachable.contains(delta.span.first())).collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seeing(threads: impl IntoIterator<Item = ThreadId>) -> Self {
+        Self { threads: threads.into_iter().collect(), ..Self::default() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ME: i64 = 1;
+    const OTHER: i64 = 2;
+    const ORG: i64 = 10;
+
+    fn thread(owner: i64, repo: &str, setting: Option<Visibility>, forked_from: Option<ThreadId>) -> ThreadRow {
+        ThreadRow { owner, family: 7, setting, forked_from, repo: repo.to_owned() }
+    }
+
+    fn facts(threads: Vec<(u128, ThreadRow)>) -> Facts {
+        Facts {
+            projects: HashMap::from([
+                ("org/repo".to_owned(), Project { org: Some(ORG), setting: None }),
+                ("org/secret".to_owned(), Project { org: Some(ORG), setting: Some(Visibility::Private) }),
+                ("elsewhere/repo".to_owned(), Project { org: Some(99), setting: None }),
+            ]),
+            defaults: HashMap::from([(ORG, Visibility::Org)]),
+            orgs: HashSet::from([ORG]),
+            teams: HashSet::from([(ORG, "core".to_owned())]),
+            threads: threads.into_iter().map(|(id, row)| (ThreadId(id), row)).collect(),
+            ..Facts::default()
+        }
+    }
+
+    fn sees(facts: Facts, id: u128) -> bool {
+        Viewer::decide(ME, facts, 0).sees_thread(ThreadId(id))
+    }
+
+    #[test]
+    fn org_members_see_threads_their_project_does_not_hide() {
+        assert!(sees(facts(vec![(1, thread(OTHER, "org/repo", None, None))]), 1));
+        assert!(!sees(facts(vec![(1, thread(OTHER, "org/secret", None, None))]), 1));
+        assert!(!sees(facts(vec![(1, thread(OTHER, "elsewhere/repo", None, None))]), 1), "not a member of that org");
+    }
+
+    #[test]
+    fn owners_always_see_their_threads() {
+        assert!(sees(facts(vec![(1, thread(ME, "org/secret", Some(Visibility::Private), None))]), 1));
+        assert!(sees(facts(vec![(1, thread(ME, "unknown/repo", None, None))]), 1));
+    }
+
+    #[test]
+    fn teams_see_only_their_own_threads() {
+        let core = thread(OTHER, "org/repo", Some(Visibility::Team("core".to_owned())), None);
+        let design = thread(OTHER, "org/repo", Some(Visibility::Team("design".to_owned())), None);
+        let both = facts(vec![(1, core), (2, design)]);
+        let viewer = Viewer::decide(ME, both, 0);
+        assert!(viewer.sees_thread(ThreadId(1)));
+        assert!(!viewer.sees_thread(ThreadId(2)));
+        assert!(viewer.sees_family(7));
+    }
+
+    #[test]
+    fn forks_take_their_source_s_setting_unless_they_have_one() {
+        let source = thread(OTHER, "org/repo", Some(Visibility::Private), None);
+        let fork = thread(OTHER, "org/repo", None, Some(ThreadId(1)));
+        let shown = thread(OTHER, "org/repo", Some(Visibility::Org), Some(ThreadId(1)));
+        let viewer = Viewer::decide(ME, facts(vec![(1, source), (2, fork), (3, shown)]), 0);
+        assert!(!viewer.sees_thread(ThreadId(2)));
+        assert!(viewer.sees_thread(ThreadId(3)));
+    }
+
+    #[test]
+    fn a_fork_cycle_hides_the_thread() {
+        let one = thread(OTHER, "org/repo", None, Some(ThreadId(2)));
+        let two = thread(OTHER, "org/repo", None, Some(ThreadId(1)));
+        assert!(!sees(facts(vec![(1, one), (2, two)]), 1));
     }
 }
