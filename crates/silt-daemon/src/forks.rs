@@ -186,20 +186,20 @@ impl Core {
             .into_iter()
             .find(|request| request.id == delta.span.first())
             .expect("just opened");
-        Ok(mr_summary(&request))
+        Ok(mr_summary(&self.families[&family_id], &request))
     }
 
     /// Merge requests involving `selector`'s thread, or all of them.
     pub(crate) fn mr_list(&self, selector: Option<&str>) -> Result<Vec<MrSummary>, CoreError> {
         let thread = selector.map(|selector| self.find_thread(selector)).transpose()?;
-        let mut requests: Vec<MergeRequest> = self
+        let mut requests: Vec<(&Family, MergeRequest)> = self
             .families
             .values()
-            .flat_map(Family::merge_requests)
-            .filter(|request| thread.is_none_or(|thread| request.fork == thread || request.target == thread))
+            .flat_map(|family| family.merge_requests().into_iter().map(move |request| (family, request)))
+            .filter(|(_, request)| thread.is_none_or(|thread| request.fork == thread || request.target == thread))
             .collect();
-        requests.sort_by_key(|request| request.opened_ms);
-        Ok(requests.iter().map(mr_summary).collect())
+        requests.sort_by_key(|(_, request)| request.opened_ms);
+        Ok(requests.iter().map(|(family, request)| mr_summary(family, request)).collect())
     }
 
     fn find_mr(&self, selector: &str) -> Result<(FamilyId, MergeRequest), CoreError> {
@@ -235,7 +235,7 @@ impl Core {
                 .filter(|item| item.source != HistorySource::Inherited && offered.contains(item.delta.span.first()))
                 .collect(),
         );
-        Ok(MrDetails { mr: mr_summary(&request), diff: crate::views::render_diff(&theirs), conflicts, conversation })
+        Ok(MrDetails { mr: mr_summary(family, &request), diff: crate::views::render_diff(&theirs), conflicts, conversation })
     }
 
     /// Merges a merge request into its target on the device that holds the
@@ -271,9 +271,7 @@ impl Core {
             ),
         )
         .await;
-        let request =
-            self.families[&family_id].merge_requests().into_iter().find(|found| found.id == request.id).expect("still there");
-        Ok(mr_summary(&request))
+        Ok(self.summary_of(family_id, request.id))
     }
 
     pub(crate) async fn mr_decline(&mut self, selector: &str, reason: Option<String>) -> Result<MrSummary, CoreError> {
@@ -281,9 +279,27 @@ impl Core {
         let head = self.families[&family_id].thread_head(request.target);
         let declined = MrOp::Declined { mr: request.id, reason: reason.unwrap_or_default() };
         self.append_op(family_id, request.target, head, Op::Mr(declined)).await?;
-        let request =
-            self.families[&family_id].merge_requests().into_iter().find(|found| found.id == request.id).expect("still there");
-        Ok(mr_summary(&request))
+        Ok(self.summary_of(family_id, request.id))
+    }
+
+    /// Keeps the request open and asks its fork for changes; its agent, if
+    /// running here, hears the reason with its next prompt (ADR 0025).
+    pub(crate) async fn mr_request_changes(&mut self, selector: &str, reason: String) -> Result<MrSummary, CoreError> {
+        if reason.trim().is_empty() {
+            return Err(CoreError::Invalid("say what should change".into()));
+        }
+        let (family_id, request) = self.open_request(selector)?;
+        let head = self.families[&family_id].thread_head(request.target);
+        let asked = MrOp::ChangesRequested { mr: request.id, reason: reason.clone() };
+        self.append_op(family_id, request.target, head, Op::Mr(asked)).await?;
+        self.notify(request.fork, changes_requested_notice(&request.title, &reason)).await;
+        Ok(self.summary_of(family_id, request.id))
+    }
+
+    fn summary_of(&self, family_id: FamilyId, mr: silt_types::DeltaId) -> MrSummary {
+        let family = &self.families[&family_id];
+        let request = family.merge_requests().into_iter().find(|found| found.id == mr).expect("still there");
+        mr_summary(family, &request)
     }
 
     /// An open merge request whose target this device may write to.
@@ -441,7 +457,18 @@ fn status_text(status: &MrStatus) -> String {
     }
 }
 
-fn mr_summary(request: &MergeRequest) -> MrSummary {
+/// What the fork's agent is told when changes are asked of its request.
+pub(crate) fn changes_requested_notice(title: &str, reason: &str) -> String {
+    format!(
+        "The reviewer asked for changes to the merge request \"{title}\" from this thread before taking it: {reason}\n\
+         Make them here; the request stays open and shows that the fork moved on."
+    )
+}
+
+fn mr_summary(family: &Family, request: &MergeRequest) -> MrSummary {
+    let open = request.status == MrStatus::Open;
+    let asked = request.changes_requested.as_ref().filter(|_| open);
+    let fork_moved_ms = family.log().iter().filter(|delta| delta.thread == request.fork).map(|delta| delta.time_ms).max();
     MrSummary {
         id: short_mr(request.id),
         fork: request.fork.to_string(),
@@ -450,6 +477,8 @@ fn mr_summary(request: &MergeRequest) -> MrSummary {
         summary: request.summary.clone(),
         status: status_text(&request.status),
         opened_ms: request.opened_ms,
+        changes_requested: asked.map(|asked| asked.reason.clone()),
+        updated_since: asked.is_some_and(|asked| fork_moved_ms.is_some_and(|moved| moved > asked.at_ms)),
     }
 }
 

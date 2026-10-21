@@ -188,7 +188,7 @@ impl Redactor {
                 text(title);
                 text(summary);
             }
-            Op::Mr(MrOp::Declined { reason, .. }) => text(reason),
+            Op::Mr(MrOp::Declined { reason, .. } | MrOp::ChangesRequested { reason, .. }) => text(reason),
             Op::Comment(CommentOp::Added { text: comment, .. } | CommentOp::Replied { text: comment, .. }) => text(comment),
             _ => {}
         }

@@ -177,10 +177,19 @@ pub fn merge_requests(requests: &[MrSummary]) -> String {
             short(&request.fork),
             short(&request.target),
             request.title,
-            request.status
+            shown_status(request)
         );
     }
     out
+}
+
+/// The status, with what a reviewer asked to change while it's open.
+fn shown_status(request: &MrSummary) -> String {
+    match &request.changes_requested {
+        Some(reason) if request.updated_since => format!("changes requested, updated since: {reason}"),
+        Some(reason) => format!("changes requested: {reason}"),
+        None => request.status.clone(),
+    }
 }
 
 pub fn merge_request(details: &MrDetails) -> String {
@@ -188,7 +197,7 @@ pub fn merge_request(details: &MrDetails) -> String {
     let mut out = format!(
         "merge request {} ({})\n{}\nfrom fork {} into {}\n\n{}\n",
         request.id,
-        request.status,
+        shown_status(request),
         request.title,
         request.fork,
         request.target,

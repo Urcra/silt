@@ -499,6 +499,21 @@ fn merge_requests_open_and_resolve_once() {
     assert_eq!(family.merge_requests()[0].status, MrStatus::Open);
     assert_eq!(family.merge_requests()[0].fork, FORK);
 
+    // Asking for changes keeps it open, the latest request showing.
+    for reason in ["add a test", "and a doc comment"] {
+        let head = family.thread_head(THREAD);
+        on_thread(
+            &mut family,
+            DAEMON.derive(THREAD.0),
+            THREAD,
+            head,
+            Op::Mr(MrOp::ChangesRequested { mr, reason: reason.into() }),
+        );
+    }
+    let request = &family.merge_requests()[0];
+    assert_eq!(request.status, MrStatus::Open);
+    assert_eq!(request.changes_requested.as_ref().map(|asked| asked.reason.as_str()), Some("and a doc comment"));
+
     let parents: Frontier = family.thread_head(THREAD).ids().iter().copied().chain([mr]).collect();
     on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, parents, Op::Merge { from: FORK, mr: Some(mr) });
     let head = family.thread_head(THREAD);

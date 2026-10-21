@@ -748,8 +748,8 @@ pub enum OrgChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notification {
     pub id: i64,
-    /// `mr_opened`, `mr_approved`, `mr_declined`, `comment`, `reply` or
-    /// `mention`.
+    /// `mr_opened`, `mr_approved`, `mr_declined`, `mr_changes_requested`,
+    /// `comment`, `reply` or `mention`.
     pub kind: String,
     pub thread: ThreadId,
     /// Who caused it.

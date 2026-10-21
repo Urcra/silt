@@ -102,6 +102,11 @@ test('reviews and approves a merge request', async ({ page }) => {
   await expect(page.getByTestId('diff')).toContainText('+fn forked() {}')
   await expect(page.getByRole('main').getByText('Continuing in a fork')).toBeVisible()
 
+  await page.getByLabel('reason').fill('add a test first')
+  await page.getByRole('button', { name: 'Request changes' }).click()
+  await expect(page.getByTestId('changes-requested')).toContainText('add a test first')
+  await expect(page.getByTestId('mr-status')).toHaveText('open')
+
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
   await page.getByRole('link', { name: thread }).first().click()

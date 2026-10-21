@@ -343,6 +343,17 @@ fn the_inbox_hears_about_merge_requests_comments_and_mentions() {
     );
     assert!(bob.stdout(&["inbox"]).contains("nothing new"), "nobody hears about their own work");
 
+    // Asking for changes keeps it open and tells the fork's owner and agent.
+    alice.silt(&["mr", "request-changes", &mr, "please", "add", "a", "test"]);
+    assert!(
+        eventually(|| bob.stdout(&["inbox"]).contains("alice asks for changes to your merge request")),
+        "{}",
+        bob.stdout(&["inbox"])
+    );
+    assert!(eventually(|| bob.stdout(&["mr", "list"]).contains("changes requested: please add a test")));
+    let fork_session = first_session(bob);
+    assert!(eventually(|| prompt_hook(bob, &fork_session).contains("asked for changes")), "Bob's agent hears what to change");
+
     alice.silt(&["mr", "approve", &mr]);
     assert!(eventually(|| bob.stdout(&["inbox"]).contains("alice approved and merged your merge request")));
     let praised = alice.stdout(&["comment", &thread, "--entry", "0", "nice work @bob"]);

@@ -114,6 +114,24 @@ impl Server {
                         });
                     }
                 }
+                Op::Mr(MrOp::ChangesRequested { mr, reason }) => {
+                    let fork = self.shared.index.lock().await.request_fork(*mr);
+                    if let Some(fork) = fork
+                        && let Some(owner) = owner(db, fork).await?
+                    {
+                        notes.push(Note {
+                            user: owner,
+                            kind: "mr_changes_requested",
+                            thread: fork,
+                            text: format!(
+                                "{actor_name} asks for changes to your merge request from fork {}: {}",
+                                fork.short(),
+                                clip(reason)
+                            ),
+                        });
+                    }
+                    mentioned.clone_from(reason);
+                }
                 Op::Comment(CommentOp::Added { text, .. }) => {
                     if let Some(owner) = owner(db, delta.thread).await? {
                         notes.push(Note {

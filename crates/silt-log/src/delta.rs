@@ -114,9 +114,23 @@ pub enum CommentTarget {
 /// fork's head being offered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MrOp {
-    Opened { target: ThreadId, title: String, summary: String },
-    Approved { mr: DeltaId },
-    Declined { mr: DeltaId, reason: String },
+    Opened {
+        target: ThreadId,
+        title: String,
+        summary: String,
+    },
+    Approved {
+        mr: DeltaId,
+    },
+    Declined {
+        mr: DeltaId,
+        reason: String,
+    },
+    /// Keeps the request open with what to change first (ADR 0025).
+    ChangesRequested {
+        mr: DeltaId,
+        reason: String,
+    },
 }
 
 impl Op {

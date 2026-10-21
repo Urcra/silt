@@ -267,6 +267,12 @@ enum MrCommand {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Keep it open and ask the fork for changes first
+    RequestChanges {
+        mr: String,
+        #[arg(required = true)]
+        reason: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -575,6 +581,7 @@ fn run() -> Result<(), Exn<CliError>> {
             MrCommand::Show { mr } => commands::mr_show(&mr),
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
+            MrCommand::RequestChanges { mr, reason } => commands::mr_request_changes(&mr, &reason.join(" ")),
         },
         Command::Visibility { visibility, thread } => commands::visibility(visibility, thread),
         Command::Auth { command } => match command {

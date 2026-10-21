@@ -111,6 +111,11 @@ pub enum Request {
         mr: String,
         reason: Option<String>,
     },
+    /// Keeps a merge request open, asking its fork for changes first.
+    MrRequestChanges {
+        mr: String,
+        reason: String,
+    },
     /// A page of a thread's full history, across compactions and forks.
     HistoryRead {
         thread: String,
@@ -600,6 +605,12 @@ pub struct MrSummary {
     /// `open`, `approved` or `declined: <reason>`.
     pub status: String,
     pub opened_ms: i64,
+    /// What to change before it's taken, while it's open (ADR 0025).
+    #[serde(default)]
+    pub changes_requested: Option<String>,
+    /// The fork has moved on since changes were asked for.
+    #[serde(default)]
+    pub updated_since: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

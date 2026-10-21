@@ -23,7 +23,8 @@ export function MergeRequests() {
               {request.title}
             </Link>{' '}
             <span className="text-xs text-fg-3">
-              {short(request.fork)} → {short(request.target)} · {request.status}
+              {short(request.fork)} → {short(request.target)} · {request.changes_requested ? 'changes requested' : request.status}
+              {request.updated_since && ', updated since'}
             </span>
           </li>
         ))}
@@ -63,12 +64,29 @@ export function MergeRequest({ id }: { id: string }) {
         </p>
         <p className="mt-2 whitespace-pre-wrap text-sm">{mr.summary}</p>
       </div>
+      {mr.changes_requested && (
+        <div data-testid="changes-requested">
+          <Banner tone={mr.updated_since ? 'info' : 'warn'}>
+            <p className="font-medium">
+              Changes requested{mr.updated_since ? '; the fork has moved on since' : ''}
+            </p>
+            <p>{mr.changes_requested}</p>
+          </Banner>
+        </div>
+      )}
       {mr.status === 'open' && (
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" icon="check" onClick={() => void act(api.approve(id))}>
             Approve and merge
           </Button>
-          <Input aria-label="reason" placeholder="reason (optional)" value={reason} onChange={(event) => setReason(event.target.value)} />
+          <Input aria-label="reason" placeholder="reason (optional to decline)" value={reason} onChange={(event) => setReason(event.target.value)} />
+          <Button
+            disabled={!reason.trim()}
+            title="Keeps it open and tells the fork what to change"
+            onClick={() => void act(api.requestChanges(id, reason).then(() => setReason('')))}
+          >
+            Request changes
+          </Button>
           <Button variant="danger" onClick={() => void act(api.decline(id, reason))}>
             Decline
           </Button>

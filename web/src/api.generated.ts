@@ -197,7 +197,15 @@ export type MrSummary = { id: string, fork: string, target: string, title: strin
 /**
  * `open`, `approved` or `declined: <reason>`.
  */
-status: string, opened_ms: number, };
+status: string, opened_ms: number, 
+/**
+ * What to change before it's taken, while it's open (ADR 0025).
+ */
+changes_requested: string | null, 
+/**
+ * The fork has moved on since changes were asked for.
+ */
+updated_since: boolean, };
 
 export type PermissionAsked = { id: number, title: string, 
 /**

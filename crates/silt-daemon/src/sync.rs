@@ -280,26 +280,36 @@ impl Core {
         if self.families.contains_key(&family_id) {
             self.lease_changes(&fresh, &heads_before).await?;
             self.update_checkouts(family_id, &fresh).await?;
-            self.announce_requests(&fresh).await;
+            self.announce_requests(family_id, &fresh).await;
         }
         Ok(stopped)
     }
 
     /// Tells the agent of a thread here about merge requests opened on it
-    /// elsewhere, on its next prompt.
-    async fn announce_requests(&self, deltas: &[Delta]) {
+    /// elsewhere, and about changes asked of its own, on its next prompt.
+    async fn announce_requests(&self, family_id: FamilyId, deltas: &[Delta]) {
+        let runs_here = |thread: ThreadId| self.sessions.iter().any(|session| session.record.thread == thread);
         for delta in deltas {
-            if let Op::Mr(silt_log::MrOp::Opened { target, title, .. }) = &delta.op
-                && self.sessions.iter().any(|session| session.record.thread == *target)
-            {
-                self.notify(
-                    *target,
-                    format!(
-                        "A merge request \"{title}\" was opened on this thread from fork {}. The user can review it with `silt mr show` and `silt mr approve` or `silt mr decline`.",
-                        delta.thread
-                    ),
-                )
-                .await;
+            match &delta.op {
+                Op::Mr(silt_log::MrOp::Opened { target, title, .. }) if runs_here(*target) => {
+                    self.notify(
+                        *target,
+                        format!(
+                            "A merge request \"{title}\" was opened on this thread from fork {}. The user can review it with `silt mr show` and `silt mr approve` or `silt mr decline`.",
+                            delta.thread
+                        ),
+                    )
+                    .await;
+                }
+                Op::Mr(silt_log::MrOp::ChangesRequested { mr, reason }) => {
+                    let request = self.families.get(&family_id).and_then(|family| {
+                        family.merge_requests().into_iter().find(|request| request.id == *mr && runs_here(request.fork))
+                    });
+                    if let Some(request) = request {
+                        self.notify(request.fork, crate::forks::changes_requested_notice(&request.title, reason)).await;
+                    }
+                }
+                _ => {}
             }
         }
     }

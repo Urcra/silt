@@ -626,6 +626,13 @@ pub fn mr_decline(mr: &str, reason: Option<String>) -> Result<(), Exn<CliError>>
     Ok(())
 }
 
+pub fn mr_request_changes(mr: &str, reason: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let asked: MrSummary = call(&Request::MrRequestChanges { mr: mr.into(), reason: reason.into() })?;
+    println!("asked fork {} for changes to {}; it stays open", short(&asked.fork), asked.id);
+    Ok(())
+}
+
 pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let message: String = call(&Request::SetVisibility { cwd: current_dir()?, thread, visibility })?;
