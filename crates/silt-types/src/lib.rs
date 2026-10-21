@@ -9,10 +9,12 @@ mod hex_serde;
 
 mod entity;
 mod frontier;
+mod hex;
 mod id;
 mod oid;
 
-pub use entity::{BlobHash, DeviceId, FamilyId, ParseBlobHashError, ThreadId};
+pub use entity::{BlobHash, DeviceId, FamilyId, ThreadId};
 pub use frontier::{Frontier, Version};
-pub use id::{ActorId, DeltaId, DeltaSpan, Lamport, ParseActorIdError};
-pub use oid::{GitOid, ParseGitOidError};
+pub use hex::ParseIdError;
+pub use id::{ActorId, DeltaId, DeltaSpan, Lamport};
+pub use oid::GitOid;

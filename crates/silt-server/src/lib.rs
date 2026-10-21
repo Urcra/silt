@@ -915,7 +915,7 @@ async fn get_blob(
     Extension(caller): Extension<Caller>,
     UrlPath(hash_hex): UrlPath<String>,
 ) -> Result<Vec<u8>, ApiError> {
-    let hash = parse_blob_hash(&hash_hex).ok_or_else(|| bad_request("invalid blob hash"))?;
+    let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
     let references = server.shared.index.lock().await.blob_references(hash);
     let viewer = server.viewer(caller.user).await?;
     let mut readable = false;
@@ -1065,17 +1065,6 @@ impl Drop for Waiter<'_> {
             waiters.remove(&self.family);
         }
     }
-}
-
-fn parse_blob_hash(hex: &str) -> Option<BlobHash> {
-    if hex.len() != 64 {
-        return None;
-    }
-    let mut bytes = [0u8; 32];
-    for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(BlobHash(bytes))
 }
 
 pub(crate) fn hash(text: &str) -> [u8; 32] {

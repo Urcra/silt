@@ -4,6 +4,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::ParseIdError;
+
 /// A replica that produces deltas: one checkout, daemon or server writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ActorId(pub u128);
@@ -33,18 +35,11 @@ impl fmt::Display for ActorId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid actor id {0:?}: expected 32 hex digits")]
-pub struct ParseActorIdError(String);
-
 impl FromStr for ActorId {
-    type Err = ParseActorIdError;
+    type Err = ParseIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() != 32 {
-            return Err(ParseActorIdError(s.to_owned()));
-        }
-        u128::from_str_radix(s, 16).map(Self).map_err(|_| ParseActorIdError(s.to_owned()))
+        crate::hex::parse("actor id", s).map(|bytes| Self(u128::from_be_bytes(bytes)))
     }
 }
 
@@ -96,13 +91,16 @@ impl fmt::Display for DeltaId {
 }
 
 impl FromStr for DeltaId {
-    type Err = ParseActorIdError;
+    type Err = ParseIdError;
 
     /// Parses the `actor.lamport` form produced by `Display`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let invalid = || ParseActorIdError(s.to_owned());
+        let invalid = || ParseIdError::new("delta id (actor.lamport)", 32, s);
         let (actor, lamport) = s.split_once('.').ok_or_else(invalid)?;
-        Ok(Self::new(actor.parse()?, Lamport(lamport.parse().map_err(|_| invalid())?)))
+        if lamport.is_empty() || !lamport.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        Ok(Self::new(actor.parse().map_err(|_| invalid())?, Lamport(lamport.parse().map_err(|_| invalid())?)))
     }
 }
 

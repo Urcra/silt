@@ -22,25 +22,11 @@ impl fmt::Debug for GitOid {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid git object id {0:?}: expected 40 hex digits")]
-pub struct ParseGitOidError(String);
-
 impl FromStr for GitOid {
-    type Err = ParseGitOidError;
+    type Err = crate::ParseIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let error = || ParseGitOidError(s.to_owned());
-        if s.len() != 40 || !s.is_ascii() {
-            return Err(error());
-        }
-        let mut bytes = [0u8; 20];
-        let (pairs, _) = s.as_bytes().as_chunks::<2>();
-        for (byte, pair) in bytes.iter_mut().zip(pairs) {
-            let pair = std::str::from_utf8(pair).map_err(|_| error())?;
-            *byte = u8::from_str_radix(pair, 16).map_err(|_| error())?;
-        }
-        Ok(Self(bytes))
+        crate::hex::parse("git object id", s).map(Self)
     }
 }
 
