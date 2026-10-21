@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { rememberModes } from '../agentModes'
 import { api, type AgentStatus, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
-import { PRESETS, STATE_PHRASE, running } from '../agentState'
+import { APPROVED, PRESETS, STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
 import { useActions } from '../shortcuts'
 import { PromptQueue } from './Queue'
@@ -100,8 +100,6 @@ function AgentChoices({ thread, status, act }: { thread: string; status: AgentSt
     </div>
   )
 }
-
-const APPROVED = 'The plan is approved. Go ahead.'
 
 /**
  * The agent working in the thread from the web UI (ADR 0014): starting it,

@@ -386,6 +386,11 @@ impl Core {
         }) else {
             return Ok(None);
         };
+        // An agent started from the web UI loads or primes the session
+        // itself, so there is nothing to restore unless a CLI takes it on.
+        if session.agent == silt_agents::acp::AGENT && target.is_none_or(|target| target.id() == session.agent) {
+            return Ok(None);
+        }
         let source = resolve_agent(&session.agent)?;
         let target = target.unwrap_or(source);
         let relative = history

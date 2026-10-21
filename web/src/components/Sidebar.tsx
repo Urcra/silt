@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { STATE_TAG } from '../agentState'
+import { useState } from 'react'
+import { APPROVED, STATE_TAG } from '../agentState'
+import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import { useTopic } from '../bus'
 import { projectName, projects } from '../projects'
-import { keys } from '../query'
-import { Icon, Skeleton, Tag } from '../ui'
+import { keys, message } from '../query'
+import { Button, Icon, Skeleton, Tag } from '../ui'
 
 /** An agent state worth showing next to its thread; a stopped one isn't. */
 function shownState(thread: ThreadSummary) {
@@ -27,6 +29,47 @@ function ThreadItem({ thread }: { thread: ThreadSummary }) {
         {thread.title ?? 'Untitled thread'}
       </Link>
       {state && <Tag tone={state.tone}>{state.label}</Tag>}
+    </li>
+  )
+}
+
+/** A thread waiting on the person, with what it waits for answerable in place. */
+function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
+  const status = useAgentStatus(thread.id)
+  const [error, setError] = useState<string>()
+  const act = (action: Promise<unknown>) => {
+    setError(undefined)
+    action.catch((failure: unknown) => setError(message(failure)))
+  }
+  const asked = status?.permissions[0]
+  const title = thread.title ?? 'Untitled thread'
+  return (
+    <li role="group" aria-label={`${title} needs you`}>
+      <ul>
+        <ThreadItem thread={thread} />
+      </ul>
+      {asked && (
+        <div className="space-y-1 px-4 pb-2 text-xs">
+          <p className="truncate text-fg-2" title={asked.title}>
+            Asks to run: {asked.title}
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {asked.options.map(([option, label]) => (
+              <Button key={option} className="px-1.5 py-0.5" onClick={() => act(api.answer(thread.id, asked.id, option))}>
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+      {status?.state === 'awaiting_input' && (
+        <div className="px-4 pb-2">
+          <Button variant="primary" className="px-1.5 py-0.5" onClick={() => act(api.prompt(thread.id, APPROVED))}>
+            Approve plan
+          </Button>
+        </div>
+      )}
+      {error && <p className="px-4 pb-2 text-xs text-danger">{error}</p>}
     </li>
   )
 }
@@ -67,7 +110,7 @@ export function Sidebar() {
           <h2 className="px-4 pt-2 pb-1 font-mono text-[10px] tracking-wider text-accent-fg uppercase">Needs you</h2>
           <ul>
             {waiting.map((thread) => (
-              <ThreadItem key={thread.id} thread={thread} />
+              <NeedsYouItem key={thread.id} thread={thread} />
             ))}
           </ul>
         </section>

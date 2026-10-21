@@ -30,6 +30,9 @@ export const STATE_TAG: Record<AgentState, { label: string; tone: Tone }> = {
   stopped: { label: 'stopped', tone: 'neutral' },
 }
 
+/** What approving a plan tells the agent. */
+export const APPROVED = 'The plan is approved. Go ahead.'
+
 export function running(state: AgentState): boolean {
   return state !== 'error' && state !== 'stopped'
 }

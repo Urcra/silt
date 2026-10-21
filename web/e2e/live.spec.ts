@@ -303,3 +303,54 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await page.getByRole('tab', { name: 'Against main' }).click()
   await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
 })
+
+/** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */
+async function startInBackground(page: Page, project: RegExp, prompt: string) {
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  const projects = form.getByLabel('project')
+  await projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
+  await form.getByLabel('first prompt').fill(prompt)
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByLabel('permissions').selectOption('ask_for_everything')
+  await form.getByLabel('Start in the background').check()
+  await form.getByRole('button', { name: 'Start' }).click()
+  await expect(form.getByLabel('first prompt')).toHaveValue('')
+}
+
+test('two agents in two projects queue prompts, are answered from the sidebar, and a fork is offered back', async ({ page }) => {
+  await page.goto(live.alice)
+  await startInBackground(page, /origin/, 'work in origin')
+  await startInBackground(page, /tools/, 'work in tools')
+
+  const sidebar = page.getByRole('navigation', { name: 'projects' })
+  const origin = sidebar.getByRole('group', { name: 'work in origin needs you' })
+  const tools = sidebar.getByRole('group', { name: 'work in tools needs you' })
+  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
+  await expect(tools).toContainText('Asks to run: Edit src/main.rs')
+
+  await origin.getByRole('link', { name: 'work in origin' }).click()
+  await page.getByLabel('draft').fill('then document it')
+  await page.getByRole('button', { name: 'Queue', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'queued prompts' })).toContainText('then document it')
+
+  await tools.getByRole('button', { name: 'Allow' }).click()
+  await expect(tools).toBeHidden()
+  await origin.getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('Done: work in origin')).toBeVisible()
+  // The queued prompt went next, and asks in turn.
+  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
+  await origin.getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('Done: then document it')).toBeVisible()
+  await expect(origin).toBeHidden()
+
+  await page.getByRole('button', { name: 'Fork', exact: true }).click()
+  await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
+  await page.getByRole('button', { name: 'Offer as merge request' }).click()
+  await page.getByLabel('merge request title').fill('Origin work')
+  await page.getByRole('button', { name: 'Offer', exact: true }).click()
+  await expect(page).toHaveURL(/\/mr\//)
+  await expect(page.getByTestId('mr-status')).toHaveText('open')
+  await page.getByRole('link', { name: 'Merge requests' }).click()
+  await expect(page.getByRole('main')).toContainText('Origin work')
+})

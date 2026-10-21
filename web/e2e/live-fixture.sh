@@ -1,7 +1,8 @@
 #!/bin/sh
 # A server with two people, Alice and Bob, each with a daemon and a clone.
 # Alice records a thread with the fake Claude and shares it with Bob; both
-# open the web UI. Both can start the scripted ACP agent from it. Prints the details as one JSON line.
+# open the web UI. Both can start the scripted ACP agent from it. Alice has
+# a clone of a second project, tools, too. Prints the details as one JSON line.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
@@ -19,6 +20,13 @@ printf 'fn main() {}\n' > "$work/seed/src/main.rs"
 git -C "$work/seed" add .
 git -C "$work/seed" -c user.name=t -c user.email=t@example.com commit -q -m init
 git clone -q --bare "$work/seed" "$work/origin.git"
+# A second project, which only Alice has a clone of.
+git init -q -b main "$work/tools-seed"
+mkdir -p "$work/tools-seed/src"
+printf 'fn tool() {}\n' > "$work/tools-seed/src/main.rs"
+git -C "$work/tools-seed" add .
+git -C "$work/tools-seed" -c user.name=t -c user.email=t@example.com commit -q -m init
+git clone -q --bare "$work/tools-seed" "$work/tools.git"
 
 printf '%s\n' "$password" | "$silt" server init --data "$work/server" --listen "127.0.0.1:$port" --public-url "$url" --password-stdin > /dev/null
 for user in alice bob; do
@@ -51,6 +59,8 @@ machine alice
 thread=$("$silt" log | awk 'NR == 1 { print $1 }')
 "$silt" thread share "$thread" bob > /dev/null
 alice_url=$("$silt" open --no-browser)
+git clone -q "$work/tools.git" "$work/alice/tools"
+(cd "$work/alice/tools" && "$silt" open --no-browser > /dev/null)
 
 machine bob
 for _ in $(seq 1 100); do

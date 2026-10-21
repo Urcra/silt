@@ -110,12 +110,15 @@ impl Core {
             self.registry_checked = true;
             tokio::spawn(registry::refresh(self.data_dir.clone()));
         }
+        let mut clones: Vec<CloneInfo> =
+            self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect();
+        clones.sort_by(|a, b| a.repo.cmp(&b.repo));
         AgentChoices {
             agents: registry::all(&self.data_dir)
                 .into_iter()
                 .map(|agent| AgentChoice { id: agent.id, name: agent.name, description: agent.description })
                 .collect(),
-            clones: self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect(),
+            clones,
         }
     }
 

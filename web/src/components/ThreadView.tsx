@@ -1,11 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useContext, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { MainScroll } from '../scroll'
+import { useActions } from '../shortcuts'
+import { Button, Input, toast } from '../ui'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
 import { LivePanel } from './Live'
@@ -129,6 +131,54 @@ function Entry({
   )
 }
 
+/** Fork the thread here, or offer a fork's work back to its source as a merge request. */
+function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
+  const navigate = useNavigate()
+  const [offering, setOffering] = useState(false)
+  const [title, setTitle] = useState('')
+  const [error, setError] = useState<string>()
+  const failed = (failure: unknown) => setError(message(failure))
+  const fork = () => {
+    setError(undefined)
+    api.fork(thread).then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)
+  }
+  useActions([
+    { id: 'fork', label: 'Fork this thread', run: fork },
+    ...(forked ? [{ id: 'offer', label: 'Offer as merge request', run: () => setOffering(true) }] : []),
+  ])
+  return (
+    <>
+      <Button icon="branch" onClick={fork} title="A copy of the thread, in a checkout of its own, to try something else in">
+        Fork
+      </Button>
+      {forked && !offering && (
+        <Button icon="merge" onClick={() => setOffering(true)}>
+          Offer as merge request
+        </Button>
+      )}
+      {offering && (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setError(undefined)
+            api.offerMergeRequest(thread, title).then((mr) => {
+              toast(`Offered "${mr.title}"`, 'ok')
+              void navigate({ to: '/mr/$id', params: { id: mr.id } })
+            }, failed)
+          }}
+        >
+          <Input aria-label="merge request title" autoFocus placeholder="What it does" value={title} onChange={(event) => setTitle(event.target.value)} />
+          <Button type="submit" variant="primary" disabled={!title.trim()}>
+            Offer
+          </Button>
+        </form>
+      )}
+      {error && <p className="w-full text-sm text-danger">{error}</p>}
+    </>
+  )
+}
+
 export function ThreadView({ id }: { id: string }) {
   const queries = useQueryClient()
   const history = useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
@@ -191,6 +241,7 @@ export function ThreadView({ id }: { id: string }) {
           </select>
           <Copy command={`silt resume ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <Copy command={`silt fork ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
+          <ForkActions thread={fullId} forked={Boolean(summary?.forked_from)} />
         </div>
         <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
         {history.data?.thread && (
