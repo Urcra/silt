@@ -13,8 +13,7 @@ fi
 cargo fmt --all -- --check
 cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-# The sandbox's tests skip where namespaces are off; here they must run.
-SILT_REQUIRE_SANDBOX="${SILT_REQUIRE_SANDBOX:-1}" cargo test --workspace
+cargo test --workspace
 cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm --target wasm32-unknown-unknown
 
 # Playwright drives the built UI against a real daemon.

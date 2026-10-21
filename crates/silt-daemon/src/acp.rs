@@ -78,7 +78,7 @@ impl Core {
             tokio::spawn(registry::refresh(self.data_dir.clone()));
         }
         AgentChoices {
-            agents: registry::all(&self.data_dir, &silt_exe())
+            agents: registry::all(&self.data_dir)
                 .into_iter()
                 .map(|agent| AgentChoice { id: agent.id, name: agent.name, description: agent.description })
                 .collect(),
@@ -94,7 +94,7 @@ impl Core {
         clone: Option<&Path>,
         agent: &str,
     ) -> Result<String, CoreError> {
-        let info = registry::all(&self.data_dir, &silt_exe())
+        let info = registry::all(&self.data_dir)
             .into_iter()
             .find(|candidate| candidate.id == agent)
             .ok_or_else(|| CoreError::Invalid(format!("no agent called {agent}")))?;
