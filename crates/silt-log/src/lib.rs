@@ -1,8 +1,10 @@
+mod commits;
 mod delta;
 mod family;
 mod purge;
 mod stored;
 
+pub use commits::{ThreadCommit, commits_in};
 pub use delta::{
     Author, CommentOp, CommentTarget, Content, ConvOp, Delta, GitOp, MrOp, Op, SessionFile, SessionRef, ShapeError, TurnMark,
 };

@@ -26,6 +26,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads", get(threads))
         .route("/app/api/threads/{id}/history", get(history))
         .route("/app/api/threads/{id}/turns", get(turns))
+        .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/threads/{id}/comments", get(comments))
         .route("/app/api/threads/{id}/state", patch(change_state))
         .route("/app/api/mrs", get(merge_requests))
@@ -292,6 +293,45 @@ async fn turns(
         }
     }
     Ok(Json(turns))
+}
+
+/// The thread's commits with the turns they came in (ADR 0030), and their
+/// subjects from the family's git mirror, which has those origin lacked.
+async fn commits(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<silt_proto::view::CommitView>>, ApiError> {
+    let readable = Readable::load(&server, browser.user).await?;
+    let row = readable.row(&id)?;
+    let mirror = server.git_root().join(format!("{}.git", row.family));
+    let mut views = Vec::new();
+    for commit in silt_log::commits_in(readable.of(row), row.id) {
+        let id = commit.commit.to_string();
+        views.push(silt_proto::view::CommitView {
+            subject: mirror_subject(&mirror, &id).await,
+            commit: id,
+            branch: commit.branch,
+            turn: commit.turn,
+            time_ms: commit.time_ms,
+        });
+    }
+    Ok(Json(views))
+}
+
+async fn mirror_subject(mirror: &std::path::Path, commit: &str) -> Option<String> {
+    if !mirror.exists() {
+        return None;
+    }
+    let out = tokio::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(mirror)
+        .args(["log", "-1", "--format=%s", commit, "--"])
+        .output()
+        .await
+        .ok()?;
+    let subject = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (out.status.success() && !subject.is_empty()).then_some(subject)
 }
 
 /// How a daemon shortens an id it shows, so links from either work.

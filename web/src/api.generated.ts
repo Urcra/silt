@@ -111,6 +111,8 @@ export type CommentView = { id: string, by: string, time_ms: number, text: strin
  */
 replies: Array<ReplyView>, };
 
+export type CommitView = { commit: string, subject: string | null, branch: string | null, turn: number | null, time_ms: number, };
+
 export type DaemonStatus = { server: string | null, device: string | null, sync_error: string | null, threads: number, 
 /**
  * Threads whose history here differs from the server's, so they no

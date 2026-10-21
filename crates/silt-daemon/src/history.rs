@@ -10,7 +10,7 @@ use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
-use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
+use crate::protocol::{CommitView, FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
 use crate::transcripts::native_entries;
 
 /// Longest text of one entry in a history page.
@@ -209,6 +209,53 @@ impl Core {
 
 impl Core {
     /// The thread's own turns, each with the history entry of its prompt.
+    /// The thread's commits with the turns they came in (ADR 0030), and
+    /// their subjects as this machine's clone of it has them.
+    pub(crate) fn commits(&self, thread: ThreadId) -> Vec<CommitView> {
+        let Some(family) = self.families.get(&self.threads[&thread].family) else {
+            return Vec::new();
+        };
+        let repo = self.code_of(thread).and_then(|path| silt_git::Repo::discover(&path).ok());
+        silt_log::commits_in(family.log(), thread)
+            .into_iter()
+            .map(|commit| CommitView {
+                subject: repo.as_ref().and_then(|repo| subject(repo, &commit.commit.to_string())),
+                commit: commit.commit.to_string(),
+                branch: commit.branch,
+                turn: commit.turn,
+                time_ms: commit.time_ms,
+            })
+            .collect()
+    }
+
+    /// Each thread here that made a commit whose id starts with `prefix`,
+    /// with the turn it came in.
+    pub(crate) fn find_commit(&self, prefix: &str) -> Result<Vec<(String, Option<usize>)>, CoreError> {
+        let prefix = prefix.trim().to_lowercase();
+        if prefix.len() < 4 || !prefix.chars().all(|char| char.is_ascii_hexdigit()) {
+            return Err(CoreError::Invalid("give at least four hex digits of the commit".into()));
+        }
+        let mut found = Vec::new();
+        for thread in self.threads.keys() {
+            for commit in self.commits(*thread) {
+                if commit.commit.starts_with(&prefix) {
+                    found.push((thread.to_string(), commit.turn));
+                }
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+
+    /// Where this machine has the thread's commits: its checkout, or a
+    /// clone of its project.
+    fn code_of(&self, thread: ThreadId) -> Option<std::path::PathBuf> {
+        match self.checkouts.values().find(|checkout| checkout.record.thread == thread) {
+            Some(checkout) => Some(checkout.record.path.clone()),
+            None => self.clone_of(thread).ok(),
+        }
+    }
+
     pub(crate) fn turns(&self, thread: ThreadId) -> Vec<TurnInfo> {
         let Some(family) = self.families.get(&self.threads[&thread].family) else {
             return Vec::new();
@@ -289,6 +336,13 @@ impl Timeline {
 }
 
 /// The history entries one delta contributes, as kind and text.
+/// A commit's subject line, when the clone has the commit.
+fn subject(repo: &silt_git::Repo, commit: &str) -> Option<String> {
+    let out = repo.git(&["log", "-1", "--format=%s", commit, "--"], None).ok()?;
+    let subject = String::from_utf8_lossy(&out).trim().to_owned();
+    (!subject.is_empty()).then_some(subject)
+}
+
 fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<(String, String)> {
     match &delta.op {
         Op::Conv(ConvOp::Native { .. }) => native_entries(transcripts, delta)

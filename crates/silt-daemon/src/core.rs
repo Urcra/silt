@@ -488,6 +488,8 @@ impl Core {
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
+            Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
             Request::OpenWeb { cwd, once } => {
                 if let Some(cwd) = cwd {
                     self.remember_clone(&cwd).await;

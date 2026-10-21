@@ -410,6 +410,17 @@ pub struct DeviceAgent {
     pub state: AgentState,
 }
 
+/// A commit a thread made, with the turn it came in (ADR 0030).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CommitView {
+    pub commit: String,
+    pub subject: Option<String>,
+    pub branch: Option<String>,
+    pub turn: Option<usize>,
+    pub time_ms: i64,
+}
+
 /// A read-only link to a thread (ADR 0027).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

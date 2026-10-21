@@ -138,6 +138,32 @@ function Entry({
 }
 
 /** Offers pinning, snoozing and settling the thread in the palette. */
+/** The commits the thread made, each with the turn it came in (ADR 0030). */
+function ThreadCommits({ thread }: { thread: string }) {
+  const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
+  if (!commits.data?.length) return null
+  return (
+    <section aria-label="commits" className="mb-4">
+      <h3 className="font-semibold">Commits from this thread</h3>
+      <ul className="mt-2 space-y-1 text-xs">
+        {commits.data.map((commit) => (
+          <li key={commit.commit} className="flex items-baseline gap-2">
+            <code className="text-fg-2">{commit.commit.slice(0, 8)}</code>
+            <span className="min-w-0 flex-1 truncate" title={commit.subject ?? undefined}>
+              {commit.subject ?? ''}
+            </span>
+            {commit.turn !== null && (
+              <a className="shrink-0 text-accent-fg" href={`#turn-${commit.turn}`}>
+                turn {commit.turn}
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
   const items = useThreadState(summary)
   useActions(items.map((item) => ({ id: `state:${item.label}`, label: `${item.label} this thread`, run: item.onSelect })))
@@ -306,6 +332,7 @@ export function ThreadView({ id }: { id: string }) {
         </div>
       </div>
       <aside className="text-sm">
+        <ThreadCommits thread={id} />
         <h3 className="font-semibold">Comments on code</h3>
         {comments.error && <p className="text-xs text-danger">{message(comments.error)}</p>}
         <ul data-testid="code-comments" className="mt-2 space-y-2">

@@ -14,6 +14,7 @@ export const keys = {
   thread: (id: string) => ['thread', id] as const,
   history: (id: string) => ['thread', id, 'history'] as const,
   turns: (id: string) => ['thread', id, 'turns'] as const,
+  commits: (id: string) => ['thread', id, 'commits'] as const,
   comments: (id: string) => ['thread', id, 'comments'] as const,
   queue: (id: string) => ['thread', id, 'queue'] as const,
   diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,

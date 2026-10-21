@@ -109,8 +109,12 @@ enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
-    /// List recorded threads
-    Log,
+    /// List recorded threads, or with --commit the threads and turns that
+    /// made a commit
+    Log {
+        #[arg(long)]
+        commit: Option<String>,
+    },
     /// Show a thread's conversation and the files each tool call changed
     Show { thread: String },
     /// Show what a thread, or one of its turns, changed
@@ -638,7 +642,8 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Project { command: ProjectCommand::Set { name, agent, preset } } => admin::project_here().and_then(|repo| {
             admin::org_change(OrgChange::ProjectSettings { repo, name, default_agent: agent, default_preset: preset })
         }),
-        Command::Log => commands::log(),
+        Command::Log { commit: None } => commands::log(),
+        Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
         Command::Search { query, repo, author, status, branch, file, since, until } => {

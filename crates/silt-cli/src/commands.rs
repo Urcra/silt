@@ -701,6 +701,21 @@ pub fn log() -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn find_commit(commit: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let found: Vec<(String, Option<usize>)> = call(&Request::FindCommit { commit: commit.into() })?;
+    if found.is_empty() {
+        println!("no thread here made {commit}");
+    }
+    for (thread, turn) in found {
+        match turn {
+            Some(turn) => println!("{thread} turn {turn}"),
+            None => println!("{thread} before its first turn"),
+        }
+    }
+    Ok(())
+}
+
 pub fn show(thread: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let lines: Vec<ShowLine> = call(&Request::Show { thread: thread.into() })?;

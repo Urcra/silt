@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    CommentLocation, CommentOn, CommentView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit, HistoryEntry,
-    HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink, Project, ReplyView, SearchFilters,
-    SearchResult, ShowLine, StateChange, ThreadLink, ThreadSummary, TurnInfo,
+    CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit,
+    HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink, Project, ReplyView,
+    SearchFilters, SearchResult, ShowLine, StateChange, ThreadLink, ThreadSummary, TurnInfo,
 };
 
 /// One request per line on the daemon socket, answered by one response line.
@@ -149,6 +149,14 @@ pub enum Request {
     /// The thread's turns, for showing each turn's diff next to its prompt.
     Turns {
         thread: String,
+    },
+    /// The commits the thread made, with their turns (ADR 0030).
+    Commits {
+        thread: String,
+    },
+    /// The threads and turns that made commits starting with `commit`.
+    FindCommit {
+        commit: String,
     },
     /// Starts the web UI if needed; answers with its URL.
     OpenWeb {
@@ -855,6 +863,7 @@ mod tests {
             CommentLocation::decl(&config),
             CommentOn::decl(&config),
             CommentView::decl(&config),
+            CommitView::decl(&config),
             DaemonStatus::decl(&config),
             DeviceAgent::decl(&config),
             DeviceChange::decl(&config),

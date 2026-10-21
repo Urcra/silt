@@ -610,6 +610,26 @@ fn an_agent_reads_what_was_decided_before_compaction() {
 }
 
 #[test]
+fn a_commit_is_found_with_the_thread_and_turn_that_made_it() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    git(&env.repo, &["commit", "-qam", "add a farewell"]);
+    let commit = String::from_utf8_lossy(
+        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&env.repo).output().expect("git runs").stdout,
+    )
+    .trim()
+    .to_owned();
+    let full = env.stdout(&["history", &thread]);
+    let full_id = full.split_whitespace().nth(1).expect("the thread's full id").trim_end_matches(':').to_owned();
+    assert!(eventually(|| env.stdout(&["log", "--commit", &commit[..10]]).contains(&format!("{full_id} turn 1"))));
+    assert!(env.stdout(&["log", "--commit", "abcdef12"]).contains("no thread here made"));
+    let refused = env.run(&["log", "--commit", "xy"]);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("four hex digits"));
+}
+
+#[test]
 fn diffs_start_from_the_base_asked_for() {
     let env = Env::new();
     let first = String::from_utf8_lossy(

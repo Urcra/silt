@@ -882,3 +882,17 @@ test('the owner shares a thread from its page: who sees it, and who may write in
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(dialog).toContainText('could not share the thread')
 })
+
+// Last: it commits in Alice's clone, which the threads above work in.
+test("a thread's page lists its commits with the turns they came in", async ({ page }) => {
+  const repo = join(live.work, 'alice', 'repo')
+  execFileSync('git', ['-C', repo, '-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '-qam', 'Add the farewell'])
+  await page.goto(live.alice)
+  const commits = page.getByRole('region', { name: 'commits' })
+  await expect(async () => {
+    await page.goto(new URL(`/t/${live.thread}`, live.alice).toString())
+    await expect(commits).toContainText('Add the farewell', { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  // Tests above prompted in this thread too, so which turn depends on them.
+  await expect(commits.getByRole('link', { name: /^turn \d+$/ }).last()).toBeVisible()
+})

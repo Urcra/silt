@@ -8,6 +8,7 @@ import type {
   AgentChoices,
   CommentOn,
   CommentView,
+  CommitView,
   DaemonStatus,
   DeviceChange,
   DeviceView,
@@ -101,6 +102,7 @@ export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   history: (id: string) => request<HistoryPage>('GET', `${thread(id)}/history`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
+  commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
   diff: (id: string, options: { turn?: number; base?: string } = {}) => {
     const params = new URLSearchParams()
     if (options.turn !== undefined) params.set('turn', String(options.turn))
