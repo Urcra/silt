@@ -184,7 +184,10 @@ impl Remote {
         visibility: Option<Visibility>,
         origin_url: Option<String>,
     ) -> Result<(), RemoteError> {
-        let body = RegisterThread { thread: thread.clone(), visibility, origin_url };
+        self.register(RegisterThread { thread: thread.clone(), visibility, origin_url, recovery_of: None }).await
+    }
+
+    pub async fn register(&self, body: RegisterThread) -> Result<(), RemoteError> {
         let response = self.request(reqwest::Method::POST, "/v1/threads").json(&body).send().await?;
         checked(response).await?;
         Ok(())

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", kind, thread_id, actor, text, created_ms, read_ms FROM notifications\n         WHERE user_id = ? AND (? OR read_ms IS NULL) ORDER BY id DESC LIMIT ?",
+  "query": "SELECT id AS \"id!\", kind, thread_id, actor, text, created_ms, read_ms, action FROM notifications\n         WHERE user_id = ? AND (? OR read_ms IS NULL) ORDER BY id DESC LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "read_ms"
           }
         }
+      },
+      {
+        "name": "action",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notifications",
+            "name": "action"
+          }
+        }
       }
     ],
     "parameters": {
@@ -91,8 +102,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "c7ea457bdd5a8567d7b0a80b0eb7f75a33c312afe27f729aaa975b0632802315"
+  "hash": "373f7a3a712fe34ec8f2fc80cb3a88dc2164d3f23468a2d03b1d56e8ae2b6900"
 }

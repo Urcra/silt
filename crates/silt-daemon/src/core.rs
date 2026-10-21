@@ -1414,6 +1414,7 @@ impl Core {
                     text: notification.text,
                     created_ms: notification.created_ms,
                     read: notification.read,
+                    action: notification.action,
                 })
                 .collect())
         })

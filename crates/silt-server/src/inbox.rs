@@ -10,7 +10,7 @@ use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use silt_log::{CommentOp, Delta, MrOp, Op};
-use silt_proto::{InboxRead, InboxReply, Notification};
+use silt_proto::{InboxAction, InboxRead, InboxReply, Notification};
 use silt_types::ThreadId;
 use sqlx::sqlite::SqlitePool;
 
@@ -201,6 +201,56 @@ impl Server {
     }
 }
 
+/// What a device did or reports, for its person (ADR 0028).
+pub(crate) struct PersonNote<'a> {
+    pub(crate) user: UserId,
+    pub(crate) kind: &'static str,
+    pub(crate) thread: ThreadId,
+    /// The device it's about.
+    pub(crate) actor: &'a str,
+    pub(crate) text: String,
+    pub(crate) action: Option<InboxAction>,
+}
+
+/// Writes `note`, bringing an unread one of the same kind and thread up to
+/// date rather than repeating it.
+pub(crate) async fn notify_person(db: &SqlitePool, note: PersonNote<'_>) -> Result<(), sqlx::Error> {
+    let (thread, now) = (id_bytes(note.thread.0), now_ms());
+    let action = note.action.as_ref().and_then(|action| serde_json::to_string(action).ok());
+    let updated = sqlx::query!(
+        "UPDATE notifications SET text = ?, actor = ?, action = ?, created_ms = ?
+         WHERE user_id = ? AND kind = ? AND thread_id = ? AND read_ms IS NULL",
+        note.text,
+        note.actor,
+        action,
+        now,
+        note.user,
+        note.kind,
+        thread,
+    )
+    .execute(db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        // Not from a delta: a key of its own keeps it apart from the rest.
+        let key = format!("{}:{}", note.kind, uuid::Uuid::new_v4().simple());
+        sqlx::query!(
+            "INSERT INTO notifications (user_id, kind, thread_id, delta, actor, text, created_ms, action)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            note.user,
+            note.kind,
+            thread,
+            key,
+            note.actor,
+            note.text,
+            now,
+            action,
+        )
+        .execute(db)
+        .await?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub(crate) struct InboxQuery {
     #[serde(default)]
@@ -213,7 +263,7 @@ pub(crate) async fn list(
     Query(query): Query<InboxQuery>,
 ) -> Result<Json<InboxReply>, ApiError> {
     let rows = sqlx::query!(
-        r#"SELECT id AS "id!", kind, thread_id, actor, text, created_ms, read_ms FROM notifications
+        r#"SELECT id AS "id!", kind, thread_id, actor, text, created_ms, read_ms, action FROM notifications
          WHERE user_id = ? AND (? OR read_ms IS NULL) ORDER BY id DESC LIMIT ?"#,
         caller.user,
         query.all,
@@ -232,6 +282,8 @@ pub(crate) async fn list(
             text: row.text,
             created_ms: row.created_ms,
             read: row.read_ms.is_some(),
+            // Only while it's unread: what it answers has moved on since.
+            action: row.action.filter(|_| row.read_ms.is_none()).and_then(|action| serde_json::from_str(&action).ok()),
         })
         .filter(|notification| viewer.sees_thread(notification.thread))
         .collect();

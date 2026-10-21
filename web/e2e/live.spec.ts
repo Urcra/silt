@@ -271,6 +271,30 @@ test("another of Alice's machines directs the agent running on the first, throug
   await laptop.context().close()
 })
 
+test('the inbox hears that an agent waits, and answers it in place', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('permissions').selectOption('ask_for_everything')
+  await page.getByLabel('draft').fill('ask me in the inbox')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
+  const thread = new URL(page.url()).pathname.split('/t/')[1]
+
+  const item = page
+    .getByTestId('inbox')
+    .getByRole('listitem')
+    .filter({ hasText: thread.slice(-12) })
+    .filter({ hasText: 'asks to run: Edit src/main.rs' })
+  await expect(async () => {
+    await page.goto(new URL('/inbox', live.alice).toString())
+    await expect(item).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await item.getByRole('button', { name: 'Allow' }).click()
+  await expect(item).toHaveCount(0)
+  await page.goto(new URL(`/t/${thread}`, live.alice).toString())
+  await expect(page.getByText(/^Done: [\s\S]*ask me in the inbox$/)).toBeVisible()
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+})
+
 test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
   const hosted = await (await browser.newContext()).newPage()
   await hosted.goto(`${live.server}/app/t/${live.thread}`)

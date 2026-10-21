@@ -502,6 +502,7 @@ async fn inbox(
                 text: note.text,
                 created_ms: note.created_ms,
                 read: note.read,
+                action: note.action,
             })
             .collect(),
     ))

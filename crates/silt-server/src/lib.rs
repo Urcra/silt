@@ -325,6 +325,7 @@ impl Server {
             tracing::warn!(%error, "could not purge the trash");
         }
         self.keep_trash_tidy();
+        self.watch_devices();
         axum::serve(listener, self.router()).await
     }
 }
@@ -601,7 +602,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
 async fn register_thread(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
-    Json(RegisterThread { thread, visibility, origin_url }): Json<RegisterThread>,
+    Json(RegisterThread { thread, visibility, origin_url, recovery_of }): Json<RegisterThread>,
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
     claim_family(&server, thread.family, caller).await?;
@@ -629,6 +630,18 @@ async fn register_thread(
     orgs::place_project(db, &thread.repo, caller.user).await?;
     if let Some(origin_url) = origin_url.filter(|_| !thread.repo.is_empty()) {
         projects::note_origin(db, &thread.repo, &silt_proto::shareable_url(&origin_url)).await?;
+    }
+    if let Some(of) = recovery_of {
+        let device =
+            sqlx::query_scalar!("SELECT name FROM devices WHERE id = ?", id_bytes(caller.device.0)).fetch_one(db).await?;
+        let text = format!(
+            "{device} kept its work on thread {} in recovery thread {}: its copy differed from the server's",
+            of.short(),
+            thread.id.short()
+        );
+        let note =
+            inbox::PersonNote { user: caller.user, kind: "recovered", thread: thread.id, actor: &device, text, action: None };
+        inbox::notify_person(db, note).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

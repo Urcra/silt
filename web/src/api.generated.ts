@@ -11,6 +11,8 @@ export type AgentState = "starting" | "idle" | "working" | "awaiting_permission"
 
 export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
 
+export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
+
 export type Startable = { id: string, name: string, };
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
@@ -173,7 +175,7 @@ export type HistoryPage = { thread: string, total: number, entries: Array<Histor
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
-export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, };
+export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, action: InboxAction | null, };
 
 export type LiveState = { deltas: number, 
 /**

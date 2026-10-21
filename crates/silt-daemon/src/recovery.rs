@@ -59,7 +59,7 @@ impl Core {
 
         for (thread, conversation) in conversations {
             let recovery = self.fork_thread(thread).await?;
-            self.register_thread_now(recovery).await?;
+            self.register_recovery(recovery, thread).await?;
             let server_ids: HashSet<DeltaId> = self.families[&family_id].log().iter().map(|delta| delta.span.first()).collect();
             for delta in conversation.iter().filter(|delta| !server_ids.contains(&delta.span.first())) {
                 if let Op::Conv(op) = &delta.op

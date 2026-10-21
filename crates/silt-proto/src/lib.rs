@@ -98,6 +98,9 @@ pub struct RegisterThread {
     /// credentials, for others to clone it (ADR 0023).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
+    /// The thread this one recovers what diverged of (ADR 0028).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_of: Option<ThreadId>,
 }
 
 /// A value and when someone set it, so the newest of two settings wins.
@@ -803,7 +806,8 @@ pub enum OrgChange {
 pub struct Notification {
     pub id: i64,
     /// `mr_opened`, `mr_approved`, `mr_declined`, `mr_changes_requested`,
-    /// `comment`, `reply` or `mention`.
+    /// `comment`, `reply` or `mention`; from what devices report,
+    /// `permission`, `plan`, `finished`, `errored`, `offline` or `recovered`.
     pub kind: String,
     pub thread: ThreadId,
     /// Who caused it.
@@ -811,6 +815,19 @@ pub struct Notification {
     pub text: String,
     pub created_ms: i64,
     pub read: bool,
+    #[serde(default)]
+    pub action: Option<InboxAction>,
+}
+
+/// What can be done from a notification in place (ADR 0028).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "do", rename_all = "snake_case")]
+pub enum InboxAction {
+    /// Answer the agent's permission request with one of its options.
+    Permission { id: u64, title: String, options: Vec<(String, String)> },
+    /// Approve the agent's plan.
+    Plan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -301,7 +301,8 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
         owner: String::new(),
         collaborators: Vec::new(),
     };
-    let register = silt_proto::RegisterThread { thread: info, visibility: Some(Visibility::Private), origin_url: None };
+    let register =
+        silt_proto::RegisterThread { thread: info, visibility: Some(Visibility::Private), origin_url: None, recovery_of: None };
     assert_eq!(bob.send(bob.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
     let family = &mut world.family;
     let head = family.thread_head(THREAD);
@@ -778,6 +779,66 @@ async fn the_hosted_app_comments_and_reviews_as_the_person() {
 }
 
 #[tokio::test]
+async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
+    use silt_proto::{AgentReport, AgentState, AgentsReport, AskedPermission};
+    let world = world(Visibility::Private).await;
+    let machine = &world.alice;
+    let report = |state, asked: Option<u64>| AgentsReport {
+        agents: vec![AgentReport {
+            thread: THREAD,
+            agent: "Fake agent".into(),
+            state,
+            permissions: asked
+                .map(|id| AskedPermission { id, title: "Edit a.rs".into(), options: vec![("allow".into(), "Allow".into())] })
+                .into_iter()
+                .collect(),
+            queued: 0,
+            preset: String::new(),
+        }],
+        startable: Vec::new(),
+    };
+    async fn put(client: &Client, report: AgentsReport) {
+        assert_eq!(client.send(client.request(Method::PUT, "/v1/control/agents").json(&report)).await, StatusCode::NO_CONTENT);
+    }
+    let alice = Browser::sign_in(machine, "alice").await;
+    let inbox = || async { alice.get("/inbox").await.1.as_array().expect("a list").clone() };
+
+    // What runs already when the server first hears of the device is old news.
+    put(machine, report(AgentState::AwaitingPermission, Some(1))).await;
+    assert!(inbox().await.is_empty(), "{:?}", inbox().await);
+
+    put(machine, report(AgentState::Working, None)).await;
+    put(machine, report(AgentState::AwaitingPermission, Some(2))).await;
+    put(machine, report(AgentState::AwaitingPermission, Some(3))).await;
+    let notes = inbox().await;
+    assert_eq!(notes.len(), 1, "an unread one is brought up to date: {notes:?}");
+    assert_eq!(notes[0]["kind"], "permission");
+    assert!(
+        notes[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("Fake agent on ") && text.ends_with("asks to run: Edit a.rs"))
+    );
+    assert_eq!(
+        notes[0]["action"],
+        serde_json::json!({ "do": "permission", "id": 3, "title": "Edit a.rs", "options": [["allow", "Allow"]] })
+    );
+
+    let id = notes[0]["id"].as_i64().expect("an id");
+    assert_eq!(alice.post("/inbox/read", serde_json::json!({ "ids": [id] })).await.0, StatusCode::OK);
+    put(machine, report(AgentState::Idle, None)).await;
+    let notes = inbox().await;
+    assert_eq!(notes.len(), 1);
+    assert_eq!((notes[0]["kind"].as_str(), &notes[0]["action"]), (Some("finished"), &serde_json::Value::Null));
+    let all = alice.get("/inbox?all=true").await.1;
+    let read = all.as_array().expect("a list").iter().find(|note| note["kind"] == "permission").expect("the read one");
+    assert_eq!(read["action"], serde_json::Value::Null, "a read notification offers nothing to do any more");
+
+    let other = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
+    let bob = Browser::sign_in(other, "bob").await;
+    assert!(bob.get("/inbox").await.1.as_array().expect("a list").is_empty(), "only the device's person hears");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;
@@ -884,6 +945,7 @@ async fn org_members_list_their_projects_and_owners_set_them_up() {
         thread: info,
         visibility: None,
         origin_url: Some("https://alice:ghp_secret@github.com/acme/app.git".into()),
+        recovery_of: None,
     };
     assert_eq!(world.alice.send(world.alice.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
 

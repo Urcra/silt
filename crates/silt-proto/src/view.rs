@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentState, Capabilities, Snooze, Startable, ThreadStatus, Visibility};
+use crate::{AgentState, Capabilities, InboxAction, Snooze, Startable, ThreadStatus, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -342,6 +342,8 @@ pub struct InboxEntry {
     pub text: String,
     pub created_ms: i64,
     pub read: bool,
+    #[serde(default)]
+    pub action: Option<InboxAction>,
 }
 
 /// A project as the web UI shows it (ADR 0023): the server's record when

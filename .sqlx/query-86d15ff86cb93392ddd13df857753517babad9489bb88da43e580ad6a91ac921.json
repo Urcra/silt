@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notifications (user_id, kind, thread_id, delta, actor, text, created_ms, action)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "86d15ff86cb93392ddd13df857753517babad9489bb88da43e580ad6a91ac921"
+}

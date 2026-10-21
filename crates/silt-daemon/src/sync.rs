@@ -472,14 +472,27 @@ impl Core {
     /// Registers the thread and waits for the server, for when the next step
     /// needs the server to know it.
     pub(crate) async fn register_thread_now(&self, thread: ThreadId) -> Result<(), CoreError> {
+        self.register_now(thread, None).await
+    }
+
+    /// [`Self::register_thread_now`] for a thread that recovers `of`'s work
+    /// here, so its person hears of it (ADR 0028).
+    pub(crate) async fn register_recovery(&self, thread: ThreadId, of: ThreadId) -> Result<(), CoreError> {
+        self.register_now(thread, Some(of)).await
+    }
+
+    async fn register_now(&self, thread: ThreadId, recovery_of: Option<ThreadId>) -> Result<(), CoreError> {
         let Some(remote) = &self.remote else {
             return Ok(());
         };
         let record = &self.threads[&thread];
-        remote
-            .register_thread(&thread_info(record), None, origin_url(record))
-            .await
-            .map_err(|source| CoreError::Server { doing: "register the thread", source })
+        let body = silt_proto::RegisterThread {
+            thread: thread_info(record),
+            visibility: None,
+            origin_url: origin_url(record),
+            recovery_of,
+        };
+        remote.register(body).await.map_err(|source| CoreError::Server { doing: "register the thread", source })
     }
 
     /// The blob's bytes, fetched from the server when not stored locally.

@@ -10,8 +10,8 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use silt_proto::{
-    AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand, RunningElsewhere,
-    Startable,
+    AgentReport, AgentState, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, InboxAction, RemoteCommand,
+    RunningElsewhere, Startable,
 };
 use silt_types::{DeviceId, ThreadId};
 use tokio::sync::{Mutex, Notify};
@@ -33,9 +33,15 @@ pub(crate) struct Control {
 }
 
 struct Heard {
+    user: UserId,
     agents: Vec<AgentReport>,
     startable: Vec<Startable>,
     at: Instant,
+    /// Whether it reported since the server started, so a change to what
+    /// it runs can be told from what it ran all along.
+    reported: bool,
+    /// Its person heard it went offline with work running.
+    offline_noted: bool,
 }
 
 /// What each device last reported, by device.
@@ -45,14 +51,25 @@ struct Board {
 }
 
 impl Board {
-    fn hear(&mut self, device: DeviceId, report: Option<AgentsReport>) {
-        let heard =
-            self.devices.entry(device).or_insert_with(|| Heard { agents: Vec::new(), startable: Vec::new(), at: Instant::now() });
+    /// Notes the device was heard from, with its report if it sent one, and
+    /// gives the report before, if there was one.
+    fn hear(&mut self, device: DeviceId, user: UserId, report: Option<AgentsReport>) -> Option<Vec<AgentReport>> {
+        let heard = self.devices.entry(device).or_insert_with(|| Heard {
+            user,
+            agents: Vec::new(),
+            startable: Vec::new(),
+            at: Instant::now(),
+            reported: false,
+            offline_noted: false,
+        });
         heard.at = Instant::now();
-        if let Some(report) = report {
-            heard.agents = report.agents;
-            heard.startable = report.startable;
-        }
+        heard.offline_noted = false;
+        let report = report?;
+        let before = heard.reported.then(|| std::mem::take(&mut heard.agents));
+        heard.agents = report.agents;
+        heard.startable = report.startable;
+        heard.reported = true;
+        before
     }
 
     fn online(&self) -> impl Iterator<Item = (&DeviceId, &Heard)> {
@@ -139,7 +156,7 @@ pub(crate) async fn poll(
     let control = &server.shared.control;
     let deadline = Instant::now() + wait.wait_ms.map_or(Duration::ZERO, Duration::from_millis).min(MAX_WAIT);
     loop {
-        control.board.lock().await.hear(caller.device, None);
+        control.board.lock().await.hear(caller.device, caller.user, None);
         let relayed = control.relayed.notified();
         tokio::pin!(relayed);
         relayed.as_mut().enable();
@@ -199,10 +216,138 @@ pub(crate) async fn report(
     Json(report): Json<AgentsReport>,
 ) -> Result<StatusCode, ApiError> {
     let viewer = server.viewer(caller.user).await?;
-    let agents = report.agents.into_iter().filter(|agent| viewer.sees_thread(agent.thread)).take(MAX_AGENTS).collect();
+    let agents: Vec<AgentReport> =
+        report.agents.into_iter().filter(|agent| viewer.sees_thread(agent.thread)).take(MAX_AGENTS).collect();
     let startable = report.startable.into_iter().take(MAX_AGENTS).collect();
-    server.shared.control.board.lock().await.hear(caller.device, Some(AgentsReport { agents, startable }));
+    let now = agents.clone();
+    let before =
+        server.shared.control.board.lock().await.hear(caller.device, caller.user, Some(AgentsReport { agents, startable }));
+    if let Some(before) = before {
+        let device = device_name(&server, caller.device).await?;
+        for change in changes(&before, &now) {
+            let note = change.note(caller.user, &device);
+            crate::inbox::notify_person(server.db(), note).await?;
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn device_name(server: &Server, device: DeviceId) -> Result<String, sqlx::Error> {
+    let id = id_bytes(device.0);
+    let name = sqlx::query_scalar!("SELECT name FROM devices WHERE id = ?", id).fetch_optional(server.db()).await?;
+    Ok(name.unwrap_or_else(|| "a signed-out device".into()))
+}
+
+/// What changed about an agent between two reports that its person hears
+/// of (ADR 0028).
+#[derive(Debug, PartialEq, Eq)]
+enum Change {
+    Asks(AgentReport),
+    Planned(AgentReport),
+    Finished(AgentReport),
+    Errored(AgentReport),
+}
+
+impl Change {
+    fn note<'a>(self, user: UserId, device: &'a str) -> crate::inbox::PersonNote<'a> {
+        let (kind, agent, text, action) = match self {
+            Self::Asks(agent) => {
+                let asked = &agent.permissions[0];
+                let text = format!("{} on {device} asks to run: {}", agent.agent, asked.title);
+                let action = InboxAction::Permission { id: asked.id, title: asked.title.clone(), options: asked.options.clone() };
+                ("permission", agent, text, Some(action))
+            }
+            Self::Planned(agent) => {
+                let text = format!("{} on {device} wrote a plan for you to approve", agent.agent);
+                ("plan", agent, text, Some(InboxAction::Plan))
+            }
+            Self::Finished(agent) => {
+                let text = format!("{} on {device} finished its turn", agent.agent);
+                ("finished", agent, text, None)
+            }
+            Self::Errored(agent) => {
+                let text = format!("{} on {device} stopped with an error", agent.agent);
+                ("errored", agent, text, None)
+            }
+        };
+        crate::inbox::PersonNote { user, kind, thread: agent.thread, actor: device, text, action }
+    }
+}
+
+/// The changes from `before` to `after`, one device's reports.
+fn changes(before: &[AgentReport], after: &[AgentReport]) -> Vec<Change> {
+    let mut changes = Vec::new();
+    for agent in after {
+        let was = before.iter().find(|earlier| earlier.thread == agent.thread);
+        let state = was.map(|was| was.state);
+        let asked = |report: &AgentReport| report.permissions.first().map(|asked| asked.id);
+        match agent.state {
+            AgentState::AwaitingPermission if asked(agent).is_some() && was.and_then(asked) != asked(agent) => {
+                changes.push(Change::Asks(agent.clone()));
+            }
+            AgentState::AwaitingInput if state != Some(AgentState::AwaitingInput) => changes.push(Change::Planned(agent.clone())),
+            AgentState::Idle
+                if agent.queued == 0 && matches!(state, Some(AgentState::Working | AgentState::AwaitingPermission)) =>
+            {
+                changes.push(Change::Finished(agent.clone()));
+            }
+            AgentState::Error if state != Some(AgentState::Error) => changes.push(Change::Errored(agent.clone())),
+            _ => {}
+        }
+    }
+    changes
+}
+
+/// How often devices gone quiet are looked for.
+const OFFLINE_CHECK: Duration = Duration::from_secs(15);
+
+impl Server {
+    pub(crate) fn watch_devices(&self) {
+        let server = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(OFFLINE_CHECK);
+            loop {
+                interval.tick().await;
+                if let Err(error) = note_offline(&server).await {
+                    tracing::warn!(%error, "could not note devices gone offline");
+                }
+            }
+        });
+    }
+}
+
+/// Tells each person whose device went offline with an agent at work
+/// there, once per time it goes (ADR 0028).
+pub(crate) async fn note_offline(server: &Server) -> Result<(), sqlx::Error> {
+    let gone: Vec<(DeviceId, UserId, Vec<AgentReport>)> = {
+        let mut board = server.shared.control.board.lock().await;
+        board
+            .devices
+            .iter_mut()
+            .filter(|(_, heard)| heard.reported && !heard.offline_noted && heard.at.elapsed() >= OFFLINE_AFTER)
+            .filter_map(|(device, heard)| {
+                let busy: Vec<AgentReport> = heard
+                    .agents
+                    .iter()
+                    .filter(|agent| {
+                        matches!(agent.state, AgentState::Working | AgentState::AwaitingPermission | AgentState::AwaitingInput)
+                    })
+                    .cloned()
+                    .collect();
+                heard.offline_noted = true;
+                (!busy.is_empty()).then_some((*device, heard.user, busy))
+            })
+            .collect()
+    };
+    for (device, user, busy) in gone {
+        let name = device_name(server, device).await?;
+        for agent in busy {
+            let text = format!("{name} went offline while {} was at work there", agent.agent);
+            let note = crate::inbox::PersonNote { user, kind: "offline", thread: agent.thread, actor: &name, text, action: None };
+            crate::inbox::notify_person(server.db(), note).await?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn answer(
@@ -453,5 +598,49 @@ mod tests {
             Some((device, false, agent(ThreadId(7)))),
             "but its thread is still known to run there, for a prompt to wait for it"
         );
+    }
+
+    fn report(state: AgentState, asked: Option<u64>, queued: u32) -> AgentReport {
+        AgentReport {
+            thread: ThreadId(7),
+            agent: "Fake agent".into(),
+            state,
+            permissions: asked
+                .map(|id| silt_proto::AskedPermission {
+                    id,
+                    title: "Edit a.rs".into(),
+                    options: vec![("allow".into(), "Allow".into())],
+                })
+                .into_iter()
+                .collect(),
+            queued,
+            preset: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_person_hears_when_their_agent_needs_them_or_is_done() {
+        let from = |before: &AgentReport, after: &AgentReport| changes(std::slice::from_ref(before), std::slice::from_ref(after));
+        let working = report(AgentState::Working, None, 0);
+        let asking = report(AgentState::AwaitingPermission, Some(1), 0);
+        assert_eq!(from(&working, &asking), [Change::Asks(asking.clone())]);
+        assert!(from(&asking, &asking).is_empty(), "the same request once");
+        let again = report(AgentState::AwaitingPermission, Some(2), 0);
+        assert_eq!(from(&asking, &again), [Change::Asks(again)], "a new request again");
+
+        let idle = report(AgentState::Idle, None, 0);
+        assert_eq!(from(&working, &idle), [Change::Finished(idle.clone())]);
+        assert!(from(&working, &report(AgentState::Idle, None, 1)).is_empty(), "the queue goes on");
+        assert!(changes(&[], std::slice::from_ref(&idle)).is_empty(), "an agent just started did nothing yet");
+
+        let planned = report(AgentState::AwaitingInput, None, 0);
+        assert_eq!(from(&working, &planned), [Change::Planned(planned)]);
+        let failed = report(AgentState::Error, None, 0);
+        assert_eq!(from(&working, &failed), [Change::Errored(failed.clone())]);
+        assert!(from(&failed, &failed).is_empty());
+
+        let note = Change::Asks(asking).note(UserId(3), "workstation");
+        assert_eq!((note.kind, note.text.as_str()), ("permission", "Fake agent on workstation asks to run: Edit a.rs"));
+        assert!(matches!(note.action, Some(InboxAction::Permission { id: 1, .. })));
     }
 }
