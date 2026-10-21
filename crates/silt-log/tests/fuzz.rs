@@ -212,8 +212,9 @@ proptest! {
         let mut partway = Family::new();
         replay(&stored[..cut], &mut partway);
         let snapshot = partway.snapshot().expect("encodes");
-        let (mut restored, rest) = Family::from_snapshot(&snapshot, &stored).expect("matches");
-        replay(rest, &mut restored);
+        let mut rest = stored.clone();
+        let mut restored = Family::from_snapshot(&snapshot, &mut rest).expect("matches");
+        replay(&rest, &mut restored);
         let mut whole = Family::new();
         replay(&stored, &mut whole);
 

@@ -26,7 +26,7 @@ pub(crate) async fn family(store: &Store, family_id: FamilyId, repo: Option<&Rep
         return Ok(Loaded::Raw(deltas));
     };
     let snapshot = store.snapshot(family_id).await?;
-    let (family, covered) = replay(snapshot.as_ref(), &deltas, &mut RepoBases(repo));
+    let (family, covered) = replay(snapshot.as_ref(), deltas, &mut RepoBases(repo));
     Ok(Loaded::Projected { family: Box::new(family), covered })
 }
 
@@ -40,16 +40,16 @@ pub(crate) async fn save_snapshot(store: &Store, family_id: FamilyId, family: &F
 
 /// A family rebuilt from its stored deltas, starting from `snapshot` when it
 /// is a snapshot of them, and how much of its log that snapshot covers.
-pub(crate) fn replay(snapshot: Option<&Snapshot>, stored: &[Delta], bases: &mut dyn BaseText) -> (Family, usize) {
+pub(crate) fn replay(snapshot: Option<&Snapshot>, mut stored: Vec<Delta>, bases: &mut dyn BaseText) -> (Family, usize) {
     let restored = snapshot.filter(|snapshot| snapshot.format == SNAPSHOT_FORMAT).and_then(|snapshot| {
-        Family::from_snapshot(&snapshot.data, stored)
+        Family::from_snapshot(&snapshot.data, &mut stored)
             .inspect_err(|error| warn!(%error, "replaying the family instead of reading its snapshot"))
             .ok()
     });
-    let (mut family, rest) = restored.unwrap_or_else(|| (Family::new(), stored));
+    let mut family = restored.unwrap_or_default();
     let covered = family.log().len();
-    for delta in rest {
-        if let Err(error) = family.apply(delta.clone(), bases) {
+    for delta in stored {
+        if let Err(error) = family.apply(delta, bases) {
             warn!(%error, "skipping a delta that no longer applies");
         }
     }
@@ -98,10 +98,10 @@ mod tests {
     #[test]
     fn a_family_starts_from_its_snapshot_and_applies_what_came_after() {
         let stored = typed(20);
-        let (partway, _) = replay(None, &stored[..12], &mut HashMap::new());
+        let (partway, _) = replay(None, stored[..12].to_vec(), &mut HashMap::new());
         let snapshot = Snapshot { format: SNAPSHOT_FORMAT, covers: 12, data: partway.snapshot().expect("encodes") };
-        let (restored, covered) = replay(Some(&snapshot), &stored, &mut HashMap::new());
-        let (replayed, nothing) = replay(None, &stored, &mut HashMap::new());
+        let (restored, covered) = replay(Some(&snapshot), stored.clone(), &mut HashMap::new());
+        let (replayed, nothing) = replay(None, stored, &mut HashMap::new());
         assert_eq!((covered, nothing), (12, 0));
         assert_eq!(restored.log(), replayed.log());
         assert_eq!(text(&restored), Some(FileView::Text("x".repeat(20))));
@@ -110,13 +110,13 @@ mod tests {
     #[test]
     fn a_snapshot_that_does_not_fit_is_replayed_instead() {
         let stored = typed(3);
-        let (other, _) = replay(None, &typed(5), &mut HashMap::new());
+        let (other, _) = replay(None, typed(5), &mut HashMap::new());
         let foreign = Snapshot { format: SNAPSHOT_FORMAT, covers: 6, data: other.snapshot().expect("encodes") };
-        let (partway, _) = replay(None, &stored[..2], &mut HashMap::new());
+        let (partway, _) = replay(None, stored[..2].to_vec(), &mut HashMap::new());
         let later_format = Snapshot { format: SNAPSHOT_FORMAT + 1, covers: 2, data: partway.snapshot().expect("encodes") };
         let garbage = Snapshot { format: SNAPSHOT_FORMAT, covers: 2, data: b"not a snapshot".to_vec() };
         for snapshot in [foreign, later_format, garbage] {
-            let (family, covered) = replay(Some(&snapshot), &stored, &mut HashMap::new());
+            let (family, covered) = replay(Some(&snapshot), stored.clone(), &mut HashMap::new());
             assert_eq!(covered, 0);
             assert_eq!(text(&family), Some(FileView::Text("xxx".into())));
         }

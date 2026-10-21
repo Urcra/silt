@@ -87,6 +87,20 @@ pub fn stat(root: &Path, path: &str) -> io::Result<Option<(u64, i64, bool)>> {
 
 /// Reads a regular file. Missing files, symlinks and paths Silt doesn't
 /// write give `None`.
+/// Whether `path` is a file `read` would read.
+pub fn is_file(root: &Path, path: &str) -> io::Result<bool> {
+    let full = match inside(root, path, false) {
+        Ok(full) => full,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match fs::symlink_metadata(&full) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
     let full = match inside(root, path, false) {
         Ok(full) => full,

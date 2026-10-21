@@ -1,4 +1,5 @@
 mod blobs;
+mod chunks;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -464,10 +465,23 @@ impl Store {
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
         let family = id_bytes(family.0);
-        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq", family)
+        let chunks = sqlx::query!("SELECT last_seq, data FROM delta_chunks WHERE family_id = ? ORDER BY first_seq", family)
             .fetch_all(&self.pool)
             .await?;
-        rows.into_iter().map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?)).collect()
+        let packed = chunks.last().map_or(-1, |chunk| chunk.last_seq);
+        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, packed)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut deltas = Vec::new();
+        for chunk in &chunks {
+            for (format, data) in chunks::unpack(&chunk.data)? {
+                deltas.push(silt_log::decode_stored(format, data)?);
+            }
+        }
+        for row in rows {
+            deltas.push(silt_log::decode_stored(row.format, &row.data)?);
+        }
+        Ok(deltas)
     }
 
     pub async fn add_checkout(
@@ -537,20 +551,28 @@ impl Store {
 
     pub async fn disk_files(&self, checkout: CheckoutId) -> Result<HashMap<String, DiskFile>, StoreError> {
         let checkout = checkout.0;
-        let rows =
-            sqlx::query!("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?", checkout)
-                .fetch_all(&self.pool)
-                .await?;
+        // As one row: a large checkout's rows one by one take a hook capturing
+        // on its own a quarter of its budget (ADR 0018).
+        let rows = sqlx::query_scalar!(
+            r#"SELECT json_group_array(json_array(path, hex(inode), hex(hash), size, mtime_ns, hex(version))) AS "rows!: String"
+               FROM disk_files WHERE checkout_id = ?"#,
+            checkout
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let rows: Vec<(String, String, String, i64, i64, String)> =
+            serde_json::from_str(&rows).map_err(|_| StoreError::Corrupt { what: "disk state" })?;
         rows.into_iter()
-            .map(|row| {
+            .map(|(path, inode, hash, size, mtime_ns, version)| {
+                let hash = unhex(&hash)?;
                 Ok((
-                    row.path,
+                    path,
                     DiskFile {
-                        inode: postcard::from_bytes(&row.inode)?,
-                        hash: BlobHash(row.hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?),
-                        size: u64::try_from(row.size).unwrap_or_default(),
-                        mtime_ns: row.mtime_ns,
-                        version: postcard::from_bytes(&row.version)?,
+                        inode: postcard::from_bytes(&unhex(&inode)?)?,
+                        hash: BlobHash(hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?),
+                        size: u64::try_from(size).unwrap_or_default(),
+                        mtime_ns,
+                        version: postcard::from_bytes(&unhex(&version)?)?,
                     },
                 ))
             })
@@ -730,6 +752,40 @@ async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, del
         .execute(&mut *tx)
         .await?;
     }
+    pack_deltas_in(tx, &family).await
+}
+
+/// Packs the family's rows not in a chunk yet, a chunk's worth at a time.
+async fn pack_deltas_in(tx: &mut sqlx::SqliteConnection, family: &[u8]) -> Result<(), StoreError> {
+    let packed = sqlx::query_scalar!(
+        r#"SELECT COALESCE(MAX(last_seq), -1) AS "packed!: i64" FROM delta_chunks WHERE family_id = ?"#,
+        family
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let unpacked =
+        sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM deltas WHERE family_id = ? AND seq > ?"#, family, packed)
+            .fetch_one(&mut *tx)
+            .await?;
+    if usize::try_from(unpacked).unwrap_or_default() < chunks::CHUNK_ROWS {
+        return Ok(());
+    }
+    let rows = sqlx::query!("SELECT seq, format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, packed)
+        .fetch_all(&mut *tx)
+        .await?;
+    for chunk in rows.as_chunks::<{ chunks::CHUNK_ROWS }>().0 {
+        let (first, last) = (chunk[0].seq, chunk[chunks::CHUNK_ROWS - 1].seq);
+        let data = chunks::pack(chunk.iter().map(|row| (row.format, row.data.as_slice())));
+        sqlx::query!(
+            "INSERT INTO delta_chunks (family_id, first_seq, last_seq, data) VALUES (?, ?, ?, ?)",
+            family,
+            first,
+            last,
+            data
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     Ok(())
 }
 
@@ -769,6 +825,7 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
         .execute(&mut *tx)
         .await?;
     sqlx::query!("DELETE FROM deltas WHERE family_id = ?1", family).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM delta_chunks WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM family_snapshots WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM sync_state WHERE family_id = ?1", family).execute(&mut *tx).await?;
     Ok(())
@@ -778,6 +835,18 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
 /// can't be misread as query syntax.
 fn fts_query(text: &str) -> String {
     text.split_whitespace().map(|word| format!("\"{}\"*", word.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
+}
+
+/// Bytes from SQLite's `hex()`.
+fn unhex(text: &str) -> Result<Vec<u8>, StoreError> {
+    let digit = |byte: u8| char::from(byte).to_digit(16).ok_or(StoreError::Corrupt { what: "hex" });
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| match pair {
+            [high, low] => Ok(u8::try_from(digit(*high)? << 4 | digit(*low)?).expect("two hex digits")),
+            _ => Err(StoreError::Corrupt { what: "hex" }),
+        })
+        .collect()
 }
 
 fn id_bytes(id: u128) -> Vec<u8> {

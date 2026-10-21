@@ -2,7 +2,7 @@
 //! what was stored since (ADR 0018). The log's deltas aren't in it, as they
 //! are stored already; only their ids are, to find them among the stored.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use silt_crdt::{CausalGraph, FileTree, InodeId};
@@ -76,23 +76,33 @@ impl Family {
     }
 
     /// The family `snapshot` was taken of, given every delta stored for it.
-    /// Returns, too, the stored deltas after the ones it holds, still to be
-    /// applied.
-    pub fn from_snapshot<'a>(snapshot: &[u8], stored: &'a [Delta]) -> Result<(Self, &'a [Delta]), SnapshotError> {
+    /// Takes the deltas it holds out of `stored`, leaving those after them,
+    /// still to be applied; on an error, `stored` is left as it was.
+    pub fn from_snapshot(snapshot: &[u8], stored: &mut Vec<Delta>) -> Result<Self, SnapshotError> {
         let read: Read = postcard::from_bytes(snapshot)?;
+        // Only deltas stored under one id need their contents told apart;
+        // the store never holds two.
+        let mut ids = HashSet::with_capacity(stored.len());
+        let unique = stored.iter().all(|delta| ids.insert(delta.span.first()));
+        let is = |delta: &Delta, logged: &Logged| {
+            delta.span.first() == logged.id && (unique || Logged::of(delta).is_ok_and(|found| found == *logged))
+        };
         let mut next = 0;
-        let mut log = Vec::with_capacity(read.log.len());
+        let mut held = Vec::with_capacity(read.log.len());
         for logged in &read.log {
             // Stored deltas in between were refused or already known when the
             // snapshot was taken, as a replay would find them again.
-            let found = stored[next..]
-                .iter()
-                .position(|delta| delta.span.first() == logged.id && Logged::of(delta).is_ok_and(|found| found == *logged))
-                .ok_or(SnapshotError::Mismatch)?;
-            log.push(stored[next + found].clone());
+            let found = stored[next..].iter().position(|delta| is(delta, logged)).ok_or(SnapshotError::Mismatch)?;
+            held.push(next + found);
             next += found + 1;
         }
-        let rest = &stored[next..];
+        let rest = stored.split_off(next);
+        let mut held = held.into_iter().peekable();
+        let log = std::mem::replace(stored, rest)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, delta)| held.next_if_eq(&index).map(|_| delta))
+            .collect();
         let family = Self {
             graph: read.graph,
             tree: read.tree,
@@ -102,6 +112,6 @@ impl Family {
             log,
             ..Self::default()
         };
-        Ok((family, rest))
+        Ok(family)
     }
 }

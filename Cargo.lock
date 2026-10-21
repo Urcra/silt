@@ -4336,6 +4336,7 @@ version = "0.0.1"
 dependencies = [
  "blake3",
  "postcard",
+ "serde_json",
  "silt-crdt",
  "silt-log",
  "silt-types",

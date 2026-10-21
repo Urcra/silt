@@ -598,9 +598,17 @@ impl Core {
         }
         let thread_paths =
             if probes.iter().any(|probe| matches!(probe, Probe::Root(_))) { self.family_paths(checkout_id) } else { Vec::new() };
+        let listed: HashSet<String> = probes
+            .iter()
+            .flat_map(|probe| match probe {
+                Probe::Root(files) | Probe::Dir(files) => files.as_slice(),
+                Probe::File(_) | Probe::Gone(_) => &[],
+            })
+            .cloned()
+            .collect();
         let recorded = self.checkout(checkout_id)?.bridge.entries().keys();
-        let mut worklist = self.trackable(checkout_id, candidates(probes, recorded, &thread_paths))?;
-        for path in self.ingest_renames(checkout_id, &worklist).await? {
+        let mut worklist = self.trackable(checkout_id, candidates(probes, recorded, &thread_paths), &listed)?;
+        for path in self.ingest_renames(checkout_id, &worklist, &listed).await? {
             worklist.retain(|candidate| *candidate != path);
         }
         let mut rounds = 0;
@@ -615,26 +623,40 @@ impl Core {
                     Err(error) => warn!(%error, path, "could not record a change to a file"),
                 }
             }
-            worklist = self.trackable(checkout_id, retry)?;
+            worklist = self.trackable(checkout_id, retry, &HashSet::new())?;
         }
         Ok(())
     }
 
     /// Records each vanished file whose exact bytes reappeared at a new path
     /// in the same batch as a move. Returns the paths it handled.
-    async fn ingest_renames(&mut self, checkout_id: CheckoutId, paths: &[String]) -> Result<Vec<String>, CoreError> {
+    /// `listed` are files git just listed, so they are there.
+    async fn ingest_renames(
+        &mut self,
+        checkout_id: CheckoutId,
+        paths: &[String],
+        listed: &HashSet<String>,
+    ) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
-        let entries = self.checkout(checkout_id)?.bridge.entries().clone();
         let mut vanished: BTreeMap<BlobHash, Vec<&String>> = BTreeMap::new();
-        let mut appeared = Vec::new();
+        let mut unrecorded = Vec::new();
+        let entries = self.checkout(checkout_id)?.bridge.entries();
         for path in paths {
             // An unreadable file is left to `ingest_file`, which reports it.
-            match (entries.get(path), disk::read(&root, path)) {
-                (Some(entry), Ok(None)) => vanished.entry(entry.hash).or_default().push(path),
-                (None, Ok(Some(raw))) => appeared.push((path, raw)),
-                _ => {}
+            match entries.get(path) {
+                Some(entry) if !listed.contains(path) && matches!(disk::is_file(&root, path), Ok(false)) => {
+                    vanished.entry(entry.hash).or_default().push(path);
+                }
+                Some(_) => {}
+                None => unrecorded.push(path),
             }
         }
+        // Reading every new file only pays when a file went.
+        if vanished.is_empty() {
+            return Ok(Vec::new());
+        }
+        let appeared: Vec<_> =
+            unrecorded.into_iter().filter_map(|path| Some((path, disk::read(&root, path).ok().flatten()?))).collect();
         let mut handled = Vec::new();
         for (to, raw) in appeared {
             let Some(from) = vanished.get_mut(&raw.hash).and_then(Vec::pop) else {
@@ -918,29 +940,40 @@ impl Core {
         checkout_id: CheckoutId,
         paths: Vec<String>,
     ) -> Result<(), CoreError> {
-        for path in self.trackable(checkout_id, paths)? {
+        for path in self.trackable(checkout_id, paths, &HashSet::new())? {
             Box::pin(self.ingest_file(checkout_id, &path)).await?;
         }
         Ok(())
     }
 
-    /// `paths` without Silt's and git's own data and ignored files.
-    fn trackable(&self, checkout_id: CheckoutId, mut paths: Vec<String>) -> Result<Vec<String>, CoreError> {
+    /// `paths` without Silt's and git's own data and ignored files. Those
+    /// `listed` git just listed as not ignored, and it isn't asked again:
+    /// asking about every file of a large checkout takes it seconds.
+    fn trackable(
+        &self,
+        checkout_id: CheckoutId,
+        mut paths: Vec<String>,
+        listed: &HashSet<String>,
+    ) -> Result<Vec<String>, CoreError> {
         paths.retain(|path| !disk::is_internal(path));
-        if paths.is_empty() {
+        let unlisted: Vec<String> = paths.iter().filter(|path| !listed.contains(*path)).cloned().collect();
+        if unlisted.is_empty() {
             return Ok(paths);
         }
         let repo = &self.checkout(checkout_id)?.repo;
-        match repo.ignored(&paths) {
+        match repo.ignored(&unlisted) {
             Ok(ignored) => paths.retain(|path| !ignored.contains(path)),
             // git refuses some paths, such as those inside a submodule;
             // asking one at a time leaves out only those.
-            Err(_) => paths.retain(|path| match repo.ignored(std::slice::from_ref(path)) {
-                Ok(ignored) => ignored.is_empty(),
-                Err(error) => {
-                    warn!(%error, path, "leaving out a path git won't check");
-                    false
-                }
+            Err(_) => paths.retain(|path| {
+                listed.contains(path)
+                    || match repo.ignored(std::slice::from_ref(path)) {
+                        Ok(ignored) => ignored.is_empty(),
+                        Err(error) => {
+                            warn!(%error, path, "leaving out a path git won't check");
+                            false
+                        }
+                    }
             }),
         }
         Ok(paths)

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT json_group_array(json_array(path, hex(inode), hex(hash), size, mtime_ns, hex(version))) AS \"rows!: String\"\n               FROM disk_files WHERE checkout_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rows!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "19fc7811e96dde5f815cbf0bd339d4e2d556f9d82de576d91ce68d16c514ab03"
+}

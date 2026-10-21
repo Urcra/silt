@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(last_seq), -1) AS \"packed!: i64\" FROM delta_chunks WHERE family_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "packed!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "959ab1fa675f7af7a693e0667d822d0a2dd2073896c7eb6d4314ee0a0c2d67cf"
+}

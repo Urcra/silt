@@ -42,3 +42,7 @@ uuid = { version = "1.28.0", features = ["v4", "v7"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[[bench]]
+name = "hook_latency"
+harness = false

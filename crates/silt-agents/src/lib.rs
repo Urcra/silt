@@ -100,6 +100,12 @@ impl Read {
 /// message again when it grows, so a reader may remember what it has seen.
 pub trait Reader: Send {
     fn push(&mut self, line: &str) -> Read;
+
+    /// Whether what it read before changes how it reads a line, so a
+    /// reader for a session read before must be shown its earlier lines.
+    fn remembers(&self) -> bool {
+        true
+    }
 }
 
 /// A reader for agents whose records stand alone.
@@ -108,6 +114,10 @@ pub struct Stateless(pub fn(&str) -> Read);
 impl Reader for Stateless {
     fn push(&mut self, line: &str) -> Read {
         (self.0)(line)
+    }
+
+    fn remembers(&self) -> bool {
+        false
     }
 }
 

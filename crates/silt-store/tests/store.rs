@@ -58,6 +58,28 @@ async fn deltas_round_trip_in_order_across_reopen() {
 }
 
 #[tokio::test]
+async fn a_long_family_reads_the_same_once_packed_into_chunks() {
+    let (_dir, store) = store_with_thread().await;
+    let mut family = Family::new();
+    let mut appended = Vec::new();
+    for index in 0..2_500 {
+        let op = Op::Conv(silt_log::ConvOp::Title(format!("title {index}")));
+        let delta = family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op);
+        family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
+        appended.push(delta);
+    }
+    // Unevenly, so packing happens partway through a batch.
+    for batch in appended.chunks(700) {
+        store.append_deltas(FAMILY, batch).await.expect("appends");
+    }
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
+    assert_eq!(store.deltas_after(FAMILY, 2_400).await.expect("loads"), appended[2_401..]);
+
+    store.replace_deltas(FAMILY, &appended[..10]).await.expect("replaces");
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended[..10], "chunks of the replaced deltas are gone");
+}
+
+#[tokio::test]
 async fn a_snapshot_lasts_until_the_family_s_deltas_are_replaced() {
     let (dir, store) = store_with_thread().await;
     assert_eq!(store.snapshot(FAMILY).await.expect("reads"), None);

@@ -128,7 +128,8 @@ pub(crate) fn transcript_grew(session: &Session) -> bool {
 }
 
 /// Feeds `sessions` what `deltas` recorded of them, as their transcripts'
-/// readers would have read it.
+/// readers would have read it. Readers that read each line on its own
+/// aren't shown them, which matters for a hook reading a long session.
 pub(crate) fn read_recorded(sessions: &mut [Session], deltas: &[silt_log::Delta]) {
     let by_reference: HashMap<SessionRef, usize> =
         sessions.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
@@ -139,8 +140,13 @@ pub(crate) fn read_recorded(sessions: &mut [Session], deltas: &[silt_log::Delta]
                     continue;
                 };
                 let agent = found.agent;
-                found.readers.entry(file_key(file)).or_insert_with(|| agent.reader()).push(line);
-                if let Some(key) = agent.record_key(line) {
+                let reader = found.readers.entry(file_key(file)).or_insert_with(|| agent.reader());
+                if reader.remembers() {
+                    reader.push(line);
+                }
+                if agent.capture() == Capture::Snapshot
+                    && let Some(key) = agent.record_key(line)
+                {
                     found.recorded.insert(key);
                 }
             }

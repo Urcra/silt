@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM delta_chunks WHERE family_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9cd04258c31528a7afad19a24f90425b1b09c578985cfa8cbfc3ce32be6fd252"
+}

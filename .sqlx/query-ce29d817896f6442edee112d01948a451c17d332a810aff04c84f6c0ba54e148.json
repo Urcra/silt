@@ -1,16 +1,16 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq",
+  "query": "SELECT last_seq, data FROM delta_chunks WHERE family_id = ? ORDER BY first_seq",
   "describe": {
     "columns": [
       {
-        "name": "format",
+        "name": "last_seq",
         "ordinal": 0,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "deltas",
-            "name": "format"
+            "table": "delta_chunks",
+            "name": "last_seq"
           }
         }
       },
@@ -20,7 +20,7 @@
         "type_info": "Blob",
         "origin": {
           "Table": {
-            "table": "deltas",
+            "table": "delta_chunks",
             "name": "data"
           }
         }
@@ -34,5 +34,5 @@
       false
     ]
   },
-  "hash": "773b2cd6bf145fd910b989181d3882eddc327592e7bd956671cc9089496d8bdb"
+  "hash": "ce29d817896f6442edee112d01948a451c17d332a810aff04c84f6c0ba54e148"
 }
