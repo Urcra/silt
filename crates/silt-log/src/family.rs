@@ -439,63 +439,7 @@ impl Family {
     /// The comments on `thread`, oldest first by causal order, so every
     /// replica lists them alike whatever order the deltas arrived in.
     pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
-        let ops = || {
-            self.log.iter().filter(move |delta| delta.thread == thread).filter_map(|delta| match &delta.op {
-                Op::Comment(op) => Some((delta, op)),
-                _ => None,
-            })
-        };
-        let resolved: HashSet<DeltaId> = ops()
-            .filter_map(|(_, op)| match op {
-                CommentOp::Resolved { comment } => Some(*comment),
-                _ => None,
-            })
-            .collect();
-        // A reply naming another reply, as an older or careless peer may
-        // send, still lands under the first comment.
-        let parent_of: HashMap<DeltaId, DeltaId> = ops()
-            .filter_map(|(delta, op)| match op {
-                CommentOp::Replied { parent, .. } => Some((delta.span.first(), *parent)),
-                _ => None,
-            })
-            .collect();
-        let root = |mut id: DeltaId| {
-            for _ in 0..parent_of.len() {
-                match parent_of.get(&id) {
-                    Some(parent) => id = *parent,
-                    None => break,
-                }
-            }
-            id
-        };
-        let mut replies: HashMap<DeltaId, Vec<Reply>> = HashMap::new();
-        for (delta, op) in ops() {
-            if let CommentOp::Replied { parent, text, by } = op {
-                let reply = Reply { id: delta.span.first(), text: text.clone(), by: by.clone(), time_ms: delta.time_ms };
-                replies.entry(root(*parent)).or_default().push(reply);
-            }
-        }
-        let mut comments: Vec<Comment> = ops()
-            .filter_map(|(delta, op)| match op {
-                CommentOp::Added { target, text, by } => {
-                    let id = delta.span.first();
-                    let mut replies = replies.remove(&id).unwrap_or_default();
-                    replies.sort_by_key(|reply| Stamp::from(reply.id));
-                    Some(Comment {
-                        id,
-                        target: *target,
-                        text: text.clone(),
-                        by: by.clone(),
-                        time_ms: delta.time_ms,
-                        resolved: resolved.contains(&id),
-                        replies,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-        comments.sort_by_key(|comment| Stamp::from(comment.id));
-        comments
+        comments_in(&self.log, thread)
     }
 
     /// The file's text document, turning a git-lazy file into one first, as
@@ -508,56 +452,124 @@ impl Family {
     /// decisions are taken in causal order, so the first decision wins on
     /// every replica whatever order the deltas arrived in.
     pub fn merge_requests(&self) -> Vec<MergeRequest> {
-        let mut ops: Vec<(&Delta, &MrOp)> = self
-            .log
-            .iter()
-            .filter_map(|delta| match &delta.op {
-                Op::Mr(op) => Some((delta, op)),
-                _ => None,
-            })
-            .collect();
-        ops.sort_by_key(|(delta, _)| Stamp::from(delta.span.first()));
-        let mut requests: Vec<MergeRequest> = Vec::new();
-        for (delta, op) in ops {
-            match op {
-                MrOp::Opened { target, title, summary } => requests.push(MergeRequest {
-                    id: delta.span.first(),
-                    fork: delta.thread,
+        merge_requests_in(&self.log)
+    }
+}
+
+/// [`Family::comments`] over any deltas of a family, such as the ones a
+/// server lets someone read.
+pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
+    let ops = || {
+        log.iter().filter(move |delta| delta.thread == thread).filter_map(|delta| match &delta.op {
+            Op::Comment(op) => Some((delta, op)),
+            _ => None,
+        })
+    };
+    let resolved: HashSet<DeltaId> = ops()
+        .filter_map(|(_, op)| match op {
+            CommentOp::Resolved { comment } => Some(*comment),
+            _ => None,
+        })
+        .collect();
+    // A reply naming another reply, as an older or careless peer may
+    // send, still lands under the first comment.
+    let parent_of: HashMap<DeltaId, DeltaId> = ops()
+        .filter_map(|(delta, op)| match op {
+            CommentOp::Replied { parent, .. } => Some((delta.span.first(), *parent)),
+            _ => None,
+        })
+        .collect();
+    let root = |mut id: DeltaId| {
+        for _ in 0..parent_of.len() {
+            match parent_of.get(&id) {
+                Some(parent) => id = *parent,
+                None => break,
+            }
+        }
+        id
+    };
+    let mut replies: HashMap<DeltaId, Vec<Reply>> = HashMap::new();
+    for (delta, op) in ops() {
+        if let CommentOp::Replied { parent, text, by } = op {
+            let reply = Reply { id: delta.span.first(), text: text.clone(), by: by.clone(), time_ms: delta.time_ms };
+            replies.entry(root(*parent)).or_default().push(reply);
+        }
+    }
+    let mut comments: Vec<Comment> = ops()
+        .filter_map(|(delta, op)| match op {
+            CommentOp::Added { target, text, by } => {
+                let id = delta.span.first();
+                let mut replies = replies.remove(&id).unwrap_or_default();
+                replies.sort_by_key(|reply| Stamp::from(reply.id));
+                Some(Comment {
+                    id,
                     target: *target,
-                    title: title.clone(),
-                    summary: summary.clone(),
-                    opened_ms: delta.time_ms,
-                    status: MrStatus::Open,
-                    changes_requested: None,
-                    guide: None,
-                }),
-                MrOp::Guided { mr, guide, by } => {
-                    if let Some(request) = requests.iter_mut().find(|request| request.id == *mr) {
-                        request.guide = Some((guide.clone(), by.clone()));
-                    }
+                    text: text.clone(),
+                    by: by.clone(),
+                    time_ms: delta.time_ms,
+                    resolved: resolved.contains(&id),
+                    replies,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    comments.sort_by_key(|comment| Stamp::from(comment.id));
+    comments
+}
+
+/// [`Family::merge_requests`] over any deltas of a family.
+pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
+    let mut ops: Vec<(&Delta, &MrOp)> = log
+        .iter()
+        .filter_map(|delta| match &delta.op {
+            Op::Mr(op) => Some((delta, op)),
+            _ => None,
+        })
+        .collect();
+    ops.sort_by_key(|(delta, _)| Stamp::from(delta.span.first()));
+    let mut requests: Vec<MergeRequest> = Vec::new();
+    for (delta, op) in ops {
+        match op {
+            MrOp::Opened { target, title, summary } => requests.push(MergeRequest {
+                id: delta.span.first(),
+                fork: delta.thread,
+                target: *target,
+                title: title.clone(),
+                summary: summary.clone(),
+                opened_ms: delta.time_ms,
+                status: MrStatus::Open,
+                changes_requested: None,
+                guide: None,
+            }),
+            MrOp::Guided { mr, guide, by } => {
+                if let Some(request) = requests.iter_mut().find(|request| request.id == *mr) {
+                    request.guide = Some((guide.clone(), by.clone()));
                 }
-                MrOp::ChangesRequested { mr, reason } => {
-                    if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
-                        && request.status == MrStatus::Open
-                    {
-                        request.changes_requested = Some(ChangesRequested { reason: reason.clone(), at_ms: delta.time_ms });
-                    }
+            }
+            MrOp::ChangesRequested { mr, reason } => {
+                if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
+                    && request.status == MrStatus::Open
+                {
+                    request.changes_requested = Some(ChangesRequested { reason: reason.clone(), at_ms: delta.time_ms });
                 }
-                MrOp::Approved { mr } | MrOp::Declined { mr, .. } => {
-                    if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
-                        && request.status == MrStatus::Open
-                    {
-                        request.status = match op {
-                            MrOp::Declined { reason, .. } => MrStatus::Declined { reason: reason.clone() },
-                            _ => MrStatus::Approved,
-                        };
-                    }
+            }
+            MrOp::Approved { mr } | MrOp::Declined { mr, .. } => {
+                if let Some(request) = requests.iter_mut().find(|request| request.id == *mr)
+                    && request.status == MrStatus::Open
+                {
+                    request.status = match op {
+                        MrOp::Declined { reason, .. } => MrStatus::Declined { reason: reason.clone() },
+                        _ => MrStatus::Approved,
+                    };
                 }
             }
         }
-        requests
     }
+    requests
+}
 
+impl Family {
     pub fn conversation(&self, thread: ThreadId) -> impl DoubleEndedIterator<Item = &Delta> {
         self.threads.get(&thread).into_iter().flat_map(|state| state.conversation.iter().map(|index| &self.log[*index]))
     }

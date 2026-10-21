@@ -33,6 +33,7 @@ use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 pub mod accounts;
 mod app;
 pub mod backup;
+mod browse;
 mod collab;
 pub mod config;
 mod git;

@@ -204,7 +204,7 @@ impl Server {
 #[derive(Deserialize)]
 pub(crate) struct InboxQuery {
     #[serde(default)]
-    all: bool,
+    pub(crate) all: bool,
 }
 
 pub(crate) async fn list(

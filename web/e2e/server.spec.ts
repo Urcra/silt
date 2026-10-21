@@ -140,6 +140,40 @@ test('the server hosts the web app for someone signed in', async ({ page }) => {
   await expect(page).toHaveURL(`${base}/app/`)
 })
 
+test('the hosted app lists the threads a device shared', async ({ page }) => {
+  const mismatch = (await fetch(`${base}/v1/listing`).then((response) => response.json())) as { supported: number[] }
+  const headers = { 'content-type': 'application/json', 'silt-protocol': String(mismatch.supported[0]) }
+  const login = await fetch(`${base}/v1/login/password`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ user: 'alice', password: 'correct horse battery', name: 'laptop' }),
+  }).then((response) => response.json())
+  const thread = '0192ab0000007000800012345678abcd'
+  const created = await fetch(`${base}/v1/threads`, {
+    method: 'POST',
+    headers: { ...headers, authorization: `Bearer ${login.token}` },
+    body: JSON.stringify({
+      id: thread,
+      family: '0192ab0000007000800012345678abce',
+      repo: 'github.com/acme/hosted',
+      created_ms: Date.now(),
+      lease: null,
+      owner: '',
+      collaborators: [],
+    }),
+  })
+  expect(created.status).toBe(204)
+
+  await page.goto(`${base}/app/`)
+  await page.getByLabel('User').fill('alice')
+  await page.getByLabel('Password').fill('correct horse battery')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page).toHaveURL(`${base}/app/`)
+  await expect(page.getByRole('link', { name: /untitled/i }).first()).toBeVisible()
+  await page.getByRole('link', { name: /untitled/i }).first().click()
+  await expect(page).toHaveURL(new RegExp(`/app/t/${thread}`))
+})
+
 test('a device is approved in the browser', async ({ page }) => {
   // Asked without a version, the server says which one it speaks.
   const mismatch = (await fetch(`${base}/v1/device/start`, { method: 'POST' }).then((response) => response.json())) as {

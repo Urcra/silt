@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use silt_proto::{MrSeen, SeenMark, Stamped, ThreadState};
+use silt_proto::{MrSeen, SeenMark, ThreadState};
 use silt_types::ThreadId;
 use tracing::warn;
 
@@ -31,7 +31,7 @@ pub(crate) struct Personal {
 
 impl Personal {
     pub(crate) fn mine(&self, thread: ThreadId) -> Mine {
-        mine(self.states.get(&thread))
+        Mine::of(self.states.get(&thread))
     }
 
     /// Whether the file was looked at as it is now, its `hash`.
@@ -57,33 +57,6 @@ pub(crate) struct Synced {
     /// Seen marks the server took.
     marks_sent: Vec<(String, SeenMark)>,
     marks: Result<Vec<MrSeen>, String>,
-}
-
-/// The state as the web UI reads it.
-fn mine(state: Option<&ThreadState>) -> Mine {
-    let value = |field: Option<Stamped<bool>>| field.is_some_and(|field| field.value);
-    let stamped = state.and_then(|state| state.snooze);
-    let snooze = stamped.map(|snooze| snooze.value);
-    Mine {
-        pinned: value(state.and_then(|state| state.pinned)),
-        snoozed_until: snooze.and_then(|snooze| snooze.until),
-        snoozed_at: stamped.filter(|snooze| snooze.value.until.is_some()).map(|snooze| snooze.at_ms),
-        wake_on_activity: snooze.is_some_and(|snooze| snooze.wake_on_activity),
-        settled: value(state.and_then(|state| state.settled)),
-        seen_ms: state.and_then(|state| state.seen_ms).map(|seen| seen.value),
-    }
-}
-
-/// The change the web UI asks for, stamped now.
-fn stamped(thread: ThreadId, change: &StateChange, now: i64) -> ThreadState {
-    let at = |value| Stamped { value, at_ms: now };
-    ThreadState {
-        thread,
-        pinned: change.pinned.map(at),
-        snooze: change.snooze.map(|snooze| Stamped { value: snooze, at_ms: now }),
-        settled: change.settled.map(at),
-        seen_ms: change.seen.then_some(Stamped { value: now, at_ms: now }),
-    }
 }
 
 impl Core {
@@ -147,7 +120,7 @@ impl Core {
     /// server at the next sync.
     pub(crate) async fn change_thread_state(&mut self, selector: &str, change: StateChange) -> Result<Mine, CoreError> {
         let thread = self.find_thread(selector)?;
-        let change = stamped(thread, &change, now_ms());
+        let change = change.stamped(thread, now_ms());
         let state = self.personal.states.entry(thread).or_insert_with(|| ThreadState::new(thread));
         state.merge(&change);
         let state = state.clone();
@@ -157,7 +130,7 @@ impl Core {
         // Sent now rather than at the next interval.
         self.personal.last_sync = None;
         self.drive_thread_states();
-        Ok(mine(Some(&state)))
+        Ok(Mine::of(Some(&state)))
     }
 
     async fn keep_thread_state(&self, state: &ThreadState, pending: bool) {
@@ -289,30 +262,5 @@ impl Core {
         if changed {
             self.announce(BusEvent::Mrs);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use silt_proto::Snooze;
-
-    use super::*;
-
-    #[test]
-    fn a_change_from_the_web_ui_sets_only_what_it_names() {
-        let thread = ThreadId(3);
-        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true };
-        let state = stamped(thread, &change, 50);
-        assert_eq!(state.pinned, Some(Stamped { value: true, at_ms: 50 }));
-        assert_eq!((state.snooze, state.settled), (None, None));
-        assert_eq!(state.seen_ms, Some(Stamped { value: 50, at_ms: 50 }));
-
-        let snoozed = StateChange { snooze: Some(Snooze { until: Some(900), wake_on_activity: true }), ..StateChange::default() };
-        let mut both = state.clone();
-        both.merge(&stamped(thread, &snoozed, 60));
-        let shown = mine(Some(&both));
-        assert!(shown.pinned && shown.wake_on_activity && !shown.settled);
-        assert_eq!((shown.snoozed_until, shown.snoozed_at, shown.seen_ms), (Some(900), Some(60), Some(50)));
-        assert_eq!(mine(None), Mine::default());
     }
 }

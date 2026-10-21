@@ -8,7 +8,7 @@ pub use delta::{
 };
 pub use family::{
     Applied, BaseText, ChangesRequested, Comment, Family, FileView, HistoryItem, HistorySource, LogError, MergeRequest, MrStatus,
-    Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView,
+    Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, merge_requests_in,
 };
 pub use purge::kept_after_purge;
 pub use stored::{DELTA_FORMAT, StoredError, decode_stored, encode_stored};

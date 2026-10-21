@@ -418,6 +418,111 @@ async fn each_person_keeps_their_own_state_of_a_thread_they_see() {
     assert_eq!(change(&world.alice, &elsewhere).await.expect("sends").status(), StatusCode::BAD_REQUEST);
 }
 
+/// A browser signed in on the server's page, reading the hosted app's API.
+struct Browser {
+    http: reqwest::Client,
+    base: String,
+    cookie: String,
+}
+
+impl Browser {
+    async fn sign_in(client: &Client, user: &str) -> Self {
+        let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("client");
+        let signed_in = http
+            .post(format!("{}/login", client.base))
+            .form(&[("user", user), ("password", PASSWORD), ("next", "/app/")])
+            .send()
+            .await
+            .expect("sends");
+        let cookie = signed_in
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("silt_session="))
+            .and_then(|value| value.split(';').next())
+            .expect("a session cookie")
+            .to_owned();
+        Self { http, base: client.base.clone(), cookie }
+    }
+
+    async fn get(&self, path: &str) -> (StatusCode, serde_json::Value) {
+        let response = self
+            .http
+            .get(format!("{}/app/api{path}", self.base))
+            .header(reqwest::header::COOKIE, &self.cookie)
+            .send()
+            .await
+            .expect("sends");
+        let status = response.status();
+        (status, response.json().await.unwrap_or_default())
+    }
+}
+
+#[tokio::test]
+async fn the_hosted_app_reads_what_each_person_sees() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let mut family = world.family.clone();
+    let mut add = |op| {
+        let delta = family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op);
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        delta
+    };
+    let said = add(Op::Conv(ConvOp::Native {
+        session: SessionRef { agent: "claude-code".into(), id: "s".into() },
+        file: SessionFile::Main,
+        line: r#"{"type":"user","message":{"role":"user","content":"Fix the tokenizer"}}"#.into(),
+    }));
+    let titled = add(Op::Conv(ConvOp::Title("Tokenizer".into())));
+    let commented = add(Op::Comment(CommentOp::Added {
+        target: CommentTarget::Message { delta: said.span.first() },
+        text: "which tokenizer?".into(),
+        by: "bob".into(),
+    }));
+    assert_eq!(alice.push(vec![said, titled, commented]).await, StatusCode::OK);
+
+    let people = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let bob = Browser::sign_in(people("bob"), "bob").await;
+    let (status, threads) = bob.get("/threads").await;
+    assert_eq!(status, StatusCode::OK, "{threads}");
+    let thread = &threads[0];
+    assert_eq!(thread["id"], THREAD.to_string());
+    assert_eq!(thread["title"], "Tokenizer");
+    assert_eq!(thread["owner"], "alice");
+    assert_eq!(thread["messages"], 1);
+    assert_eq!(thread["writable"], true, "bob collaborates");
+    assert_eq!(thread["location"], "remote");
+
+    let (_, history) = bob.get(&format!("/threads/{THREAD}/history")).await;
+    assert_eq!(history["total"], 1);
+    assert_eq!(history["entries"][0]["text"], "Fix the tokenizer");
+    let (_, comments) = bob.get(&format!("/threads/{THREAD}/comments")).await;
+    assert_eq!(comments[0]["text"], "which tokenizer?");
+    assert_eq!(comments[0]["location"], serde_json::json!({ "at": "entry", "index": 0, "excerpt": "Fix the tokenizer" }));
+
+    let erin = Browser::sign_in(people("erin"), "erin").await;
+    let (_, threads) = erin.get("/threads").await;
+    assert_eq!(threads, serde_json::json!([]), "erin isn't in the team");
+    assert_eq!(erin.get(&format!("/threads/{THREAD}/history")).await.0, StatusCode::NOT_FOUND);
+
+    let pin = |browser: &Browser| {
+        browser
+            .http
+            .patch(format!("{}/app/api/threads/{THREAD}/state", browser.base))
+            .header(reqwest::header::COOKIE, &browser.cookie)
+            .header("x-silt-request", "1")
+            .json(&serde_json::json!({ "pinned": true }))
+            .send()
+    };
+    let mine: serde_json::Value = pin(&bob).await.expect("sends").json().await.expect("json");
+    assert_eq!(mine["pinned"], true);
+    assert_eq!(bob.get("/threads").await.1[0]["mine"]["pinned"], true);
+    assert_eq!(people("bob").thread_states().await.len(), 1, "the same state bob's daemons sync");
+    assert_eq!(pin(&erin).await.expect("sends").status(), StatusCode::NOT_FOUND);
+}
+
 impl Client {
     async fn thread_states(&self) -> Vec<silt_proto::ThreadState> {
         self.request(Method::GET, "/v1/me/threads").send().await.expect("sends").json().await.expect("states")

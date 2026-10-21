@@ -64,6 +64,23 @@ pub struct Mine {
     pub seen_ms: Option<i64>,
 }
 
+impl Mine {
+    /// A person's [`crate::ThreadState`] as the web UI reads it.
+    pub fn of(state: Option<&crate::ThreadState>) -> Self {
+        let value = |field: Option<crate::Stamped<bool>>| field.is_some_and(|field| field.value);
+        let stamped = state.and_then(|state| state.snooze);
+        let snooze = stamped.map(|snooze| snooze.value);
+        Self {
+            pinned: value(state.and_then(|state| state.pinned)),
+            snoozed_until: snooze.and_then(|snooze| snooze.until),
+            snoozed_at: stamped.filter(|snooze| snooze.value.until.is_some()).map(|snooze| snooze.at_ms),
+            wake_on_activity: snooze.is_some_and(|snooze| snooze.wake_on_activity),
+            settled: value(state.and_then(|state| state.settled)),
+            seen_ms: state.and_then(|state| state.seen_ms).map(|seen| seen.value),
+        }
+    }
+}
+
 /// A change to [`Mine`]: the fields it sets; `seen` marks the thread seen now.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -73,6 +90,20 @@ pub struct StateChange {
     pub snooze: Option<Snooze>,
     pub settled: Option<bool>,
     pub seen: bool,
+}
+
+impl StateChange {
+    /// The change as a [`crate::ThreadState`] stamped `now`, to merge.
+    pub fn stamped(&self, thread: silt_types::ThreadId, now: i64) -> crate::ThreadState {
+        let at = |value| crate::Stamped { value, at_ms: now };
+        crate::ThreadState {
+            thread,
+            pinned: self.pinned.map(at),
+            snooze: self.snooze.map(|snooze| crate::Stamped { value: snooze, at_ms: now }),
+            settled: self.settled.map(at),
+            seen_ms: self.seen.then_some(crate::Stamped { value: now, at_ms: now }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,4 +363,30 @@ pub struct Project {
     pub open_mrs: u32,
     /// This machine's clone of it.
     pub clone: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_types::ThreadId;
+
+    use super::*;
+    use crate::Stamped;
+
+    #[test]
+    fn a_change_from_the_web_ui_sets_only_what_it_names() {
+        let thread = ThreadId(3);
+        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true };
+        let state = change.stamped(thread, 50);
+        assert_eq!(state.pinned, Some(Stamped { value: true, at_ms: 50 }));
+        assert_eq!((state.snooze, state.settled), (None, None));
+        assert_eq!(state.seen_ms, Some(Stamped { value: 50, at_ms: 50 }));
+
+        let snoozed = StateChange { snooze: Some(Snooze { until: Some(900), wake_on_activity: true }), ..StateChange::default() };
+        let mut both = state.clone();
+        both.merge(&snoozed.stamped(thread, 60));
+        let shown = Mine::of(Some(&both));
+        assert!(shown.pinned && shown.wake_on_activity && !shown.settled);
+        assert_eq!((shown.snoozed_until, shown.snoozed_at, shown.seen_ms), (Some(900), Some(60), Some(50)));
+        assert_eq!(Mine::of(None), Mine::default());
+    }
 }
