@@ -8,6 +8,7 @@ const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 interface Live {
   alice: string
   bob: string
+  server: string
   thread: string
   work: string
 }
@@ -158,6 +159,38 @@ async function startInNewThread(page: Page, agent: string) {
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
 }
+
+test('the server-hosted app shows an agent waiting on the machine running it', async ({ browser }) => {
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('permissions').selectOption('ask_for_everything')
+  await machine.getByLabel('draft').fill('wait for me')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  const asked = machine.getByRole('group', { name: 'permission' })
+  await expect(asked).toContainText('Edit src/main.rs')
+
+  const hosted = await (await browser.newContext()).newPage()
+  await hosted.goto(`${live.server}/app/`)
+  await hosted.getByLabel('User').fill('alice')
+  await hosted.getByLabel('Password').fill('correct horse battery')
+  await hosted.getByRole('button', { name: 'Sign in' }).click()
+  const waiting = hosted.getByRole('region', { name: 'needs you' }).getByRole('group', { name: /wait for me needs you/ })
+  await expect(async () => {
+    await hosted.reload()
+    await expect(waiting).toBeVisible({ timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
+  await expect(waiting.getByText('needs you')).toBeVisible()
+
+  await asked.getByRole('button', { name: 'Allow' }).click()
+  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(async () => {
+    await hosted.reload()
+    await expect(waiting).toHaveCount(0, { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await machine.context().close()
+  await hosted.context().close()
+})
 
 test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')

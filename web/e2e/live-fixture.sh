@@ -76,4 +76,4 @@ for _ in $(seq 1 100); do
 done
 bob_url=$("$silt" open --no-browser)
 
-printf '{"alice":"%s","bob":"%s","thread":"%s","work":"%s"}\n' "$alice_url" "$bob_url" "$thread" "$work"
+printf '{"alice":"%s","bob":"%s","server":"%s","thread":"%s","work":"%s"}\n' "$alice_url" "$bob_url" "$url" "$thread" "$work"

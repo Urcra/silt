@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE control_commands SET answered_ms = ?, answer = ? WHERE id = ? AND device_id = ? AND answered_ms IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9824fa07151b57b1d240fd45ee05c08739c026dfcb4351f93078d86422a63316"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT answer FROM control_commands WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "answer",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "answer"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "636b2be507ba827b730c9b2b7e7021df98c5cd06835c7de4b75af8a7e0be2397"
+}

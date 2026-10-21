@@ -6,6 +6,7 @@ pub mod capture_lock;
 mod catch_up;
 pub mod client;
 mod comments;
+mod control;
 mod core;
 mod disk;
 mod forks;

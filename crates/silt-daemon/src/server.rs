@@ -143,6 +143,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Listed(listing, requested) => core.listed(listing, requested).await,
             Event::Personal(synced) => core.personal_synced(*synced).await,
+            Event::Control(event) => core.control_event(event).await,
         }
         if let Err(error) = core.end_turn().await {
             warn!(%error, "could not note what the store holds");

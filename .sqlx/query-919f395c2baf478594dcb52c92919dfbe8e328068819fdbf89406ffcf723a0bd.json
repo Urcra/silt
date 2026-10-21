@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id, d.user_id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.name = ? ORDER BY d.created_ms DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "919f395c2baf478594dcb52c92919dfbe8e328068819fdbf89406ffcf723a0bd"
+}

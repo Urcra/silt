@@ -36,6 +36,7 @@ pub mod backup;
 mod browse;
 mod collab;
 pub mod config;
+mod control;
 mod git;
 mod inbox;
 mod index;
@@ -166,6 +167,7 @@ struct Shared {
     /// Threads purged for good; their deltas are never stored again.
     purged: Mutex<std::collections::HashSet<ThreadId>>,
     presence: Mutex<presence::Board>,
+    control: control::Control,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
 }
@@ -233,6 +235,7 @@ impl Server {
                 data_dir: data_dir.to_owned(),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
+                control: control::Control::default(),
                 passwords: accounts::PasswordChecks::default(),
                 config,
                 http,
@@ -269,6 +272,9 @@ impl Server {
             .route("/v1/threads/{id}/purge", post(lifecycle::purge))
             .route("/v1/trash", get(lifecycle::trash))
             .route("/v1/presence", get(presence::list).post(presence::update))
+            .route("/v1/control", get(control::poll))
+            .route("/v1/control/agents", put(control::report))
+            .route("/v1/control/{id}", post(control::answer))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))

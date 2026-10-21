@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE control_commands SET taken_ms = ?\n         WHERE device_id = ? AND taken_ms IS NULL AND expires_ms > ?\n         RETURNING id AS \"id!\", thread_id, from_device, command, created_ms,\n           (SELECT name FROM users WHERE users.id = sender_id) AS \"sender!: String\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "from_device",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "from_device"
+          }
+        }
+      },
+      {
+        "name": "command",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "command"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "sender!: String",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "9d9f905cd233c902ccf176a7463b2596e770f4cb620e1a6ee342ad23468b3dbe"
+}

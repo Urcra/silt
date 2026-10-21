@@ -861,3 +861,101 @@ pub struct PresenceReply {
     /// Everyone else on the thread.
     pub people: Vec<Presence>,
 }
+
+/// An agent a daemon runs, as it reports it to the server (ADR 0026), so
+/// browsers see what runs where without opening the thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AgentReport {
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub thread: ThreadId,
+    pub agent: String,
+    pub state: AgentState,
+    /// What it waits on the person to answer.
+    #[serde(default)]
+    pub permissions: Vec<AskedPermission>,
+    /// Prompts waiting their turn.
+    #[serde(default)]
+    pub queued: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AskedPermission {
+    pub id: u64,
+    pub title: String,
+    /// Option ids and labels.
+    pub options: Vec<(String, String)>,
+}
+
+/// Every agent a daemon runs; sent when they change and as a heartbeat.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsReport {
+    pub agents: Vec<AgentReport>,
+}
+
+/// What a person asks a daemon to do from elsewhere (ADR 0026).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemoteCommand {
+    Start {
+        agent: String,
+        #[serde(default)]
+        preset: Option<String>,
+        #[serde(default)]
+        mode: Option<String>,
+    },
+    Prompt {
+        text: String,
+        #[serde(default)]
+        plan: bool,
+    },
+    Queue {
+        text: String,
+    },
+    Steer {
+        text: String,
+    },
+    Answer {
+        id: u64,
+        #[serde(default)]
+        option: Option<String>,
+    },
+    Cancel,
+    Stop,
+    Preset {
+        preset: String,
+    },
+    Mode {
+        mode: String,
+    },
+    /// Takes the thread up on this device.
+    Resume,
+}
+
+/// A command waiting for the daemon it's meant for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlCommand {
+    pub id: i64,
+    pub thread: ThreadId,
+    /// Who sent it, by name, and from which of their devices, if any.
+    pub sender: String,
+    #[serde(default)]
+    pub from: Option<DeviceId>,
+    pub sent_ms: i64,
+    pub command: RemoteCommand,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlReply {
+    pub commands: Vec<ControlCommand>,
+}
+
+/// How a daemon answered a command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CommandAnswer {
+    pub ok: bool,
+    pub message: String,
+}

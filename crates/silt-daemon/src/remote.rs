@@ -241,6 +241,23 @@ impl Remote {
         Ok(checked(request.send().await?).await?.json().await?)
     }
 
+    /// The commands waiting for this device, waiting up to `wait` for one.
+    pub async fn control(&self, wait: Duration) -> Result<silt_proto::ControlReply, RemoteError> {
+        let path = format!("/v1/control?wait_ms={}", wait.as_millis());
+        let request = self.request(reqwest::Method::GET, &path).timeout(wait + Duration::from_secs(15));
+        Ok(checked(request.send().await?).await?.json().await?)
+    }
+
+    pub async fn answer_command(&self, id: i64, answer: &silt_proto::CommandAnswer) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::POST, &format!("/v1/control/{id}")).json(answer).send().await?).await?;
+        Ok(())
+    }
+
+    pub async fn report_agents(&self, report: &silt_proto::AgentsReport) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::PUT, "/v1/control/agents").json(report).send().await?).await?;
+        Ok(())
+    }
+
     pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {
         let request = ShareRequest { user: user.to_owned(), remove };
         let response =

@@ -67,6 +67,7 @@ pub enum Event {
         run: u64,
         event: crate::acp::AcpEvent,
     },
+    Control(crate::control::ControlEvent),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -215,6 +216,8 @@ pub struct Core {
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
+    /// The control channel to the server (ADR 0026).
+    pub(crate) control: crate::control::Control,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -371,6 +374,7 @@ impl Core {
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             personal: crate::personal::Personal::default(),
+            control: crate::control::Control::default(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -581,6 +585,9 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        if self.resident {
+            self.drive_control().await;
+        }
         if let Err(error) = self.check_commits().await {
             warn!(%error, "could not record new commits");
         }

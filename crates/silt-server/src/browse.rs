@@ -15,7 +15,7 @@ use silt_proto::view::{
     CommentLocation, CommentView, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrGuide, MrSummary, Project, ReplyView,
     SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
 };
-use silt_proto::{InboxRead, SearchQuery, ThreadState, Visibility};
+use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 use crate::app::Browser;
@@ -166,6 +166,7 @@ fn summary(
     row: &Row,
     requests: &[(FamilyId, MergeRequest)],
     states: &HashMap<ThreadId, ThreadState>,
+    running: &HashMap<ThreadId, (DeviceId, AgentReport)>,
 ) -> ThreadSummary {
     let log = readable.of(row);
     let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
@@ -200,7 +201,7 @@ fn summary(
         writable: row.owner == readable.me || collaborators.contains(&readable.me),
         owner: row.owner.clone(),
         collaborators,
-        agent_state: None,
+        agent_state: running.get(&row.id).map(|(_, agent)| agent.state),
         last_ms: own.iter().map(|delta| delta.time_ms).max().unwrap_or(row.created_ms),
         merged: requests.iter().any(|(_, request)| request.fork == row.id && request.status == MrStatus::Approved),
         review: row.owner == readable.me
@@ -222,7 +223,8 @@ async fn threads(
     let readable = Readable::load(&server, browser).await?;
     let requests = readable.requests();
     let states = states(&server, browser).await?;
-    Ok(Json(readable.rows.iter().map(|row| summary(&readable, row, &requests, &states)).collect()))
+    let running = server.shared.control.running().await;
+    Ok(Json(readable.rows.iter().map(|row| summary(&readable, row, &requests, &states, &running)).collect()))
 }
 
 #[derive(Deserialize)]
