@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:daemon": "./scripts/dev-daemon.sh",
     "build": "./scripts/build-wasm.sh && tsc -b && vite build",
     "lint": "oxlint --ignore-pattern src/wasm",
     "preview": "vite preview",
