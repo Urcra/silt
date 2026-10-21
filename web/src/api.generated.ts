@@ -9,6 +9,8 @@ streaming: string, };
 
 export type AgentState = "starting" | "idle" | "working" | "awaiting_permission" | "awaiting_input" | "error" | "stopped";
 
+export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
+
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
 export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
@@ -109,6 +111,24 @@ diverged: Array<string>,
  * Recovery forks made since the daemon started.
  */
 recovered: Array<string>, };
+
+export type DeviceAgent = { thread: string, title: string | null, agent: string, state: AgentState, };
+
+export type DeviceChange = { name: string | null, capabilities: Capabilities | null, };
+
+export type DeviceView = { id: string, name: string, created_ms: number, last_used_ms: number, 
+/**
+ * Heard from in the last minute and a half.
+ */
+online: boolean, 
+/**
+ * The device asking, when a device asks.
+ */
+this: boolean, capabilities: Capabilities, 
+/**
+ * The agents it runs, as it last reported them.
+ */
+agents: Array<DeviceAgent>, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 

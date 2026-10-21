@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT capabilities FROM devices WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "capabilities",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "capabilities"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f11f5401ef9fdbeb8de8924ee1077f994d9a7c75344b938e877fa36747a9d0da"
+}

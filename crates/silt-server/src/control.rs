@@ -60,6 +60,12 @@ impl Control {
         self.board.lock().await.online().any(|(online, _)| *online == device)
     }
 
+    /// Whether `device` is online, and the agents it last reported.
+    pub(crate) async fn heard(&self, device: DeviceId) -> (bool, Vec<AgentReport>) {
+        let board = self.board.lock().await;
+        board.devices.get(&device).map_or((false, Vec::new()), |heard| (heard.at.elapsed() < OFFLINE_AFTER, heard.agents.clone()))
+    }
+
     /// The device that last reported running an agent in `thread`, whether
     /// it's still online, and what it reported.
     pub(crate) async fn runs(&self, thread: ThreadId) -> Option<(DeviceId, bool, AgentReport)> {
@@ -134,14 +140,18 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
             tracing::warn!(id = row.id, "skipping a command this server can't read");
             continue;
         };
+        let from = row.from_device.as_deref().map(|device| DeviceId(id_from(device)));
+        // A browser signed in with the person's password may do all they may.
+        let capabilities = match from {
+            Some(device) => crate::devices::capabilities_of(server.db(), device).await?,
+            None => Capabilities::ALL,
+        };
         commands.push(ControlCommand {
             id: row.id,
             thread: ThreadId(id_from(&row.thread_id)),
             sender: row.sender,
-            from: row.from_device.as_deref().map(|device| DeviceId(id_from(device))),
-            // Browsers and devices alike may do everything, until people
-            // choose per device.
-            capabilities: Capabilities::ALL,
+            from,
+            capabilities,
             sent_ms: row.created_ms,
             command,
         });
@@ -334,7 +344,17 @@ mod tests {
         assert_eq!(commands.len(), 1, "the waiting poll hears of it at once");
         assert_eq!((commands[0].id, &commands[0].command, commands[0].sender.as_str()), (id, &prompt, "alice"));
         assert_eq!(commands[0].from, Some(phone_device));
+        assert_eq!(commands[0].capabilities, Capabilities::ALL, "a new device may do everything");
         assert!(laptop.poll(0).await.is_empty(), "a command is taken once");
+
+        let phone_id = id_bytes(phone_device.0);
+        sqlx::query!(r#"UPDATE devices SET capabilities = '{"answer_permissions":true}' WHERE id = ?"#, phone_id)
+            .execute(server.db())
+            .await
+            .expect("updates");
+        super::relay(&server, relay(RemoteCommand::Cancel, Duration::from_secs(60))).await.expect("relays");
+        let limited = laptop.poll(0).await;
+        assert_eq!(limited[0].capabilities, Capabilities { answer_permissions: true, ..Capabilities::default() });
 
         let stale = super::relay(&server, relay(RemoteCommand::Stop, Duration::ZERO)).await.expect("relays");
         assert!(laptop.poll(0).await.is_empty(), "an expired command isn't taken");

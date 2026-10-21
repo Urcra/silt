@@ -241,6 +241,24 @@ impl Remote {
         Ok(checked(request.send().await?).await?.json().await?)
     }
 
+    pub async fn devices(&self) -> Result<Vec<silt_proto::view::DeviceView>, RemoteError> {
+        Ok(checked(self.request(reqwest::Method::GET, "/v1/devices").send().await?).await?.json().await?)
+    }
+
+    pub async fn change_device(
+        &self,
+        id: &str,
+        change: &silt_proto::view::DeviceChange,
+    ) -> Result<silt_proto::view::DeviceView, RemoteError> {
+        let response = self.request(reqwest::Method::PATCH, &format!("/v1/devices/{id}")).json(change).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn revoke_device(&self, id: &str) -> Result<(), RemoteError> {
+        checked(self.request(reqwest::Method::POST, &format!("/v1/devices/{id}/revoke")).send().await?).await?;
+        Ok(())
+    }
+
     /// The commands waiting for this device, waiting up to `wait` for one.
     pub async fn control(&self, wait: Duration) -> Result<silt_proto::ControlReply, RemoteError> {
         let path = format!("/v1/control?wait_ms={}", wait.as_millis());

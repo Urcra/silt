@@ -37,6 +37,7 @@ mod browse;
 mod collab;
 pub mod config;
 mod control;
+mod devices;
 mod git;
 mod inbox;
 mod index;
@@ -286,6 +287,7 @@ impl Server {
             .route("/v1/me/seen/{mr}", put(me::mark_seen))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
+            .merge(devices::routes())
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))

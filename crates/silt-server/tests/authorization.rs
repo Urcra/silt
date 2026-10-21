@@ -543,6 +543,76 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
 }
 
 #[tokio::test]
+async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do() {
+    use silt_proto::{AgentReport, AgentState, AgentsReport};
+    let world = world(Visibility::Private).await;
+    let machine = &world.alice;
+    let report = AgentsReport {
+        agents: vec![AgentReport {
+            thread: THREAD,
+            agent: "Fake agent".into(),
+            state: AgentState::Working,
+            permissions: Vec::new(),
+            queued: 0,
+            preset: String::new(),
+        }],
+    };
+    assert_eq!(machine.send(machine.request(Method::PUT, "/v1/control/agents").json(&report)).await, StatusCode::NO_CONTENT);
+
+    let alice = Browser::sign_in(machine, "alice").await;
+    let (status, devices) = alice.get("/devices").await;
+    assert_eq!(status, StatusCode::OK, "{devices}");
+    let devices = devices.as_array().expect("a list").clone();
+    // Two from signing in for the world, and the browser's own sign-in isn't one.
+    assert_eq!(devices.len(), 2, "{devices:?}");
+    let reporting = devices.iter().find(|device| device["online"] == true).expect("the reporting device is online");
+    assert_eq!(reporting["agents"][0]["state"], "working");
+    assert_eq!(reporting["agents"][0]["thread"], THREAD.to_string());
+    assert_eq!(reporting["capabilities"]["send_prompts"], true, "a new device may do everything");
+    assert!(devices.iter().all(|device| device["this"] == false), "a browser is none of them");
+    let id = reporting["id"].as_str().expect("an id").to_owned();
+
+    let change = |body| {
+        alice
+            .http
+            .patch(format!("{}/app/api/devices/{id}", alice.base))
+            .header(reqwest::header::COOKIE, &alice.cookie)
+            .header("x-silt-request", "1")
+            .json(&body)
+            .send()
+    };
+    let changed: serde_json::Value = change(serde_json::json!({
+        "name": "workstation",
+        "capabilities": { "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true }
+    }))
+    .await
+    .expect("sends")
+    .json()
+    .await
+    .expect("json");
+    assert_eq!((changed["name"].as_str(), changed["capabilities"]["send_prompts"].as_bool()), (Some("workstation"), Some(false)));
+    let refused = change(serde_json::json!({ "name": "  " })).await.expect("sends");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let refused: serde_json::Value = refused.json().await.expect("json");
+    assert_eq!(refused["error"], "a device's name is 1 to 64 characters", "errors read as the app reads them");
+
+    // A device lists the same, knowing itself.
+    let listed: Vec<silt_proto::view::DeviceView> =
+        machine.request(Method::GET, "/v1/devices").send().await.expect("sends").json().await.expect("devices");
+    assert_eq!(listed.iter().filter(|device| device.this).count(), 1);
+    let bob = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1, "bob").await;
+    assert!(bob.get("/devices").await.1.as_array().expect("a list").iter().all(|device| device["id"] != id.as_str()));
+    assert_eq!(
+        bob.post(&format!("/devices/{id}/revoke"), serde_json::json!({})).await.0,
+        StatusCode::NOT_FOUND,
+        "only one's own"
+    );
+
+    assert_eq!(alice.post(&format!("/devices/{id}/revoke"), serde_json::json!({})).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(alice.get("/devices").await.1.as_array().expect("a list").len(), 1);
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

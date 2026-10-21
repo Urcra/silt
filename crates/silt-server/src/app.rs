@@ -11,7 +11,12 @@ use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde_json::json;
 
+use silt_proto::ErrorReply;
+
 use crate::{Server, UserId, pages};
+
+/// Longest error answer rewritten for the app.
+const ERROR_BODY: usize = 64 * 1024;
 
 #[derive(rust_embed::Embed)]
 #[folder = "../../web/dist"]
@@ -29,11 +34,13 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
         .route("/app/api/status", get(status))
         .merge(crate::browse::routes())
         .merge(crate::relayed::routes())
+        .merge(crate::devices::browser_routes())
         // Not the page: the app would read it as an empty answer.
         .route(
             "/app/api/{*rest}",
             axum::routing::any(|| async { refused(StatusCode::NOT_FOUND, "the server doesn't answer this yet") }),
         )
+        .layer(middleware::from_fn(as_the_app_reads))
         .layer(middleware::from_fn_with_state(server.clone(), browser_session));
     Router::new()
         .route("/app", get(|| async { Redirect::permanent("/app/") }))
@@ -72,6 +79,26 @@ fn hosted_index(html: &str) -> String {
 
 fn refused(status: StatusCode, error: &str) -> Response {
     (status, Json(json!({ "error": error }))).into_response()
+}
+
+/// Errors as the app reads them, `{"error": message}`, where the handlers
+/// it shares with devices answer the device API's way.
+async fn as_the_app_reads(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    if response.status().is_success() {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, ERROR_BODY).await else {
+        return refused(parts.status, "the answer was too long");
+    };
+    match serde_json::from_slice::<ErrorReply>(&bytes) {
+        Ok(ErrorReply::Invalid { message } | ErrorReply::Forbidden { message }) => refused(parts.status, &message),
+        Ok(ErrorReply::NotFound) => refused(parts.status, "not found"),
+        Ok(ErrorReply::Unauthorized) => refused(parts.status, "sign in at /login"),
+        Ok(_) => refused(parts.status, "the server refused this"),
+        Err(_) => Response::from_parts(parts, Body::from(bytes)),
+    }
 }
 
 /// Lets through requests with a session, and changes only with the header

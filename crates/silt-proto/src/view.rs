@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentState, Snooze, ThreadStatus, Visibility};
+use crate::{AgentState, Capabilities, Snooze, ThreadStatus, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -363,6 +363,41 @@ pub struct Project {
     pub open_mrs: u32,
     /// This machine's clone of it.
     pub clone: Option<PathBuf>,
+}
+
+/// One of the person's signed-in devices (ADR 0026).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DeviceView {
+    pub id: String,
+    pub name: String,
+    pub created_ms: i64,
+    pub last_used_ms: i64,
+    /// Heard from in the last minute and a half.
+    pub online: bool,
+    /// The device asking, when a device asks.
+    pub this: bool,
+    pub capabilities: Capabilities,
+    /// The agents it runs, as it last reported them.
+    pub agents: Vec<DeviceAgent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DeviceAgent {
+    pub thread: String,
+    pub title: Option<String>,
+    pub agent: String,
+    pub state: AgentState,
+}
+
+/// Renames a device or changes what it may do; what's left out stays.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct DeviceChange {
+    pub name: Option<String>,
+    pub capabilities: Option<Capabilities>,
 }
 
 #[cfg(test)]

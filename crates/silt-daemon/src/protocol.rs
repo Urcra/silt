@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    CommentLocation, CommentView, DaemonStatus, FileEdit, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrFile,
-    MrGuide, MrSummary, Project, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
+    CommentLocation, CommentView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit, HistoryEntry, HistoryPage,
+    InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, Project, ReplyView, SearchFilters, SearchResult, ShowLine,
+    StateChange, ThreadSummary, TurnInfo,
 };
 
 /// One request per line on the daemon socket, answered by one response line.
@@ -287,6 +288,15 @@ pub enum Request {
     },
     /// The person's orgs, their members, teams and projects.
     Orgs,
+    /// The person's devices, on the server.
+    Devices,
+    DeviceChange {
+        id: String,
+        change: DeviceChange,
+    },
+    DeviceRevoke {
+        id: String,
+    },
     /// Changes an org, a team or a project's place, on the server.
     OrgChange {
         change: silt_proto::OrgChange,
@@ -809,6 +819,7 @@ mod tests {
         let declarations = [
             silt_proto::AgentActivity::decl(&config),
             silt_proto::AgentState::decl(&config),
+            silt_proto::Capabilities::decl(&config),
             silt_proto::InboxRead::decl(&config),
             silt_proto::OrgChange::decl(&config),
             silt_proto::OrgInfo::decl(&config),
@@ -833,6 +844,9 @@ mod tests {
             CommentOn::decl(&config),
             CommentView::decl(&config),
             DaemonStatus::decl(&config),
+            DeviceAgent::decl(&config),
+            DeviceChange::decl(&config),
+            DeviceView::decl(&config),
             FileEdit::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),

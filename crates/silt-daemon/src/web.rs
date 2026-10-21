@@ -98,6 +98,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects", get(projects).post(add_clone))
         .route("/api/orgs", get(orgs))
         .route("/api/orgs/change", post(org_change))
+        .route("/api/devices", get(devices))
+        .route("/api/devices/{id}", axum::routing::patch(device_change))
+        .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
@@ -482,6 +485,22 @@ async fn org_change(State(web): State<Web>, Json(change): Json<silt_proto::OrgCh
 
 async fn projects(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Projects).await
+}
+
+async fn devices(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Devices).await
+}
+
+async fn device_change(
+    State(web): State<Web>,
+    Path(id): Path<String>,
+    Json(change): Json<crate::protocol::DeviceChange>,
+) -> HttpResponse {
+    ask(&web, Request::DeviceChange { id, change }).await
+}
+
+async fn device_revoke(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::DeviceRevoke { id }).await
 }
 
 async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {

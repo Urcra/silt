@@ -205,6 +205,21 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   await hosted.context().close()
 })
 
+test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('banner').getByRole('link', { name: 'Devices' }).click()
+  const here = page.getByRole('region').filter({ hasText: 'this device' })
+  await expect(here.getByText('online', { exact: true })).toBeVisible()
+  const prompts = here.getByLabel('Send prompts')
+  await expect(prompts).toBeChecked()
+  await prompts.click()
+  await expect(prompts).not.toBeChecked()
+  await page.reload()
+  await expect(page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts')).not.toBeChecked()
+  await page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts').click()
+  await expect(page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts')).toBeChecked()
+})
+
 test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await expect(page.getByLabel('permissions')).toHaveValue('ask_before_commands')

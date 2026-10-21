@@ -130,6 +130,35 @@ impl Core {
         })
     }
 
+    pub(crate) fn devices(
+        &self,
+    ) -> Result<impl Future<Output = Result<Vec<crate::protocol::DeviceView>, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move { remote.devices().await.map_err(|source| CoreError::Server { doing: "list your devices", source }) })
+    }
+
+    pub(crate) fn device_change(
+        &self,
+        id: String,
+        change: crate::protocol::DeviceChange,
+    ) -> Result<impl Future<Output = Result<crate::protocol::DeviceView, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move {
+            remote.change_device(&id, &change).await.map_err(|source| CoreError::Server { doing: "change the device", source })
+        })
+    }
+
+    pub(crate) fn device_revoke(
+        &self,
+        id: String,
+    ) -> Result<impl Future<Output = Result<&'static str, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move {
+            remote.revoke_device(&id).await.map_err(|source| CoreError::Server { doing: "sign the device out", source })?;
+            Ok("signed out")
+        })
+    }
+
     fn signed_in(&self) -> Result<crate::remote::Remote, CoreError> {
         self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }

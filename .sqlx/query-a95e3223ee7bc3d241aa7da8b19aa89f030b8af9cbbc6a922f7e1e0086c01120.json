@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET capabilities = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a95e3223ee7bc3d241aa7da8b19aa89f030b8af9cbbc6a922f7e1e0086c01120"
+}

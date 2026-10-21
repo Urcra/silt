@@ -19,7 +19,7 @@ use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 use crate::app::Browser;
-use crate::{ApiError, Caller, Server, bad_request, id_from, not_found, now_ms};
+use crate::{ApiError, Caller, Server, UserId, bad_request, id_from, not_found, now_ms};
 
 pub(crate) fn routes() -> Router<Server> {
     Router::new()
@@ -161,6 +161,34 @@ fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
     out
 }
 
+/// The title it was given, or else the first line of its first prompt.
+fn title(own: &[&Delta], history: &[(DeltaId, HistoryEntry)]) -> Option<String> {
+    let given = own.iter().rev().find_map(|delta| match &delta.op {
+        Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
+        _ => None,
+    });
+    given.or_else(|| {
+        history
+            .iter()
+            .find(|(_, entry)| entry.kind == "user")
+            .map(|(_, entry)| entry.text.lines().next().unwrap_or_default().chars().take(80).collect())
+    })
+}
+
+/// The titles of the threads the person sees, as their thread list shows them.
+pub(crate) async fn titles(server: &Server, user: UserId) -> Result<HashMap<ThreadId, Option<String>>, ApiError> {
+    let readable = Readable::load(server, Browser { user }).await?;
+    Ok(readable
+        .rows
+        .iter()
+        .map(|row| {
+            let log = readable.of(row);
+            let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
+            (row.id, title(&own, &entries(log, row.id)))
+        })
+        .collect())
+}
+
 fn summary(
     readable: &Readable,
     row: &Row,
@@ -171,19 +199,11 @@ fn summary(
     let log = readable.of(row);
     let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
     let history = entries(log, row.id);
-    let title = own.iter().rev().find_map(|delta| match &delta.op {
-        Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
-        _ => None,
-    });
-    let first_prompt = history
-        .iter()
-        .find(|(_, entry)| entry.kind == "user")
-        .map(|(_, entry)| entry.text.lines().next().unwrap_or_default().chars().take(80).collect());
     let collaborators = readable.collaborators.get(&row.id).cloned().unwrap_or_default();
     ThreadSummary {
         id: row.id.to_string(),
         repo: row.repo.clone(),
-        title: title.or(first_prompt),
+        title: title(&own, &history),
         agent: own.iter().rev().find_map(|delta| match &delta.op {
             Op::Conv(ConvOp::Native { session, .. }) => {
                 Some(silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()))
