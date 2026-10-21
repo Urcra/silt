@@ -855,6 +855,10 @@ impl Core {
                 TurnMark::PromptSubmitted
             }
             Mark::ToolStarted { tool_use_id, tool } => {
+                // A transcript can read as stopped before the reply's tool
+                // calls are written, as Gemini's does; a tool means the turn
+                // goes on.
+                session.in_turn = true;
                 session.open_tool = Some(tool_use_id.clone());
                 TurnMark::ToolStarted { tool_use_id, tool }
             }

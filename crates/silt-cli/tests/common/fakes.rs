@@ -76,6 +76,8 @@ turn() {
     printf '%s\n' "$3" >> src/main.rs
     say "{\"id\":\"g-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"\",\"thoughts\":[],\"toolCalls\":[{\"id\":\"edit-$2\",\"name\":\"replace\",\"args\":{\"file_path\":\"$(pwd)/src/main.rs\"},\"result\":[{\"functionResponse\":{\"id\":\"edit-$2\",\"name\":\"replace\",\"response\":{\"output\":\"replaced\"}}}],\"status\":\"success\"}]}"
     say "{\"id\":\"a-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"Gemini says done.\",\"thoughts\":[]}"
+    # Written again with its tokens once the reply finished streaming.
+    say "{\"id\":\"a-$2\",\"timestamp\":\"$now\",\"type\":\"gemini\",\"content\":\"Gemini says done.\",\"thoughts\":[],\"tokens\":{\"total\":1}}"
     say '{"$set":{"lastUpdated":"now"}}'
 }
 if [ -n "$resume" ]; then

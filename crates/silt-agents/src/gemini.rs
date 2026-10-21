@@ -129,9 +129,11 @@ fn file_session_id(path: &Path) -> Option<String> {
 
 #[derive(Default)]
 struct Seen {
+    kind: String,
     text: bool,
     thoughts: usize,
     calls: HashSet<String>,
+    stopped: bool,
 }
 
 /// Folds a session file's records.
@@ -161,13 +163,32 @@ impl Reader for GeminiReader {
             read.entries.push(Entry::Other { kind: "unparseable".into() });
             return read;
         };
-        let Some(id) = value.get("id").and_then(Value::as_str) else {
-            let kind = ["$set", "$patch", "$rewindTo", "sessionId"]
-                .into_iter()
-                .find(|key| value.get(key).is_some())
-                .unwrap_or("unknown");
-            read.entries.push(Entry::Other { kind: kind.trim_start_matches('$').to_owned() });
+        if value.get("id").is_some() {
+            self.message(&value, &mut read);
             return read;
+        }
+        let kind = ["$set", "$patch", "$rewindTo", "sessionId"]
+            .into_iter()
+            .find(|key| value.get(key).is_some())
+            .unwrap_or("unknown");
+        read.entries.push(Entry::Other { kind: kind.trim_start_matches('$').to_owned() });
+        // An update carries what a message gained, like a copy of it.
+        let updates = value.pointer("/$patch/updates").and_then(Value::as_array).cloned().unwrap_or_default();
+        for mut update in updates {
+            let known = update.get("id").and_then(Value::as_str).and_then(|id| self.messages.get(id)).map(|seen| seen.kind.clone());
+            if let (Some(kind), Some(fields)) = (known, update.as_object_mut()) {
+                fields.entry("type").or_insert(Value::String(kind));
+                self.message(&update, &mut read);
+            }
+        }
+        read
+    }
+}
+
+impl GeminiReader {
+    fn message(&mut self, value: &Value, read: &mut Read) {
+        let Some(id) = value.get("id").and_then(Value::as_str) else {
+            return;
         };
         let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
         let content = value.get("content");
@@ -175,9 +196,10 @@ impl Reader for GeminiReader {
         // `<message id>_response`; they were read with the turn.
         if id.ends_with("_response") {
             read.entries.push(Entry::Other { kind: "replayed".into() });
-            return read;
+            return;
         }
         let seen = self.messages.entry(id.to_owned()).or_default();
+        kind.clone_into(&mut seen.kind);
         match kind {
             "user" => {
                 let responses: Vec<(String, String)> = parts(content)
@@ -204,7 +226,7 @@ impl Reader for GeminiReader {
                     }
                 }
                 for (call, text) in responses {
-                    self.result(&mut read, &call, text, false);
+                    self.result(read, &call, text, false);
                 }
             }
             "gemini" => {
@@ -222,9 +244,14 @@ impl Reader for GeminiReader {
                 if !seen.text && !text.is_empty() {
                     seen.text = true;
                     read.entries.push(Entry::Assistant { text });
-                    if calls.is_empty() {
-                        read.marks.push(Mark::Stopped);
-                    }
+                }
+                // Gemini writes a reply as it streams and adds its tool calls
+                // only once they ran, so a reply without calls ends the turn
+                // only once its tokens, which come at the end, are counted.
+                let requests_tools = !calls.is_empty() || parts(content).iter().any(|part| part.get("functionCall").is_some());
+                if seen.text && !requests_tools && value.get("tokens").is_some() && !seen.stopped {
+                    seen.stopped = true;
+                    read.marks.push(Mark::Stopped);
                 }
                 let mut results = Vec::new();
                 for call in &calls {
@@ -252,12 +279,19 @@ impl Reader for GeminiReader {
                     }
                 }
                 for (call, text, failed) in results {
-                    self.result(&mut read, &call, text, failed);
+                    self.result(read, &call, text, failed);
                 }
+            }
+            "error" => {
+                // The request failed, which ends the turn.
+                if !seen.stopped {
+                    seen.stopped = true;
+                    read.marks.push(Mark::Stopped);
+                }
+                read.entries.push(Entry::Other { kind: "error".into() });
             }
             other => read.entries.push(Entry::Other { kind: other.to_owned() }),
         }
-        read
     }
 }
 
@@ -529,6 +563,34 @@ mod tests {
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(marks.first(), Some(&Mark::PromptSubmitted));
         assert_eq!(marks.last(), Some(&Mark::Stopped));
+    }
+
+    #[test]
+    fn a_reply_ends_the_turn_only_once_it_finished_without_tools() {
+        let mut reader = GeminiReader::default();
+        let marks = |reader: &mut GeminiReader, line: &str| reader.push(line).marks;
+        marks(&mut reader, r#"{"id":"u","timestamp":"t","type":"user","content":[{"text":"fix it"}]}"#);
+        let streaming = r#"{"id":"g","timestamp":"t","type":"gemini","content":"I'll edit the file.","thoughts":[]}"#;
+        assert_eq!(marks(&mut reader, streaming), Vec::new());
+        let counted = r#"{"id":"g","timestamp":"t","type":"gemini","content":[{"text":"I'll edit the file."},{"functionCall":{"name":"replace","args":{}}}],"thoughts":[],"tokens":{"total":1}}"#;
+        assert_eq!(marks(&mut reader, counted), Vec::new(), "a reply that asked for tools");
+        let ran = r#"{"$patch":{"updates":[{"id":"g","toolCalls":[{"id":"e1","name":"replace","args":{},"result":[{"functionResponse":{"id":"e1","response":{"output":"ok"}}}],"status":"success"}]}]}}"#;
+        assert_eq!(
+            marks(&mut reader, ran),
+            vec![
+                Mark::ToolStarted {
+                    tool_use_id: "e1".into(),
+                    tool: "replace".into()
+                },
+                Mark::ToolFinished { tool_use_id: "e1".into() }
+            ],
+            "a patch is read like a copy of the message"
+        );
+        let answer = r#"{"id":"a","timestamp":"t","type":"gemini","content":"Done.","thoughts":[]}"#;
+        assert_eq!(marks(&mut reader, answer), Vec::new());
+        let finished = r#"{"id":"a","timestamp":"t","type":"gemini","content":"Done.","thoughts":[],"tokens":{"total":2}}"#;
+        assert_eq!(marks(&mut reader, finished), vec![Mark::Stopped]);
+        assert_eq!(marks(&mut reader, finished), Vec::new(), "once");
     }
 
     #[test]
