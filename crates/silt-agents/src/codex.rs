@@ -4,7 +4,7 @@
 //! Codex picks the id itself, so a new session is found by its cwd.
 
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -26,16 +26,34 @@ pub fn home() -> Option<PathBuf> {
 
 /// Every rollout under `sessions/`, newest day first.
 fn rollouts(home: &Path) -> Vec<PathBuf> {
+    rollouts_from(home, &[])
+}
+
+/// The rollouts of days from `since_ms` on. Days are named in local time,
+/// so the day before counts too.
+fn rollouts_since(home: &Path, since_ms: i64) -> Vec<PathBuf> {
+    let stamp = crate::time::file_stamp(since_ms.saturating_sub(24 * 60 * 60 * 1000));
+    rollouts_from(home, &[&stamp[..4], &stamp[5..7], &stamp[8..10]])
+}
+
+/// Rollouts in the `YYYY/MM/DD` directories that sort at or after `from`,
+/// a prefix of such a date.
+fn rollouts_from(home: &Path, from: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let mut stack = vec![home.join("sessions")];
-    while let Some(dir) = stack.pop() {
+    let mut stack = vec![(home.join("sessions"), 0, true)];
+    while let Some((dir, depth, on_cutoff)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                stack.push(path);
+                let name = entry.file_name().to_string_lossy().into_owned();
+                match from.get(depth).filter(|_| on_cutoff) {
+                    Some(cutoff) if name.as_str() < *cutoff => {}
+                    Some(cutoff) => stack.push((path, depth + 1, name == *cutoff)),
+                    None => stack.push((path, depth + 1, false)),
+                }
             } else if path.extension().is_some_and(|extension| extension == "jsonl")
                 && path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
             {
@@ -59,10 +77,7 @@ fn rollout_id(path: &Path) -> Option<String> {
 
 /// The first line's `session_meta` payload.
 fn session_meta(path: &Path) -> Option<Value> {
-    let file = fs::File::open(path).ok()?;
-    let mut line = String::new();
-    BufReader::new(file).read_line(&mut line).ok()?;
-    let value: Value = serde_json::from_str(&line).ok()?;
+    let value: Value = serde_json::from_str(&crate::first_line(path)?).ok()?;
     (value.get("type")?.as_str()? == "session_meta").then(|| value.get("payload").cloned()).flatten()
 }
 
@@ -268,7 +283,7 @@ impl Agent for Codex {
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
         let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
         let cwd = cwd.to_string_lossy();
-        rollouts(&home()?)
+        rollouts_since(&home()?, since_ms)
             .into_iter()
             .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
             .filter_map(|path| Some((rollout_id(&path)?, path)))
@@ -335,6 +350,23 @@ impl Agent for Codex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looking_for_new_rollouts_skips_older_days() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let rollout = |day: &str| {
+            let dir = home.path().join("sessions").join(day);
+            fs::create_dir_all(&dir).expect("mkdir");
+            let path = dir.join("rollout-x.jsonl");
+            fs::write(&path, "{}\n").expect("write");
+            path
+        };
+        let (old, month_before, yesterday, today) = (rollout("2025/12/31"), rollout("2026/09/30"), rollout("2026/10/20"), rollout("2026/10/21"));
+        let next_year = rollout("2027/01/01");
+        let october_21_noon = 1_792_584_000_000;
+        assert_eq!(rollouts_since(home.path(), october_21_noon), vec![next_year.clone(), today.clone(), yesterday.clone()]);
+        assert_eq!(rollouts(home.path()), vec![next_year, today, yesterday, month_before, old]);
+    }
 
     #[test]
     fn reads_messages_tools_turns_and_compaction() {

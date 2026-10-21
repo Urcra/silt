@@ -202,8 +202,7 @@ impl Agent for Copilot {
             .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
             .filter_map(|path| {
                 let id = path.parent()?.file_name()?.to_string_lossy().into_owned();
-                let first = fs::read_to_string(&path).ok()?.lines().next()?.to_owned();
-                let start: Value = serde_json::from_str(&first).ok()?;
+                let start: Value = serde_json::from_str(&crate::first_line(&path)?).ok()?;
                 (start.pointer("/data/context/cwd")?.as_str()? == cwd && !known.contains(&id)).then_some((id, path))
             })
             .max_by_key(|(_, path)| crate::modified_ms(path))

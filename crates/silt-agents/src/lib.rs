@@ -289,6 +289,16 @@ pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<
 }
 
 /// Milliseconds since the epoch of a file's last change.
+/// A transcript's first line, which agents start with a record of where
+/// the session runs, read without reading the rest.
+pub(crate) fn first_line(path: &Path) -> Option<String> {
+    const LIMIT: u64 = 4 << 20;
+    let file = std::fs::File::open(path).ok()?;
+    let mut line = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(std::io::Read::take(file, LIMIT)), &mut line).ok()?;
+    Some(line)
+}
+
 pub(crate) fn modified_ms(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let elapsed = modified.duration_since(std::time::UNIX_EPOCH).ok()?;

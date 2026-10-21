@@ -1,3 +1,7 @@
+use std::sync::OnceLock;
+
+use aho_corasick::{AhoCorasick, MatchKind};
+
 /// A session as recorded elsewhere, possibly continued across machines
 /// and forks, to be written back under one id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -56,6 +60,14 @@ impl RecordedSession {
 #[derive(Debug, Clone, Default)]
 pub struct Rewrites {
     pairs: Vec<(String, String)>,
+    /// Built on first use from `pairs`, longest first.
+    matcher: OnceLock<Matcher>,
+}
+
+#[derive(Debug, Clone)]
+struct Matcher {
+    automaton: AhoCorasick,
+    replacements: Vec<String>,
 }
 
 impl Rewrites {
@@ -72,21 +84,21 @@ impl Rewrites {
         add(&session.former_cwds, new_cwd);
         add(&session.former_roots, new_root);
         add(&session.former_ids, &session.id);
-        // Longest first, so a path is never rewritten through a shorter path
-        // it starts with.
-        pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
-        Self { pairs }
+        Self {
+            pairs,
+            matcher: OnceLock::new(),
+        }
     }
 
     pub fn with(mut self, old: &str, new: &str) -> Self {
         self.pairs.push((old.to_owned(), new.to_owned()));
-        self.pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+        self.matcher = OnceLock::new();
         self
     }
 
     pub fn apply(&self, text: &str) -> String {
-        let pairs: Vec<(&str, &str)> = self.pairs.iter().map(|(old, new)| (old.as_str(), new.as_str())).collect();
-        replace_once(text, &pairs)
+        let matcher = self.matcher.get_or_init(|| Matcher::new(&self.pairs));
+        matcher.automaton.replace_all(text, &matcher.replacements)
     }
 
     pub fn lines(&self, lines: &[String]) -> String {
@@ -94,24 +106,23 @@ impl Rewrites {
     }
 }
 
-/// Replaces every occurrence of each `old` with its `new` in one pass, so
-/// replacements are never themselves rewritten. Earlier pairs win.
-fn replace_once(text: &str, rewrites: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(ch) = rest.chars().next() {
-        match rewrites.iter().find(|(old, _)| rest.starts_with(old)) {
-            Some((old, new)) => {
-                out.push_str(new);
-                rest = &rest[old.len()..];
-            }
-            None => {
-                out.push(ch);
-                rest = &rest[ch.len_utf8()..];
-            }
+impl Matcher {
+    /// Replaces every occurrence of each `old` with its `new` in one pass,
+    /// so replacements are never themselves rewritten. Longer olds win, so
+    /// a path is never rewritten through a shorter path it starts with;
+    /// between equally long ones, the earlier pair.
+    fn new(pairs: &[(String, String)]) -> Self {
+        let mut pairs: Vec<&(String, String)> = pairs.iter().filter(|(old, _)| !old.is_empty()).collect();
+        pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+        let automaton = AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostFirst)
+            .build(pairs.iter().map(|(old, _)| old))
+            .expect("rewrites are few and short enough for an automaton");
+        Self {
+            automaton,
+            replacements: pairs.into_iter().map(|(_, new)| new.clone()).collect(),
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -120,11 +131,9 @@ mod tests {
 
     #[test]
     fn rewrites_never_apply_to_their_own_output() {
-        let rewrites = [("/a/repo/old", "/a/repo/new"), ("/a/repo", "/a/repo/new")];
-        assert_eq!(
-            replace_once("cd /a/repo/old && cd /a/repo", &rewrites),
-            "cd /a/repo/new && cd /a/repo/new"
-        );
+        let rewrites = Rewrites::default().with("/a/repo", "/a/repo/new").with("/a/repo/old", "/a/repo/new");
+        assert_eq!(rewrites.apply("cd /a/repo/old && cd /a/repo"), "cd /a/repo/new && cd /a/repo/new");
+        assert_eq!(rewrites.with("", "x").apply("ab"), "ab", "an empty old matches nothing");
     }
 
     #[test]
