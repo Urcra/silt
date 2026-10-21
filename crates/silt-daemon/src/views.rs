@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
+use silt_store::ThreadRecord;
 use silt_types::{FamilyId, Frontier, ThreadId};
 use similar::TextDiff;
 
@@ -18,16 +19,19 @@ impl Core {
 
     pub(crate) fn summaries(&self, include: impl Fn(ThreadId) -> bool) -> Vec<ThreadSummary> {
         let device = self.remote.as_ref().map(|remote| remote.config.device);
-        let mut summaries: Vec<ThreadSummary> = self
-            .thread_records()
-            .values()
-            .filter(|record| include(record.id))
+        let records: Vec<&ThreadRecord> = self.thread_records().values().filter(|record| include(record.id)).collect();
+        let families: BTreeSet<FamilyId> = records.iter().map(|record| record.family).collect();
+        let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
+        for family in families {
+            for delta in self.local_log(family) {
+                by_thread.entry(delta.thread).or_default().push(delta);
+            }
+        }
+        let checked_out: HashSet<ThreadId> = self.checkouts.values().map(|checkout| checkout.record.thread).collect();
+        let mut summaries: Vec<ThreadSummary> = records
+            .into_iter()
             .map(|record| {
-                let deltas: Vec<&Delta> = self
-                    .local_log(record.family)
-                    .iter()
-                    .filter(|delta| delta.thread == record.id)
-                    .collect();
+                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
                 let conversation: Vec<&Delta> = deltas
                     .iter()
                     .copied()
@@ -37,7 +41,8 @@ impl Core {
                     Op::Lease { device, .. } => Some(device),
                     _ => None,
                 });
-                let checked_out = self.checkouts.values().any(|checkout| checkout.record.thread == record.id);
+                let checked_out = checked_out.contains(&record.id);
+                let (first_prompt, messages) = first_prompt_and_messages(&conversation);
                 let diverged = self.syncs.get(&record.family).is_some_and(|sync| sync.diverged().is_some());
                 let location = if diverged {
                     "diverged"
@@ -55,7 +60,7 @@ impl Core {
                     } else {
                         record.repo.clone()
                     },
-                    title: title(&conversation).or_else(|| {
+                    title: named_title(&conversation).or(first_prompt).or_else(|| {
                         let family = self.families.get(&record.family)?;
                         let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
                         title(&inherited)
@@ -67,15 +72,8 @@ impl Core {
                         }
                         _ => None,
                     }),
-                    messages: {
-                        let mut transcripts = Transcripts::default();
-                        conversation
-                            .iter()
-                            .flat_map(|delta| native_entries(&mut transcripts, delta))
-                            .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
-                            .count()
-                    },
-                                        edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+                    messages,
+                    edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
                     location: location.into(),
                     forked_from: deltas.iter().find_map(|delta| match delta.op {
                         Op::Fork { from } => Some(from.to_string()),
@@ -316,8 +314,35 @@ impl Core {
 
 /// The title the agent gave the conversation, or else its first prompt.
 fn title(conversation: &[&Delta]) -> Option<String> {
-    let named = conversation.iter().rev().find_map(|delta| match &delta.op {
-        Op::Conv(ConvOp::Native { line, .. }) => {
+    named_title(conversation).or_else(|| first_prompt_and_messages(conversation).0)
+}
+
+/// The conversation's first prompt as a title, and how many prompts and
+/// replies it has, read in one pass.
+fn first_prompt_and_messages(conversation: &[&Delta]) -> (Option<String>, usize) {
+    let mut transcripts = Transcripts::default();
+    let mut first_prompt = None;
+    let mut messages = 0;
+    for entry in conversation.iter().flat_map(|delta| native_entries(&mut transcripts, delta)) {
+        match entry {
+            Entry::User { text } => {
+                messages += 1;
+                if first_prompt.is_none() {
+                    first_prompt = text.lines().find(|line| !line.trim().is_empty()).map(|line| clip_title(line.trim()));
+                }
+            }
+            Entry::Assistant { .. } => messages += 1,
+            _ => {}
+        }
+    }
+    (first_prompt, messages)
+}
+
+fn named_title(conversation: &[&Delta]) -> Option<String> {
+    conversation.iter().rev().find_map(|delta| match &delta.op {
+        // Parsing every line of a long conversation to find none is the
+        // listing's main cost.
+        Op::Conv(ConvOp::Native { line, .. }) if line.contains("ai-title") => {
             let value: serde_json::Value = serde_json::from_str(line).ok()?;
             (value.get("type")?.as_str()? == "ai-title")
                 .then(|| value.get("aiTitle")?.as_str().map(str::to_owned))
@@ -325,16 +350,6 @@ fn title(conversation: &[&Delta]) -> Option<String> {
         }
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
-    });
-    named.or_else(|| {
-        let mut transcripts = Transcripts::default();
-        conversation
-            .iter()
-            .flat_map(|delta| native_entries(&mut transcripts, delta))
-            .find_map(|entry| match entry {
-                Entry::User { text } => text.lines().find(|line| !line.trim().is_empty()).map(|line| clip_title(line.trim())),
-                _ => None,
-            })
     })
 }
 
