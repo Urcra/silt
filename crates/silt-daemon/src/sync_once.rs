@@ -52,7 +52,7 @@ pub async fn sync_once(data_dir: &Path, thread: Option<&str>) -> Result<Synced, 
     let listed: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
     for record in core.threads.values().filter(|record| families.contains(&record.family) && !listed.contains(&record.id)) {
         remote
-            .register_thread(&thread_info(record), None)
+            .register_thread(&thread_info(record), None, crate::sync::origin_url(record))
             .await
             .map_err(|source| CoreError::Server { doing: "register the thread", source })?;
     }

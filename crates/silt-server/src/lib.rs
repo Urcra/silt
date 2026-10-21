@@ -41,6 +41,7 @@ mod lifecycle;
 mod orgs;
 mod pages;
 mod presence;
+mod projects;
 mod sign_in;
 mod visibility;
 
@@ -268,6 +269,7 @@ impl Server {
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
+            .route("/v1/projects", get(projects::list))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
@@ -569,7 +571,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
 async fn register_thread(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
-    Json(RegisterThread { thread, visibility }): Json<RegisterThread>,
+    Json(RegisterThread { thread, visibility, origin_url }): Json<RegisterThread>,
 ) -> Result<StatusCode, ApiError> {
     let db = &server.shared.db;
     claim_family(&server, thread.family, caller).await?;
@@ -595,6 +597,9 @@ async fn register_thread(
     .execute(db)
     .await?;
     orgs::place_project(db, &thread.repo, caller.user).await?;
+    if let Some(origin_url) = origin_url.filter(|_| !thread.repo.is_empty()) {
+        projects::note_origin(db, &thread.repo, &silt_proto::shareable_url(&origin_url)).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

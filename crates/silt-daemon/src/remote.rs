@@ -178,11 +178,21 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
-    pub async fn register_thread(&self, thread: &ThreadInfo, visibility: Option<Visibility>) -> Result<(), RemoteError> {
-        let body = RegisterThread { thread: thread.clone(), visibility };
+    pub async fn register_thread(
+        &self,
+        thread: &ThreadInfo,
+        visibility: Option<Visibility>,
+        origin_url: Option<String>,
+    ) -> Result<(), RemoteError> {
+        let body = RegisterThread { thread: thread.clone(), visibility, origin_url };
         let response = self.request(reqwest::Method::POST, "/v1/threads").json(&body).send().await?;
         checked(response).await?;
         Ok(())
+    }
+
+    pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
+        Ok(checked(response).await?.json().await?)
     }
 
     pub async fn take_lease(&self, thread: ThreadId) -> Result<Lease, RemoteError> {

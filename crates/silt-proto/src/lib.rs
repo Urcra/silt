@@ -91,6 +91,56 @@ pub struct RegisterThread {
     pub thread: ThreadInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Visibility>,
+    /// Where the registering machine fetches the repository from, without
+    /// credentials, for others to clone it (ADR 0023).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_url: Option<String>,
+}
+
+/// A project the caller can see (ADR 0023).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ProjectInfo {
+    /// The normalized remote that names it.
+    pub repo: String,
+    pub org: Option<String>,
+    pub name: String,
+    pub origin_url: Option<String>,
+    /// Its own setting; none means its org's default.
+    pub visibility: Option<Visibility>,
+    pub default_agent: Option<String>,
+    pub default_preset: Option<String>,
+    /// How many of its threads the caller can see.
+    pub threads: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectsReply {
+    pub projects: Vec<ProjectInfo>,
+}
+
+/// The name a project shows when nobody gave it one: its remote's last
+/// path segment.
+pub fn project_name(repo: &str) -> String {
+    repo.trim_end_matches('/').rsplit(['/', ':']).next().filter(|name| !name.is_empty()).unwrap_or(repo).to_owned()
+}
+
+/// `url` without credentials, so it can be shared: no user or password
+/// over HTTP, where they're tokens, and no password over SSH, where the
+/// user (`git@`) is part of the address.
+pub fn shareable_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let Some((credentials, host)) = rest.split_once('@').filter(|(credentials, _)| !credentials.contains('/')) else {
+        return url.to_owned();
+    };
+    if scheme.starts_with("http") {
+        format!("{scheme}://{host}")
+    } else {
+        let user = credentials.split(':').next().unwrap_or_default();
+        format!("{scheme}://{user}@{host}")
+    }
 }
 
 /// Adds a collaborator to a thread, or removes one.
@@ -325,6 +375,17 @@ mod tests {
     use silt_types::{ActorId, Lamport};
 
     use super::*;
+
+    #[test]
+    fn a_project_is_named_after_its_remote_and_shared_without_credentials() {
+        assert_eq!(project_name("github.com/urcra/silt"), "silt");
+        assert_eq!(project_name("example.com"), "example.com");
+        assert_eq!(shareable_url("https://me:token@github.com/urcra/silt.git"), "https://github.com/urcra/silt.git");
+        assert_eq!(shareable_url("https://ghp_x@github.com/urcra/silt"), "https://github.com/urcra/silt");
+        assert_eq!(shareable_url("ssh://git:secret@host/silt.git"), "ssh://git@host/silt.git");
+        assert_eq!(shareable_url("git@github.com:urcra/silt.git"), "git@github.com:urcra/silt.git");
+        assert_eq!(shareable_url("/srv/git/silt.git"), "/srv/git/silt.git");
+    }
 
     #[test]
     fn agent_states_read_as_they_are_written_and_as_older_peers_wrote_them() {
@@ -566,6 +627,17 @@ pub enum OrgChange {
     MoveProject {
         repo: String,
         org: String,
+    },
+    /// What a project is called and what its new threads start with;
+    /// `None` leaves a setting as it is, an empty string clears it.
+    ProjectSettings {
+        repo: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        default_agent: Option<String>,
+        #[serde(default)]
+        default_preset: Option<String>,
     },
 }
 

@@ -444,8 +444,9 @@ impl Core {
             return;
         };
         let info = thread_info(thread);
+        let origin = origin_url(thread);
         tokio::spawn(async move {
-            if let Err(error) = remote.register_thread(&info, None).await {
+            if let Err(error) = remote.register_thread(&info, None, origin).await {
                 warn!(%error, "could not register a thread with the server");
             }
         });
@@ -457,8 +458,9 @@ impl Core {
         let Some(remote) = &self.remote else {
             return Ok(());
         };
+        let record = &self.threads[&thread];
         remote
-            .register_thread(&thread_info(&self.threads[&thread]), None)
+            .register_thread(&thread_info(record), None, origin_url(record))
             .await
             .map_err(|source| CoreError::Server { doing: "register the thread", source })
     }
@@ -485,6 +487,15 @@ pub(crate) fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
         owner: String::new(),
         collaborators: Vec::new(),
     }
+}
+
+/// Where the thread's clone fetches from, without credentials (ADR 0023).
+pub(crate) fn origin_url(thread: &ThreadRecord) -> Option<String> {
+    if thread.repo_root.as_os_str().is_empty() {
+        return None;
+    }
+    let url = silt_git::Repo::discover(&thread.repo_root).ok()?.remote_url("origin").ok()??;
+    Some(silt_proto::shareable_url(&url))
 }
 
 pub(crate) struct PushBatch {

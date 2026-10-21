@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.repo AS \"repo!\", o.name AS org, p.name, p.origin_url, p.visibility, p.default_agent, p.default_preset\n        FROM projects p LEFT JOIN orgs o ON o.id = p.org_id\n        WHERE p.org_id IN (SELECT org_id FROM org_members WHERE user_id = ?)\n        ORDER BY p.repo",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "org",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "orgs",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "origin_url",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "origin_url"
+          }
+        }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "name": "default_agent",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "default_agent"
+          }
+        }
+      },
+      {
+        "name": "default_preset",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "default_preset"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f58e492e73b83bb89a3cacc458c2255d5bb5a80fee3e283073e20427f4002964"
+}

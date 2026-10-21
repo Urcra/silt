@@ -105,7 +105,7 @@ async fn owns(db: &SqlitePool, org: i64, user: UserId) -> Result<bool, ApiError>
 }
 
 /// Fails unless `user` owns `org` or administers the server.
-async fn require_owner(db: &SqlitePool, org: i64, user: UserId) -> Result<(), ApiError> {
+pub(crate) async fn require_owner(db: &SqlitePool, org: i64, user: UserId) -> Result<(), ApiError> {
     if owns(db, org, user).await? { Ok(()) } else { Err(forbidden("only the org's owners and server admins can change it")) }
 }
 
@@ -297,6 +297,9 @@ pub(crate) async fn change(
                     .await?;
             }
             tx.commit().await?;
+        }
+        OrgChange::ProjectSettings { repo, name, default_agent, default_preset } => {
+            crate::projects::change_settings(db, caller.user, &repo, name, default_agent, default_preset).await?;
         }
     }
     Ok(StatusCode::NO_CONTENT)

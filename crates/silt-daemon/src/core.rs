@@ -1565,7 +1565,7 @@ impl Core {
         let record = ThreadRecord { id: fork, created_ms: now_ms(), owner: self.own_user(), ..source.clone() };
         match (&visibility, &self.remote) {
             (Some(_), Some(remote)) => remote
-                .register_thread(&crate::sync::thread_info(&record), visibility)
+                .register_thread(&crate::sync::thread_info(&record), visibility, crate::sync::origin_url(&record))
                 .await
                 .map_err(|source| CoreError::Server { doing: "register the fork", source })?,
             _ => self.register_thread(&record),

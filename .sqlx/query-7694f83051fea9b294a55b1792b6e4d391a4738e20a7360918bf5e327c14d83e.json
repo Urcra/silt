@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET default_agent = ? WHERE repo = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7694f83051fea9b294a55b1792b6e4d391a4738e20a7360918bf5e327c14d83e"
+}

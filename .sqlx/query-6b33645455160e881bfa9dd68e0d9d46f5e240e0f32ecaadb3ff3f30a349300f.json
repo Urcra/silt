@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET origin_url = ? WHERE repo = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6b33645455160e881bfa9dd68e0d9d46f5e240e0f32ecaadb3ff3f30a349300f"
+}

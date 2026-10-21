@@ -301,7 +301,7 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
         owner: String::new(),
         collaborators: Vec::new(),
     };
-    let register = silt_proto::RegisterThread { thread: info, visibility: Some(Visibility::Private) };
+    let register = silt_proto::RegisterThread { thread: info, visibility: Some(Visibility::Private), origin_url: None };
     assert_eq!(bob.send(bob.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
     let family = &mut world.family;
     let head = family.thread_head(THREAD);
@@ -364,6 +364,7 @@ async fn nothing_is_open_without_signing_in() {
         (Method::GET, format!("/v1/presence?thread={THREAD}")),
         (Method::GET, "/v1/inbox".to_owned()),
         (Method::GET, "/v1/orgs".to_owned()),
+        (Method::GET, "/v1/projects".to_owned()),
         (Method::GET, "/v1/trash".to_owned()),
         (Method::POST, format!("/v1/threads/{THREAD}/delete")),
         (Method::GET, format!("/git/{REPO}/info/refs?service=git-upload-pack")),
@@ -371,4 +372,72 @@ async fn nothing_is_open_without_signing_in() {
     for (method, path) in routes {
         assert_eq!(stranger.send(stranger.request(method.clone(), &path)).await, StatusCode::UNAUTHORIZED, "{method} {path}");
     }
+}
+
+impl Client {
+    async fn projects(&self) -> Vec<silt_proto::ProjectInfo> {
+        let reply: silt_proto::ProjectsReply =
+            self.request(Method::GET, "/v1/projects").send().await.expect("sends").json().await.expect("projects");
+        reply.projects
+    }
+}
+
+#[tokio::test]
+async fn org_members_list_their_projects_and_owners_set_them_up() {
+    let world = world(Visibility::Private).await;
+    let person = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let info = ThreadInfo {
+        id: THREAD,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 1,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    let register = silt_proto::RegisterThread {
+        thread: info,
+        visibility: None,
+        origin_url: Some("https://alice:ghp_secret@github.com/acme/app.git".into()),
+    };
+    assert_eq!(world.alice.send(world.alice.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
+
+    let listed = world.alice.projects().await;
+    assert_eq!(listed.len(), 1);
+    let project = &listed[0];
+    assert_eq!((project.repo.as_str(), project.name.as_str(), project.org.as_deref()), (REPO, "app", Some("acme")));
+    assert_eq!(project.origin_url.as_deref(), Some("https://github.com/acme/app.git"));
+    assert_eq!(project.threads, 1);
+    // Erin is in the org but can't see Alice's private thread; Dave isn't in it.
+    assert_eq!(person("erin").projects().await[0].threads, 0);
+    assert!(person("dave").projects().await.is_empty());
+
+    let settings = |name: &str, preset: &str| OrgChange::ProjectSettings {
+        repo: REPO.into(),
+        name: Some(name.into()),
+        default_agent: Some("claude-acp".into()),
+        default_preset: Some(preset.into()),
+    };
+    assert_eq!(person("erin").change(settings("Mine now", "full_access")).await, StatusCode::FORBIDDEN);
+    assert_eq!(world.alice.change(settings("App", "no way!")).await, StatusCode::BAD_REQUEST);
+    assert_eq!(world.alice.change(settings("App", "ask_for_everything")).await, StatusCode::NO_CONTENT);
+    let project = &person("erin").projects().await[0];
+    assert_eq!(project.name, "App");
+    assert_eq!(
+        (project.default_agent.as_deref(), project.default_preset.as_deref()),
+        (Some("claude-acp"), Some("ask_for_everything"))
+    );
+
+    let cleared =
+        OrgChange::ProjectSettings { repo: REPO.into(), name: Some(String::new()), default_agent: None, default_preset: None };
+    assert_eq!(world.alice.change(cleared).await, StatusCode::NO_CONTENT);
+    let project = &world.alice.projects().await[0];
+    assert_eq!((project.name.as_str(), project.default_agent.as_deref()), ("app", Some("claude-acp")));
+    let elsewhere = OrgChange::ProjectSettings {
+        repo: "github.com/nobody/else".into(),
+        name: None,
+        default_agent: None,
+        default_preset: None,
+    };
+    assert_eq!(world.alice.change(elsewhere).await, StatusCode::NOT_FOUND);
 }
