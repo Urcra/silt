@@ -529,6 +529,15 @@ pub struct SearchResult {
     pub status: Option<silt_proto::ThreadStatus>,
     #[serde(default)]
     pub repo: Option<String>,
+    /// When it was said.
+    #[serde(default)]
+    pub time_ms: Option<i64>,
+    /// The thread's turn it was said in, when the thread is here.
+    #[serde(default)]
+    pub turn: Option<usize>,
+    /// The agent compacted its context after it.
+    #[serde(default)]
+    pub before_compaction: bool,
 }
 
 /// Server search filters (ADR 0011); dates are milliseconds since the epoch.

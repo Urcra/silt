@@ -292,7 +292,19 @@ export type SearchResult = { thread: string, kind: string, snippet: string,
 /**
  * Set when the server answered.
  */
-owner: string | null, status: ThreadStatus | null, repo: string | null, };
+owner: string | null, status: ThreadStatus | null, repo: string | null, 
+/**
+ * When it was said.
+ */
+time_ms: number | null, 
+/**
+ * The thread's turn it was said in, when the thread is here.
+ */
+turn: number | null, 
+/**
+ * The agent compacted its context after it.
+ */
+before_compaction: boolean, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 

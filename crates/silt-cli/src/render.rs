@@ -101,7 +101,11 @@ pub fn search(hits: &[SearchResult]) -> String {
             (Some(owner), Some(status)) => format!("{owner}, {status}  "),
             _ => String::new(),
         };
-        let _ = writeln!(out, "{}  {who}{:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
+        let mut place = hit.turn.map(|turn| format!("turn {turn}  ")).unwrap_or_default();
+        if hit.before_compaction {
+            place.push_str("[before compaction]  ");
+        }
+        let _ = writeln!(out, "{}  {who}{place}{:<11} {}", short(&hit.thread), hit.kind, clip(&hit.snippet, 160));
     }
     out
 }

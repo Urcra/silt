@@ -19,7 +19,17 @@ test('lists threads and searches across compaction', async ({ page }) => {
 
   await page.getByLabel('search', { exact: true }).fill('farewell')
   await page.getByRole('button', { name: 'Search' }).click()
-  await expect(page.getByTestId('search-results')).toContainText('[farewell]')
+  const results = page.getByTestId('search-results')
+  await expect(results).toContainText('[farewell]')
+  // Hits group under their thread, and what came before the compaction says so.
+  const inThread = results.getByRole('region', { name: 'hits in Add a farewell' })
+  await expect(inThread.getByRole('link', { name: 'Add a farewell' })).toBeVisible()
+  await expect(inThread.getByText('before compaction').first()).toBeVisible()
+
+  await page.getByRole('button', { name: 'merged' }).click()
+  await expect(page.getByRole('button', { name: 'clear status' })).toBeVisible()
+  await page.getByRole('button', { name: 'clear status' }).click()
+  await expect(page.getByRole('button', { name: 'clear status' })).toHaveCount(0)
 })
 
 test('shows a thread with compaction, turn diffs and comments', async ({ page }) => {

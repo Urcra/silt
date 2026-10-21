@@ -233,6 +233,59 @@ impl Core {
         }
         turns
     }
+
+    /// The thread's history in order, marking where its own turns started
+    /// and where its agent compacted its context, to place a search hit.
+    pub(crate) fn timeline(&self, thread: ThreadId) -> Option<Timeline> {
+        let family = self.families.get(&self.threads.get(&thread)?.family)?;
+        let mut transcripts = Transcripts::default();
+        let items = family
+            .history(thread)
+            .into_iter()
+            .map(|item| Moment {
+                delta: item.delta.span.first(),
+                time_ms: item.delta.time_ms,
+                prompt: item.source == HistorySource::Own
+                    && matches!(item.delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })),
+                compaction: entry_texts(&mut transcripts, item.delta).iter().any(|(kind, _)| kind == "compaction"),
+            })
+            .collect();
+        Some(Timeline { items })
+    }
+}
+
+#[derive(Debug)]
+struct Moment {
+    delta: silt_types::DeltaId,
+    time_ms: i64,
+    prompt: bool,
+    compaction: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Timeline {
+    items: Vec<Moment>,
+}
+
+impl Timeline {
+    /// Where a hit is: at its delta when known, else after the last thing
+    /// said by its time.
+    fn position(&self, delta: Option<silt_types::DeltaId>, at: i64) -> Option<usize> {
+        delta
+            .and_then(|delta| self.items.iter().position(|moment| moment.delta == delta))
+            .or_else(|| self.items.iter().rposition(|moment| moment.time_ms <= at))
+    }
+
+    /// The turn a hit belongs to, counted as `silt diff --turn` counts
+    /// them, and whether the agent compacted its context after it.
+    pub(crate) fn place(&self, delta: Option<silt_types::DeltaId>, at: i64) -> (Option<usize>, bool) {
+        let Some(position) = self.position(delta, at) else {
+            return (None, false);
+        };
+        let started = self.items[..=position].iter().filter(|moment| moment.prompt).count();
+        let compacted = self.items[position + 1..].iter().any(|moment| moment.compaction);
+        ((started > 0).then_some(started), compacted)
+    }
 }
 
 /// The history entries one delta contributes, as kind and text.

@@ -4,7 +4,7 @@ use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_store::ThreadRecord;
-use silt_types::{FamilyId, Frontier, GitOid, ThreadId};
+use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
@@ -337,7 +337,7 @@ impl Core {
             };
             match remote.search(&request).await {
                 Ok(reply) => {
-                    return Ok(reply
+                    let hits = reply
                         .hits
                         .into_iter()
                         .map(|hit| SearchResult {
@@ -347,8 +347,13 @@ impl Core {
                             owner: Some(hit.owner),
                             status: Some(hit.status),
                             repo: Some(hit.repo),
+                            time_ms: Some(hit.time_ms),
+                            turn: None,
+                            before_compaction: false,
                         })
-                        .collect());
+                        .collect::<Vec<_>>();
+                    let deltas = vec![None; hits.len()];
+                    return Ok(self.placed(hits, &deltas));
                 }
                 Err(error) if !filters.is_empty() => {
                     return Err(CoreError::Invalid(format!("the server could not search: {error}")));
@@ -358,20 +363,62 @@ impl Core {
         } else if !filters.is_empty() {
             return Err(CoreError::Invalid("search filters need a server; use `silt auth login`".into()));
         }
-        Ok(self
-            .store()
-            .search(query, limit)
-            .await?
+        let hits = self.store().search(query, limit).await?;
+        let times = self.delta_times(hits.iter().map(|hit| (hit.thread, hit.delta)));
+        let deltas: Vec<Option<DeltaId>> = hits.iter().map(|hit| Some(hit.delta)).collect();
+        let hits = hits
             .into_iter()
             .map(|hit| SearchResult {
+                time_ms: times.get(&hit.delta).copied(),
                 thread: hit.thread.to_string(),
                 kind: hit.kind,
                 snippet: hit.snippet,
                 owner: None,
                 status: None,
                 repo: None,
+                turn: None,
+                before_compaction: false,
             })
-            .collect())
+            .collect();
+        Ok(self.placed(hits, &deltas))
+    }
+
+    /// When each of these deltas was made, from the families here.
+    fn delta_times(&self, wanted: impl Iterator<Item = (ThreadId, DeltaId)>) -> HashMap<DeltaId, i64> {
+        let mut by_family: HashMap<FamilyId, HashSet<DeltaId>> = HashMap::new();
+        for (thread, delta) in wanted {
+            if let Some(record) = self.threads.get(&thread) {
+                by_family.entry(record.family).or_default().insert(delta);
+            }
+        }
+        let mut times = HashMap::new();
+        for (family, ids) in by_family {
+            for delta in self.local_log(family) {
+                if ids.contains(&delta.span.first()) {
+                    times.insert(delta.span.first(), delta.time_ms);
+                }
+            }
+        }
+        times
+    }
+
+    /// Search hits with their turn and whether a compaction came after,
+    /// for threads whose history is here; `deltas` are the hits' own, when
+    /// known.
+    fn placed(&self, mut hits: Vec<SearchResult>, deltas: &[Option<DeltaId>]) -> Vec<SearchResult> {
+        let mut timelines: HashMap<String, Option<crate::history::Timeline>> = HashMap::new();
+        for (hit, delta) in hits.iter_mut().zip(deltas) {
+            let Some(at) = hit.time_ms else {
+                continue;
+            };
+            let timeline = timelines
+                .entry(hit.thread.clone())
+                .or_insert_with(|| self.find_thread(&hit.thread).ok().and_then(|thread| self.timeline(thread)));
+            if let Some(timeline) = timeline {
+                (hit.turn, hit.before_compaction) = timeline.place(*delta, at);
+            }
+        }
+        hits
     }
 }
 
