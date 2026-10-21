@@ -94,6 +94,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/agents", get(agents))
         .route("/api/agents/start", post(agent_start))
         .route("/api/clones/branches", get(branches))
+        .route("/api/projects", get(projects).post(add_clone))
+        .route("/api/projects/clone", post(clone_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
@@ -440,6 +442,24 @@ struct CloneQuery {
 
 async fn branches(State(web): State<Web>, Query(query): Query<CloneQuery>) -> HttpResponse {
     ask(&web, Request::Branches { clone: query.path }).await
+}
+
+async fn projects(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Projects).await
+}
+
+async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
+    ask(&web, Request::AddClone { path: body.path }).await
+}
+
+#[derive(Deserialize)]
+struct CloneProject {
+    url: String,
+    path: PathBuf,
+}
+
+async fn clone_project(State(web): State<Web>, Json(body): Json<CloneProject>) -> HttpResponse {
+    ask(&web, Request::CloneProject { url: body.url, path: body.path }).await
 }
 
 #[derive(Deserialize)]

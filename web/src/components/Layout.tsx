@@ -33,6 +33,7 @@ function useGlobalActions() {
   useActions([
     { id: 'new', label: 'New thread', keys: 'n', run: () => void navigate({ to: '/new' }) },
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/' }) },
+    { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/projects' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
   ])

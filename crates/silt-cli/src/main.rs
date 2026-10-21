@@ -362,6 +362,18 @@ enum TeamCommand {
 enum ProjectCommand {
     /// Move this clone's project into an org
     Move { org: String },
+    /// Name this clone's project and say what its new threads start with;
+    /// an empty value clears a setting
+    Set {
+        #[arg(long)]
+        name: Option<String>,
+        /// The agent's registry id, such as claude-acp
+        #[arg(long)]
+        agent: Option<String>,
+        /// ask_before_commands, ask_for_everything or full_access
+        #[arg(long)]
+        preset: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -598,6 +610,9 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Project { command: ProjectCommand::Move { org } } => {
             admin::project_here().and_then(|repo| admin::org_change(OrgChange::MoveProject { repo, org }))
         }
+        Command::Project { command: ProjectCommand::Set { name, agent, preset } } => admin::project_here().and_then(|repo| {
+            admin::org_change(OrgChange::ProjectSettings { repo, name, default_agent: agent, default_preset: preset })
+        }),
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),

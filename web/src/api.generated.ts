@@ -179,6 +179,24 @@ options: Array<[string, string]>, };
 
 export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access";
 
+export type Project = { 
+/**
+ * The normalized remote that names it.
+ */
+repo: string, name: string, org: string | null, origin_url: string | null, visibility: Visibility | null, default_agent: string | null, default_preset: string | null, 
+/**
+ * Its threads: those the person can see on the server, or those here.
+ */
+threads: number, 
+/**
+ * Merge requests still open into its threads, as this machine knows them.
+ */
+open_mrs: number, 
+/**
+ * This machine's clone of it.
+ */
+clone: string | null, };
+
 export type PromptAttachment = { name: string, mime: string, 
 /**
  * The content, in base64.

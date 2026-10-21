@@ -15,6 +15,7 @@ import type {
   MrSummary,
   PresenceReply,
   Preset,
+  Project,
   PromptAttachment,
   Queued,
   ReplicaDeltas,
@@ -115,6 +116,9 @@ export const api = {
   startAgent: (agent: string, where: { thread: string } | { clone: string }, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
   branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
+  projects: () => request<Project[]>('GET', '/api/projects'),
+  addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
+  cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
     request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),

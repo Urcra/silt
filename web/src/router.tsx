@@ -3,6 +3,7 @@ import { Inbox } from './components/Inbox'
 import { Layout, MergeRequestPage, ThreadPage } from './components/Layout'
 import { MergeRequests } from './components/MergeRequests'
 import { NewThread } from './components/NewThread'
+import { Projects } from './components/Projects'
 import { ThreadList } from './components/ThreadList'
 
 const root = createRootRoute({ component: Layout })
@@ -11,6 +12,7 @@ export const router = createRouter({
   routeTree: root.addChildren([
     createRoute({ getParentRoute: () => root, path: '/', component: ThreadList }),
     createRoute({ getParentRoute: () => root, path: '/new', component: NewThread }),
+    createRoute({ getParentRoute: () => root, path: '/projects', component: Projects }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: ThreadPage }),
     createRoute({ getParentRoute: () => root, path: '/mrs', component: MergeRequests }),
     createRoute({ getParentRoute: () => root, path: '/mr/$id', component: MergeRequestPage }),

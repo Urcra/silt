@@ -354,3 +354,42 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
   await page.getByRole('link', { name: 'Merge requests' }).click()
   await expect(page.getByRole('main')).toContainText('Origin work')
 })
+
+test('projects show their clone here, and one is added by cloning its URL', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
+  const list = page.getByTestId('projects')
+  await expect(list.getByRole('listitem', { name: 'tools' })).toContainText(`Here at ${live.work}/alice/tools`)
+  const origin = list.getByRole('listitem', { name: 'origin' })
+  await expect(origin).toContainText(/\d+ threads?/)
+  await expect(origin).toContainText(`Here at ${live.work}/alice/repo`)
+  await expect(origin).toContainText('New threads start with plain')
+
+  const add = page.getByRole('region', { name: 'add a project' })
+  await add.getByLabel('clone path').fill(live.work)
+  await add.getByRole('button', { name: 'Add' }).click()
+  await expect(add).toContainText('not inside a git repository')
+
+  await add.getByRole('tab', { name: 'Clone a URL' }).click()
+  await add.getByLabel('remote URL').fill(`${live.work}/docs.git`)
+  await add.getByLabel('where to clone it').fill(`${live.work}/alice/docs`)
+  await add.getByRole('button', { name: 'Add' }).click()
+  await expect(list.getByRole('listitem', { name: 'docs' })).toContainText(`Here at ${live.work}/alice/docs`)
+  expect(readFileSync(join(live.work, 'alice', 'docs', 'src', 'main.rs'), 'utf8')).toBe('fn tool() {}\n')
+})
+
+test("a new thread starts with what its project says, until the person picks", async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  const projects = form.getByLabel('project')
+  const pick = async (project: RegExp) =>
+    projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
+  await pick(/origin/)
+  await expect(form.getByLabel('agent to start')).toHaveValue('plain')
+  await pick(/tools/)
+  await expect(form.getByLabel('agent to start')).toHaveValue('')
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await pick(/origin/)
+  await expect(form.getByLabel('agent to start')).toHaveValue('fake')
+})

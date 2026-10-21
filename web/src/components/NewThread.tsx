@@ -25,9 +25,9 @@ export function NewThread() {
   const [clone, setClone] = useState('')
   const [here, setHere] = useState(false)
   const [base, setBase] = useState('')
-  const [agent, setAgent] = useState('')
+  const [chosenAgent, setAgent] = useState<string>()
   const [mode, setMode] = useState('')
-  const [preset, setPreset] = useState<Preset>('ask_before_commands')
+  const [chosenPreset, setPreset] = useState<Preset>()
   const [visibility, setVisibility] = useState('')
   const [prompt, setPrompt] = useState('')
   const [plan, setPlan] = useState(false)
@@ -35,6 +35,12 @@ export function NewThread() {
   const [error, setError] = useState<string>()
   const clones = choices.data?.clones ?? []
   const project = clone || clones[0]?.path || ''
+  // What the project's new threads start with, until the person picks (ADR 0023).
+  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
+  const defaults = projects.data?.find((candidate) => candidate.clone === project)
+  const suggestedAgent = choices.data?.agents.find((candidate) => candidate.id === defaults?.default_agent)?.id ?? ''
+  const agent = chosenAgent ?? suggestedAgent
+  const preset = chosenPreset ?? PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ?? 'ask_before_commands'
   const branches = useQuery({
     queryKey: keys.branches(project),
     queryFn: () => api.branches(project),
@@ -46,7 +52,11 @@ export function NewThread() {
   if (choices.isSuccess && clones.length === 0) {
     return (
       <EmptyState title="No projects on this machine yet">
-        Run <code>silt open</code> in a clone to start threads in it from here.
+        Add a clone in{' '}
+        <Link to="/projects" className="text-accent-fg">
+          Projects
+        </Link>
+        , or run <code>silt open</code> in one, to start threads in it from here.
       </EmptyState>
     )
   }

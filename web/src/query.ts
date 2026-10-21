@@ -22,6 +22,7 @@ export const keys = {
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   branches: (clone: string) => ['branches', clone] as const,
+  projects: ['projects'] as const,
   status: ['status'] as const,
 }
 

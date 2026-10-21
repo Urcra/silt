@@ -94,6 +94,7 @@ export function useBusInvalidation() {
     switch (event.event) {
       case 'threads':
         void queries.invalidateQueries({ queryKey: keys.threads })
+        void queries.invalidateQueries({ queryKey: keys.projects })
         break
       case 'thread':
         void queries.invalidateQueries({ queryKey: keys.thread(event.thread) })
@@ -106,6 +107,7 @@ export function useBusInvalidation() {
         break
       case 'mrs':
         void queries.invalidateQueries({ queryKey: keys.mrs })
+        void queries.invalidateQueries({ queryKey: keys.projects })
         break
       case 'lagged':
         void queries.invalidateQueries()

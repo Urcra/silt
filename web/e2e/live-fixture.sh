@@ -27,6 +27,8 @@ printf 'fn tool() {}\n' > "$work/tools-seed/src/main.rs"
 git -C "$work/tools-seed" add .
 git -C "$work/tools-seed" -c user.name=t -c user.email=t@example.com commit -q -m init
 git clone -q --bare "$work/tools-seed" "$work/tools.git"
+# A third that nobody has cloned yet.
+git clone -q --bare "$work/tools-seed" "$work/docs.git"
 
 printf '%s\n' "$password" | "$silt" server init --data "$work/server" --listen "127.0.0.1:$port" --public-url "$url" --password-stdin > /dev/null
 for user in alice bob; do
@@ -58,6 +60,11 @@ machine alice
 "$silt" claude > /dev/null 2>&1
 thread=$("$silt" log | awk 'NR == 1 { print $1 }')
 "$silt" thread share "$thread" bob > /dev/null
+# New threads of this project start with the plain agent; setting that
+# takes an org owner or a server admin.
+"$silt" server user admin alice --data "$work/server" > /dev/null
+"$silt" project set --agent plain > /dev/null
+"$silt" server user admin alice --revoke --data "$work/server" > /dev/null
 alice_url=$("$silt" open --no-browser)
 git clone -q "$work/tools.git" "$work/alice/tools"
 (cd "$work/alice/tools" && "$silt" open --no-browser > /dev/null)

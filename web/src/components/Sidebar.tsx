@@ -77,6 +77,8 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
 export function Sidebar() {
   useTopic('threads')
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const named = useQuery({ queryKey: keys.projects, queryFn: api.projects })
+  const nameOf = (repo: string) => named.data?.find((project) => project.repo === repo)?.name ?? projectName(repo)
   const waiting = (threads.data ?? []).filter(
     (thread) => thread.agent_state === 'awaiting_permission' || thread.agent_state === 'awaiting_input' || thread.agent_state === 'error',
   )
@@ -99,6 +101,14 @@ export function Sidebar() {
         <Icon name="plus" />
         New thread
       </Link>
+      <Link
+        to="/projects"
+        className="mx-2 mb-2 flex items-center gap-2 rounded-sm px-2 py-1 text-fg-1 hover:bg-surface-2"
+        activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
+      >
+        <Icon name="branch" />
+        Projects
+      </Link>
       {threads.isPending && (
         <div className="space-y-2 px-4">
           <Skeleton />
@@ -119,7 +129,7 @@ export function Sidebar() {
         <section key={repo} aria-label={repo} className="mb-2">
           <h2 className="flex items-center justify-between px-4 pt-2 pb-1 font-mono text-[10px] tracking-wider text-fg-3 uppercase">
             <span className="truncate" title={repo}>
-              {projectName(repo)}
+              {nameOf(repo)}
             </span>
             <span>{inRepo.length}</span>
           </h2>

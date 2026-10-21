@@ -15,6 +15,7 @@ mod live;
 mod load;
 pub mod paths;
 mod presets;
+mod projects;
 pub mod protocol;
 mod queue;
 mod recorder;

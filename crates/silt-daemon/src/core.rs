@@ -488,6 +488,9 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
             Request::Branches { clone } => to_response(self.branches(&clone)),
+            Request::Projects => return answer_later(reply, Ok(self.projects())),
+            Request::AddClone { path } => to_response(self.add_clone(&path).await),
+            Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
                 Ok(attachments) => to_response(self.acp_prompt_with(&thread, &text, plan, attachments).await),
                 Err(error) => Response::error(error),

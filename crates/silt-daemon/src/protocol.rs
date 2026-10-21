@@ -249,6 +249,17 @@ pub enum Request {
     Branches {
         clone: PathBuf,
     },
+    /// The projects the person works in, here and on the server.
+    Projects,
+    /// Makes the clone at `path` this machine's clone of its project.
+    AddClone {
+        path: PathBuf,
+    },
+    /// Clones `url` to `path` with the person's git, then adds the clone.
+    CloneProject {
+        url: String,
+        path: PathBuf,
+    },
     /// Sends the person's draft, with teammates' drafts, as the next prompt,
     /// or queues it while the agent is busy (ADR 0022).
     AcpPrompt {
@@ -762,6 +773,27 @@ pub struct AgentStatus {
     pub takes_files: bool,
 }
 
+/// A project as the web UI shows it (ADR 0023): the server's record when
+/// connected, with this machine's clone of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Project {
+    /// The normalized remote that names it.
+    pub repo: String,
+    pub name: String,
+    pub org: Option<String>,
+    pub origin_url: Option<String>,
+    pub visibility: Option<silt_proto::Visibility>,
+    pub default_agent: Option<String>,
+    pub default_preset: Option<String>,
+    /// Its threads: those the person can see on the server, or those here.
+    pub threads: u32,
+    /// Merge requests still open into its threads, as this machine knows them.
+    pub open_mrs: u32,
+    /// This machine's clone of it.
+    pub clone: Option<PathBuf>,
+}
+
 /// A file sent with a prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -1009,6 +1041,7 @@ mod tests {
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
             Preset::decl(&config),
+            Project::decl(&config),
             PromptAttachment::decl(&config),
             Queued::decl(&config),
             Pulled::decl(&config),
