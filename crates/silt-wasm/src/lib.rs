@@ -3,7 +3,7 @@
 //! and merges everyone else's as they arrive, so co-editing never waits on
 //! the network.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
 
 use silt_checkout::text_edits;
@@ -18,7 +18,7 @@ pub struct Core {
     actor: ActorId,
     thread: ThreadId,
     /// Deltas received but not applied yet, waiting for a git base text.
-    pending: Vec<Delta>,
+    pending: VecDeque<Delta>,
     received: usize,
     /// What the editor shows of each file and the version it is of. Edits
     /// are made against it, so changes that arrived since are merged, not
@@ -33,7 +33,7 @@ impl Core {
             bases: HashMap::new(),
             actor: ActorId::from_str(actor).map_err(|error| error.to_string())?,
             thread: ThreadId::from_str(thread).map_err(|error| error.to_string())?,
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             received: 0,
             shown: HashMap::new(),
         })
@@ -60,11 +60,11 @@ impl Core {
     /// A delta that can't apply is dropped, as the daemon does (ADR 0016);
     /// one waiting for a git base stays first until the text arrives.
     fn apply_pending(&mut self) -> Result<Option<GitOid>, String> {
-        while let Some(delta) = self.pending.first().cloned() {
+        while let Some(delta) = self.pending.front().cloned() {
             match self.family.apply(delta, &mut self.bases) {
                 Err(LogError::MissingBase(oid)) => return Ok(Some(oid)),
                 Ok(_) | Err(_) => {
-                    self.pending.remove(0);
+                    self.pending.pop_front();
                 }
             }
         }

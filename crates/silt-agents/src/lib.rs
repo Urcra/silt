@@ -231,10 +231,25 @@ pub fn reader(agent_id: &str) -> Box<dyn Reader> {
 }
 
 /// Readers for many sessions' transcripts, for reading a log in order.
+/// Only the most recently read ones are kept: a long-running reader of every
+/// session, like the server's index, would otherwise keep one per session
+/// ever seen. A session read again after its reader went starts afresh.
 #[derive(Default)]
 pub struct Transcripts {
-    readers: std::collections::HashMap<(String, String, String), Box<dyn Reader>>,
+    readers: std::collections::HashMap<TranscriptKey, KeptReader>,
+    reads: u64,
 }
+
+/// Agent, session and file.
+type TranscriptKey = (String, String, String);
+
+struct KeptReader {
+    reader: Box<dyn Reader>,
+    last_read: u64,
+}
+
+/// Readers kept before the least recently used quarter is dropped.
+const READERS_KEPT: usize = 1024;
 
 impl std::fmt::Debug for Transcripts {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -244,10 +259,32 @@ impl std::fmt::Debug for Transcripts {
 
 impl Transcripts {
     pub fn push(&mut self, agent: &str, session: &str, file: &str, line: &str) -> Read {
-        self.readers
-            .entry((agent.to_owned(), session.to_owned(), file.to_owned()))
-            .or_insert_with(|| reader(agent))
-            .push(line)
+        self.reads += 1;
+        let key = (agent.to_owned(), session.to_owned(), file.to_owned());
+        if self.readers.len() >= READERS_KEPT && !self.readers.contains_key(&key) {
+            self.forget_least_recent();
+        }
+        let kept = self.readers.entry(key).or_insert_with(|| KeptReader {
+            reader: reader(agent),
+            last_read: 0,
+        });
+        kept.last_read = self.reads;
+        kept.reader.push(line)
+    }
+
+    fn forget_least_recent(&mut self) {
+        let mut reads: Vec<u64> = self.readers.values().map(|kept| kept.last_read).collect();
+        let (_, cutoff, _) = reads.select_nth_unstable(READERS_KEPT / 4);
+        let cutoff = *cutoff;
+        self.readers.retain(|_, kept| kept.last_read > cutoff);
+    }
+
+    pub fn len(&self) -> usize {
+        self.readers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.readers.is_empty()
     }
 
     pub fn entries(&mut self, agent: &str, session: &str, file: &str, line: &str) -> Vec<Entry> {
@@ -326,6 +363,17 @@ mod tests {
             .flatten()
             .filter(|entry| entry.file_name().to_string_lossy().contains(".before-silt-"))
             .count()
+    }
+
+    #[test]
+    fn only_recently_read_transcripts_keep_a_reader() {
+        let mut transcripts = Transcripts::default();
+        for session in 0..READERS_KEPT * 3 {
+            transcripts.push("claude-code", "kept", "main", "{}");
+            transcripts.push("claude-code", &session.to_string(), "main", "{}");
+        }
+        assert!(transcripts.len() <= READERS_KEPT, "{}", transcripts.len());
+        assert!(transcripts.readers.contains_key(&("claude-code".to_owned(), "kept".to_owned(), "main".to_owned())));
     }
 
     #[test]
