@@ -2,6 +2,7 @@ mod admin;
 mod commands;
 mod mcp;
 mod recording;
+mod reference;
 mod render;
 
 use std::path::PathBuf;
@@ -235,6 +236,9 @@ enum Command {
         agent: Option<String>,
         event: String,
     },
+    /// Print the command-line reference in Markdown, for the docs site
+    #[command(hide = true)]
+    Reference,
     /// Serve Silt's history tools to an agent over MCP on stdio
     #[command(hide = true)]
     Mcp {
@@ -722,6 +726,10 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
+        Command::Reference => {
+            print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
+            Ok(())
+        }
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())
