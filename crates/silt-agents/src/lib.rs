@@ -346,10 +346,24 @@ pub(crate) fn link_skills(dir: &Path, skills: &[PathBuf]) -> std::io::Result<()>
         let link = dir.join(name);
         // A link already there, even a dangling one, is a skill of that name.
         if std::fs::symlink_metadata(&link).is_err() {
-            std::os::unix::fs::symlink(skill, link)?;
+            symlink(skill, &link)?;
         }
     }
     Ok(())
+}
+
+/// Makes `link` point at `target`, a directory or a file.
+pub(crate) fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    #[cfg(not(any(unix, windows)))]
+    return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, format!("can't link {} here", link.display())));
 }
 
 /// A transcript's first line, which agents start with a record of where
@@ -391,6 +405,7 @@ mod tests {
             .count()
     }
 
+    #[cfg(unix)]
     #[test]
     fn sessions_translate_into_a_directory_whose_name_is_not_utf8() {
         use std::os::unix::ffi::OsStrExt as _;

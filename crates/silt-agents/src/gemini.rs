@@ -504,19 +504,19 @@ fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
     let dir = overlay.join(".gemini");
     fs::create_dir_all(&dir)?;
     if let Some(agents) = home().map(|home| home.join(".agents")).filter(|path| path.exists()) {
-        std::os::unix::fs::symlink(agents, overlay.join(".agents"))?;
+        crate::symlink(&agents, &overlay.join(".agents"))?;
     }
     for entry in fs::read_dir(&real)?.flatten() {
         let name = entry.file_name();
         if name != "settings.json" && name != "GEMINI.md" && name != "projects.json" {
-            std::os::unix::fs::symlink(entry.path(), dir.join(&name))?;
+            crate::symlink(&entry.path(), &dir.join(&name))?;
         }
     }
     for shared in ["tmp", "history"] {
         let path = real.join(shared);
         if !dir.join(shared).exists() {
             fs::create_dir_all(&path)?;
-            std::os::unix::fs::symlink(path, dir.join(shared))?;
+            crate::symlink(&path, &dir.join(shared))?;
         }
     }
     if real.join("projects.json").exists() {
