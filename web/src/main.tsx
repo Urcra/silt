@@ -4,7 +4,9 @@ import './index.css'
 import App from './App.tsx'
 import { takeTokenFromUrl } from './api'
 import { legacyPath } from './legacy'
+import { applyTheme, storedTheme } from './theme'
 
+applyTheme(storedTheme())
 const moved = legacyPath(window.location.hash)
 if (moved) window.history.replaceState(null, '', moved)
 

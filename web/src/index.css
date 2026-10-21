@@ -1,1 +1,192 @@
 @import 'tailwindcss';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+/* Nous (ADR 0020): warm neutrals and one amber accent. Components use the
+   semantic tokens below, through Tailwind's names for them, so a theme
+   changes only these. */
+
+:root {
+  --paper-50: #faf6ee;
+  --paper-100: #f6f1e8;
+  --paper-200: #efe8da;
+  --paper-300: #e6ddc9;
+  --paper-400: #d9cdb3;
+  --tobacco-300: #6b5e48;
+  --tobacco-500: #4a3f2e;
+  --tobacco-700: #2e2620;
+  --tobacco-800: #221c17;
+  --tobacco-900: #1a1714;
+  --amber-300: #e8b97a;
+  --amber-400: #dfa055;
+  --amber-500: #d9883a;
+  --amber-600: #b86e25;
+  --amber-700: #8e5418;
+  --olive-500: #7a8a3f;
+  --olive-600: #5f6e2d;
+  --rust-500: #c25a3a;
+  --rust-600: #9b4326;
+  --slate-500: #5b7a8a;
+  --slate-600: #3f5c6e;
+  --honey-500: #c9982e;
+
+  --bg: var(--paper-100);
+  --bg-elevated: var(--paper-50);
+  --surface-1: var(--paper-200);
+  --surface-2: var(--paper-300);
+  --surface-3: var(--paper-400);
+  --fg-1: var(--tobacco-500);
+  --fg-2: var(--tobacco-300);
+  /* Darker than the design's paper-500, which is too faint for text. */
+  --fg-3: #786a51;
+  /* Cream on amber is too faint to read. */
+  --fg-on-accent: var(--tobacco-900);
+  --border: var(--paper-400);
+  --border-strong: var(--tobacco-300);
+  --border-subtle: rgb(74 63 46 / 0.08);
+  --accent: var(--amber-500);
+  --accent-hover: var(--amber-600);
+  --accent-tint: rgb(217 136 58 / 0.1);
+  --accent-fg: var(--amber-700);
+  --ok: var(--olive-600);
+  --warn: var(--honey-500);
+  --danger: var(--rust-600);
+  --info: var(--slate-600);
+  --ok-tint: rgb(122 138 63 / 0.12);
+  --warn-tint: rgb(201 152 46 / 0.14);
+  --danger-tint: rgb(194 90 58 / 0.12);
+  --info-tint: rgb(91 122 138 / 0.12);
+  --shadow-1: 0 1px 2px rgb(20 14 8 / 0.04), 0 1px 1px rgb(20 14 8 / 0.06);
+  --shadow-2: 0 8px 24px rgb(20 14 8 / 0.1), 0 2px 4px rgb(20 14 8 / 0.06);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: var(--tobacco-900);
+    --bg-elevated: var(--tobacco-800);
+    --surface-1: var(--tobacco-800);
+    --surface-2: var(--tobacco-700);
+    --surface-3: #3a3025;
+    --fg-1: #efe6d6;
+    --fg-2: #b8ac95;
+    --fg-3: #8e836f;
+    --fg-on-accent: var(--tobacco-900);
+    --border: #3a3127;
+    --border-strong: #5c4f3d;
+    --border-subtle: rgb(239 230 214 / 0.06);
+    --accent: var(--amber-400);
+    --accent-hover: var(--amber-300);
+    --accent-tint: rgb(223 160 85 / 0.14);
+    --accent-fg: var(--amber-300);
+    --ok: var(--olive-500);
+    --danger: var(--rust-500);
+    --info: var(--slate-500);
+    --ok-tint: rgb(122 138 63 / 0.18);
+    --warn-tint: rgb(201 152 46 / 0.18);
+    --danger-tint: rgb(194 90 58 / 0.18);
+    --info-tint: rgb(91 122 138 / 0.18);
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
+    --shadow-2: 0 8px 24px rgb(0 0 0 / 0.4), 0 2px 4px rgb(0 0 0 / 0.25);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: var(--tobacco-900);
+  --bg-elevated: var(--tobacco-800);
+  --surface-1: var(--tobacco-800);
+  --surface-2: var(--tobacco-700);
+  --surface-3: #3a3025;
+  --fg-1: #efe6d6;
+  --fg-2: #b8ac95;
+  --fg-3: #8e836f;
+  --fg-on-accent: var(--tobacco-900);
+  --border: #3a3127;
+  --border-strong: #5c4f3d;
+  --border-subtle: rgb(239 230 214 / 0.06);
+  --accent: var(--amber-400);
+  --accent-hover: var(--amber-300);
+  --accent-tint: rgb(223 160 85 / 0.14);
+  --accent-fg: var(--amber-300);
+  --ok: var(--olive-500);
+  --danger: var(--rust-500);
+  --info: var(--slate-500);
+  --ok-tint: rgb(122 138 63 / 0.18);
+  --warn-tint: rgb(201 152 46 / 0.18);
+  --danger-tint: rgb(194 90 58 / 0.18);
+  --info-tint: rgb(91 122 138 / 0.18);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.4), 0 2px 4px rgb(0 0 0 / 0.25);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-elevated: var(--bg-elevated);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-fg-1: var(--fg-1);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-on-accent: var(--fg-on-accent);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-line-subtle: var(--border-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-fg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-ok-tint: var(--ok-tint);
+  --color-warn-tint: var(--warn-tint);
+  --color-danger-tint: var(--danger-tint);
+  --color-info-tint: var(--info-tint);
+  --shadow-raised: var(--shadow-1);
+  --shadow-overlay: var(--shadow-2);
+}
+
+@theme {
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --ease-nous: cubic-bezier(0.2, 0, 0, 1);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--fg-1);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
