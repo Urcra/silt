@@ -52,7 +52,7 @@ function useLive(thread: string): Live {
         previous.deltas === event.deltas ? previous : { ...previous, deltas: event.deltas, changes: previous.changes + 1 },
       )
     } else if (event.event === 'agent') {
-      const working = event.status?.state === 'working'
+      const working = event.status?.state === 'working' || event.status?.state === 'awaiting_permission'
       setLive((previous) => ({ ...previous, agent: event.status, tool: working ? previous.tool : NO_TOOL }))
     } else if (event.event === 'agent_text' && event.kind === 'tool') {
       setLive((previous) => {

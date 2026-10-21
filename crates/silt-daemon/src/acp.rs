@@ -49,6 +49,15 @@ pub enum AcpEvent {
     Agent(silt_acp::Event),
 }
 
+/// The state shown for a run: a working agent with a request open waits on
+/// the person (ADR 0022).
+fn shown_state(state: AgentState, asking: bool) -> AgentState {
+    match state {
+        AgentState::Working if asking => AgentState::AwaitingPermission,
+        other => other,
+    }
+}
+
 fn silt_exe() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("silt"))
 }
@@ -86,7 +95,7 @@ impl Core {
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
                 let thread = self.find_thread(selector)?;
-                if self.acp.get(&thread).is_some_and(|run| run.state != AgentState::Exited) {
+                if self.acp.get(&thread).is_some_and(|run| run.state.running()) {
                     return Err(CoreError::Invalid("an agent is already running in this thread".into()));
                 }
                 let (checkout_id, checkout) = self.checkout_for_agent(thread).await?;
@@ -142,7 +151,7 @@ impl Core {
                 tool_output: HashMap::new(),
             },
         );
-        self.announce_agent(thread);
+        self.agent_changed(thread).await;
         Ok(thread.to_string())
     }
 
@@ -205,11 +214,11 @@ impl Core {
         run.state = AgentState::Working;
         run.error = None;
         send(run, Command::Prompt(prompt));
-        self.announce_agent(thread);
+        self.agent_changed(thread).await;
         Ok("sent")
     }
 
-    pub(crate) fn acp_command(&mut self, selector: &str, command: Command) -> Result<&'static str, CoreError> {
+    pub(crate) async fn acp_command(&mut self, selector: &str, command: Command) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         self.running(thread)?;
         let run = self.acp.get_mut(&thread).expect("checked above");
@@ -225,22 +234,71 @@ impl Core {
             run.asking.retain(|asked| asked.id != *id);
         }
         send(run, command);
-        self.announce_agent(thread);
+        self.agent_changed(thread).await;
         Ok("ok")
     }
 
     fn running(&self, thread: ThreadId) -> Result<&AcpRun, CoreError> {
         self.acp
             .get(&thread)
-            .filter(|run| run.state != AgentState::Exited)
+            .filter(|run| run.state.running())
             .ok_or_else(|| CoreError::Invalid("no agent is running in this thread".into()))
+    }
+
+    /// How the thread's agent stands: as it runs here, or as last stored.
+    pub(crate) fn agent_state(&self, thread: ThreadId) -> Option<AgentState> {
+        match self.acp.get(&thread) {
+            Some(run) => Some(shown_state(run.state, !run.asking.is_empty())),
+            None => self.agent_runs.get(&thread).and_then(|stored| AgentState::parse(&stored.state)),
+        }
+    }
+
+    /// Tells browsers how the thread's agent stands, and stores it when its
+    /// state or error changed.
+    pub(crate) async fn agent_changed(&mut self, thread: ThreadId) {
+        self.announce_agent(thread);
+        let Some(run) = self.acp.get(&thread) else {
+            return;
+        };
+        let stored = self.agent_runs.get(&thread);
+        let record = silt_store::AgentRunRecord {
+            agent: run.info.name.clone(),
+            state: shown_state(run.state, !run.asking.is_empty()).as_str().to_owned(),
+            error: run.error.clone(),
+            preset: stored.map_or_else(|| "ask_before_commands".to_owned(), |stored| stored.preset.clone()),
+            mode: stored.and_then(|stored| stored.mode.clone()),
+            updated_ms: crate::core::now_ms(),
+        };
+        let unchanged = stored
+            .is_some_and(|stored| (&stored.agent, &stored.state, &stored.error) == (&record.agent, &record.state, &record.error));
+        if unchanged {
+            return;
+        }
+        if let Err(error) = self.store.put_agent_run(thread, &record).await {
+            warn!(%error, "could not store how the agent stands");
+        }
+        self.agent_runs.insert(thread, record);
+        self.announce(crate::protocol::BusEvent::Threads);
+    }
+
+    /// Reads how each thread's agent stood. One that ran went with the
+    /// daemon's last process, so it stopped.
+    pub(crate) async fn load_agent_runs(&mut self) -> Result<(), CoreError> {
+        self.agent_runs = self.store.agent_runs().await?;
+        for (thread, run) in &mut self.agent_runs {
+            if AgentState::parse(&run.state).is_some_and(AgentState::running) {
+                run.state = AgentState::Stopped.as_str().to_owned();
+                self.store.put_agent_run(*thread, run).await?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn agent_status(&self, thread: ThreadId) -> Option<AgentStatus> {
         let run = self.acp.get(&thread)?;
         Some(AgentStatus {
             agent: run.info.name.clone(),
-            state: run.state,
+            state: shown_state(run.state, !run.asking.is_empty()),
             streaming: run.text.clone(),
             thinking: run.thought.clone(),
             permissions: run
@@ -266,7 +324,7 @@ impl Core {
                 current.error = Some(error.to_string());
             }
         }
-        self.announce_agent(thread);
+        self.agent_changed(thread).await;
     }
 
     async fn handle_acp(&mut self, thread: ThreadId, event: AcpEvent) -> Result<(), CoreError> {
@@ -280,7 +338,7 @@ impl Core {
             }
             AcpEvent::Started(Err(error)) => {
                 run.error = Some(error);
-                run.state = AgentState::Exited;
+                run.state = AgentState::Error;
             }
             AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => {
                 self.acp_ready(thread, &session, loaded, &agent).await?
@@ -291,14 +349,14 @@ impl Core {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = AgentState::Ready;
+                run.state = AgentState::Idle;
                 run.asking.clear();
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = AgentState::Exited;
+                run.state = AgentState::Stopped;
                 run.handle = None;
                 run.asking.clear();
                 if let Some(id) = run.session.clone() {
@@ -317,7 +375,7 @@ impl Core {
     /// new one starts its own, primed with the thread's conversation.
     async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool, name: &str) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
-        run.state = AgentState::Ready;
+        run.state = AgentState::Idle;
         let (checkout_id, checkout, agent_id) = (run.checkout_id, run.checkout.clone(), run.info.id.clone());
         let earlier = run.load.take().filter(|(_, earlier)| loaded && earlier == native);
         if let Some(session) = earlier.and_then(|(id, _)| self.session_mut(&id)) {
@@ -461,4 +519,48 @@ fn spawn_agent(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use silt_store::{AgentRunRecord, Store, ThreadRecord};
+    use silt_types::{ActorId, FamilyId};
+
+    use super::*;
+
+    #[test]
+    fn a_working_agent_with_a_request_open_waits_on_the_person() {
+        assert_eq!(shown_state(AgentState::Working, true), AgentState::AwaitingPermission);
+        assert_eq!(shown_state(AgentState::Working, false), AgentState::Working);
+        assert_eq!(shown_state(AgentState::Idle, true), AgentState::Idle);
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_ran_before_a_restart_reads_as_stopped() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let store = Store::open(data.path()).await.expect("opens");
+        let (thread, family) = (ThreadId(7), FamilyId(9));
+        let record = ThreadRecord {
+            id: thread,
+            family,
+            repo_root: PathBuf::new(),
+            repo: String::new(),
+            created_ms: 1,
+            owner: String::new(),
+        };
+        store.create_thread(&record).await.expect("thread");
+        let run = |state: &str| AgentRunRecord {
+            agent: "Fake agent".into(),
+            state: state.into(),
+            error: None,
+            preset: "ask_before_commands".into(),
+            mode: None,
+            updated_ms: 1,
+        };
+        store.put_agent_run(thread, &run("working")).await.expect("saves");
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        assert_eq!(core.agent_state(thread), Some(AgentState::Stopped));
+        assert_eq!(core.store.agent_runs().await.expect("reads")[&thread].state, "stopped");
+    }
 }

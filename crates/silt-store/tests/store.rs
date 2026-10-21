@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
-use silt_store::{BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Snapshot, Store, ThreadRecord};
+use silt_store::{
+    AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Snapshot, Store, ThreadRecord,
+};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
 const THREAD: ThreadId = ThreadId(11);
@@ -77,6 +79,27 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 
     store.replace_deltas(FAMILY, &appended[..10]).await.expect("replaces");
     assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended[..10], "chunks of the replaced deltas are gone");
+}
+
+#[tokio::test]
+async fn a_thread_s_agent_run_is_kept_and_replaced() {
+    let (dir, store) = store_with_thread().await;
+    assert!(store.agent_runs().await.expect("reads").is_empty());
+    let mut run = AgentRunRecord {
+        agent: "Codex".into(),
+        state: "working".into(),
+        error: None,
+        preset: "ask_before_commands".into(),
+        mode: Some("auto".into()),
+        updated_ms: 5,
+    };
+    store.put_agent_run(THREAD, &run).await.expect("saves");
+    run.state = "error".into();
+    run.error = Some("it crashed".into());
+    store.put_agent_run(THREAD, &run).await.expect("replaces");
+    drop(store);
+    let store = Store::open(dir.path()).await.expect("reopens");
+    assert_eq!(store.agent_runs().await.expect("reads").remove(&THREAD), Some(run));
 }
 
 #[tokio::test]

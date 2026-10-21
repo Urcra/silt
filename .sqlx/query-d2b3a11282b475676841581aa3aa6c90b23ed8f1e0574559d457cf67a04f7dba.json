@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id, agent, state, error, preset, mode, updated_ms FROM agent_runs",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "error",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "name": "preset",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "preset"
+          }
+        }
+      },
+      {
+        "name": "mode",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "mode"
+          }
+        }
+      },
+      {
+        "name": "updated_ms",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "updated_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "d2b3a11282b475676841581aa3aa6c90b23ed8f1e0574559d457cf67a04f7dba"
+}

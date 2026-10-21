@@ -327,6 +327,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_states_read_as_they_are_written_and_as_older_peers_wrote_them() {
+        for state in [
+            AgentState::Starting,
+            AgentState::Idle,
+            AgentState::Working,
+            AgentState::AwaitingPermission,
+            AgentState::AwaitingInput,
+            AgentState::Error,
+            AgentState::Stopped,
+        ] {
+            let written = serde_json::to_string(&state).expect("encodes");
+            assert_eq!(written, format!("\"{}\"", state.as_str()));
+            assert_eq!(serde_json::from_str::<AgentState>(&written).expect("decodes"), state);
+            assert_eq!(AgentState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(serde_json::from_str::<AgentState>("\"ready\"").expect("decodes"), AgentState::Idle);
+        assert_eq!(serde_json::from_str::<AgentState>("\"exited\"").expect("decodes"), AgentState::Stopped);
+    }
+
+    #[test]
     fn conflicts_round_trip_with_full_actor_ids() {
         let reply = ErrorReply::Conflict { delta: DeltaId::new(ActorId(u128::MAX - 5), Lamport(34)) };
         let json = serde_json::to_string(&reply).expect("serializes");
@@ -392,25 +412,64 @@ impl std::str::FromStr for ThreadStatus {
     }
 }
 
-/// What an agent the web UI started is doing.
+/// What an agent the web UI started is doing (ADR 0022). Older peers'
+/// `ready` and `exited` are read as `idle` and `stopped`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Starting,
-    Ready,
+    #[serde(alias = "ready")]
+    Idle,
     Working,
-    Exited,
+    AwaitingPermission,
+    AwaitingInput,
+    Error,
+    #[serde(alias = "exited")]
+    Stopped,
+}
+
+impl AgentState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::AwaitingPermission => "awaiting_permission",
+            Self::AwaitingInput => "awaiting_input",
+            Self::Error => "error",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    /// The state named `name`, as `as_str` or an older peer spells it.
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "starting" => Self::Starting,
+            "idle" | "ready" => Self::Idle,
+            "working" => Self::Working,
+            "awaiting_permission" => Self::AwaitingPermission,
+            "awaiting_input" => Self::AwaitingInput,
+            "error" => Self::Error,
+            "stopped" | "exited" => Self::Stopped,
+            _ => return None,
+        })
+    }
+
+    /// Whether an agent in this state runs: it can be prompted or stopped.
+    pub fn running(self) -> bool {
+        !matches!(self, Self::Error | Self::Stopped)
+    }
+
+    /// Whether the person has to act for the agent to go on.
+    pub fn waiting_on_person(self) -> bool {
+        matches!(self, Self::AwaitingPermission | Self::AwaitingInput | Self::Error)
+    }
 }
 
 impl std::fmt::Display for AgentState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Starting => "starting",
-            Self::Ready => "ready",
-            Self::Working => "working",
-            Self::Exited => "exited",
-        })
+        f.write_str(self.as_str())
     }
 }
 

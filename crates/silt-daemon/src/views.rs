@@ -75,6 +75,7 @@ impl Core {
                     owner: record.owner.clone(),
                     collaborators: self.collaborators.get(&record.id).cloned().unwrap_or_default(),
                     writable: self.may_write(record.id),
+                    agent_state: self.agent_state(record.id),
                 }
             })
             .collect();

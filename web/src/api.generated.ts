@@ -7,7 +7,7 @@ export type AgentActivity = { name: string, state: AgentState,
  */
 streaming: string, };
 
-export type AgentState = "starting" | "ready" | "working" | "exited";
+export type AgentState = "starting" | "idle" | "working" | "awaiting_permission" | "awaiting_input" | "error" | "stopped";
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
@@ -202,7 +202,11 @@ owner: string, collaborators: Array<string>,
 /**
  * Whether this machine's user may write into it (ADR 0014).
  */
-writable: boolean, };
+writable: boolean, 
+/**
+ * How the agent the web UI last ran in it here stands (ADR 0022).
+ */
+agent_state: AgentState | null, };
 
 export type TurnInfo = { 
 /**

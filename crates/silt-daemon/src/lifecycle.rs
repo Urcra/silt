@@ -136,6 +136,7 @@ impl Core {
                 run.stop();
                 self.announce_agent(*thread);
             }
+            self.agent_runs.remove(thread);
         }
         for thread in threads {
             self.deleted.remove(thread);

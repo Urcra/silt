@@ -106,6 +106,8 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await alice.getByRole('button', { name: 'Send' }).click()
   const asked = alice.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
+  await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
+  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('needs you')
   await asked.getByRole('button', { name: 'Allow' }).click()
 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')

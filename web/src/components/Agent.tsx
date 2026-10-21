@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, type AgentStatus, type Presence } from '../api'
+import { STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
 
 function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
@@ -94,21 +95,22 @@ export function AgentPanel({
     setError(undefined)
     action.then(after, (failure: unknown) => setError(message(failure)))
   }
-  const running = status !== null && status.state !== 'exited'
+  const live = status !== null && running(status.state)
   const elsewhere = people.find((person) => person.agent)
 
   return (
     <section aria-label="agent at work" className="mt-3 rounded border border-line p-3 text-sm">
-      {!running && elsewhere?.agent && (
+      {!live && elsewhere?.agent && (
         <div className="space-y-2">
           <p data-testid="agent-state">
-            {elsewhere.user}&apos;s <span className="font-medium">{elsewhere.agent.name}</span> is {elsewhere.agent.state}
+            {elsewhere.user}&apos;s <span className="font-medium">{elsewhere.agent.name}</span>{' '}
+            {STATE_PHRASE[elsewhere.agent.state]}
           </p>
           {elsewhere.agent.streaming && <p className="whitespace-pre-wrap">{elsewhere.agent.streaming}</p>}
           <p className="text-xs text-fg-3">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
         </div>
       )}
-      {!running && !elsewhere && (
+      {!live && !elsewhere && (
         <div className="flex flex-wrap items-center gap-2">
           <span>Run an agent here:</span>
           <AgentPicker value={agent} onChange={setAgent} />
@@ -122,10 +124,10 @@ export function AgentPanel({
           {status?.error && <p className="w-full text-danger">{status.agent} stopped: {status.error}</p>}
         </div>
       )}
-      {running && (
+      {live && (
         <div className="space-y-2">
           <p data-testid="agent-state">
-            <span className="font-medium">{status.agent}</span> is {status.state}
+            <span className="font-medium">{status.agent}</span> {STATE_PHRASE[status.state]}
           </p>
           {status.thinking && <p className="text-xs italic text-fg-3">{status.thinking}</p>}
           {status.streaming && <p className="whitespace-pre-wrap">{status.streaming}</p>}
@@ -155,14 +157,14 @@ export function AgentPanel({
           ))}
           <div className="flex gap-2">
             <button
-              disabled={status.state !== 'ready'}
+              disabled={status.state !== 'idle'}
               className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
               onClick={() => act(api.prompt(thread, draft), onSent)}
               title="Sends your draft together with everyone else's"
             >
               Send
             </button>
-            {status.state === 'working' && (
+            {(status.state === 'working' || status.state === 'awaiting_permission') && (
               <button className="rounded border border-line px-2 py-1" onClick={() => act(api.cancelTurn(thread))}>
                 Cancel turn
               </button>

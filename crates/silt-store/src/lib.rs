@@ -55,6 +55,18 @@ pub struct SyncState {
     pub view: u64,
 }
 
+/// How the agent the web UI last ran in a thread stands (ADR 0022); its
+/// state, preset and mode by name, as the daemon spells them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRunRecord {
+    pub agent: String,
+    pub state: String,
+    pub error: Option<String>,
+    pub preset: String,
+    pub mode: Option<String>,
+    pub updated_ms: i64,
+}
+
 /// A family's encoded projection as of its first `covers` deltas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
@@ -434,6 +446,44 @@ impl Store {
             .await?;
         taken.sort_by_key(|notice| notice.id);
         Ok(taken.into_iter().map(|notice| notice.message).collect())
+    }
+
+    pub async fn agent_runs(&self) -> Result<HashMap<ThreadId, AgentRunRecord>, StoreError> {
+        let rows = sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, updated_ms FROM agent_runs")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let record = AgentRunRecord {
+                    agent: row.agent,
+                    state: row.state,
+                    error: row.error,
+                    preset: row.preset,
+                    mode: row.mode,
+                    updated_ms: row.updated_ms,
+                };
+                Ok((ThreadId(id_from(&row.thread_id)?), record))
+            })
+            .collect()
+    }
+
+    pub async fn put_agent_run(&self, thread: ThreadId, run: &AgentRunRecord) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!(
+            "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (thread_id) DO UPDATE SET agent = excluded.agent, state = excluded.state, error = excluded.error,
+                 preset = excluded.preset, mode = excluded.mode, updated_ms = excluded.updated_ms",
+            thread,
+            run.agent,
+            run.state,
+            run.error,
+            run.preset,
+            run.mode,
+            run.updated_ms,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// The family's projection snapshot, if one was saved since its deltas

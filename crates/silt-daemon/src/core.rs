@@ -205,6 +205,8 @@ pub struct Core {
     pub(crate) adopted: HashSet<ThreadId>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
+    /// How each thread's agent stands as last stored (ADR 0022).
+    pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -256,6 +258,7 @@ impl Core {
             core.start_checkout(record, entries)?;
         }
         core.load_sessions().await?;
+        core.load_agent_runs().await?;
         // Queued rather than done here, so the socket is already taking
         // requests while they run; they still come before any request.
         for checkout in core.checkouts.values() {
@@ -356,6 +359,7 @@ impl Core {
             resident,
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
+            agent_runs: HashMap::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -484,11 +488,11 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
             }
             Request::AcpPrompt { thread, text } => to_response(self.acp_prompt(&thread, &text).await),
-            Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel)),
+            Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel).await),
             Request::AcpAnswer { thread, id, option } => {
-                to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }))
+                to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }).await)
             }
-            Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop)),
+            Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop).await),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
@@ -1357,12 +1361,10 @@ impl Core {
             line,
             draft: self.redactor.replace(&draft),
             leaving,
-            agent: self.agent_status(thread).filter(|status| status.state != silt_proto::AgentState::Exited).map(|status| {
-                silt_proto::AgentActivity {
-                    name: status.agent,
-                    state: status.state,
-                    streaming: self.redactor.replace(&status.streaming),
-                }
+            agent: self.agent_status(thread).filter(|status| status.state.running()).map(|status| silt_proto::AgentActivity {
+                name: status.agent,
+                state: status.state,
+                streaming: self.redactor.replace(&status.streaming),
             }),
         };
         Ok(async move {

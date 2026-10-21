@@ -348,6 +348,9 @@ pub struct ThreadSummary {
     /// Whether this machine's user may write into it (ADR 0014).
     #[serde(default)]
     pub writable: bool,
+    /// How the agent the web UI last ran in it here stands (ADR 0022).
+    #[serde(default)]
+    pub agent_state: Option<silt_proto::AgentState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
