@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
-use silt_store::{BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Store, ThreadRecord};
+use silt_store::{BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Snapshot, Store, ThreadRecord};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
 const THREAD: ThreadId = ThreadId(11);
@@ -55,6 +55,25 @@ async fn deltas_round_trip_in_order_across_reopen() {
     assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
     assert_eq!(store.families().await.expect("families"), vec![FAMILY]);
     assert_eq!(store.threads().await.expect("threads")[0].id, THREAD);
+}
+
+#[tokio::test]
+async fn a_snapshot_lasts_until_the_family_s_deltas_are_replaced() {
+    let (dir, store) = store_with_thread().await;
+    assert_eq!(store.snapshot(FAMILY).await.expect("reads"), None);
+    let snapshot = Snapshot { format: 1, covers: 2, data: b"projection".to_vec() };
+    store.put_snapshot(FAMILY, &snapshot).await.expect("saves");
+    let newer = Snapshot { format: 1, covers: 5, data: b"later".to_vec() };
+    store.put_snapshot(FAMILY, &newer).await.expect("replaces");
+    drop(store);
+
+    let store = Store::open(dir.path()).await.expect("reopens");
+    assert_eq!(store.snapshot(FAMILY).await.expect("reads"), Some(newer));
+    store.replace_deltas(FAMILY, &[]).await.expect("replaces");
+    assert_eq!(store.snapshot(FAMILY).await.expect("reads"), None, "it was a snapshot of other deltas");
+    store.put_snapshot(FAMILY, &snapshot).await.expect("saves");
+    store.clear_deltas(FAMILY).await.expect("clears");
+    assert_eq!(store.snapshot(FAMILY).await.expect("reads"), None);
 }
 
 #[tokio::test]

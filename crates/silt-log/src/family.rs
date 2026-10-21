@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use serde::{Deserialize, Serialize};
 use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, Stamp, TextDoc, TextError, TextEvent, TreeError,
     TreeEvent, TreeOp, VersionVector,
@@ -9,6 +10,10 @@ use silt_crdt::{
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op};
+
+mod snapshot;
+
+pub use snapshot::{SNAPSHOT_FORMAT, SnapshotError};
 
 /// Supplies the text of git blobs, which the projection needs the first
 /// time a file that came from git is edited.
@@ -55,14 +60,14 @@ pub enum FileView {
     Blob(BlobHash),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum FileContent {
     Text(TextDoc),
     GitText(GitOid),
     Blob(BlobHash),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileState {
     content: FileContent,
     /// The delta that set the current content; text edits only apply to the
@@ -108,7 +113,7 @@ impl FileState {
 }
 
 /// What the family's log says of one thread; only applying deltas changes it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ThreadState {
     head: Frontier,
     /// Indices into the family log of the thread's conversation deltas.

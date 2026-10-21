@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT format, covers, data FROM family_snapshots WHERE family_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "format",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "family_snapshots",
+            "name": "format"
+          }
+        }
+      },
+      {
+        "name": "covers",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "family_snapshots",
+            "name": "covers"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_snapshots",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f7a30a77359b0934c88015a21ca5416ca2eb7a1e89540e8edaab7e4d36357203"
+}

@@ -141,6 +141,7 @@ impl Core {
             self.store.remove_thread(*thread).await?;
         }
         for family in families {
+            self.snapshotted.remove(&family);
             let remaining = self.threads.values().filter(|record| record.family == family).count();
             if remaining == 0 {
                 self.families.remove(&family);

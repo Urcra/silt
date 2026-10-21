@@ -53,6 +53,14 @@ pub struct SyncState {
     pub view: u64,
 }
 
+/// A family's encoded projection as of its first `covers` deltas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub format: i64,
+    pub covers: u64,
+    pub data: Vec<u8>,
+}
+
 /// A checkout's row in this machine's store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckoutId(pub i64);
@@ -367,6 +375,32 @@ impl Store {
         Ok(())
     }
 
+    /// The family's projection snapshot, if one was saved since its deltas
+    /// were last replaced.
+    pub async fn snapshot(&self, family: FamilyId) -> Result<Option<Snapshot>, StoreError> {
+        let family = id_bytes(family.0);
+        let row = sqlx::query!("SELECT format, covers, data FROM family_snapshots WHERE family_id = ?", family)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| Snapshot { format: row.format, covers: u64::try_from(row.covers).unwrap_or_default(), data: row.data }))
+    }
+
+    pub async fn put_snapshot(&self, family: FamilyId, snapshot: &Snapshot) -> Result<(), StoreError> {
+        let family = id_bytes(family.0);
+        let covers = i64::try_from(snapshot.covers).unwrap_or(i64::MAX);
+        sqlx::query!(
+            "INSERT INTO family_snapshots (family_id, format, covers, data) VALUES (?, ?, ?, ?)
+             ON CONFLICT (family_id) DO UPDATE SET format = excluded.format, covers = excluded.covers, data = excluded.data",
+            family,
+            snapshot.format,
+            covers,
+            snapshot.data,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
         let family = id_bytes(family.0);
@@ -675,6 +709,7 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
         .execute(&mut *tx)
         .await?;
     sqlx::query!("DELETE FROM deltas WHERE family_id = ?1", family).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM family_snapshots WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM sync_state WHERE family_id = ?1", family).execute(&mut *tx).await?;
     Ok(())
 }

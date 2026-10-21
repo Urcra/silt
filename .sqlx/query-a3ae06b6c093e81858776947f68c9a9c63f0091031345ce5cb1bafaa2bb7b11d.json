@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM family_snapshots WHERE family_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a3ae06b6c093e81858776947f68c9a9c63f0091031345ce5cb1bafaa2bb7b11d"
+}

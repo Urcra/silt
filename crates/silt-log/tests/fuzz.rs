@@ -183,4 +183,52 @@ proptest! {
             prop_assert_eq!(paths(&replayed), paths(&family));
         }
     }
+
+    /// Stored deltas, refused ones too, give the same family whether
+    /// replayed or read from a snapshot taken partway and the rest applied.
+    #[test]
+    fn a_snapshot_and_what_follows_is_a_replay(steps in proptest::collection::vec(step(), 1..60), cut in any::<prop::sample::Index>()) {
+        let mut family = Family::new();
+        let mut taken: Vec<DeltaId> = Vec::new();
+        let mut inodes: Vec<DeltaId> = Vec::new();
+        let mut stored = Vec::new();
+        for step in &steps {
+            let delta = delta(&family, &taken, &inodes, step);
+            let before = family.log().len();
+            if family.apply(delta.clone(), &mut bases()).is_ok() && family.log().len() > before {
+                taken.push(delta.span.last());
+                if let Op::Create { .. } = delta.op {
+                    inodes.push(delta.span.first());
+                }
+            }
+            stored.push(delta);
+        }
+        let replay = |deltas: &[Delta], family: &mut Family| {
+            for delta in deltas {
+                let _ = family.apply(delta.clone(), &mut bases());
+            }
+        };
+        let cut = cut.index(stored.len() + 1);
+        let mut partway = Family::new();
+        replay(&stored[..cut], &mut partway);
+        let snapshot = partway.snapshot().expect("encodes");
+        let (mut restored, rest) = Family::from_snapshot(&snapshot, &stored).expect("matches");
+        replay(rest, &mut restored);
+        let mut whole = Family::new();
+        replay(&stored, &mut whole);
+
+        prop_assert_eq!(restored.log(), whole.log());
+        prop_assert_eq!(state(&restored), state(&whole));
+        // Neither type compares, and their debug output shows every field.
+        let threads = |family: &Family| format!("{:?}", family.threads().collect::<Vec<_>>());
+        prop_assert_eq!(threads(&restored), threads(&whole));
+        prop_assert_eq!(format!("{:?}", restored.graph()), format!("{:?}", whole.graph()));
+        for thread in THREADS {
+            let view = |family: &Family| {
+                let history: Vec<DeltaId> = family.history(thread).iter().map(|item| item.delta.span.first()).collect();
+                (family.thread_view(thread).paths().keys().cloned().collect::<Vec<_>>(), family.thread_head(thread), history)
+            };
+            prop_assert_eq!(view(&restored), view(&whole));
+        }
+    }
 }

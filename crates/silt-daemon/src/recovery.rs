@@ -50,6 +50,7 @@ impl Core {
             }
         }
         self.store.replace_deltas(family_id, &kept).await?;
+        self.snapshotted.remove(&family_id);
         let last = fetched.last().map(|(seq, delta)| (*seq, delta.span.first()));
         let sync = ClientSync::new(None, kept.len() as u64, last.map_or(0, |(seq, _)| seq), last.map(|(_, id)| id), 0);
         self.replace_sync(family_id, sync);

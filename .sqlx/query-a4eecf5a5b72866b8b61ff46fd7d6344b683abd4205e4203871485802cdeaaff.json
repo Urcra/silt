@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO family_snapshots (family_id, format, covers, data) VALUES (?, ?, ?, ?)\n             ON CONFLICT (family_id) DO UPDATE SET format = excluded.format, covers = excluded.covers, data = excluded.data",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a4eecf5a5b72866b8b61ff46fd7d6344b683abd4205e4203871485802cdeaaff"
+}
