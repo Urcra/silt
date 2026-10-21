@@ -355,7 +355,7 @@ impl Core {
             .remote
             .clone()
             .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
-        let refused = |error: crate::remote::RemoteError| CoreError::Invalid(error.to_string());
+        let refused = |source| CoreError::Server { doing: "change the visibility", source };
         match selector {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;

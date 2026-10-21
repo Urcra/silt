@@ -640,9 +640,7 @@ impl Core {
         for pending in waiting {
             let (agent, cwd, since) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms);
             let known = known.clone();
-            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known))
-                .await
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known)).await?;
             match found {
                 Some(found) => self.register_found(pending, found).await?,
                 None => warn!("the agent's session was never written"),
@@ -674,9 +672,7 @@ impl Core {
             });
             match snapshot {
                 Some((agent, found)) => {
-                    let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found).map_err(|error| error.to_string()))
-                        .await
-                        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+                    let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found)).await?;
                     match lines {
                         Ok(lines) => self.record_snapshot(&id, lines).await?,
                         Err(error) => warn!(%error, "could not read the session"),

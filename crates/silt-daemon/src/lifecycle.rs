@@ -44,7 +44,7 @@ impl Core {
             remote
                 .thread_lifecycle(thread, change.action())
                 .await
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+                .map_err(|source| CoreError::Server { doing: "change the thread", source })?;
         }
         let short = crate::forks::short(thread);
         self.trash_changed.insert(thread, std::time::Instant::now());

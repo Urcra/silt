@@ -290,7 +290,7 @@ impl Core {
         let lease = remote
             .take_lease(thread)
             .await
-            .map_err(|error| CoreError::Invalid(format!("could not take the thread's lease: {error}")))?;
+            .map_err(|source| CoreError::Server { doing: "take the thread's lease", source })?;
         let family_id = self.threads[&thread].family;
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("projected above");
@@ -632,10 +632,9 @@ impl Core {
 /// transcript, or OpenCode's import, takes a while.
 async fn restore(agent: &'static dyn Agent, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, CoreError> {
     let (root, cwd, session) = (root.to_owned(), cwd.to_owned(), session.clone());
-    let written = tokio::task::spawn_blocking(move || agent.restore(&root, &cwd, &session))
-        .await
-        .map_err(|error| CoreError::Invalid(format!("restoring the session failed: {error}")))?;
-    Ok(written?)
+    tokio::task::spawn_blocking(move || agent.restore(&root, &cwd, &session))
+        .await?
+        .map_err(|source| CoreError::Agent { doing: "restore the session", source })
 }
 
 /// One page of the family's deltas after server sequence `after`.

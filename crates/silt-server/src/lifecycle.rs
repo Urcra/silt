@@ -233,7 +233,7 @@ impl Server {
             }
             let mut room = Room::new(self.shared.generation);
             if !kept.is_empty() {
-                room.push(kept.clone()).map_err(|error| std::io::Error::other(error.to_string()))?;
+                room.push(kept.clone())?;
             }
             for (seq, delta) in (1..).zip(&kept) {
                 sqlx::query("INSERT INTO deltas (family_id, seq, format, data) VALUES (?, ?, ?, ?)")

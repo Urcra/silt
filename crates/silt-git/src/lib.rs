@@ -24,8 +24,8 @@ pub use remote::normalize_remote;
 pub enum GitError {
     #[error("{path} is not inside a git repository")]
     NotARepository { path: PathBuf },
-    #[error("git operation failed: {0}")]
-    Gix(String),
+    #[error("git operation failed")]
+    Gix(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("`git {args}` failed: {stderr}")]
     Command { args: String, stderr: String },
     #[error("could not run git")]
@@ -33,8 +33,8 @@ pub enum GitError {
 }
 
 impl GitError {
-    fn gix(error: impl std::fmt::Display) -> Self {
-        Self::Gix(error.to_string())
+    fn gix(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Gix(Box::new(error))
     }
 }
 

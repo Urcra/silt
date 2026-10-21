@@ -441,7 +441,7 @@ impl Core {
         remote
             .register_thread(&thread_info(&self.threads[&thread]), None)
             .await
-            .map_err(|error| CoreError::Invalid(format!("could not register the thread with the server: {error}")))
+            .map_err(|source| CoreError::Server { doing: "register the thread", source })
     }
 
     /// The blob's bytes, fetched from the server when not stored locally.
@@ -456,7 +456,7 @@ impl Core {
         let bytes = remote
             .get_blob(hash)
             .await
-            .map_err(|error| CoreError::Invalid(format!("could not fetch blob {hash}: {error}")))?;
+            .map_err(|source| CoreError::Server { doing: "fetch a file", source })?;
         self.store.blobs().put(&bytes).await?;
         Ok(bytes)
     }

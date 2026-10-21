@@ -146,7 +146,7 @@ impl Core {
                 path: relative,
             })
             .await
-            .map_err(|error| CoreError::Invalid(format!("the server could not answer: {error}")))?;
+            .map_err(|source| CoreError::Server { doing: "list the threads changing it", source })?;
         Ok(reply
             .threads
             .into_iter()

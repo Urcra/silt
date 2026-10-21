@@ -83,6 +83,8 @@ pub enum ServerError {
     Config(#[from] ConfigError),
     #[error("could not set up the HTTP client for sign-in providers")]
     HttpClient(#[from] reqwest::Error),
+    #[error("the deltas kept after a purge no longer fit together")]
+    Kept(#[from] PushError),
 }
 
 /// One family's room, locked on its own so families sync independently.

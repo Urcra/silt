@@ -116,8 +116,7 @@ impl Core {
         let (from, to) = line_span(&text, start, end)
             .ok_or_else(|| CoreError::Invalid(format!("{path} has {} lines", text.lines().count())))?;
         let anchor = |pos, bias| -> Result<Anchor, CoreError> {
-            doc.anchor_at(family.graph(), &head, pos, bias)
-                .map_err(|error| CoreError::Invalid(error.to_string()))
+            Ok(doc.anchor_at(family.graph(), &head, pos, bias)?)
         };
         Ok(CommentTarget::Code {
             inode,

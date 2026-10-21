@@ -201,6 +201,21 @@ impl Response {
             message: message.to_string(),
         }
     }
+
+    /// `error` and what caused it, on one line.
+    pub fn failure(error: &(dyn std::error::Error + 'static)) -> Self {
+        let mut message = error.to_string();
+        let mut cause = error.source();
+        while let Some(source) = cause {
+            let text = source.to_string();
+            if !message.ends_with(&text) {
+                message.push_str(": ");
+                message.push_str(&text);
+            }
+            cause = source.source();
+        }
+        Self::Error { message }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,4 +549,22 @@ pub struct AgentChoice {
 pub struct CloneInfo {
     pub repo: String,
     pub path: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("could not take the lease")]
+    struct Outer(#[source] std::io::Error);
+
+    #[test]
+    fn a_failure_says_what_caused_it() {
+        let error = Outer(std::io::Error::other("connection refused"));
+        let Response::Error { message } = Response::failure(&error) else {
+            panic!("an error");
+        };
+        assert_eq!(message, "could not take the lease: connection refused");
+    }
 }

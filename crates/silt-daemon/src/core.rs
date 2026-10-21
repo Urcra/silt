@@ -53,6 +53,22 @@ pub enum CoreError {
     Io(#[from] std::io::Error),
     #[error("could not watch the checkout")]
     Watch(#[from] notify::Error),
+    #[error("could not {doing} on the server")]
+    Server {
+        doing: &'static str,
+        #[source]
+        source: crate::remote::RemoteError,
+    },
+    #[error("a background task stopped")]
+    Background(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Text(#[from] silt_crdt::TextError),
+    #[error("could not {doing}")]
+    Agent {
+        doing: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("{0}")]
     Invalid(String),
 }
@@ -1015,9 +1031,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         // Bundling a long history takes git a while; off the event loop.
         let (root, known_commits) = (repo.root().to_owned(), known.to_vec());
-        let bundled = tokio::task::spawn_blocking(move || Repo::discover(&root)?.bundle(commit, &known_commits))
-            .await
-            .map_err(|error| CoreError::Invalid(format!("bundling failed: {error}")))?;
+        let bundled = tokio::task::spawn_blocking(move || Repo::discover(&root)?.bundle(commit, &known_commits)).await?;
         let Some(bytes) = bundled? else {
             return Ok(());
         };
@@ -1186,7 +1200,7 @@ impl Core {
     fn inbox(&self, all: bool) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
         let remote = self.connected()?;
         Ok(async move {
-            let reply = remote.inbox(all).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+            let reply = remote.inbox(all).await.map_err(|source| CoreError::Server { doing: "read the inbox", source })?;
             Ok(reply
                 .notifications
                 .into_iter()
@@ -1206,7 +1220,7 @@ impl Core {
     fn inbox_read(&self, read: silt_proto::InboxRead) -> Result<impl Future<Output = Result<&'static str, CoreError>> + use<>, CoreError> {
         let remote = self.connected()?;
         Ok(async move {
-            remote.inbox_read(&read).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+            remote.inbox_read(&read).await.map_err(|source| CoreError::Server { doing: "mark the inbox read", source })?;
             Ok("read")
         })
     }
@@ -1237,7 +1251,7 @@ impl Core {
             let Some(remote) = remote else {
                 return Ok(silt_proto::PresenceReply::default());
             };
-            remote.presence(&update).await.map_err(|error| CoreError::Invalid(error.to_string()))
+            remote.presence(&update).await.map_err(|source| CoreError::Server { doing: "share presence", source })
         })
     }
 
@@ -1331,7 +1345,7 @@ impl Core {
     async fn share(&mut self, selector: &str, user: &str, remove: bool) -> Result<String, CoreError> {
         let thread = self.find_thread(selector)?;
         let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("sharing needs a server; use `silt auth login`".into()))?;
-        remote.share(thread, user, remove).await.map_err(|error| CoreError::Invalid(error.to_string()))?;
+        remote.share(thread, user, remove).await.map_err(|source| CoreError::Server { doing: "share the thread", source })?;
         let names = self.collaborators.entry(thread).or_default();
         names.retain(|name| name != user);
         if !remove {
@@ -1393,7 +1407,7 @@ impl Core {
             (Some(_), Some(remote)) => remote
                 .register_thread(&crate::sync::thread_info(&record), visibility)
                 .await
-                .map_err(|error| CoreError::Invalid(format!("could not register the fork with the server: {error}")))?,
+                .map_err(|source| CoreError::Server { doing: "register the fork", source })?,
             _ => self.register_thread(&record),
         }
         self.store.create_thread(&record).await?;
@@ -1480,7 +1494,7 @@ where
 pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> Response {
     match result {
         Ok(value) => Response::ok(value),
-        Err(error) => Response::error(error),
+        Err(error) => Response::failure(&error),
     }
 }
 
