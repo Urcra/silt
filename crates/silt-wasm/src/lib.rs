@@ -94,7 +94,7 @@ impl Core {
     }
 
     pub fn version(&self) -> String {
-        format!("{:?}", self.family.thread_head(self.thread))
+        self.family.thread_head(self.thread).ids().iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
     }
 
     /// The file's current text, now shown in the editor.
@@ -141,6 +141,20 @@ fn js(message: impl std::fmt::Display) -> JsError {
 }
 
 #[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn error(message: &str);
+}
+
+/// A panic traps the module, and the replica that was in use stays borrowed
+/// for good; its message goes to the console, as the trap itself says
+/// nothing.
+#[wasm_bindgen(start)]
+fn start() {
+    std::panic::set_hook(Box::new(|info| error(&format!("silt replica: {info}"))));
+}
+
+#[wasm_bindgen]
 impl Replica {
     /// A replica writing as `actor` (32 hex digits, fresh for each tab)
     /// into `thread`.
@@ -168,9 +182,9 @@ impl Replica {
         Ok(self.0.add_base(oid, text).map_err(js)?.map(|oid| oid.to_string()))
     }
 
-    /// The thread's files, one path per line.
-    pub fn paths(&self) -> String {
-        self.0.paths().join("\n")
+    /// The thread's files.
+    pub fn paths(&self) -> Vec<String> {
+        self.0.paths()
     }
 
     /// The git blob a file's text still comes from, before anyone edited it.

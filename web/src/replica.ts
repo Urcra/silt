@@ -26,10 +26,25 @@ export class LiveReplica {
   private readonly thread: string
   private readonly replica: Replica
   private syncing: Promise<void> = Promise.resolve()
+  private broken = false
 
   private constructor(thread: string, replica: Replica) {
     this.thread = thread
     this.replica = replica
+  }
+
+  /** A trap leaves the replica unusable, so later calls say so plainly. */
+  private use<T>(call: (replica: Replica) => T): T {
+    if (this.broken) throw new Error('The editor stopped after an internal error; reload the page.')
+    try {
+      return call(this.replica)
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) {
+        this.broken = true
+        throw new Error('The editor stopped after an internal error (see the console); reload the page.')
+      }
+      throw error
+    }
   }
 
   static async open(thread: string): Promise<LiveReplica> {
@@ -48,28 +63,32 @@ export class LiveReplica {
   }
 
   private async syncOnce(): Promise<void> {
-    const after = this.replica.received()
+    const after = this.use((replica) => replica.received())
     const reply = await api.replica(this.thread, after)
     this.writable = reply.writable
-    await this.fill(this.replica.receive(after, fromBase64(reply.deltas)))
+    await this.fill(this.use((replica) => replica.receive(after, fromBase64(reply.deltas))))
   }
 
   private async fill(needed: string | undefined): Promise<void> {
-    while (needed) needed = this.replica.add_base(needed, await api.gitText(this.thread, needed))
+    while (needed) {
+      const text = await api.gitText(this.thread, needed)
+      const base = needed
+      needed = this.use((replica) => replica.add_base(base, text))
+    }
   }
 
   paths(): string[] {
-    return this.replica.paths().split('\n').filter(Boolean)
+    return this.use((replica) => replica.paths())
   }
 
   /** Fetches the git text the file still needs, so `showNow` can read it. */
   async prepare(path: string): Promise<void> {
-    await this.fill(this.replica.needed_base(path))
+    await this.fill(this.use((replica) => replica.needed_base(path)))
   }
 
   async text(path: string): Promise<string | undefined> {
     await this.prepare(path)
-    return this.replica.text(path)
+    return this.use((replica) => replica.text(path))
   }
 
   /** The file's text, to show in the editor: later edits are made against it. */
@@ -80,7 +99,7 @@ export class LiveReplica {
 
   /** `show` for a prepared file, at once. */
   showNow(path: string): string | undefined {
-    return this.replica.show(path)
+    return this.use((replica) => replica.show(path))
   }
 
   /**
@@ -88,7 +107,7 @@ export class LiveReplica {
    * against what the editor was shown; sending them to the daemon follows.
    */
   edit(path: string, text: string): Promise<void> {
-    const made = this.replica.edit(path, text, Date.now())
+    const made = this.use((replica) => replica.edit(path, text, Date.now()))
     return made.length > 1 ? api.sendDeltas(this.thread, toBase64(made)).then(() => undefined) : Promise.resolve()
   }
 }
