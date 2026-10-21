@@ -96,9 +96,31 @@ impl Rewrites {
         self
     }
 
-    pub fn apply(&self, text: &str) -> String {
+    /// `json`, a transcript line, with every old value replaced by its new
+    /// one. Both are matched and written as they appear inside JSON strings,
+    /// and an old value counts only where it ends: `/a/repo` is not rewritten
+    /// in `/a/repo-old`.
+    pub fn apply(&self, json: &str) -> String {
         let matcher = self.matcher.get_or_init(|| Matcher::new(&self.pairs));
-        matcher.automaton.replace_all(text, &matcher.replacements)
+        let mut matches: Vec<(usize, usize, usize)> = matcher
+            .automaton
+            .find_overlapping_iter(json)
+            .filter(|found| json[..found.end()].ends_with('/') || ends_a_value(&json[found.end()..]))
+            .map(|found| (found.start(), found.end(), found.pattern().as_usize()))
+            .collect();
+        matches.sort_by_key(|(start, end, pattern)| (*start, std::cmp::Reverse(*end), *pattern));
+        let mut out = String::with_capacity(json.len());
+        let mut done = 0;
+        for (start, end, pattern) in matches {
+            if start < done {
+                continue;
+            }
+            out.push_str(&json[done..start]);
+            out.push_str(&matcher.replacements[pattern]);
+            done = end;
+        }
+        out.push_str(&json[done..]);
+        out
     }
 
     pub fn lines(&self, lines: &[String]) -> String {
@@ -106,21 +128,33 @@ impl Rewrites {
     }
 }
 
+/// Whether a value ends right before `rest`: paths and ids go on with
+/// letters, digits, `-` and `_`.
+fn ends_a_value(rest: &str) -> bool {
+    !rest.chars().next().is_some_and(|next| next.is_ascii_alphanumeric() || matches!(next, '-' | '_'))
+}
+
+/// `text` as it appears inside a JSON string.
+fn json_escaped(text: &str) -> String {
+    let quoted = serde_json::to_string(text).expect("strings serialize");
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
 impl Matcher {
-    /// Replaces every occurrence of each `old` with its `new` in one pass,
-    /// so replacements are never themselves rewritten. Longer olds win, so
-    /// a path is never rewritten through a shorter path it starts with;
-    /// between equally long ones, the earlier pair.
+    /// Every occurrence of each `old` is replaced by its `new` in one pass,
+    /// so replacements are never themselves rewritten. Where several match
+    /// at one place the longest wins, so a path is never rewritten through
+    /// a shorter path it starts with; between equally long ones, the
+    /// earlier pair.
     fn new(pairs: &[(String, String)]) -> Self {
-        let mut pairs: Vec<&(String, String)> = pairs.iter().filter(|(old, _)| !old.is_empty()).collect();
-        pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+        let pairs: Vec<&(String, String)> = pairs.iter().filter(|(old, _)| !old.is_empty()).collect();
         let automaton = AhoCorasick::builder()
-            .match_kind(MatchKind::LeftmostFirst)
-            .build(pairs.iter().map(|(old, _)| old))
+            .match_kind(MatchKind::Standard)
+            .build(pairs.iter().map(|(old, _)| json_escaped(old)))
             .expect("rewrites are few and short enough for an automaton");
         Self {
             automaton,
-            replacements: pairs.into_iter().map(|(_, new)| new.clone()).collect(),
+            replacements: pairs.into_iter().map(|(_, new)| json_escaped(new)).collect(),
         }
     }
 }
@@ -134,6 +168,21 @@ mod tests {
         let rewrites = Rewrites::default().with("/a/repo", "/a/repo/new").with("/a/repo/old", "/a/repo/new");
         assert_eq!(rewrites.apply("cd /a/repo/old && cd /a/repo"), "cd /a/repo/new && cd /a/repo/new");
         assert_eq!(rewrites.with("", "x").apply("ab"), "ab", "an empty old matches nothing");
+    }
+
+    #[test]
+    fn rewrites_match_whole_values_as_json_holds_them() {
+        let rewrites = Rewrites::default().with("/a/repo", "/b/new \"repo\"").with("/a", "/c");
+        let line = r#"{"cwd":"/a/repo","old":"/a/repo-old/x","file":"/a/repo/src/main.rs","other":"/a/b"}"#;
+        assert_eq!(
+            rewrites.apply(line),
+            r#"{"cwd":"/b/new \"repo\"","old":"/c/repo-old/x","file":"/b/new \"repo\"/src/main.rs","other":"/c/b"}"#
+        );
+        assert_eq!(Rewrites::default().with("/a/", "/z/").apply(r#""/a/b""#), r#""/z/b""#);
+        let quoted = Rewrites::default().with(r#"/a/"q""#, "/b");
+        assert_eq!(quoted.apply(r#"{"cwd":"/a/\"q\""}"#), r#"{"cwd":"/b"}"#);
+        let parsed: serde_json::Value = serde_json::from_str(&rewrites.apply(line)).expect("still JSON");
+        assert_eq!(parsed["cwd"], "/b/new \"repo\"");
     }
 
     #[test]
