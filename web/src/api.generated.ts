@@ -29,7 +29,21 @@ export type Visibility = string;
 
 export type AgentChoice = { id: string, name: string, description: string, };
 
+export type AgentChoiceItem = { id: string, name: string, description: string | null, };
+
 export type AgentChoices = { agents: Array<AgentChoice>, clones: Array<CloneInfo>, };
+
+export type AgentModes = { current: string, available: Array<AgentChoiceItem>, 
+/**
+ * The mode Plan first switches to.
+ */
+plan: string | null, };
+
+export type AgentSetting = { id: string, name: string, 
+/**
+ * `model`, `thought_level`, … as the agent tags it.
+ */
+category: string | null, current: string, choices: Array<AgentChoiceItem>, };
 
 export type AgentStart = { "kind": "resume", id: string, } | { "kind": "primed", id: string | null, prompt: string, };
 
@@ -37,7 +51,15 @@ export type AgentStatus = { agent: string, state: AgentState,
 /**
  * What the agent is saying or thinking right now, not recorded yet.
  */
-streaming: string, thinking: string, permissions: Array<PermissionAsked>, error: string | null, };
+streaming: string, thinking: string, permissions: Array<PermissionAsked>, error: string | null, 
+/**
+ * The agent's modes, when it has any.
+ */
+modes: AgentModes | null, 
+/**
+ * Its settings with a choice of values, such as its model.
+ */
+settings: Array<AgentSetting>, };
 
 export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
 

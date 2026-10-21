@@ -24,7 +24,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
     };
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options.clone(), sender);
-    let Event::Ready { session, loaded, agent: name } = next(&mut events).await else {
+    let Event::Ready { session, loaded, agent: name, .. } = next(&mut events).await else {
         panic!("the session starts first");
     };
     assert!(!loaded);
@@ -106,5 +106,54 @@ async fn cancelling_answers_the_pending_permission_request() {
         }
     }
     assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\n");
+    agent.send(Command::Stop);
+}
+
+#[tokio::test]
+async fn modes_and_settings_come_with_the_session_and_change_on_request() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), Vec::new()), sender);
+    let Event::Ready { modes: Some(modes), settings, .. } = next(&mut events).await else {
+        panic!("the session starts with its modes");
+    };
+    assert_eq!(modes.current, "code");
+    assert_eq!(silt_acp::plan_mode(&modes).map(|mode| mode.id.as_str()), Some("plan"));
+    assert_eq!(settings[0].id, "model");
+    assert_eq!(settings[0].current, "fast");
+    assert_eq!(settings[0].choices.len(), 2);
+
+    agent.send(Command::SetMode("nonsense".into()));
+    assert!(matches!(next(&mut events).await, Event::Refused(_)));
+    agent.send(Command::SetSetting { id: "model".into(), value: "smart".into() });
+    let Event::Settings(settings) = next(&mut events).await else {
+        panic!("the agent says how its settings stand");
+    };
+    assert_eq!(settings[0].current, "smart");
+
+    // The mode is asked for before the prompt, so the turn runs in it.
+    agent.send(Command::SetMode("plan".into()));
+    agent.send(Command::Prompt("add acp".into()));
+    let mut said = Vec::new();
+    loop {
+        match next(&mut events).await {
+            Event::ModeChanged(mode) => assert_eq!(mode, "plan"),
+            Event::Update(Update::AgentText(text)) => said.push(text),
+            Event::TurnEnded { .. } => break,
+            Event::Update(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(said, ["Plan: add acp"]);
+    assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\n");
+    agent.send(Command::Stop);
+}
+
+#[tokio::test]
+async fn an_agent_without_modes_says_so() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), vec![("FAKE_ACP_NO_MODES".into(), "1".into())]), sender);
+    assert!(matches!(next(&mut events).await, Event::Ready { modes: None, settings, .. } if settings.is_empty()));
     agent.send(Command::Stop);
 }

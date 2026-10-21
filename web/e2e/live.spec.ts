@@ -191,3 +191,46 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: I interrupted your last turn to say: change of plan')).toBeVisible()
 })
+
+async function startInNewThread(page: Page, agent: string) {
+  await page.goto(live.alice)
+  await page.getByLabel('agent to start').selectOption({ label: agent })
+  await page.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
+}
+
+test("the agent's modes and model are offered, and Plan first plans in its plan mode", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  const mode = page.getByLabel('mode', { exact: true })
+  await expect(mode).toHaveValue('code')
+  await page.getByLabel('model').selectOption({ label: 'Smart' })
+  await expect(page.getByLabel('model')).toHaveValue('smart')
+
+  await page.getByLabel('draft').fill('add a parser')
+  await page.getByLabel('Plan first').check()
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Plan: add a parser')).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
+  await expect(mode).toHaveValue('plan')
+  await expect(page.getByRole('region', { name: 'needs you' })).toBeVisible()
+
+  await page.getByRole('group', { name: 'plan' }).getByRole('button', { name: 'Approve plan' }).click()
+  await expect(page.getByText('Done: The plan is approved. Go ahead.')).toBeVisible()
+  await expect(mode).toHaveValue('code')
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+})
+
+test('Plan first asks an agent without a plan mode for a plan by the prompt', async ({ page }) => {
+  await startInNewThread(page, 'Plain agent')
+  await expect(page.getByLabel('mode', { exact: true })).toHaveCount(0)
+  await page.getByLabel('draft').fill('add a lexer')
+  await page.getByLabel('Plan first').check()
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText(/^Done: Before you change anything, write a plan[\s\S]*add a lexer$/)).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Plain agent wrote a plan for you to approve')
+
+  await page.getByLabel('draft').fill('use a table instead')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: use a table instead')).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Plain agent is ready')
+})

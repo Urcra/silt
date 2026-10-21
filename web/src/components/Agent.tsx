@@ -104,6 +104,57 @@ function PresetPicker({ thread, preset, onPreset }: { thread: string; preset: Pr
   )
 }
 
+/** Whether a prompt goes straight to the agent rather than its queue. */
+function ready(status: AgentStatus): boolean {
+  return status.state === 'idle' || status.state === 'awaiting_input'
+}
+
+const SELECT ='rounded-sm border border-line bg-elevated px-1.5 py-0.5 text-xs text-fg-1'
+
+/** The agent's own modes and settings, such as its model, as it offers them. */
+function AgentChoices({ thread, status, act }: { thread: string; status: AgentStatus; act: (action: Promise<unknown>) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-fg-2">
+      {status.modes && (
+        <label className="flex items-center gap-2">
+          Mode
+          <select
+            aria-label="mode"
+            value={status.modes.current}
+            onChange={(event) => act(api.setMode(thread, event.target.value))}
+            className={SELECT}
+          >
+            {status.modes.available.map((mode) => (
+              <option key={mode.id} value={mode.id} title={mode.description ?? undefined}>
+                {mode.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {status.settings.map((setting) => (
+        <label key={setting.id} className="flex items-center gap-2">
+          {setting.name}
+          <select
+            aria-label={setting.name.toLowerCase()}
+            value={setting.current}
+            onChange={(event) => act(api.setSetting(thread, setting.id, event.target.value))}
+            className={SELECT}
+          >
+            {setting.choices.map((choice) => (
+              <option key={choice.id} value={choice.id} title={choice.description ?? undefined}>
+                {choice.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+const APPROVED = 'The plan is approved. Go ahead.'
+
 export function AgentPanel({
   thread,
   status,
@@ -126,6 +177,7 @@ export function AgentPanel({
   people: Presence[]
 }) {
   const [agent, setAgent] = useState('')
+  const [planFirst, setPlanFirst] = useState(false)
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
@@ -191,19 +243,43 @@ export function AgentPanel({
               </div>
             </div>
           ))}
-          <div className="flex gap-2">
+          {status.state === 'awaiting_input' && (
+            <div className="flex items-center gap-2 rounded bg-accent-tint p-2" role="group" aria-label="plan">
+              <span>Approve the plan, or send a draft to change it.</span>
+              <button
+                className="rounded bg-accent px-2 py-0.5 text-on-accent"
+                onClick={() => act(api.prompt(thread, APPROVED))}
+              >
+                Approve plan
+              </button>
+            </div>
+          )}
+          <AgentChoices thread={thread} status={status} act={act} />
+          <div className="flex flex-wrap items-center gap-2">
             <button
               disabled={!draft.trim()}
               className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
-              onClick={() => act(api.prompt(thread, draft), onSent)}
+              onClick={() => act(api.prompt(thread, draft, planFirst && ready(status)), () => {
+                setPlanFirst(false)
+                onSent()
+              })}
               title={
-                status.state === 'idle'
+                ready(status)
                   ? "Sends your draft together with everyone else's"
                   : 'Queues your draft for when the agent is ready'
               }
             >
-              {status.state === 'idle' ? 'Send' : 'Queue'}
+              {ready(status) ? 'Send' : 'Queue'}
             </button>
+            {ready(status) && (
+              <label
+                className="flex items-center gap-1 text-xs text-fg-2"
+                title="The agent writes a plan for you to approve before it edits anything"
+              >
+                <input type="checkbox" checked={planFirst} onChange={(event) => setPlanFirst(event.target.checked)} />
+                Plan first
+              </label>
+            )}
             {(status.state === 'working' || status.state === 'awaiting_permission') && (
               <button
                 disabled={!draft.trim()}

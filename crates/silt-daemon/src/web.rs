@@ -99,6 +99,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
+        .route("/api/threads/{id}/agent/mode", post(agent_mode))
+        .route("/api/threads/{id}/agent/setting", post(agent_setting))
         .route("/api/threads/{id}/queue", get(queue).post(queue_add))
         .route("/api/threads/{id}/queue/{item}", put(queue_edit).delete(queue_remove))
         .route("/api/threads/{id}/queue/{item}/move", post(queue_move))
@@ -431,10 +433,12 @@ async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> Ht
 #[derive(Deserialize)]
 struct AgentPrompt {
     text: String,
+    #[serde(default)]
+    plan: bool,
 }
 
 async fn agent_prompt(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
-    ask(&web, Request::AcpPrompt { thread, text: body.text }).await
+    ask(&web, Request::AcpPrompt { thread, text: body.text, plan: body.plan }).await
 }
 
 async fn agent_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
@@ -464,6 +468,25 @@ struct PresetBody {
 
 async fn agent_preset(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<PresetBody>) -> HttpResponse {
     ask(&web, Request::AgentPreset { thread, preset: body.preset }).await
+}
+
+#[derive(Deserialize)]
+struct ModeBody {
+    mode: String,
+}
+
+async fn agent_mode(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<ModeBody>) -> HttpResponse {
+    ask(&web, Request::AcpMode { thread, mode: body.mode }).await
+}
+
+#[derive(Deserialize)]
+struct SettingBody {
+    id: String,
+    value: String,
+}
+
+async fn agent_setting(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<SettingBody>) -> HttpResponse {
+    ask(&web, Request::AcpSetting { thread, id: body.id, value: body.value }).await
 }
 
 async fn queue(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

@@ -110,7 +110,10 @@ export const api = {
   agents: () => request<AgentChoices>('GET', '/api/agents'),
   startAgent: (agent: string, where: { thread: string } | { clone: string }) =>
     request<string>('POST', '/api/agents/start', { agent, ...where }),
-  prompt: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/prompt`, { text }),
+  prompt: (id: string, text: string, plan = false) => request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan }),
+  setMode: (id: string, mode: string) => request<string>('POST', `${thread(id)}/agent/mode`, { mode }),
+  setSetting: (id: string, setting: string, value: string) =>
+    request<string>('POST', `${thread(id)}/agent/setting`, { id: setting, value }),
   cancelTurn: (id: string) => request<string>('POST', `${thread(id)}/agent/cancel`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),

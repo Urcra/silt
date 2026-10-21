@@ -45,6 +45,32 @@ pub(crate) struct AcpRun {
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
+    modes: Option<silt_acp::Modes>,
+    settings: Vec<silt_acp::Setting>,
+    /// The turn running is a Plan first one.
+    planning: bool,
+    /// The mode Plan first switched away from, to go back to once the plan
+    /// is approved.
+    back_to: Option<String>,
+}
+
+/// What a Plan first prompt starts with when the agent has no plan mode.
+const PLAN_FIRST: &str = "Before you change anything, write a plan for this and stop: don't edit files or run commands \
+                          that change them until I approve the plan.";
+
+impl AcpRun {
+    fn plan_mode(&self) -> Option<&str> {
+        self.modes.as_ref().and_then(silt_acp::plan_mode).map(|mode| mode.id.as_str())
+    }
+
+    /// Whether the agent is still where Plan first put it: in its plan
+    /// mode, or told by the prompt to plan when it has none.
+    fn still_planning(&self) -> bool {
+        match self.plan_mode() {
+            Some(plan) => self.modes.as_ref().is_some_and(|modes| modes.current == plan),
+            None => true,
+        }
+    }
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -156,6 +182,10 @@ impl Core {
                 tool_output: HashMap::new(),
                 steering: None,
                 tool_kinds: HashMap::new(),
+                modes: None,
+                settings: Vec::new(),
+                planning: false,
+                back_to: None,
             },
         );
         self.agent_changed(thread).await;
@@ -191,16 +221,26 @@ impl Core {
     }
 
     /// Sends `text` to the thread's agent when it's ready for a prompt, and
-    /// queues it otherwise (ADR 0022).
-    pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str) -> Result<&'static str, CoreError> {
+    /// queues it otherwise (ADR 0022). An agent awaiting input takes it as
+    /// the answer to its plan.
+    pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str, plan: bool) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         if text.trim().is_empty() {
             return Err(CoreError::Invalid("there is nothing to send".into()));
         }
-        let idle = self.acp.get(&thread).is_some_and(|run| run.state == AgentState::Idle);
-        if !idle {
+        let ready = self.acp.get(&thread).is_some_and(|run| matches!(run.state, AgentState::Idle | AgentState::AwaitingInput));
+        if !ready {
+            if plan {
+                return Err(CoreError::Invalid("Plan first starts a turn of its own; send it once this one ends".into()));
+            }
             self.enqueue(thread, text, false).await?;
             return Ok("queued");
+        }
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        if plan {
+            plan_first(run);
+        } else if let Some(mode) = run.back_to.take() {
+            send(run, Command::SetMode(mode));
         }
         let me = self.own_user();
         self.send_prompt(thread, &me, text).await?;
@@ -213,7 +253,7 @@ impl Core {
     pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str) -> Result<&'static str, CoreError> {
         let run = self.running(thread)?;
         if !matches!(run.state, AgentState::Working) {
-            return self.acp_prompt(&thread.to_string(), text).await;
+            return self.acp_prompt(&thread.to_string(), text, false).await;
         }
         let run = self.acp.get_mut(&thread).expect("checked above");
         run.steering = Some(text.to_owned());
@@ -255,6 +295,9 @@ impl Core {
         let mut prompt = said.clone();
         if let Some(notices) = self.take_notices(thread).await {
             prompt = format!("{prompt}\n\n{notices}");
+        }
+        if self.acp.get(&thread).is_some_and(|run| run.planning && run.plan_mode().is_none()) {
+            prompt = format!("{PLAN_FIRST}\n\n{prompt}");
         }
         if let Some(primer) = self.acp.get_mut(&thread).and_then(|run| run.primer.take()) {
             prompt = format!("{primer}\n\n{prompt}");
@@ -348,20 +391,58 @@ impl Core {
     }
 
     pub(crate) async fn set_preset(&mut self, thread: ThreadId, preset: Preset) -> Result<&'static str, CoreError> {
+        self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
+        self.announce_agent(thread);
+        Ok("set")
+    }
+
+    /// Switches the running agent to `mode` and keeps it for the thread's
+    /// later runs.
+    pub(crate) async fn set_mode(&mut self, thread: ThreadId, mode: &str) -> Result<&'static str, CoreError> {
+        let run = self.running(thread)?;
+        if !run.modes.as_ref().is_some_and(|modes| modes.available.iter().any(|offered| offered.id == mode)) {
+            return Err(CoreError::Invalid(format!("the agent has no mode called {mode}")));
+        }
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        run.back_to = None;
+        send(run, Command::SetMode(mode.to_owned()));
+        self.keep_choice(thread, |record| record.mode = Some(mode.to_owned())).await?;
+        Ok("set")
+    }
+
+    pub(crate) async fn set_setting(&mut self, thread: ThreadId, id: String, value: String) -> Result<&'static str, CoreError> {
+        let run = self.running(thread)?;
+        let offered = run
+            .settings
+            .iter()
+            .find(|setting| setting.id == id)
+            .is_some_and(|setting| setting.choices.iter().any(|choice| choice.id == value));
+        if !offered {
+            return Err(CoreError::Invalid(format!("the agent doesn't offer {value} for {id}")));
+        }
+        send(self.acp.get_mut(&thread).expect("checked above"), Command::SetSetting { id, value });
+        Ok("set")
+    }
+
+    /// Stores a choice the person made for the thread's agent.
+    async fn keep_choice(
+        &mut self,
+        thread: ThreadId,
+        choose: impl FnOnce(&mut silt_store::AgentRunRecord),
+    ) -> Result<(), CoreError> {
         let mut record = self.agent_runs.get(&thread).cloned().unwrap_or_else(|| silt_store::AgentRunRecord {
             agent: String::new(),
             state: AgentState::Stopped.as_str().to_owned(),
             error: None,
-            preset: String::new(),
+            preset: Preset::default().as_str().to_owned(),
             mode: None,
             updated_ms: 0,
         });
-        record.preset = preset.as_str().to_owned();
+        choose(&mut record);
         record.updated_ms = crate::core::now_ms();
         self.store.put_agent_run(thread, &record).await?;
         self.agent_runs.insert(thread, record);
-        self.announce_agent(thread);
-        Ok("set")
+        Ok(())
     }
 
     /// Reads how each thread's agent stood. One that ran went with the
@@ -390,6 +471,8 @@ impl Core {
                 .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
             error: run.error.clone(),
+            modes: run.modes.as_ref().map(Into::into),
+            settings: run.settings.iter().map(Into::into).collect(),
         })
     }
 
@@ -423,17 +506,45 @@ impl Core {
                 run.error = Some(error);
                 run.state = AgentState::Error;
             }
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => {
+            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent, modes, settings }) => {
+                let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone());
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                run.modes = modes;
+                run.settings = settings;
+                if let Some(mode) = kept.filter(|mode| {
+                    run.modes
+                        .as_ref()
+                        .is_some_and(|modes| modes.current != *mode && modes.available.iter().any(|offered| offered.id == *mode))
+                }) {
+                    send(run, Command::SetMode(mode));
+                }
                 self.acp_ready(thread, &session, loaded, &agent).await?;
                 self.next_prompt(thread).await?;
             }
+            AcpEvent::Agent(silt_acp::Event::ModeChanged(mode)) => {
+                if let Some(modes) = &mut run.modes {
+                    modes.current = mode;
+                }
+            }
+            AcpEvent::Agent(silt_acp::Event::Settings(settings)) => run.settings = settings,
+            AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = AgentState::Idle;
+                let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
+                run.state = if planned && run.still_planning() {
+                    AgentState::AwaitingInput
+                } else {
+                    // An agent that left its plan mode by itself chose
+                    // where to go on.
+                    if !run.still_planning() {
+                        run.back_to = None;
+                    }
+                    AgentState::Idle
+                };
                 run.asking.clear();
                 run.tool_kinds.clear();
                 self.next_prompt(thread).await?;
@@ -563,6 +674,20 @@ impl AcpRun {
         if let Some(handle) = &self.handle {
             handle.send(Command::Stop);
         }
+    }
+}
+
+/// Makes the next turn a Plan first one: in the agent's plan mode when it
+/// has one, and by the prompt otherwise.
+fn plan_first(run: &mut AcpRun) {
+    run.planning = true;
+    let Some(plan) = run.plan_mode().map(str::to_owned) else {
+        return;
+    };
+    let current = run.modes.as_ref().map(|modes| modes.current.clone()).unwrap_or_default();
+    if current != plan {
+        run.back_to.get_or_insert(current);
+        send(run, Command::SetMode(plan));
     }
 }
 

@@ -70,7 +70,7 @@ impl Core {
             return Ok(());
         };
         self.queue_changed(thread);
-        self.acp_prompt(&thread.to_string(), &next.text).await.map(|_| ())
+        self.acp_prompt(&thread.to_string(), &next.text, false).await.map(|_| ())
     }
 
     fn queue_changed(&self, thread: ThreadId) {

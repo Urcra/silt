@@ -487,7 +487,15 @@ impl Core {
             Request::AcpStart { thread, clone, agent } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
             }
-            Request::AcpPrompt { thread, text } => to_response(self.acp_prompt(&thread, &text).await),
+            Request::AcpPrompt { thread, text, plan } => to_response(self.acp_prompt(&thread, &text, plan).await),
+            Request::AcpMode { thread, mode } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.set_mode(thread, &mode).await),
+                Err(error) => Response::error(error),
+            },
+            Request::AcpSetting { thread, id, value } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.set_setting(thread, id, value).await),
+                Err(error) => Response::error(error),
+            },
             Request::AgentPreset { thread, preset } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.set_preset(thread, preset).await),
                 Err(error) => Response::error(error),

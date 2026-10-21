@@ -247,6 +247,21 @@ pub enum Request {
     AcpPrompt {
         thread: String,
         text: String,
+        /// Plan first: the agent writes a plan to approve before editing.
+        #[serde(default)]
+        plan: bool,
+    },
+    /// Switches the thread's agent to one of its modes, kept for the
+    /// thread's later runs.
+    AcpMode {
+        thread: String,
+        mode: String,
+    },
+    /// Picks one of a setting's choices, such as the agent's model.
+    AcpSetting {
+        thread: String,
+        id: String,
+        value: String,
     },
     /// Chooses which of the thread's agent's permission requests the daemon
     /// answers by itself.
@@ -728,6 +743,67 @@ pub struct AgentStatus {
     pub thinking: String,
     pub permissions: Vec<PermissionAsked>,
     pub error: Option<String>,
+    /// The agent's modes, when it has any.
+    pub modes: Option<AgentModes>,
+    /// Its settings with a choice of values, such as its model.
+    pub settings: Vec<AgentSetting>,
+}
+
+/// A mode, or one value of a setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentChoiceItem {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentModes {
+    pub current: String,
+    pub available: Vec<AgentChoiceItem>,
+    /// The mode Plan first switches to.
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentSetting {
+    pub id: String,
+    pub name: String,
+    /// `model`, `thought_level`, … as the agent tags it.
+    pub category: Option<String>,
+    pub current: String,
+    pub choices: Vec<AgentChoiceItem>,
+}
+
+impl From<&silt_acp::Choice> for AgentChoiceItem {
+    fn from(choice: &silt_acp::Choice) -> Self {
+        Self { id: choice.id.clone(), name: choice.name.clone(), description: choice.description.clone() }
+    }
+}
+
+impl From<&silt_acp::Modes> for AgentModes {
+    fn from(modes: &silt_acp::Modes) -> Self {
+        Self {
+            current: modes.current.clone(),
+            available: modes.available.iter().map(AgentChoiceItem::from).collect(),
+            plan: silt_acp::plan_mode(modes).map(|mode| mode.id.clone()),
+        }
+    }
+}
+
+impl From<&silt_acp::Setting> for AgentSetting {
+    fn from(setting: &silt_acp::Setting) -> Self {
+        Self {
+            id: setting.id.clone(),
+            name: setting.name.clone(),
+            category: setting.category.clone(),
+            current: setting.current.clone(),
+            choices: setting.choices.iter().map(AgentChoiceItem::from).collect(),
+        }
+    }
 }
 
 /// A prompt waiting for the thread's agent.
@@ -863,7 +939,10 @@ mod tests {
             silt_proto::ThreadStatus::decl(&config),
             silt_proto::Visibility::decl(&config),
             AgentChoice::decl(&config),
+            AgentChoiceItem::decl(&config),
             AgentChoices::decl(&config),
+            AgentModes::decl(&config),
+            AgentSetting::decl(&config),
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
             BusEvent::decl(&config),

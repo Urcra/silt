@@ -11,12 +11,15 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest,
     PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionId, SessionNotification, SessionUpdate, TextContent, ToolCallContent,
+    SessionConfigId, SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, TextContent, ToolCallContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+use crate::modes::{Modes, Setting, modes_of, settings_of};
 
 /// How to start the agent.
 #[derive(Debug, Clone)]
@@ -40,6 +43,12 @@ pub enum Command {
     Answer {
         id: u64,
         option: Option<String>,
+    },
+    SetMode(String),
+    /// Picks one of a setting's choices, such as a model.
+    SetSetting {
+        id: String,
+        value: String,
     },
     Stop,
 }
@@ -135,8 +144,15 @@ pub enum Event {
         session: String,
         loaded: bool,
         agent: String,
+        modes: Option<Modes>,
+        settings: Vec<Setting>,
     },
     Update(Update),
+    ModeChanged(String),
+    /// The agent's settings as they now stand.
+    Settings(Vec<Setting>),
+    /// The agent turned down a mode or setting.
+    Refused(String),
     Permission(Permission),
     TurnEnded {
         reason: StopReason,
@@ -177,7 +193,7 @@ fn text_of(block: &ContentBlock) -> String {
     }
 }
 
-fn label<T: serde::Serialize>(value: &T) -> String {
+pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
@@ -192,6 +208,14 @@ fn tool_output(content: &[ToolCallContent]) -> Option<String> {
         .filter(|text| !text.is_empty())
         .collect();
     (!text.is_empty()).then(|| text.join("\n"))
+}
+
+fn event_of(update: SessionUpdate) -> Option<Event> {
+    match update {
+        SessionUpdate::CurrentModeUpdate(update) => Some(Event::ModeChanged(update.current_mode_id.0.to_string())),
+        SessionUpdate::ConfigOptionUpdate(update) => Some(Event::Settings(settings_of(update.config_options))),
+        update => simplify(update).map(Event::Update),
+    }
 }
 
 fn simplify(update: SessionUpdate) -> Option<Update> {
@@ -266,9 +290,9 @@ async fn run(
         .on_receive_notification(
             async move |notification: SessionNotification, _connection| {
                 if !quiet.load(Ordering::SeqCst)
-                    && let Some(update) = simplify(notification.update)
+                    && let Some(event) = event_of(notification.update)
                 {
-                    let _ = updates.send(Event::Update(update));
+                    let _ = updates.send(event);
                 }
                 Ok(())
             },
@@ -305,13 +329,19 @@ async fn run(
                     replaying.store(false, Ordering::SeqCst);
                     // A session made on another machine can't be loaded
                     // here; the daemon primes a new one instead.
-                    loaded.ok().map(|_| id)
+                    loaded.ok().map(|response| (id, response.modes, response.config_options))
                 }
                 None => None,
             };
             let session: SessionId = match loaded {
-                Some(id) => {
-                    let _ = events.send(Event::Ready { session: id.clone(), loaded: true, agent });
+                Some((id, modes, options)) => {
+                    let _ = events.send(Event::Ready {
+                        session: id.clone(),
+                        loaded: true,
+                        agent,
+                        modes: modes_of(modes),
+                        settings: settings_of(options.unwrap_or_default()),
+                    });
                     SessionId::new(id)
                 }
                 None => {
@@ -319,7 +349,13 @@ async fn run(
                         .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
                         .block_task()
                         .await?;
-                    let _ = events.send(Event::Ready { session: created.session_id.to_string(), loaded: false, agent });
+                    let _ = events.send(Event::Ready {
+                        session: created.session_id.to_string(),
+                        loaded: false,
+                        agent,
+                        modes: modes_of(created.modes),
+                        settings: settings_of(created.config_options.unwrap_or_default()),
+                    });
                     created.session_id
                 }
             };
@@ -328,9 +364,11 @@ async fn run(
                     Command::Prompt(text) => {
                         let request = PromptRequest::new(session.clone(), vec![ContentBlock::Text(TextContent::new(text))]);
                         let ended = events.clone();
-                        let prompting = connection.clone();
+                        // Sent here rather than in the task, so a mode set
+                        // just before reaches the agent first.
+                        let sent = connection.send_request(request);
                         connection.spawn(async move {
-                            match prompting.send_request(request).block_task().await {
+                            match sent.block_task().await {
                                 Ok(response) => {
                                     let _ = ended.send(Event::TurnEnded { reason: StopReason::of(response.stop_reason) });
                                 }
@@ -360,6 +398,36 @@ async fn run(
                             };
                             responder.respond(RequestPermissionResponse::new(outcome))?;
                         }
+                    }
+                    Command::SetMode(mode) => {
+                        let request = SetSessionModeRequest::new(session.clone(), SessionModeId::new(mode.clone()));
+                        let told = events.clone();
+                        let sent = connection.send_request(request);
+                        connection.spawn(async move {
+                            let event = match sent.block_task().await {
+                                Ok(_) => Event::ModeChanged(mode),
+                                Err(error) => Event::Refused(format!("the agent kept its mode: {error}")),
+                            };
+                            let _ = told.send(event);
+                            Ok(())
+                        })?;
+                    }
+                    Command::SetSetting { id, value } => {
+                        let request = SetSessionConfigOptionRequest::new(
+                            session.clone(),
+                            SessionConfigId::new(id),
+                            SessionConfigValueId::new(value),
+                        );
+                        let told = events.clone();
+                        let sent = connection.send_request(request);
+                        connection.spawn(async move {
+                            let event = match sent.block_task().await {
+                                Ok(response) => Event::Settings(settings_of(response.config_options)),
+                                Err(error) => Event::Refused(format!("the agent kept its setting: {error}")),
+                            };
+                            let _ = told.send(event);
+                            Ok(())
+                        })?;
                     }
                     Command::Stop => break,
                 }

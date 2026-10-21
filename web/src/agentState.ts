@@ -7,7 +7,7 @@ export const STATE_PHRASE: Record<AgentState, string> = {
   idle: 'is ready',
   working: 'is working',
   awaiting_permission: 'is waiting for your permission',
-  awaiting_input: 'is waiting for you',
+  awaiting_input: 'wrote a plan for you to approve',
   error: 'stopped with an error',
   stopped: 'stopped',
 }

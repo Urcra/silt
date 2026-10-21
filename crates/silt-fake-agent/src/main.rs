@@ -2,7 +2,9 @@
 //! permission to edit `src/main.rs`, append `FAKE_ACP_LINE` (default
 //! `fn acp() {}`) when allowed, and answer. It can load the sessions it
 //! made in the same process, replaying what was said, and refuses others.
-//! With `FAKE_ACP_CRASH` set it dies on a prompt.
+//! It has a `code` and a `plan` mode, where it only answers with a plan,
+//! and a model setting; `FAKE_ACP_NO_MODES` leaves them out. With
+//! `FAKE_ACP_CRASH` set it dies on a prompt.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,8 +13,10 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, ContentBlock, ContentChunk, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
-    StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 
@@ -20,6 +24,35 @@ use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 struct State {
     cwd: HashMap<String, PathBuf>,
     said: HashMap<String, Vec<(bool, String)>>,
+    mode: HashMap<String, String>,
+    model: HashMap<String, String>,
+}
+
+fn has_modes() -> bool {
+    std::env::var_os("FAKE_ACP_NO_MODES").is_none()
+}
+
+fn modes(current: &str) -> Option<SessionModeState> {
+    has_modes().then(|| {
+        SessionModeState::new(
+            current.to_owned(),
+            vec![
+                SessionMode::new("code", "Code").description("Edits files"),
+                SessionMode::new("plan", "Plan").description("Only writes a plan"),
+            ],
+        )
+    })
+}
+
+fn settings(model: &str) -> Option<Vec<SessionConfigOption>> {
+    has_modes().then(|| {
+        vec![SessionConfigOption::select(
+            "model",
+            "Model",
+            model.to_owned(),
+            vec![SessionConfigSelectOption::new("fast", "Fast"), SessionConfigSelectOption::new("smart", "Smart")],
+        )]
+    })
 }
 
 fn text(content: impl Into<String>) -> ContentChunk {
@@ -36,6 +69,8 @@ async fn main() -> Result<()> {
     let created = state.clone();
     let loading = state.clone();
     let prompted = state.clone();
+    let moded = state.clone();
+    let configured = state.clone();
     Agent
         .builder()
         .name("silt-fake-agent")
@@ -54,19 +89,47 @@ async fn main() -> Result<()> {
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd);
-                responder.respond(NewSessionResponse::new(SessionId::new(id)))
+                responder.respond(NewSessionResponse::new(SessionId::new(id)).modes(modes("code")).config_options(settings("fast")))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: SetSessionModeRequest, responder, _connection| {
+                let mode = request.mode_id.to_string();
+                if !has_modes() || !["code", "plan"].contains(&mode.as_str()) {
+                    return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such mode"));
+                }
+                moded.lock().expect("lock").mode.insert(request.session_id.to_string(), mode);
+                responder.respond(SetSessionModeResponse::new())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+                let value = match &request.value {
+                    SessionConfigOptionValue::ValueId { value } => value.to_string(),
+                    _ => String::new(),
+                };
+                if !has_modes() || request.config_id.to_string() != "model" || !["fast", "smart"].contains(&value.as_str()) {
+                    return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting"));
+                }
+                configured.lock().expect("lock").model.insert(request.session_id.to_string(), value.clone());
+                responder.respond(SetSessionConfigOptionResponse::new(settings(&value).unwrap_or_default()))
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: LoadSessionRequest, responder, connection| {
-                let said = {
+                let (said, mode, model) = {
                     let mut state = loading.lock().expect("lock");
-                    let Some(said) = state.said.get(&request.session_id.to_string()).cloned() else {
+                    let id = request.session_id.to_string();
+                    let Some(said) = state.said.get(&id).cloned() else {
                         return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such session"));
                     };
-                    state.cwd.insert(request.session_id.to_string(), request.cwd.clone());
-                    said
+                    state.cwd.insert(id.clone(), request.cwd.clone());
+                    let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
+                    let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
+                    (said, mode, model)
                 };
                 for (by_user, line) in said {
                     let update = if by_user {
@@ -76,7 +139,7 @@ async fn main() -> Result<()> {
                     };
                     notify(&connection, &request.session_id, update)?;
                 }
-                responder.respond(LoadSessionResponse::new())
+                responder.respond(LoadSessionResponse::new().modes(modes(&mode)).config_options(settings(&model)))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -94,11 +157,21 @@ async fn main() -> Result<()> {
                             _ => None,
                         })
                         .collect();
-                    let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
+                    let (cwd, planning) = {
+                        let state = state.lock().expect("lock");
+                        let id = session.to_string();
+                        (state.cwd.get(&id).cloned().unwrap_or_default(), state.mode.get(&id).is_some_and(|mode| mode == "plan"))
+                    };
                     if std::env::var_os("FAKE_ACP_CRASH").is_some() {
                         std::process::exit(9);
                     }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
+                    if planning {
+                        let reply = format!("Plan: {prompt}");
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                        state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
                     let call = ToolCall::new("call-1", "Edit src/main.rs")
                         .kind(ToolKind::Edit)
                         .raw_input(serde_json::json!({"path": "src/main.rs"}));

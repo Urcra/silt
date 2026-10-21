@@ -3,6 +3,8 @@
 //! a checkout, and relaying its session to the daemon over channels.
 
 mod host;
+mod modes;
 pub mod registry;
 
 pub use host::{AgentHandle, Command, Event, HostError, Permission, Start, StopReason, Update, start};
+pub use modes::{Choice, Modes, Setting, plan_mode};

@@ -38,7 +38,9 @@ machine() {
     export SILT_CLAUDE_BIN="$root/web/e2e/fake-claude.sh"
     export SILT_HOOK="$silt hook"
     mkdir -p "$CLAUDE_CONFIG_DIR" "$SILT_HOME"
-    printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}]\n' "$root/target/debug/silt-fake-agent" > "$SILT_HOME/agents.json"
+    fake="$root/target/debug/silt-fake-agent"
+    printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}, {"id": "plain", "name": "Plain agent", "command": "%s", "env": {"FAKE_ACP_NO_MODES": "1"}}]\n' \
+        "$fake" "$fake" > "$SILT_HOME/agents.json"
     git clone -q "$work/origin.git" "$work/$user/repo"
     cd "$work/$user/repo"
     printf '%s\n' "$password" | "$silt" auth login --server "$url" --user "$user" > /dev/null
