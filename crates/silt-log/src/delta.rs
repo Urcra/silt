@@ -180,7 +180,7 @@ pub enum Content {
     Blob(BlobHash),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionRef {
     pub agent: String,
     pub id: String,

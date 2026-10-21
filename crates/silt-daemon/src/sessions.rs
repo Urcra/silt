@@ -119,6 +119,16 @@ pub(crate) struct NewSession {
     pub(crate) restored_side: Vec<(String, Vec<String>)>,
 }
 
+/// Whether the session's main transcript has more than was read: a session
+/// Silt doesn't know to be running, such as one recorded before a restart,
+/// is read again only then, at the cost of one `stat`.
+pub(crate) fn transcript_grew(session: &Session) -> bool {
+    let (Some(transcript), Some(read)) = (&session.transcript, session.offsets.get("main")) else {
+        return false;
+    };
+    fs::metadata(transcript).is_ok_and(|metadata| metadata.len() > read.offset)
+}
+
 pub(crate) fn file_key(file: &SessionFile) -> String {
     match file {
         SessionFile::Main => "main".to_owned(),
@@ -418,6 +428,7 @@ impl Core {
     /// Loads the sessions recorded before a restart, with readers that have
     /// seen what was already recorded.
     pub(crate) async fn load_sessions(&mut self) -> Result<(), CoreError> {
+        let mut loaded: Vec<Session> = Vec::new();
         for record in self.store.sessions().await? {
             let Some(family) = self.threads.get(&record.thread).map(|thread| thread.family) else {
                 continue;
@@ -432,46 +443,51 @@ impl Core {
                 .into_iter()
                 .map(|offset| (offset.file.clone(), offset))
                 .collect();
-            let reference = SessionRef {
-                agent: record.agent.clone(),
-                id: record.session_id.clone(),
-            };
-            let mut readers: HashMap<String, Box<dyn Reader>> = HashMap::new();
-            let mut recorded = HashSet::new();
-            let mut agent_cwd = PathBuf::new();
-            for delta in self.local_log(family) {
-                match &delta.op {
-                    Op::Conv(ConvOp::Native { session, file, line }) if *session == reference => {
-                        readers.entry(file_key(file)).or_insert_with(|| agent.reader()).push(line);
-                        if let Some(key) = agent.record_key(line) {
-                            recorded.insert(key);
-                        }
-                    }
-                    Op::Conv(ConvOp::SessionStarted { session, cwd, .. }) if *session == reference => {
-                        agent_cwd = PathBuf::from(cwd);
-                    }
-                    _ => {}
-                }
-            }
-            self.sessions.push(Session {
+            loaded.push(Session {
                 transcript: offsets.get("main").map(|offset| offset.path.clone()),
                 record,
                 family,
                 agent,
-                agent_cwd,
+                agent_cwd: PathBuf::new(),
                 offsets,
-                readers,
+                readers: HashMap::new(),
                 open_tool: None,
                 in_turn: false,
                 closed_tool: None,
                 turn_closed: None,
                 live: false,
                 attached: HashMap::new(),
-                recorded,
+                recorded: HashSet::new(),
                 snapshot_running: false,
                 last_snapshot: None,
             });
         }
+        let families: HashSet<FamilyId> = loaded.iter().map(|session| session.family).collect();
+        let by_reference: HashMap<SessionRef, usize> =
+            loaded.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
+        for family in families {
+            for delta in self.local_log(family) {
+                match &delta.op {
+                    Op::Conv(ConvOp::Native { session, file, line }) => {
+                        let Some(found) = by_reference.get(session).map(|index| &mut loaded[*index]) else {
+                            continue;
+                        };
+                        let agent = found.agent;
+                        found.readers.entry(file_key(file)).or_insert_with(|| agent.reader()).push(line);
+                        if let Some(key) = agent.record_key(line) {
+                            found.recorded.insert(key);
+                        }
+                    }
+                    Op::Conv(ConvOp::SessionStarted { session, cwd, .. }) => {
+                        if let Some(index) = by_reference.get(session) {
+                            loaded[*index].agent_cwd = PathBuf::from(cwd);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.sessions.extend(loaded);
         Ok(())
     }
 

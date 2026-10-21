@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::disk::{self, RawFile};
 use crate::lifecycle::Lifecycle;
 use crate::protocol::{Mount, Request, Response};
-use crate::sessions::{PendingSession, Session};
+use crate::sessions::{self, PendingSession, Session};
 use crate::remote::{self, Remote};
 use crate::watch::{self, Watcher};
 
@@ -411,7 +411,12 @@ impl Core {
             warn!(%error, "could not record new commits");
         }
         self.poll_sessions();
-        let ids: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|session| session.live || sessions::transcript_grew(session))
+            .map(|session| session.record.session_id.clone())
+            .collect();
         for id in ids {
             if let Err(error) = self.tail_session(&id).await {
                 warn!(%error, session = id, "could not read the session transcript");
