@@ -61,7 +61,7 @@ export function CommentThread({
           <button type="button" className="text-accent-fg" onClick={() => setReplying(true)}>
             reply
           </button>
-          <CopyLink path={`/t/${thread}#comment-${comment.id}`} label="link" />
+          <CopyLink path={`/t/${thread}#comment-${comment.id}`} thread={thread} label="link" />
         </span>
       )}
     </div>

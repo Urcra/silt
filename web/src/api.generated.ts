@@ -392,7 +392,12 @@ open_mrs: number,
 /**
  * This machine's clone of it.
  */
-clone: string | null, };
+clone: string | null, 
+/**
+ * Where its new threads go from this machine (ADR 0032): a server's
+ * URL, or `local`; none for the default server.
+ */
+home: string | null, };
 
 export type PromptAttachment = { name: string, mime: string, 
 /**

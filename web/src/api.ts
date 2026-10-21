@@ -163,6 +163,7 @@ export const api = {
   setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
   addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
+  projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
     request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),

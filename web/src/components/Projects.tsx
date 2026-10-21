@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { api, type Project } from '../api'
 import { keys, message } from '../query'
 import { hosted } from '../served'
-import { Button, EmptyState, Input, Skeleton, Tabs, Tag, toast } from '../ui'
+import { Button, EmptyState, Input, Select, Skeleton, Tabs, Tag, toast } from '../ui'
 
 /** Where a clone of `project` might go: next to this machine's other clones. */
 function suggestedPath(project: Project, projects: Project[]): string {
@@ -11,6 +11,38 @@ function suggestedPath(project: Project, projects: Project[]): string {
   if (!other) return ''
   const parent = other.replace(/\/+$/, '').replace(/\/[^/]*$/, '')
   return `${parent}/${project.name}`
+}
+
+/** Where the project's new threads go from this machine (ADR 0032). */
+function ProjectHome({ project }: { project: Project }) {
+  const queries = useQueryClient()
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status })
+  const servers = status.data?.servers ?? []
+  if (servers.length === 0) return null
+  const chosen = project.home ?? servers[0].url
+  const choose = (home: string) =>
+    api.projectHome(project.repo, home).then(
+      (said) => {
+        toast(said, 'ok')
+        void queries.invalidateQueries({ queryKey: keys.projects })
+        void queries.invalidateQueries({ queryKey: keys.threads })
+      },
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <label className="flex items-center gap-2 text-xs text-fg-2">
+      New threads sync with
+      <Select aria-label={`where ${project.name} syncs`} value={chosen} onChange={(event) => void choose(event.target.value)}>
+        {servers.map((server, index) => (
+          <option key={server.url} value={server.url}>
+            {server.url}
+            {index === 0 ? ' (the default)' : ''}
+          </option>
+        ))}
+        <option value="local">This machine only</option>
+      </Select>
+    </label>
+  )
 }
 
 function CloneHere({ project, projects }: { project: Project; projects: Project[] }) {
@@ -133,6 +165,7 @@ export function Projects() {
             ) : (
               !hosted() && <CloneHere project={project} projects={all} />
             )}
+            {!hosted() && project.clone && <ProjectHome project={project} />}
             {(project.default_agent || project.default_preset) && (
               <p className="text-xs text-fg-3">
                 New threads start with {[project.default_agent, project.default_preset?.replaceAll('_', ' ')].filter(Boolean).join(', ')}

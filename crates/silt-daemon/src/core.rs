@@ -585,6 +585,7 @@ impl Core {
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
+            Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),
             Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
                 Ok(attachments) => to_response(self.acp_prompt_with(&thread, &text, plan, attachments).await),
                 Err(error) => Response::error(error),

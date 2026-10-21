@@ -714,6 +714,7 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
                     default_preset: info.default_preset,
                     threads: info.threads,
                     clone: None,
+                    home: None,
                 }
             })
             .collect(),

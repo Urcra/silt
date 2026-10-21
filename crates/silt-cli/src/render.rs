@@ -33,9 +33,10 @@ pub fn threads(threads: &[ThreadSummary]) -> String {
     }
     for thread in threads {
         let fork = thread.forked_from.as_deref().map(|from| format!(" fork of {}", short(from))).unwrap_or_default();
+        let kept = if thread.local_only { ", this machine only" } else { "" };
         let _ = writeln!(
             out,
-            "{}  {:<6} {:>4} msgs {:>5} edits  {}  ({}){fork}",
+            "{}  {:<6} {:>4} msgs {:>5} edits  {}  ({}{kept}){fork}",
             short(&thread.id),
             thread.location,
             thread.messages,

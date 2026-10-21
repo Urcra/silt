@@ -91,7 +91,11 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
         Share
       </Button>
       <Dialog open={open} onClose={() => setOpen(false)} title="Share this thread">
-        {status.data && !status.data.server ? (
+        {thread.local_only ? (
+          <p className="text-sm text-fg-2">
+            This thread stays on this machine only. To share it, choose a server for its project on the Projects page.
+          </p>
+        ) : status.data && !status.data.server ? (
           <p className="text-sm text-fg-2">Sharing needs a server; sign in with `silt auth login`.</p>
         ) : (
           <div className="space-y-4 text-sm">

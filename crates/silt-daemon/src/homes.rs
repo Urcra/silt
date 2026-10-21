@@ -1,6 +1,8 @@
 //! Where each family syncs (ADR 0032): one of the servers this machine is
 //! signed in to, or this machine only.
 
+use std::collections::BTreeSet;
+
 use silt_types::{DeviceId, FamilyId, ThreadId};
 
 use crate::core::{Core, CoreError};
@@ -22,6 +24,14 @@ impl Home {
         match self {
             Self::Server(url) => url,
             Self::Local => "",
+        }
+    }
+
+    /// As people name it: the server's URL, or `local`.
+    pub(crate) fn shown(&self) -> &str {
+        match self {
+            Self::Server(url) => url,
+            Self::Local => "local",
         }
     }
 }
@@ -96,6 +106,55 @@ impl Core {
             None => None,
         }
         .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+    }
+
+    /// Sets where the project's new threads go: a server signed in to, or
+    /// `local` for this machine only. Its threads kept on this machine move
+    /// to a new server home, and from then on sync there; threads already
+    /// on a server stay where they are, as others may hold them there.
+    pub(crate) async fn set_project_home(&mut self, repo: &str, home: &str) -> Result<String, CoreError> {
+        let home = if home == "local" {
+            Home::Local
+        } else {
+            let url = home.trim_end_matches('/');
+            if !self.remotes.iter().any(|remote| remote.config.url == url) {
+                return Err(CoreError::Invalid(format!("not signed in to {url}; run `silt auth login --server {url}` first")));
+            }
+            Home::Server(url.to_owned())
+        };
+        self.store.set_project_home(repo, home.stored()).await?;
+        self.project_homes.insert(repo.to_owned(), home.clone());
+        let families: BTreeSet<FamilyId> =
+            self.threads.values().filter(|record| record.repo == repo).map(|record| record.family).collect();
+        let mut moved = 0;
+        let mut staying = BTreeSet::new();
+        for family in families {
+            match (&home, self.homes.get(&family)) {
+                (Home::Server(_), Some(Home::Local)) => {
+                    self.set_home(family, home.clone()).await?;
+                    moved += self.threads.values().filter(|record| record.family == family).count();
+                }
+                _ => {
+                    if let Some(remote) = self.remote_of(family) {
+                        staying.insert(remote.config.url.clone());
+                    }
+                }
+            }
+        }
+        self.drive_sync();
+        self.announce(crate::protocol::BusEvent::Threads);
+        let mut said = match &home {
+            Home::Local => format!("new threads of {repo} stay on this machine only"),
+            Home::Server(url) => format!("new threads of {repo} sync with {url}"),
+        };
+        if moved > 0 {
+            said.push_str(&format!("; {moved} threads kept on this machine now sync there too"));
+        }
+        if !staying.is_empty() {
+            let servers: Vec<String> = staying.into_iter().collect();
+            said.push_str(&format!("; its threads already on {} stay there", servers.join(" and ")));
+        }
+        Ok(said)
     }
 
     /// Gives a family a home, unless it has one.

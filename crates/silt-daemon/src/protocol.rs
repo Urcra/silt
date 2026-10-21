@@ -356,6 +356,12 @@ pub enum Request {
         url: String,
         path: PathBuf,
     },
+    /// Where the project `repo`'s new threads go (ADR 0032): a server's
+    /// URL, or `local` for this machine only.
+    ProjectHome {
+        repo: String,
+        home: String,
+    },
     /// Sends the person's draft, with teammates' drafts, as the next prompt,
     /// or queues it while the agent is busy (ADR 0022).
     AcpPrompt {

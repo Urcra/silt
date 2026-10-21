@@ -1050,3 +1050,32 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await expect(page).toHaveURL(new RegExp(`/t/[0-9a-f]*${live.thread}#turn-\\d+$`))
   await expect(page.locator('[data-testid="entry"][data-highlighted]')).toBeInViewport()
 })
+
+test('a project kept on this machine starts threads that stay here, until it moves to the server', async ({ page }) => {
+  await page.goto(live.alice)
+  const toProjects = () =>
+    page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
+  await toProjects()
+  const home = page.getByTestId('projects').getByRole('listitem', { name: 'tools' }).getByLabel('where tools syncs')
+  await expect(home).toHaveValue(live.server)
+  await home.selectOption({ label: 'This machine only' })
+  await expect(page.getByText(/stay on this machine only/).first()).toBeVisible()
+
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  const projects = form.getByLabel('project')
+  await projects.selectOption((await projects.locator('option').filter({ hasText: /tools/ }).getAttribute('value')) ?? '')
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  const kept = new URL(page.url()).pathname
+
+  await toProjects()
+  await home.selectOption(live.server)
+  await expect(page.getByText(/1 threads kept on this machine now sync there/).first()).toBeVisible()
+  await page.goto(new URL(kept, live.alice).toString())
+  await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(page.getByText('This machine only', { exact: true })).toHaveCount(0)
+})

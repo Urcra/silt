@@ -208,7 +208,7 @@ export function MergeRequest({ id }: { id: string }) {
                 <Link className="text-xs text-accent-fg" to="/mr/$id" params={{ id }} hash={`file-${file.path}`}>
                   diff
                 </Link>
-                <CopyLink path={`/mr/${id}#file-${file.path}`} label="link" />
+                <CopyLink path={`/mr/${id}#file-${file.path}`} thread={mr.target} label="link" />
               </li>
             ))}
           </ul>

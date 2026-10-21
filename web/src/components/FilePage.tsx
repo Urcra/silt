@@ -45,7 +45,7 @@ export function FilePage() {
             {at ? 'at a pinned version' : 'as the thread has it now'}
           </span>
         )}
-        {file.data && <CopyLink path={filePath(id, path, file.data.at, lines ?? undefined)} label={lines ? 'copy link to these lines' : 'copy link'} />}
+        {file.data && <CopyLink path={filePath(id, path, file.data.at, lines ?? undefined)} thread={id} label={lines ? 'copy link to these lines' : 'copy link'} />}
       </div>
       {file.error && <p className="text-danger">{message(file.error)}</p>}
       {file.data?.text === null && <p className="text-sm text-fg-2">A binary file.</p>}

@@ -10,7 +10,7 @@ import { MainScroll } from '../scroll'
 import { hosted } from '../served'
 import { useActions } from '../shortcuts'
 import { useThreadState } from '../threadState'
-import { Button, Input, toast } from '../ui'
+import { Button, Input, Tag, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { Diff } from './Diff'
@@ -74,7 +74,7 @@ function TurnDiff({ thread, turn, rewound }: { thread: string; turn: TurnInfo; r
       <button className="text-xs text-accent-fg" onClick={() => setOpen(!open)}>
         {open ? 'hide' : 'show'} what turn {turn.number} changed
       </button>
-      <CopyLink path={`/t/${thread}#turn-${turn.number}`} label={`link to turn ${turn.number}`} />
+      <CopyLink path={`/t/${thread}#turn-${turn.number}`} thread={thread} label={`link to turn ${turn.number}`} />
       {!hosted() && (
         <button className="text-xs text-accent-fg" onClick={() => void forkHere()} title="A fork with the code and conversation as this turn left them">
           fork from turn {turn.number}
@@ -358,6 +358,11 @@ export function ThreadView({ id }: { id: string }) {
           </p>
         )}
         {summary?.agent && <p className="text-sm text-fg-2">Recorded with {summary.agent}</p>}
+        {summary?.local_only && (
+          <p className="text-sm text-fg-2" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
+            <Tag>This machine only</Tag>
+          </p>
+        )}
         <div className="my-3 flex flex-wrap items-center gap-2">
           <label className="text-sm" htmlFor="continue-agent">
             Continue with

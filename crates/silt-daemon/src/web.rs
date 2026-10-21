@@ -109,6 +109,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
+        .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
@@ -559,6 +560,16 @@ struct CloneProject {
 
 async fn clone_project(State(web): State<Web>, Json(body): Json<CloneProject>) -> HttpResponse {
     ask(&web, Request::CloneProject { url: body.url, path: body.path }).await
+}
+
+#[derive(Deserialize)]
+struct ProjectHome {
+    repo: String,
+    home: String,
+}
+
+async fn project_home(State(web): State<Web>, Json(body): Json<ProjectHome>) -> HttpResponse {
+    ask(&web, Request::ProjectHome { repo: body.repo, home: body.home }).await
 }
 
 #[derive(Deserialize)]

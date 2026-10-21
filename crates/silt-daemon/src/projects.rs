@@ -18,17 +18,23 @@ impl Core {
     pub(crate) fn projects(&self) -> impl Future<Output = Result<Vec<Project>, CoreError>> + Send + 'static {
         let local = self.local_projects();
         let remote = self.default_remote().cloned();
+        let homes: BTreeMap<String, String> =
+            self.project_homes.iter().map(|(repo, home)| (repo.clone(), home.shown().to_owned())).collect();
         async move {
-            let Some(remote) = remote else {
-                return Ok(local);
+            let mut projects = match remote {
+                None => local,
+                Some(remote) => match remote.projects().await {
+                    Ok(reply) => merged(reply.projects, local),
+                    Err(error) => {
+                        warn!(%error, "could not list the server's projects; showing this machine's");
+                        local
+                    }
+                },
             };
-            match remote.projects().await {
-                Ok(reply) => Ok(merged(reply.projects, local)),
-                Err(error) => {
-                    warn!(%error, "could not list the server's projects; showing this machine's");
-                    Ok(local)
-                }
+            for project in &mut projects {
+                project.home = homes.get(&project.repo).cloned();
             }
+            Ok(projects)
         }
     }
 
@@ -152,8 +158,8 @@ impl Core {
         new: Option<crate::protocol::NewLink>,
         revoke: Option<i64>,
     ) -> Result<impl Future<Output = Result<serde_json::Value, CoreError>> + Send + 'static, CoreError> {
-        let remote = self.signed_in()?;
         let thread = self.find_thread(selector)?;
+        let remote = self.server_for(thread)?;
         Ok(async move {
             let server = |source| CoreError::Server { doing: "share the thread by link", source };
             let answer = match (new, revoke) {
@@ -223,6 +229,7 @@ fn project(repo: &str) -> Project {
         threads: 0,
         open_mrs: 0,
         clone: None,
+        home: None,
     }
 }
 
@@ -269,6 +276,7 @@ fn merged(server: Vec<ProjectInfo>, local: Vec<Project>) -> Vec<Project> {
                 default_agent: info.default_agent,
                 default_preset: info.default_preset,
                 threads: info.threads,
+                home: None,
             }
         })
         .collect();

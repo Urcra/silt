@@ -582,6 +582,13 @@ pub fn sync_once(thread: Option<&str>) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn project_home(repo: String, home: String) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let said: String = call(&Request::ProjectHome { repo, home })?;
+    println!("{said}");
+    Ok(())
+}
+
 pub fn revert(thread: Option<String>, turn: usize) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let reverted: Reverted = call(&Request::Revert { thread, cwd: current_dir()?, turn })?;

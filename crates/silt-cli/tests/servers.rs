@@ -66,3 +66,28 @@ fn each_thread_syncs_with_its_own_server_only() {
     assert!(!threads(&world.oss_peer).contains(&at_work), "the work thread never reached the open-source server");
     assert!(!threads(&world.work_peer).contains(&in_the_open), "the open-source thread never reached work");
 }
+
+#[test]
+fn a_project_kept_on_this_machine_syncs_nowhere_until_moved_to_a_server() {
+    let world = world();
+    let laptop = &world.laptop;
+    let said = laptop.stdout(&["project", "home", "local"]);
+    assert!(said.contains("stay on this machine only"), "{said}");
+    let kept = record(laptop);
+    let line = laptop.log_line(&kept).expect("listed here");
+    assert!(line.contains("this machine only"), "{line}");
+
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!threads(&world.work_peer).contains(&kept), "nothing reached the default server");
+    assert!(!threads(&world.oss_peer).contains(&kept), "nothing reached the other server");
+    let refused = laptop.run(&["thread", "share", &kept, "someone"]);
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success() && said.contains("stays on this machine only"), "a thread kept here isn't shared: {said}");
+
+    let said = laptop.stdout(&["project", "home", &world.oss.url]);
+    assert!(said.contains("1 threads kept on this machine now sync there"), "{said}");
+    assert!(eventually(|| threads(&world.oss_peer).contains(&kept)), "the moved thread reaches the server chosen");
+    assert!(!laptop.log_line(&kept).expect("listed here").contains("this machine only"));
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!threads(&world.work_peer).contains(&kept), "and only that server");
+}

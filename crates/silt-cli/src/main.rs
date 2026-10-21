@@ -416,6 +416,10 @@ enum ProjectCommand {
         #[arg(long)]
         preset: Option<String>,
     },
+    /// Choose where this clone's project's new threads sync: a server this
+    /// machine is signed in to, or `local` to keep them on this machine.
+    /// Threads kept here move to the server chosen.
+    Home { home: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -655,6 +659,9 @@ fn run() -> Result<(), Exn<CliError>> {
         }),
         Command::Project { command: ProjectCommand::Move { org } } => {
             admin::project_here().and_then(|repo| admin::org_change(OrgChange::MoveProject { repo, org }))
+        }
+        Command::Project { command: ProjectCommand::Home { home } } => {
+            admin::project_here().and_then(|repo| commands::project_home(repo, home))
         }
         Command::Project { command: ProjectCommand::Set { name, agent, preset } } => admin::project_here().and_then(|repo| {
             admin::org_change(OrgChange::ProjectSettings { repo, name, default_agent: agent, default_preset: preset })

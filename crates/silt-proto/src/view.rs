@@ -393,6 +393,10 @@ pub struct Project {
     pub open_mrs: u32,
     /// This machine's clone of it.
     pub clone: Option<PathBuf>,
+    /// Where its new threads go from this machine (ADR 0032): a server's
+    /// URL, or `local`; none for the default server.
+    #[serde(default)]
+    pub home: Option<String>,
 }
 
 /// Where a new comment goes.
