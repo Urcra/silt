@@ -190,8 +190,12 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   await draft.fill('change of plan')
   await page.getByRole('button', { name: 'Steer now' }).click()
   await expect(page.getByText('I was not allowed to edit.')).toBeVisible()
-  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
-  await expect(page.getByText('Done: I interrupted your last turn to say: change of plan')).toBeVisible()
+  // The cancelled turn's request can still show for a moment before the
+  // steer's own replaces it; allowing the old one is refused, so try again.
+  await expect(async () => {
+    await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click({ timeout: 2000 })
+    await expect(page.getByText('Done: I interrupted your last turn to say: change of plan')).toBeVisible({ timeout: 2000 })
+  }).toPass({ timeout: 15_000 })
 })
 
 test('a thread started in the background from a branch plans its first prompt and waits in Needs you', async ({ page }) => {

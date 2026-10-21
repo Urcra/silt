@@ -57,6 +57,17 @@ pub struct SyncState {
     pub view: u64,
 }
 
+/// A seen mark on a merge request's file, by the request's `DeltaId`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenRecord {
+    pub mr: String,
+    pub path: String,
+    pub hash: String,
+    pub seen: bool,
+    pub at_ms: i64,
+    pub pending: bool,
+}
+
 /// How the agent the web UI last ran in a thread stands (ADR 0022); its
 /// state, preset and mode by name, as the daemon spells them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,6 +447,40 @@ impl Store {
     pub async fn thread_states(&self) -> Result<Vec<(ThreadId, String, bool)>, StoreError> {
         let rows = sqlx::query!("SELECT thread_id, state, pending FROM thread_state").fetch_all(&self.pool).await?;
         rows.into_iter().map(|row| Ok((ThreadId(id_from(&row.thread_id)?), row.state, row.pending != 0))).collect()
+    }
+
+    /// This person's seen marks on merge request files, and whether the
+    /// server has yet to hear of each (ADR 0024).
+    pub async fn seen_marks(&self) -> Result<Vec<SeenRecord>, StoreError> {
+        let rows = sqlx::query!("SELECT mr_id, path, hash, seen, at_ms, pending FROM seen_marks").fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SeenRecord {
+                mr: row.mr_id,
+                path: row.path,
+                hash: row.hash,
+                seen: row.seen != 0,
+                at_ms: row.at_ms,
+                pending: row.pending != 0,
+            })
+            .collect())
+    }
+
+    pub async fn put_seen_mark(&self, mark: &SeenRecord) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO seen_marks (mr_id, path, hash, seen, at_ms, pending) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (mr_id, path) DO UPDATE SET hash = excluded.hash, seen = excluded.seen, at_ms = excluded.at_ms,
+                 pending = excluded.pending",
+            mark.mr,
+            mark.path,
+            mark.hash,
+            mark.seen,
+            mark.at_ms,
+            mark.pending,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn put_thread_state(&self, thread: ThreadId, state: &str, pending: bool) -> Result<(), StoreError> {

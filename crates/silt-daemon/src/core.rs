@@ -51,12 +51,9 @@ pub enum Event {
     },
     /// A listing, and when it was asked for.
     Listed(Result<Listing, String>, Instant),
-    /// Thread states the server took, each with how it then stood, and
-    /// every state it holds for this person (ADR 0024).
-    ThreadStates {
-        sent: Vec<(silt_proto::ThreadState, silt_proto::ThreadState)>,
-        fetched: Result<Vec<silt_proto::ThreadState>, String>,
-    },
+    /// What the server took of this person's thread states and seen marks,
+    /// and all it holds of them (ADR 0024).
+    Personal(Box<crate::personal::Synced>),
     Discovered {
         token: u64,
         found: Option<silt_agents::Found>,
@@ -456,6 +453,7 @@ impl Core {
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
+            Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
             Request::OpenWeb { cwd, once } => {
                 if let Some(cwd) = cwd {

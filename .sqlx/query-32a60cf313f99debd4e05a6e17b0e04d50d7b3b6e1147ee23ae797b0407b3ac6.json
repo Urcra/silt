@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO seen (user_id, mr_id, path, hash, seen, at_ms) VALUES (?, ?, ?, ?, ?, ?)\n         ON CONFLICT (user_id, mr_id, path) DO UPDATE SET hash = excluded.hash, seen = excluded.seen, at_ms = excluded.at_ms\n         WHERE excluded.at_ms > seen.at_ms OR (excluded.at_ms = seen.at_ms AND excluded.seen > seen.seen)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "32a60cf313f99debd4e05a6e17b0e04d50d7b3b6e1147ee23ae797b0407b3ac6"
+}

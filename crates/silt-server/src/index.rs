@@ -24,6 +24,8 @@ pub(crate) struct Index {
     placements: HashMap<FamilyId, HashMap<InodeId, Placement>>,
     /// Each merge request's fork, by the request's id.
     requests: HashMap<DeltaId, ThreadId>,
+    /// Each merge request's target, by the request's id.
+    targets: HashMap<DeltaId, ThreadId>,
     /// Each fork's source.
     forks: HashMap<ThreadId, ThreadId>,
     /// Counts changes to `forks`, which visibility is worked out from;
@@ -90,8 +92,9 @@ impl Index {
             }
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
                 rows.push(Row::Text { thread, kind: "merge".into(), body: format!("{title}\n{summary}"), time_ms });
-                if let Op::Mr(_) = delta.op {
+                if let Op::Mr(MrOp::Opened { target, .. }) = &delta.op {
                     self.requests.insert(delta.span.first(), thread);
+                    self.targets.insert(delta.span.first(), *target);
                 }
                 None
             }
@@ -144,6 +147,11 @@ impl Index {
     /// The fork a merge request came from.
     pub(crate) fn request_fork(&self, mr: DeltaId) -> Option<ThreadId> {
         self.requests.get(&mr).copied()
+    }
+
+    /// The thread a merge request offers its fork's work to.
+    pub(crate) fn request_target(&self, mr: DeltaId) -> Option<ThreadId> {
+        self.targets.get(&mr).copied()
     }
 
     pub(crate) fn forks(&self) -> &HashMap<ThreadId, ThreadId> {

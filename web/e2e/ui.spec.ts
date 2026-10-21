@@ -107,6 +107,12 @@ test('reviews and approves a merge request', async ({ page }) => {
   await expect(page.getByTestId('changes-requested')).toContainText('add a test first')
   await expect(page.getByTestId('mr-status')).toHaveText('open')
 
+  await expect(page.getByTestId('seen-count')).toHaveText('0/1 seen')
+  await page.getByLabel('seen src/main.rs').check()
+  await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
+  await page.reload()
+  await expect(page.getByLabel('seen src/main.rs')).toBeChecked()
+
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
   await page.getByRole('link', { name: thread }).first().click()

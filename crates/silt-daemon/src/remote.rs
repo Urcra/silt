@@ -202,6 +202,17 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
+    pub async fn seen(&self) -> Result<Vec<silt_proto::MrSeen>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/seen").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn mark_seen(&self, mr: &str, mark: &silt_proto::SeenMark) -> Result<(), RemoteError> {
+        let response = self.request(reqwest::Method::PUT, &format!("/v1/me/seen/{mr}")).json(mark).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
         Ok(checked(response).await?.json().await?)

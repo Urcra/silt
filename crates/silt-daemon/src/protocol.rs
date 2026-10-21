@@ -116,6 +116,12 @@ pub enum Request {
         mr: String,
         reason: String,
     },
+    /// Ticks a file of a merge request as looked at, or not, for this person.
+    MrSeen {
+        mr: String,
+        path: String,
+        seen: bool,
+    },
     /// A page of a thread's full history, across compactions and forks.
     HistoryRead {
         thread: String,
@@ -623,6 +629,17 @@ pub struct MrDetails {
     pub conflicts: Vec<String>,
     /// The fork's conversation since it forked.
     pub conversation: Vec<ShowLine>,
+    /// The files it changes, and whether this person has looked at each as
+    /// it is now (ADR 0024).
+    #[serde(default)]
+    pub files: Vec<MrFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MrFile {
+    pub path: String,
+    pub seen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1121,6 +1138,7 @@ mod tests {
             Mine::decl(&config),
             Mount::decl(&config),
             MrDetails::decl(&config),
+            MrFile::decl(&config),
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
             Preset::decl(&config),

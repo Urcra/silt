@@ -13,7 +13,7 @@ use similar::{DiffTag, TextDiff};
 use tracing::warn;
 
 use crate::core::{CanonicalCwd, Core, CoreError, now_ms, touched_inode};
-use crate::protocol::{MrDetails, MrSummary, Pulled};
+use crate::protocol::{MrDetails, MrFile, MrSummary, Pulled};
 use crate::transcripts::native_entries;
 use crate::views::FileChange;
 
@@ -202,7 +202,7 @@ impl Core {
         Ok(requests.iter().map(|(family, request)| mr_summary(family, request)).collect())
     }
 
-    fn find_mr(&self, selector: &str) -> Result<(FamilyId, MergeRequest), CoreError> {
+    pub(crate) fn find_mr(&self, selector: &str) -> Result<(FamilyId, MergeRequest), CoreError> {
         let matches: Vec<(FamilyId, MergeRequest)> = self
             .families
             .iter()
@@ -226,6 +226,11 @@ impl Core {
         let ours = self.changes(family_id, &base, &target);
         let theirs = self.changes(family_id, &base, &offered);
         let conflicts = conflicts(&ours, &theirs);
+        let mr = request.id.to_string();
+        let files = file_hashes(&theirs)
+            .into_iter()
+            .map(|(path, hash)| MrFile { seen: self.personal.has_seen(&mr, &path, &hash), path })
+            .collect();
         let conversation = self.show_items(
             family,
             request.fork,
@@ -235,7 +240,22 @@ impl Core {
                 .filter(|item| item.source != HistorySource::Inherited && offered.contains(item.delta.span.first()))
                 .collect(),
         );
-        Ok(MrDetails { mr: mr_summary(family, &request), diff: crate::views::render_diff(&theirs), conflicts, conversation })
+        Ok(MrDetails {
+            mr: mr_summary(family, &request),
+            diff: crate::views::render_diff(&theirs),
+            conflicts,
+            conversation,
+            files,
+        })
+    }
+
+    /// The files the request changes, each with the hash of its text in it.
+    pub(crate) fn request_files(&self, family_id: FamilyId, request: &MergeRequest) -> Vec<(String, String)> {
+        let family = &self.families[&family_id];
+        let graph = family.graph();
+        let offered = graph.version_vector(&Frontier::single(request.id));
+        let target = graph.version_vector(&family.thread_head(request.target));
+        file_hashes(&self.changes(family_id, &offered.intersection(&target), &offered))
     }
 
     /// Merges a merge request into its target on the device that holds the
@@ -457,6 +477,19 @@ fn status_text(status: &MrStatus) -> String {
     }
 }
 
+/// Each changed file's path and the BLAKE3 of its text in the change, or
+/// of nothing for one the change deletes, so a seen mark goes stale when
+/// the file differs (ADR 0024).
+fn file_hashes(changes: &[FileChange]) -> Vec<(String, String)> {
+    changes
+        .iter()
+        .map(|change| {
+            let text = if change.new_path.is_some() { change.new_text.as_bytes() } else { b"" };
+            (change.path().to_owned(), blake3::hash(text).to_hex().to_string())
+        })
+        .collect()
+}
+
 /// What the fork's agent is told when changes are asked of its request.
 pub(crate) fn changes_requested_notice(title: &str, reason: &str) -> String {
     format!(
@@ -509,5 +542,23 @@ mod tests {
         let ours = [change(1, "x.rs", "a\nB\nc\n"), change(2, "y.rs", "a\nB\nc\n")];
         let theirs = [change(1, "x.rs", "a\nb2\nc\n"), change(3, "z.rs", "a\nb2\nc\n")];
         assert_eq!(conflicts(&ours, &theirs), ["x.rs: both changed lines 2-2 of the merge base"]);
+    }
+
+    #[test]
+    fn a_file_is_hashed_as_the_request_leaves_it() {
+        let change = |new_path: Option<&str>, new_text: &str| FileChange {
+            inode: None,
+            old_path: Some("x.rs".to_owned()),
+            new_path: new_path.map(str::to_owned),
+            old_text: "old\n".to_owned(),
+            new_text: new_text.to_owned(),
+            binary: false,
+        };
+        let edited = file_hashes(&[change(Some("x.rs"), "new\n")]);
+        let edited_again = file_hashes(&[change(Some("x.rs"), "newer\n")]);
+        let deleted = file_hashes(&[change(None, "")]);
+        assert_eq!(edited[0].0, "x.rs");
+        assert_ne!(edited[0].1, edited_again[0].1, "a changed file is unseen again");
+        assert_eq!(deleted[0], ("x.rs".to_owned(), blake3::hash(b"").to_hex().to_string()));
     }
 }

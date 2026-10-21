@@ -327,6 +327,23 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
     let after = family_info(alice).await;
     assert_ne!(after.view, before.view, "the request makes the fork's history readable");
     assert!(pulled(alice).await.iter().any(|(_, delta)| delta.span.first() == work.span.first()), "read again from the start");
+
+    // Alice ticks a file of the request as seen; an older mark from another
+    // device doesn't untick it, and Dave can't mark a request he can't see.
+    let mr = opened_id(&world.family);
+    let mark = |seen, at_ms| silt_proto::SeenMark { path: "quiet.rs".into(), hash: "h1".into(), seen, at_ms };
+    let put = |client: &Client, mark: silt_proto::SeenMark| client.request(Method::PUT, &format!("/v1/me/seen/{mr}")).json(&mark);
+    assert_eq!(alice.send(put(alice, mark(true, 20))).await, StatusCode::NO_CONTENT);
+    assert_eq!(alice.send(put(alice, mark(false, 10))).await, StatusCode::NO_CONTENT);
+    let seen: Vec<silt_proto::MrSeen> =
+        alice.request(Method::GET, "/v1/me/seen").send().await.expect("sends").json().await.expect("seen");
+    assert_eq!(seen, [silt_proto::MrSeen { mr, marks: vec![mark(true, 20)] }]);
+    let dave = &world.people.iter().find(|(name, _)| *name == "dave").expect("dave").1;
+    assert_eq!(dave.send(put(dave, mark(true, 30))).await, StatusCode::NOT_FOUND);
+}
+
+fn opened_id(family: &Family) -> silt_types::DeltaId {
+    family.merge_requests()[0].id
 }
 
 fn applied(family: &mut Family, delta: Delta) -> Delta {

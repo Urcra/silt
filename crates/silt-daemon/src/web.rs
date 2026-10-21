@@ -119,6 +119,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/mrs/{id}/approve", post(approve))
         .route("/api/mrs/{id}/decline", post(decline))
         .route("/api/mrs/{id}/request-changes", post(mr_request_changes))
+        .route("/api/mrs/{id}/seen", put(mr_seen))
         .route("/api/threads/{id}", delete(thread_purge))
         .route("/api/threads/{id}/fork", post(fork))
         .route("/api/threads/{id}/resume", post(resume))
@@ -644,6 +645,16 @@ struct ChangesBody {
 
 async fn mr_request_changes(State(web): State<Web>, Path(mr): Path<String>, Json(body): Json<ChangesBody>) -> HttpResponse {
     ask(&web, Request::MrRequestChanges { mr, reason: body.reason }).await
+}
+
+#[derive(Deserialize)]
+struct SeenBody {
+    path: String,
+    seen: bool,
+}
+
+async fn mr_seen(State(web): State<Web>, Path(mr): Path<String>, Json(body): Json<SeenBody>) -> HttpResponse {
+    ask(&web, Request::MrSeen { mr, path: body.path, seen: body.seen }).await
 }
 
 #[derive(Deserialize, Default)]

@@ -191,7 +191,14 @@ conflicts: Array<string>,
 /**
  * The fork's conversation since it forked.
  */
-conversation: Array<ShowLine>, };
+conversation: Array<ShowLine>, 
+/**
+ * The files it changes, and whether this person has looked at each as
+ * it is now (ADR 0024).
+ */
+files: Array<MrFile>, };
+
+export type MrFile = { path: string, seen: boolean, };
 
 export type MrSummary = { id: string, fork: string, target: string, title: string, summary: string, 
 /**

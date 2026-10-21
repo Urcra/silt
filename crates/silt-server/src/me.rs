@@ -3,12 +3,83 @@
 
 use std::str::FromStr;
 
+use std::collections::BTreeMap;
+
 use axum::Json;
 use axum::extract::{Extension, Path as UrlPath, State};
-use silt_proto::ThreadState;
-use silt_types::ThreadId;
+use axum::http::StatusCode;
+use silt_proto::{MrSeen, SeenMark, ThreadState};
+use silt_types::{DeltaId, ThreadId};
 
 use crate::{ApiError, Caller, Server, bad_request, id_bytes, not_found};
+
+/// Whether the caller sees the merge request: its target, whose readers
+/// review it, or its fork.
+async fn sees_request(server: &Server, caller: Caller, mr: DeltaId) -> Result<bool, ApiError> {
+    let (fork, target) = {
+        let index = server.shared.index.lock().await;
+        (index.request_fork(mr), index.request_target(mr))
+    };
+    let viewer = server.viewer(caller.user).await?;
+    Ok([fork, target].into_iter().flatten().any(|thread| viewer.sees_thread(thread)))
+}
+
+/// The caller's seen marks on every merge request they still see.
+pub(crate) async fn seen(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<MrSeen>>, ApiError> {
+    let rows = sqlx::query!("SELECT mr_id, path, hash, seen, at_ms FROM seen WHERE user_id = ?", caller.user)
+        .fetch_all(server.db())
+        .await?;
+    let mut by_mr: BTreeMap<String, Vec<SeenMark>> = BTreeMap::new();
+    for row in rows {
+        by_mr.entry(row.mr_id).or_default().push(SeenMark {
+            path: row.path,
+            hash: row.hash,
+            seen: row.seen != 0,
+            at_ms: row.at_ms,
+        });
+    }
+    let mut out = Vec::new();
+    for (mr, marks) in by_mr {
+        let Ok(mr) = DeltaId::from_str(&mr) else {
+            continue;
+        };
+        if sees_request(&server, caller, mr).await? {
+            out.push(MrSeen { mr, marks });
+        }
+    }
+    Ok(Json(out))
+}
+
+/// Keeps a seen mark unless the one stored is newer.
+pub(crate) async fn mark_seen(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(mr): UrlPath<String>,
+    Json(mark): Json<SeenMark>,
+) -> Result<StatusCode, ApiError> {
+    let id = DeltaId::from_str(&mr).map_err(|_| bad_request("invalid merge request id"))?;
+    if !sees_request(&server, caller, id).await? {
+        return Err(not_found());
+    }
+    let (mr, seen) = (id.to_string(), i64::from(mark.seen));
+    sqlx::query!(
+        "INSERT INTO seen (user_id, mr_id, path, hash, seen, at_ms) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, mr_id, path) DO UPDATE SET hash = excluded.hash, seen = excluded.seen, at_ms = excluded.at_ms
+         WHERE excluded.at_ms > seen.at_ms OR (excluded.at_ms = seen.at_ms AND excluded.seen > seen.seen)",
+        caller.user,
+        mr,
+        mark.path,
+        mark.hash,
+        seen,
+        mark.at_ms,
+    )
+    .execute(server.db())
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 pub(crate) async fn threads(
     State(server): State<Server>,

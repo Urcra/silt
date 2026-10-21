@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { api, short } from '../api'
+import { api, short, type MrFile } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { Banner, Button, Input } from '../ui'
@@ -39,6 +39,7 @@ export function MergeRequest({ id }: { id: string }) {
   const queries = useQueryClient()
   const [error, setError] = useState<string>()
   const [reason, setReason] = useState('')
+  const [ticked, setTicked] = useState<Record<string, boolean>>({})
   const act = (action: Promise<unknown>) =>
     action.then(
       () => queries.invalidateQueries({ queryKey: keys.mrs }),
@@ -46,7 +47,10 @@ export function MergeRequest({ id }: { id: string }) {
     )
   if (details.error) return <p className="text-danger">{message(details.error)}</p>
   if (!details.data) return <p className="text-fg-3">Loading…</p>
-  const { mr, diff, conflicts, conversation } = details.data
+  const { mr, diff, conflicts, conversation, files } = details.data
+  // A tick shows at once, before the daemon answers.
+  const seenNow = (file: MrFile) => ticked[file.path] ?? file.seen
+  const seenCount = files.filter(seenNow).length
   return (
     <div className="space-y-4">
       <div>
@@ -104,6 +108,38 @@ export function MergeRequest({ id }: { id: string }) {
             </ul>
           </Banner>
         </div>
+      )}
+      {files.length > 0 && (
+        <section aria-label="files">
+          <div className="mb-1 flex items-center gap-3">
+            <h3 className="font-semibold">Files</h3>
+            <span data-testid="seen-count" className="text-xs text-fg-2">
+              {seenCount}/{files.length} seen
+            </span>
+            <span className="h-1.5 w-32 overflow-hidden rounded-full bg-surface-2" aria-hidden="true">
+              <span className="block h-full bg-ok" style={{ width: `${(100 * seenCount) / files.length}%` }} />
+            </span>
+          </div>
+          <ul className="space-y-0.5 text-sm">
+            {files.map((file) => (
+              <li key={file.path}>
+                <label className="flex items-center gap-2 font-mono text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label={`seen ${file.path}`}
+                    checked={seenNow(file)}
+                    onChange={(event) => {
+                      const seen = event.target.checked
+                      setTicked((before) => ({ ...before, [file.path]: seen }))
+                      void act(api.markSeen(id, file.path, seen))
+                    }}
+                  />
+                  {file.path}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       <section>
         <h3 className="mb-1 font-semibold">Changes</h3>

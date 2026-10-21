@@ -163,6 +163,33 @@ impl ThreadState {
     }
 }
 
+/// Whether a person has looked at a file of a merge request, at the
+/// version whose `hash` it had then (ADR 0024). The newer mark wins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SeenMark {
+    pub path: String,
+    /// BLAKE3 of the file's text in the request, so a changed file shows
+    /// as unseen again.
+    pub hash: String,
+    pub seen: bool,
+    pub at_ms: i64,
+}
+
+impl SeenMark {
+    /// Whether `self` should replace `other` for the same file.
+    pub fn newer_than(&self, other: &SeenMark) -> bool {
+        (self.at_ms, self.seen) > (other.at_ms, other.seen)
+    }
+}
+
+/// A person's marks on one merge request, by its id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MrSeen {
+    pub mr: DeltaId,
+    pub marks: Vec<SeenMark>,
+}
+
 /// A project the caller can see (ADR 0023).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

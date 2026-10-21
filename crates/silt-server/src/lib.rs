@@ -273,6 +273,8 @@ impl Server {
             .route("/v1/projects", get(projects::list))
             .route("/v1/me/threads", get(me::threads))
             .route("/v1/me/threads/{thread}", patch(me::change_thread))
+            .route("/v1/me/seen", get(me::seen))
+            .route("/v1/me/seen/{mr}", put(me::mark_seen))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));

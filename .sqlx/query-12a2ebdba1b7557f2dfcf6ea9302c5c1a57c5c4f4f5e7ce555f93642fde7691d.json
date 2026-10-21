@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT mr_id, path, hash, seen, at_ms FROM seen WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "mr_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "seen",
+            "name": "mr_id"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "seen",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "seen",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "seen",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seen",
+            "name": "seen"
+          }
+        }
+      },
+      {
+        "name": "at_ms",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seen",
+            "name": "at_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "12a2ebdba1b7557f2dfcf6ea9302c5c1a57c5c4f4f5e7ce555f93642fde7691d"
+}
