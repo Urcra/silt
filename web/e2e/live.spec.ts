@@ -331,6 +331,37 @@ test('a waiting agent notifies its person in a tab that is open but not in front
   await machine.context().close()
 })
 
+test('on a phone, the hosted app answers a waiting agent from Needs you', async ({ browser }) => {
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('permissions').selectOption('ask_for_everything')
+  await machine.getByLabel('draft').fill('from my phone')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  await expect(machine.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
+
+  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage()
+  await phone.goto(`${live.server}/app/needs-you`)
+  await phone.getByLabel('User').fill('alice')
+  await phone.getByLabel('Password').fill('correct horse battery')
+  await phone.getByRole('button', { name: 'Sign in' }).click()
+  await expect(phone).toHaveURL(`${live.server}/app/needs-you`)
+  await expect(phone.getByRole('navigation', { name: 'tabs' })).toBeVisible()
+  await expect(phone.getByRole('banner').getByRole('link', { name: 'Inbox' })).toBeHidden()
+  const manifest = (await (await phone.request.get(`${live.server}/app/manifest.webmanifest`)).json()) as { name: string }
+  expect(manifest.name).toBe('Silt')
+
+  const waiting = phone.getByRole('region', { name: 'waiting on you' }).getByRole('group', { name: /from my phone needs you/ })
+  await expect(async () => {
+    await phone.reload()
+    await expect(waiting.getByRole('button', { name: 'Allow' })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await waiting.getByRole('button', { name: 'Allow' }).tap()
+  await expect(machine.getByText(/^Done: [\s\S]*from my phone$/)).toBeVisible()
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await machine.context().close()
+  await phone.context().close()
+})
+
 test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
   const hosted = await (await browser.newContext()).newPage()
   await hosted.goto(`${live.server}/app/t/${live.thread}`)

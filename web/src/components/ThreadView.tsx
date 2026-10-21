@@ -226,7 +226,7 @@ export function ThreadView({ id }: { id: string }) {
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
 
   return (
-    <div className="grid grid-cols-[1fr_18rem] gap-6">
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_18rem]">
       <div>
         <h2 className="text-lg font-semibold">{summary?.title ?? 'Thread'}</h2>
         <p className="font-mono text-xs text-fg-3">{fullId}</p>

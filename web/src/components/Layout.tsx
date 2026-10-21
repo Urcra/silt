@@ -3,12 +3,14 @@ import { Link, Outlet, useMatch, useNavigate, useParams } from '@tanstack/react-
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react'
 import { api, short } from '../api'
 import { useNotifier } from '../notifier'
+import { useNow } from '../now'
 import { projectName } from '../projects'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
+import { sections } from '../sections'
 import { useActions } from '../shortcuts'
 import { THEMES, applyTheme, storedTheme, type Theme } from '../theme'
-import { IconButton, Toaster, cx } from '../ui'
+import { Icon, IconButton, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MergeRequest } from './MergeRequests'
 import { Palette } from './Palette'
@@ -118,6 +120,40 @@ function useSidebarWidth() {
   return { width, drag, key }
 }
 
+/** A phone's way around: what waits on the person first (ADR 0028). */
+function TabBar() {
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const waiting = sections(threads.data ?? [], useNow()).needs_you.length
+  const tab = 'flex flex-col items-center gap-0.5 py-1.5 text-[11px] text-fg-2'
+  const active = { className: 'text-accent-fg' }
+  return (
+    <nav
+      aria-label="tabs"
+      className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden"
+    >
+      <Link to="/needs-you" className={tab} activeProps={active}>
+        <Icon name="alert" />
+        <span>
+          Needs you
+          {waiting > 0 && <span className="ml-1 rounded-full bg-accent px-1 text-on-accent">{waiting}</span>}
+        </span>
+      </Link>
+      <Link to="/" className={tab} activeOptions={{ exact: true }} activeProps={active}>
+        <Icon name="thread" />
+        Threads
+      </Link>
+      <Link to="/inbox" className={tab} activeProps={active}>
+        <Icon name="inbox" />
+        Inbox
+      </Link>
+      <Link to="/devices" className={tab} activeProps={active}>
+        <Icon name="monitor" />
+        Devices
+      </Link>
+    </nav>
+  )
+}
+
 export function Layout() {
   useGlobalActions()
   useNotifier()
@@ -137,18 +173,20 @@ export function Layout() {
         <Breadcrumbs />
         <nav className="ml-auto flex items-center gap-4 text-xs">
           <Palette />
-          <Link to="/mrs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
-            Merge requests
-          </Link>
-          <Link to="/inbox" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
-            Inbox
-          </Link>
-          <Link to="/orgs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
-            Orgs
-          </Link>
-          <Link to="/devices" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
-            Devices
-          </Link>
+          <span className="hidden items-center gap-4 md:flex">
+            <Link to="/mrs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+              Merge requests
+            </Link>
+            <Link to="/inbox" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+              Inbox
+            </Link>
+            <Link to="/orgs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+              Orgs
+            </Link>
+            <Link to="/devices" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+              Devices
+            </Link>
+          </span>
           <ThemeToggle />
         </nav>
       </header>
@@ -177,7 +215,7 @@ export function Layout() {
           className="hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent md:block"
         />
         <main ref={scroll} className="relative min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-6xl p-6">
+          <div className="mx-auto max-w-6xl p-3 pb-20 md:p-6">
             <ErrorBoundary>
               <MainScroll.Provider value={scroll}>
                 <Outlet />
@@ -186,6 +224,7 @@ export function Layout() {
           </div>
         </main>
       </div>
+      <TabBar />
       <Toaster />
     </div>
   )

@@ -370,7 +370,7 @@ export function LivePanel({
       />
       {error && <p className="text-danger">{error}</p>}
       {replica && (
-        <div className="mt-3 grid grid-cols-[12rem_1fr] gap-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[12rem_1fr]">
           <ul aria-label="files" className="text-sm">
             {replica.paths().map((path) => (
               <li key={path}>

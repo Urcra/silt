@@ -46,7 +46,7 @@ function ThreadItem({ thread }: { thread: ThreadSummary }) {
 }
 
 /** A thread waiting on the person, with what it waits for answerable in place. */
-function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
+export function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
   const status = useAgentStatus(thread.id)
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>) => {
