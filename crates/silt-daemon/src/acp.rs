@@ -51,7 +51,7 @@ fn silt_exe() -> PathBuf {
 impl Core {
     pub(crate) fn acp_agents(&self) -> AgentChoices {
         AgentChoices {
-            agents: registry::all(&self.data_dir, &silt_exe())
+            agents: registry::all(&self.data_dir)
                 .into_iter()
                 .map(|agent| AgentChoice {
                     id: agent.id,
@@ -73,7 +73,7 @@ impl Core {
     /// Starts `agent` in the thread's checkout, making one from a known
     /// clone if this machine has none, or in a new thread of `clone`.
     pub(crate) async fn acp_start(&mut self, thread: Option<&str>, clone: Option<&Path>, agent: &str) -> Result<String, CoreError> {
-        let info = registry::all(&self.data_dir, &silt_exe())
+        let info = registry::all(&self.data_dir)
             .into_iter()
             .find(|candidate| candidate.id == agent)
             .ok_or_else(|| CoreError::Invalid(format!("no agent called {agent}")))?;

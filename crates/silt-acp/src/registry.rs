@@ -1,5 +1,5 @@
 //! The agents Silt can start (ADR 0005): the public ACP registry, cached for
-//! a day with a bundled snapshot to fall back on, plus Silt's own harness.
+//! a day with a bundled snapshot to fall back on, plus the user's own.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -117,20 +117,6 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
         .collect()
 }
 
-/// Silt's own agent, `silt harness` (ADR 0014).
-pub fn harness(silt: &Path) -> AgentInfo {
-    AgentInfo {
-        id: "silt-harness".into(),
-        name: "Silt harness".into(),
-        description: "Silt's own agent on your Anthropic or OpenAI-compatible API key, running commands in a sandbox".into(),
-        distribution: Distribution::Command {
-            program: silt.to_string_lossy().into_owned(),
-            args: vec!["harness".into()],
-            env: Vec::new(),
-        },
-    }
-}
-
 /// The registry as cached in `data_dir`, or the bundled snapshot.
 pub fn cached(data_dir: &Path) -> Vec<AgentInfo> {
     let from_cache = std::fs::read_to_string(data_dir.join("acp-registry.json"))
@@ -157,13 +143,17 @@ pub async fn refresh(data_dir: PathBuf) {
 /// in `<data>/agent-env`, one per line. Other credentials in the daemon's
 /// environment stay with the daemon.
 pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String)> {
+    const TOOLS: [&str; 22] = [
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "TZ", "COLORTERM", "CARGO_HOME",
+        "RUSTUP_HOME", "GOPATH", "GOROOT", "JAVA_HOME", "VIRTUAL_ENV", "CONDA_PREFIX", "NVM_DIR", "PNPM_HOME",
+        "NODE_PATH", "PYTHONPATH", "DENO_DIR",
+    ];
     const SHARED: [&str; 8] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"];
     let vendor: &[&str] = match agent_id {
         id if id.contains("claude") => &["ANTHROPIC_", "CLAUDE_"],
         id if id.contains("codex") || id.contains("openai") => &["OPENAI_", "CODEX_"],
         id if id.contains("gemini") => &["GEMINI_", "GOOGLE_"],
         id if id.contains("copilot") => &["GITHUB_", "GH_", "COPILOT_"],
-        "silt-harness" => &["ANTHROPIC_", "OPENAI_", "SILT_HOME", "SILT_HARNESS_MODEL"],
         _ => &[],
     };
     let listed: Vec<String> = std::fs::read_to_string(data_dir.join("agent-env"))
@@ -175,17 +165,17 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
                 .collect()
         })
         .unwrap_or_default();
-    let mut environment: Vec<(String, String)> = silt_sandbox::safe_environment()
-        .into_iter()
+    std::env::vars_os()
         .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
-    environment.extend(std::env::vars().filter(|(name, _)| {
-        SHARED.contains(&name.as_str())
-            || name.starts_with("XDG_")
-            || vendor.iter().any(|prefix| name.starts_with(prefix))
-            || listed.contains(name)
-    }));
-    environment
+        .filter(|(name, _)| {
+            TOOLS.contains(&name.as_str())
+                || name.starts_with("LC_")
+                || SHARED.contains(&name.as_str())
+                || name.starts_with("XDG_")
+                || vendor.iter().any(|prefix| name.starts_with(prefix))
+                || listed.contains(name)
+        })
+        .collect()
 }
 
 /// Agents the user added in `<data>/agents.json`:
@@ -222,11 +212,9 @@ pub fn custom(data_dir: &Path) -> Vec<AgentInfo> {
         .collect()
 }
 
-/// Every agent to offer: custom ones first, then Silt's harness, then the
-/// registry's.
-pub fn all(data_dir: &Path, silt: &Path) -> Vec<AgentInfo> {
+/// Every agent to offer: custom ones first, then the registry's.
+pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
     let mut agents = custom(data_dir);
-    agents.push(harness(silt));
     agents.extend(cached(data_dir));
     agents
 }

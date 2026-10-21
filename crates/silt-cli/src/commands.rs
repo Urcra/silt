@@ -63,11 +63,10 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     {
         use std::os::unix::process::CommandExt;
         // The daemon outlives this command: it starts from `/`, not from
-        // wherever this ran, and without settings meant for one command.
+        // wherever this ran.
         Command::new(exe)
             .args(["daemon", "run"])
             .current_dir("/")
-            .env_remove("SILT_HARNESS_UNSANDBOXED")
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(log_err)
@@ -882,38 +881,6 @@ fn short(thread: &str) -> &str {
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
-}
-
-
-
-
-/// Runs `command` in the sandbox in place of this process.
-/// Runs `command` in the sandbox, exiting with its status. Silt's own data
-/// is hidden too: its socket controls the daemon.
-pub fn sandbox(mut sandbox: silt_sandbox::Sandbox, command: &[String]) -> Result<(), Exn<CliError>> {
-    if command.is_empty() {
-        return Err(fail("give a command to run"));
-    }
-    sandbox.hidden.push(paths::data_dir());
-    sandbox.hidden.push(paths::socket_path());
-    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt binary".into()))?;
-    let init = [exe.into_os_string(), "sandbox-init".into()];
-    let code = sandbox.run(&init, command).or_raise(|| CliError("cannot set up the sandbox".into()))?;
-    std::process::exit(code)
-}
-
-/// Serves the harness to the ACP client on stdin and stdout.
-pub fn harness() -> Result<(), Exn<CliError>> {
-    let config = silt_harness::Config {
-        silt: env::current_exe().or_raise(|| CliError("cannot find the silt binary".into()))?,
-        state_dir: paths::data_dir().join("harness"),
-        unsandboxed: env::var_os("SILT_HARNESS_UNSANDBOXED").is_some_and(|value| value == "1"),
-        secrets_file: Some(paths::data_dir().join("secrets")),
-    };
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the runtime".into()))?;
-    runtime
-        .block_on(silt_harness::serve(config))
-        .or_raise(|| CliError("the harness stopped".into()))
 }
 
 #[cfg(test)]

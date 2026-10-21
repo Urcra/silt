@@ -4128,7 +4128,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "silt-sandbox",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4163,22 +4162,18 @@ dependencies = [
 name = "silt-cli"
 version = "0.0.1"
 dependencies = [
- "axum",
  "clap",
  "exn",
  "rpassword",
  "rustix",
  "serde",
  "serde_json",
- "silt-acp",
  "silt-agents",
  "silt-daemon",
  "silt-git",
- "silt-harness",
  "silt-mcp",
  "silt-proto",
  "silt-redact",
- "silt-sandbox",
  "silt-server",
  "tempfile",
  "thiserror",
@@ -4263,25 +4258,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "silt-harness"
-version = "0.0.1"
-dependencies = [
- "agent-client-protocol",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "silt-checkout",
- "silt-redact",
- "silt-sandbox",
- "tempfile",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "silt-log"
 version = "0.0.1"
 dependencies = [
@@ -4317,15 +4293,6 @@ dependencies = [
  "silt-crdt",
  "silt-log",
  "silt-types",
-]
-
-[[package]]
-name = "silt-sandbox"
-version = "0.0.1"
-dependencies = [
- "libc",
- "rustix",
- "thiserror",
 ]
 
 [[package]]
