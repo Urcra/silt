@@ -39,6 +39,7 @@ function useGlobalActions() {
     { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/projects' }) },
     { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/orgs' }) },
     { id: 'devices', label: 'Devices', run: () => void navigate({ to: '/devices' }) },
+    { id: 'graph', label: 'Graph', keys: 'g', run: () => void navigate({ to: '/graph' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
   ])
@@ -174,6 +175,9 @@ export function Layout() {
         <nav className="ml-auto flex items-center gap-4 text-xs">
           <Palette />
           <span className="hidden items-center gap-4 md:flex">
+            <Link to="/graph" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+              Graph
+            </Link>
             <Link to="/mrs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
               Merge requests
             </Link>

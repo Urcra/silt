@@ -12,6 +12,8 @@ import type {
   DaemonStatus,
   DeviceChange,
   DeviceView,
+  GraphQuery,
+  GraphRow,
   HistoryPage,
   InboxEntry,
   InboxRead,
@@ -103,6 +105,13 @@ export const api = {
   history: (id: string) => request<HistoryPage>('GET', `${thread(id)}/history`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
+  graph: (query: GraphQuery) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== null && value !== false && value !== '') params.set(key, String(value))
+    }
+    return request<GraphRow[]>('GET', `/api/graph?${params}`)
+  },
   diff: (id: string, options: { turn?: number; base?: string } = {}) => {
     const params = new URLSearchParams()
     if (options.turn !== undefined) params.set('turn', String(options.turn))

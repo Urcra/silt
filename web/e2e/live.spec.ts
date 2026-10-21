@@ -896,3 +896,21 @@ test("a thread's page lists its commits with the turns they came in", async ({ p
   // Tests above prompted in this thread too, so which turn depends on them.
   await expect(commits.getByRole('link', { name: /^turn \d+$/ }).last()).toBeVisible()
 })
+
+test('the graph shows turns, commits, forks and requests, and the details of one', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('banner').getByRole('link', { name: 'Graph' }).click()
+  // A test above settles threads, which the graph leaves out unless asked.
+  await page.getByLabel('Settled too').check()
+  const graph = page.getByRole('list', { name: 'graph' })
+  await expect(graph.getByRole('button', { name: /^commit Add the farewell/ })).toBeVisible()
+  await expect(graph.getByRole('button', { name: /^fork forked from/ }).first()).toBeVisible()
+  await expect(graph.getByRole('button', { name: /^request Fork work/ })).toBeVisible()
+
+  await page.getByLabel('what to show').selectOption({ label: 'Commits' })
+  await expect(graph.getByRole('button', { name: /^turn/ })).toHaveCount(0)
+  await graph.getByRole('button', { name: /^commit Add the farewell/ }).click()
+  const details = page.getByRole('complementary', { name: 'details' })
+  await details.getByRole('link', { name: /^Turn \d+ of thread/ }).click()
+  await expect(page).toHaveURL(new RegExp(`/t/[0-9a-f]*${live.thread}#turn-\\d+$`))
+})
