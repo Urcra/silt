@@ -15,7 +15,23 @@ test('lists threads from the daemon', async () => {
     'fetch',
     vi.fn(async (path: string) => {
       const body = path.startsWith('/api/threads')
-        ? [{ id: '0123456789abcdef0123456789abcdef', repo: 'github.com/u/r', title: 'Fix the lexer', agent: 'claude', created_ms: 1, messages: 2, edits: 3, location: 'here', forked_from: null }]
+        ? [
+            {
+              id: '0123456789abcdef0123456789abcdef',
+              repo: 'github.com/u/r',
+              title: 'Fix the lexer',
+              agent: 'claude',
+              created_ms: 1,
+              messages: 2,
+              edits: 3,
+              location: 'here',
+              forked_from: null,
+              last_ms: 1,
+              merged: false,
+              review: false,
+              mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
+            },
+          ]
         : []
       return new Response(JSON.stringify(body), { status: 200 })
     }),
@@ -43,6 +59,10 @@ test('threads are grouped by project, newest first', () => {
     collaborators: [],
     writable: true,
     agent_state: null,
+    last_ms: created_ms,
+    merged: false,
+    review: false,
+    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])
   expect(grouped.map(([repo, threads]) => [repo, threads.map((each) => each.id)])).toEqual([

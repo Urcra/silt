@@ -190,6 +190,18 @@ impl Remote {
         Ok(())
     }
 
+    pub async fn thread_states(&self) -> Result<Vec<silt_proto::ThreadState>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/threads").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    /// Merges `state` into the server's, answering with how it then stands.
+    pub async fn change_thread_state(&self, state: &silt_proto::ThreadState) -> Result<silt_proto::ThreadState, RemoteError> {
+        let path = format!("/v1/me/threads/{}", state.thread);
+        let response = self.request(reqwest::Method::PATCH, &path).json(state).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
     pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
         Ok(checked(response).await?.json().await?)

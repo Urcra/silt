@@ -40,6 +40,7 @@ impl Core {
         let Some(remote) = self.remote.clone() else {
             return;
         };
+        self.drive_thread_states();
         if self.last_listing.is_none_or(|last| last.elapsed() >= LISTING_INTERVAL) {
             let requested = Instant::now();
             self.last_listing = Some(requested);

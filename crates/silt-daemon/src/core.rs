@@ -51,6 +51,12 @@ pub enum Event {
     },
     /// A listing, and when it was asked for.
     Listed(Result<Listing, String>, Instant),
+    /// Thread states the server took, each with how it then stood, and
+    /// every state it holds for this person (ADR 0024).
+    ThreadStates {
+        sent: Vec<(silt_proto::ThreadState, silt_proto::ThreadState)>,
+        fetched: Result<Vec<silt_proto::ThreadState>, String>,
+    },
     Discovered {
         token: u64,
         found: Option<silt_agents::Found>,
@@ -207,6 +213,8 @@ pub struct Core {
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
+    /// This person's state of each thread (ADR 0024).
+    pub(crate) personal: crate::personal::Personal,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -259,6 +267,7 @@ impl Core {
         }
         core.load_sessions().await?;
         core.load_agent_runs().await?;
+        core.load_thread_states().await?;
         // Queued rather than done here, so the socket is already taking
         // requests while they run; they still come before any request.
         for checkout in core.checkouts.values() {
@@ -360,6 +369,7 @@ impl Core {
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
+            personal: crate::personal::Personal::default(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -489,6 +499,7 @@ impl Core {
             }
             Request::Branches { clone } => to_response(self.branches(&clone)),
             Request::Projects => return answer_later(reply, Ok(self.projects())),
+            Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {

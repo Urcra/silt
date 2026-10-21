@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state FROM thread_state WHERE user_id = ? AND thread_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_state",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b05c0069fbdf0b1320e3f3ec6e29996d44073d356c750d51d174e0f272ad20e5"
+}

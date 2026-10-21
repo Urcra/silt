@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO thread_state (user_id, thread_id, state) VALUES (?, ?, ?)\n         ON CONFLICT (user_id, thread_id) DO UPDATE SET state = excluded.state",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "5e7cd9fc0794712b04a63d0766fe755f0dc6afc2cb2653dd42bcf5769cd73b73"
+}

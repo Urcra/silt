@@ -141,6 +141,16 @@ agent: AgentStatus | null,
  */
 preset: Preset, };
 
+export type Mine = { pinned: boolean, snoozed_until: number | null, 
+/**
+ * When it was snoozed, so activity since can wake it.
+ */
+snoozed_at: number | null, wake_on_activity: boolean, settled: boolean, 
+/**
+ * When they last opened it.
+ */
+seen_ms: number | null, };
+
 export type Mount = { 
 /**
  * The clone the checkout was made from.
@@ -245,6 +255,16 @@ owner: string | null, status: ThreadStatus | null, repo: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
+export type Snooze = { 
+/**
+ * None when not snoozed.
+ */
+until: number | null, 
+/**
+ * A new turn or merge request activity ends it early.
+ */
+wake_on_activity: boolean, };
+
 export type StartOptions = { 
 /**
  * A branch, tag or commit for a new thread's checkout to start from,
@@ -264,6 +284,8 @@ prompt: string | null,
  * The first prompt is a Plan first one.
  */
 plan: boolean, };
+
+export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
 
 export type TextKind = "message" | "thought" | "tool";
 
@@ -288,7 +310,19 @@ writable: boolean,
 /**
  * How the agent the web UI last ran in it here stands (ADR 0022).
  */
-agent_state: AgentState | null, };
+agent_state: AgentState | null, 
+/**
+ * When something last happened in it.
+ */
+last_ms: number, 
+/**
+ * A merge request from it was approved.
+ */
+merged: boolean, 
+/**
+ * A merge request into it waits for this person's review.
+ */
+review: boolean, mine: Mine, };
 
 export type TurnInfo = { 
 /**

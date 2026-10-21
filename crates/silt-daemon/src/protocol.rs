@@ -251,6 +251,11 @@ pub enum Request {
     },
     /// The projects the person works in, here and on the server.
     Projects,
+    /// Pins, snoozes, settles or marks seen a thread, for this person.
+    ThreadState {
+        thread: String,
+        change: StateChange,
+    },
     /// Makes the clone at `path` this machine's clone of its project.
     AddClone {
         path: PathBuf,
@@ -426,6 +431,17 @@ pub struct ThreadSummary {
     /// How the agent the web UI last ran in it here stands (ADR 0022).
     #[serde(default)]
     pub agent_state: Option<silt_proto::AgentState>,
+    /// When something last happened in it.
+    #[serde(default)]
+    pub last_ms: i64,
+    /// A merge request from it was approved.
+    #[serde(default)]
+    pub merged: bool,
+    /// A merge request into it waits for this person's review.
+    #[serde(default)]
+    pub review: bool,
+    #[serde(default)]
+    pub mine: Mine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -773,6 +789,31 @@ pub struct AgentStatus {
     pub takes_files: bool,
 }
 
+/// What this person keeps about a thread for themselves (ADR 0024).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Mine {
+    pub pinned: bool,
+    pub snoozed_until: Option<i64>,
+    /// When it was snoozed, so activity since can wake it.
+    pub snoozed_at: Option<i64>,
+    pub wake_on_activity: bool,
+    pub settled: bool,
+    /// When they last opened it.
+    pub seen_ms: Option<i64>,
+}
+
+/// A change to [`Mine`]: the fields it sets; `seen` marks the thread seen now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(default)]
+pub struct StateChange {
+    pub pinned: Option<bool>,
+    pub snooze: Option<silt_proto::Snooze>,
+    pub settled: Option<bool>,
+    pub seen: bool,
+}
+
 /// A project as the web UI shows it (ADR 0023): the server's record when
 /// connected, with this machine's clone of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1036,6 +1077,7 @@ mod tests {
             InFlight::decl(&config),
             InboxEntry::decl(&config),
             LiveState::decl(&config),
+            Mine::decl(&config),
             Mount::decl(&config),
             MrDetails::decl(&config),
             MrSummary::decl(&config),
@@ -1050,7 +1092,9 @@ mod tests {
             SearchFilters::decl(&config),
             SearchResult::decl(&config),
             ShowLine::decl(&config),
+            silt_proto::Snooze::decl(&config),
             StartOptions::decl(&config),
+            StateChange::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),
             TurnInfo::decl(&config),

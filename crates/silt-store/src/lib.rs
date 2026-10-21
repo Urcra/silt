@@ -425,8 +425,30 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         sqlx::query!("DELETE FROM search_threads WHERE thread_id = ?1", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM thread_state WHERE thread_id = ?1", id).execute(&mut *tx).await?;
         sqlx::query!("DELETE FROM threads WHERE id = ?1", id).execute(&mut *tx).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// This person's state of each thread, as JSON, and whether the server
+    /// has yet to hear of it (ADR 0024).
+    pub async fn thread_states(&self) -> Result<Vec<(ThreadId, String, bool)>, StoreError> {
+        let rows = sqlx::query!("SELECT thread_id, state, pending FROM thread_state").fetch_all(&self.pool).await?;
+        rows.into_iter().map(|row| Ok((ThreadId(id_from(&row.thread_id)?), row.state, row.pending != 0))).collect()
+    }
+
+    pub async fn put_thread_state(&self, thread: ThreadId, state: &str, pending: bool) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!(
+            "INSERT INTO thread_state (thread_id, state, pending) VALUES (?, ?, ?)
+             ON CONFLICT (thread_id) DO UPDATE SET state = excluded.state, pending = excluded.pending",
+            thread,
+            state,
+            pending,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

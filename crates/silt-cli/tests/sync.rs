@@ -241,3 +241,25 @@ fn a_client_restored_from_a_backup_recovers_its_work_in_a_fork() {
         home.try_stdout(&["in-flight", "src/main.rs"])
     );
 }
+
+#[test]
+fn a_pin_on_one_machine_reaches_the_persons_other_machines_and_survives_a_restart() {
+    let world = world();
+    let (laptop, home) = (&world.laptop, &world.home);
+    laptop.silt(&["claude"]);
+    let thread = thread_of(laptop);
+    assert!(eventually(|| home.log_line(&thread).is_some()));
+
+    let pinned = |machine: &Machine| {
+        machine.web("GET", "/api/threads", None).as_array().expect("threads").iter().any(|summary| {
+            summary["id"].as_str().is_some_and(|id| id.ends_with(&thread))
+                && summary["mine"]["pinned"] == serde_json::Value::Bool(true)
+        })
+    };
+    laptop.web("PATCH", &format!("/api/threads/{thread}/state"), Some(serde_json::json!({ "pinned": true })));
+    assert!(pinned(laptop));
+    assert!(eventually(|| pinned(home)), "the home machine hears of the pin");
+
+    home.silt(&["daemon", "stop"]);
+    assert!(eventually(|| pinned(home)), "the pin is kept on the home machine");
+}

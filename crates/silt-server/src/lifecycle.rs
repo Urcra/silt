@@ -178,6 +178,7 @@ impl Server {
             .await?;
             sqlx::query!("DELETE FROM leases WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM notifications WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM thread_state WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM touches WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM thread_activity WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM search WHERE thread_id = ?", thread).execute(&mut *tx).await?;

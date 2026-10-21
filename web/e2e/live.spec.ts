@@ -291,7 +291,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
   await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
   await page.getByLabel('code comment').fill('give it a better name')
-  await page.getByRole('button', { name: 'Add' }).click()
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(changes.getByText('alice: give it a better name')).toBeVisible()
 
   await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()
@@ -392,4 +392,48 @@ test("a new thread starts with what its project says, until the person picks", a
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await pick(/origin/)
   await expect(form.getByLabel('agent to start')).toHaveValue('fake')
+})
+
+test('each person pins, snoozes and settles threads for themselves, and sees what changed since they looked', async ({ browser }) => {
+  const alice = await (await browser.newContext()).newPage()
+  const bob = await (await browser.newContext()).newPage()
+  await alice.goto(live.alice)
+  await bob.goto(live.bob)
+  const sidebar = (page: Page) => page.getByRole('navigation', { name: 'projects' })
+  const shared = (page: Page) => sidebar(page).getByRole('link', { name: /Add a farewell$/ }).first()
+  const act = async (page: Page, action: string) => {
+    await shared(page).hover()
+    await sidebar(page).getByRole('button', { name: 'actions for Add a farewell' }).first().click()
+    await page.getByRole('menuitem', { name: action }).click()
+  }
+
+  await act(alice, 'Pin')
+  await expect(sidebar(alice).getByRole('region', { name: 'pinned' })).toContainText('Add a farewell')
+  await expect(sidebar(bob).getByRole('region', { name: 'pinned' })).toHaveCount(0)
+  await act(alice, 'Unpin')
+  await act(alice, 'Snooze until something happens')
+  const snoozed = sidebar(alice).getByRole('region', { name: 'snoozed' })
+  await expect(snoozed).toContainText('1')
+  await snoozed.getByRole('button', { expanded: false }).click()
+  await snoozed.getByRole('button', { name: 'actions for Add a farewell' }).click()
+  await alice.getByRole('menuitem', { name: 'Wake up' }).click()
+  await expect(snoozed).toHaveCount(0)
+
+  // Bob looks, then Alice edits: Bob sees there's something new.
+  await shared(bob).click()
+  await expect(bob.getByText('Please add a farewell line to main').first()).toBeVisible()
+  await sidebar(bob).getByRole('link', { name: 'All threads' }).click()
+  await expect(shared(bob).getByRole('img', { name: 'unread' })).toHaveCount(0)
+  await openFile(alice, live.alice)
+  await alice.getByTestId('editor').locator('.cm-content').click()
+  await alice.keyboard.press('ControlOrMeta+End')
+  await alice.keyboard.type('fn later() {}\n')
+  await expect(shared(bob).getByRole('img', { name: 'unread' })).toBeVisible({ timeout: 20_000 })
+  await shared(bob).click()
+  await expect(shared(bob).getByRole('img', { name: 'unread' })).toHaveCount(0)
+
+  await act(alice, 'Settle')
+  await expect(sidebar(alice).getByRole('region', { name: 'settled' })).toContainText('1')
+  await alice.context().close()
+  await bob.context().close()
 })

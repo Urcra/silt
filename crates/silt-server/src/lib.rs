@@ -12,7 +12,7 @@ use axum::extract::{DefaultBodyLimit, Extension, Path as UrlPath, Query, Request
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use silt_log::Delta;
@@ -38,6 +38,7 @@ mod git;
 mod inbox;
 mod index;
 mod lifecycle;
+mod me;
 mod orgs;
 mod pages;
 mod presence;
@@ -270,6 +271,8 @@ impl Server {
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/projects", get(projects::list))
+            .route("/v1/me/threads", get(me::threads))
+            .route("/v1/me/threads/{thread}", patch(me::change_thread))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));

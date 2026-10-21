@@ -97,6 +97,71 @@ pub struct RegisterThread {
     pub origin_url: Option<String>,
 }
 
+/// A value and when someone set it, so the newest of two settings wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Stamped<T> {
+    pub value: T,
+    pub at_ms: i64,
+}
+
+/// A thread put out of the way until `until`, or until it's woken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Snooze {
+    /// None when not snoozed.
+    pub until: Option<i64>,
+    /// A new turn or merge request activity ends it early.
+    pub wake_on_activity: bool,
+}
+
+/// What one person keeps about one thread for themselves (ADR 0024). A
+/// change is one of these with only the fields it sets; [`ThreadState::merge`]
+/// keeps the newest of each field, so changes made apart agree once both are
+/// seen, in any order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ThreadState {
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub thread: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<Stamped<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snooze: Option<Stamped<Snooze>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled: Option<Stamped<bool>>,
+    /// When the person last looked at the thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_ms: Option<Stamped<i64>>,
+}
+
+fn newest<T: Ord + Copy>(mine: &mut Option<Stamped<T>>, theirs: Option<Stamped<T>>) -> bool {
+    let Some(theirs) = theirs else {
+        return false;
+    };
+    // Equal times fall to the larger value, so both sides pick the same.
+    let newer = mine.is_none_or(|mine| (theirs.at_ms, theirs.value) > (mine.at_ms, mine.value));
+    if newer {
+        *mine = Some(theirs);
+    }
+    newer
+}
+
+impl ThreadState {
+    pub fn new(thread: ThreadId) -> Self {
+        Self { thread, pinned: None, snooze: None, settled: None, seen_ms: None }
+    }
+
+    /// Takes each of `other`'s fields that is newer; says whether any was.
+    pub fn merge(&mut self, other: &ThreadState) -> bool {
+        let pinned = newest(&mut self.pinned, other.pinned);
+        let snooze = newest(&mut self.snooze, other.snooze);
+        let settled = newest(&mut self.settled, other.settled);
+        let seen = newest(&mut self.seen_ms, other.seen_ms);
+        pinned || snooze || settled || seen
+    }
+}
+
 /// A project the caller can see (ADR 0023).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -375,6 +440,35 @@ mod tests {
     use silt_types::{ActorId, Lamport};
 
     use super::*;
+
+    #[test]
+    fn thread_state_keeps_the_newest_of_each_field_whatever_the_order() {
+        let thread = ThreadId(7);
+        let at = |value, at_ms| Some(Stamped { value, at_ms });
+        let laptop = ThreadState { pinned: at(true, 10), settled: at(true, 30), ..ThreadState::new(thread) };
+        let phone = ThreadState {
+            pinned: at(false, 20),
+            snooze: Some(Stamped { value: Snooze { until: Some(99), wake_on_activity: true }, at_ms: 5 }),
+            ..ThreadState::new(thread)
+        };
+        let mut one = laptop.clone();
+        assert!(one.merge(&phone));
+        let mut other = phone.clone();
+        assert!(other.merge(&laptop));
+        assert_eq!(one, other);
+        assert_eq!(one.pinned, at(false, 20));
+        assert_eq!(one.settled, at(true, 30));
+        assert!(!one.clone().merge(&laptop), "seeing an older change again changes nothing");
+
+        let (mut tie_a, mut tie_b) = (
+            ThreadState { pinned: at(false, 1), ..ThreadState::new(thread) },
+            ThreadState { pinned: at(true, 1), ..ThreadState::new(thread) },
+        );
+        let a = tie_a.clone();
+        tie_a.merge(&tie_b);
+        tie_b.merge(&a);
+        assert_eq!(tie_a, tie_b);
+    }
 
     #[test]
     fn a_project_is_named_after_its_remote_and_shared_without_credentials() {

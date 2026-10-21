@@ -11,6 +11,7 @@ import type {
   InboxEntry,
   InboxRead,
   LiveState,
+  Mine,
   MrDetails,
   MrSummary,
   PresenceReply,
@@ -22,6 +23,7 @@ import type {
   Resumed,
   SearchResult,
   StartOptions,
+  StateChange,
   ThreadSummary,
   TurnInfo,
 } from './api.generated'
@@ -117,6 +119,7 @@ export const api = {
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
   branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
   projects: () => request<Project[]>('GET', '/api/projects'),
+  setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
   addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
   status: () => request<DaemonStatus>('GET', '/api/status'),

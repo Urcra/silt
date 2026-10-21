@@ -14,6 +14,7 @@ mod lifecycle;
 mod live;
 mod load;
 pub mod paths;
+mod personal;
 mod presets;
 mod projects;
 pub mod protocol;

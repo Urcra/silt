@@ -28,6 +28,20 @@ impl Core {
             }
         }
         let checked_out: HashSet<ThreadId> = self.checkouts.values().map(|checkout| checkout.record.thread).collect();
+        let me = self.own_user();
+        let mrs = self.mr_list(None).unwrap_or_default();
+        let merged: HashSet<&str> = mrs.iter().filter(|mr| mr.status == "approved").map(|mr| mr.fork.as_str()).collect();
+        let reviewing: HashSet<&str> = mrs
+            .iter()
+            .filter(|mr| mr.status == "open")
+            .filter(|mr| {
+                self.find_thread(&mr.target)
+                    .ok()
+                    .and_then(|target| self.threads.get(&target))
+                    .is_some_and(|target| target.owner.is_empty() || target.owner == me)
+            })
+            .map(|mr| mr.target.as_str())
+            .collect();
         let mut summaries: Vec<ThreadSummary> = records
             .into_iter()
             .map(|record| {
@@ -76,6 +90,10 @@ impl Core {
                     collaborators: self.collaborators.get(&record.id).cloned().unwrap_or_default(),
                     writable: self.may_write(record.id),
                     agent_state: self.agent_state(record.id),
+                    last_ms: deltas.iter().map(|delta| delta.time_ms).max().unwrap_or(record.created_ms),
+                    merged: merged.contains(record.id.to_string().as_str()),
+                    review: reviewing.contains(record.id.to_string().as_str()),
+                    mine: self.personal.mine(record.id),
                 }
             })
             .collect();

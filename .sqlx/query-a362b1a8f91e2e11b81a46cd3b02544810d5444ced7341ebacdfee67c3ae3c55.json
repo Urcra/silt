@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM thread_state WHERE thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a362b1a8f91e2e11b81a46cd3b02544810d5444ced7341ebacdfee67c3ae3c55"
+}

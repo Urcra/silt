@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useContext, useRef, useState } from 'react'
-import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { MainScroll } from '../scroll'
 import { useActions } from '../shortcuts'
+import { useThreadState } from '../threadState'
 import { Button, Input, toast } from '../ui'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
@@ -131,6 +132,13 @@ function Entry({
   )
 }
 
+/** Offers pinning, snoozing and settling the thread in the palette. */
+function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
+  const items = useThreadState(summary)
+  useActions(items.map((item) => ({ id: `state:${item.label}`, label: `${item.label} this thread`, run: item.onSelect })))
+  return null
+}
+
 /** Fork the thread here, or offer a fork's work back to its source as a merge request. */
 function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   const navigate = useNavigate()
@@ -189,6 +197,11 @@ export function ThreadView({ id }: { id: string }) {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const summary = threads.data?.find((thread) => thread.id === history.data?.thread)
   const fullId = history.data?.thread ?? id
+  // Looking at the thread marks it seen, again whenever something new happens in it.
+  const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
+  useEffect(() => {
+    if (unseen) void api.setThreadState(fullId, { pinned: null, snooze: null, settled: null, seen: true }).catch(() => undefined)
+  }, [fullId, unseen])
   useTopic('threads')
   useTopic(history.data ? `thread:${history.data.thread}` : null)
   const entries = history.data?.entries ?? []
@@ -242,6 +255,7 @@ export function ThreadView({ id }: { id: string }) {
           <Copy command={`silt resume ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <Copy command={`silt fork ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <ForkActions thread={fullId} forked={Boolean(summary?.forked_from)} />
+          {summary && <ThreadStateActions summary={summary} />}
         </div>
         <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
         {history.data?.thread && (

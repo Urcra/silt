@@ -365,6 +365,8 @@ async fn nothing_is_open_without_signing_in() {
         (Method::GET, "/v1/inbox".to_owned()),
         (Method::GET, "/v1/orgs".to_owned()),
         (Method::GET, "/v1/projects".to_owned()),
+        (Method::GET, "/v1/me/threads".to_owned()),
+        (Method::PATCH, format!("/v1/me/threads/{THREAD}")),
         (Method::GET, "/v1/trash".to_owned()),
         (Method::POST, format!("/v1/threads/{THREAD}/delete")),
         (Method::GET, format!("/git/{REPO}/info/refs?service=git-upload-pack")),
@@ -374,7 +376,36 @@ async fn nothing_is_open_without_signing_in() {
     }
 }
 
+#[tokio::test]
+async fn each_person_keeps_their_own_state_of_a_thread_they_see() {
+    use silt_proto::{Stamped, ThreadState};
+    let world = world(Visibility::Team("core".into())).await;
+    let person = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let change = |client: &Client, state: &ThreadState| {
+        client.request(Method::PATCH, &format!("/v1/me/threads/{THREAD}")).json(state).send()
+    };
+    let pinned_at = |value, at_ms| ThreadState { pinned: Some(Stamped { value, at_ms }), ..ThreadState::new(THREAD) };
+
+    assert_eq!(change(&world.alice, &pinned_at(true, 20)).await.expect("sends").status(), StatusCode::OK);
+    // An older change from another device doesn't undo a newer one.
+    let answered: ThreadState = change(&world.alice, &pinned_at(false, 10)).await.expect("sends").json().await.expect("state");
+    assert_eq!(answered.pinned, Some(Stamped { value: true, at_ms: 20 }));
+    assert_eq!(world.alice.thread_states().await, [pinned_at(true, 20)]);
+
+    // Bob shares the thread but not Alice's state of it; Erin can't see it.
+    assert!(person("bob").thread_states().await.is_empty());
+    assert_eq!(change(person("bob"), &pinned_at(false, 30)).await.expect("sends").status(), StatusCode::OK);
+    assert_eq!(world.alice.thread_states().await, [pinned_at(true, 20)]);
+    assert_eq!(change(person("erin"), &pinned_at(true, 40)).await.expect("sends").status(), StatusCode::NOT_FOUND);
+    let elsewhere = ThreadState::new(ThreadId(999));
+    assert_eq!(change(&world.alice, &elsewhere).await.expect("sends").status(), StatusCode::BAD_REQUEST);
+}
+
 impl Client {
+    async fn thread_states(&self) -> Vec<silt_proto::ThreadState> {
+        self.request(Method::GET, "/v1/me/threads").send().await.expect("sends").json().await.expect("states")
+    }
+
     async fn projects(&self) -> Vec<silt_proto::ProjectInfo> {
         let reply: silt_proto::ProjectsReply =
             self.request(Method::GET, "/v1/projects").send().await.expect("sends").json().await.expect("projects");

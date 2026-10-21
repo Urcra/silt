@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id, state, pending FROM thread_state",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "thread_state",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_state",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "pending",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_state",
+            "name": "pending"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "14ba7fa3d11a03156c0033b4d3774a438e8ad6590a84aef8fc65e4cf84885d3e"
+}

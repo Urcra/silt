@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO thread_state (thread_id, state, pending) VALUES (?, ?, ?)\n             ON CONFLICT (thread_id) DO UPDATE SET state = excluded.state, pending = excluded.pending",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9e149cd9b7e130d19c5ef7e336b46e4a7804d18beaac87d5fefd58e9e45437d4"
+}

@@ -307,6 +307,25 @@ impl Machine {
     pub fn log_line(&self, thread: &str) -> Option<String> {
         self.stdout(&["log"]).lines().find(|line| line.starts_with(thread)).map(str::to_owned)
     }
+
+    /// Asks this machine's daemon over HTTP, as the web UI does; panics
+    /// unless it answers 200.
+    pub fn web(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
+        let url = self.stdout(&["open", "--no-browser"]);
+        let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+        let mut command = Command::new("curl");
+        command
+            .args(["-s", "-w", "\n%{http_code}", "-X", method, "-H", "Content-Type: application/json", "-H"])
+            .arg(format!("Authorization: Bearer {token}"));
+        if let Some(body) = body {
+            command.arg("--data").arg(body.to_string());
+        }
+        let output = command.arg(format!("{base}{path}")).output().expect("curl runs");
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (json, status) = text.rsplit_once('\n').expect("a status line");
+        assert_eq!(status, "200", "{method} {path}: {json}");
+        serde_json::from_str(json).unwrap_or(serde_json::Value::Null)
+    }
 }
 
 impl Drop for Machine {

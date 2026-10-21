@@ -142,6 +142,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 core.pulled(family, epoch, generation, outcome, error).await
             }
             Event::Listed(listing, requested) => core.listed(listing, requested).await,
+            Event::ThreadStates { sent, fetched } => core.thread_states_synced(sent, fetched).await,
         }
         if let Err(error) = core.end_turn().await {
             warn!(%error, "could not note what the store holds");

@@ -95,6 +95,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/agents/start", post(agent_start))
         .route("/api/clones/branches", get(branches))
         .route("/api/projects", get(projects).post(add_clone))
+        .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
@@ -442,6 +443,14 @@ struct CloneQuery {
 
 async fn branches(State(web): State<Web>, Query(query): Query<CloneQuery>) -> HttpResponse {
     ask(&web, Request::Branches { clone: query.path }).await
+}
+
+async fn thread_state(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(change): Json<crate::protocol::StateChange>,
+) -> HttpResponse {
+    ask(&web, Request::ThreadState { thread, change }).await
 }
 
 async fn projects(State(web): State<Web>) -> HttpResponse {
