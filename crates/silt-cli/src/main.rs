@@ -176,6 +176,9 @@ enum Command {
         /// A history entry, numbered as `silt history` shows them
         #[arg(long)]
         entry: Option<usize>,
+        /// Answer this comment, by its id as `silt comments` shows it
+        #[arg(long, conflicts_with_all = ["file", "entry"])]
+        reply: Option<String>,
         #[arg(required = true)]
         text: Vec<String>,
     },
@@ -622,7 +625,14 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::InFlight { path } => commands::in_flight(&path),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment { thread, file, lines, entry, text } => commands::comment(&thread, file, lines, entry, &text.join(" ")),
+        Command::Comment { thread, file, lines, entry, reply: Some(comment), text }
+            if file.is_none() && lines.is_none() && entry.is_none() =>
+        {
+            commands::reply(&thread, &comment, &text.join(" "))
+        }
+        Command::Comment { thread, file, lines, entry, reply: _, text } => {
+            commands::comment(&thread, file, lines, entry, &text.join(" "))
+        }
         Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
         Command::Server { command } => match command {
             ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {

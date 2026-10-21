@@ -165,6 +165,13 @@ pub enum Request {
         comment: String,
         cwd: PathBuf,
     },
+    /// Answers a comment, under it.
+    Reply {
+        thread: String,
+        comment: String,
+        text: String,
+        cwd: PathBuf,
+    },
     /// Sets the visibility of the project at `cwd`, or of `thread`'s family.
     SetVisibility {
         cwd: PathBuf,
@@ -700,6 +707,18 @@ pub struct CommentView {
     pub text: String,
     pub resolved: bool,
     pub location: CommentLocation,
+    /// The conversation under it, oldest first (ADR 0025).
+    #[serde(default)]
+    pub replies: Vec<ReplyView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ReplyView {
+    pub id: String,
+    pub by: String,
+    pub time_ms: i64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1097,6 +1116,7 @@ mod tests {
             Project::decl(&config),
             PromptAttachment::decl(&config),
             Queued::decl(&config),
+            ReplyView::decl(&config),
             Pulled::decl(&config),
             ReplicaDeltas::decl(&config),
             Resumed::decl(&config),

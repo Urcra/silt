@@ -145,6 +145,9 @@ pub fn comments(comments: &[CommentView]) -> String {
             comment_location(&comment.location),
             comment.text
         );
+        for reply in &comment.replies {
+            let _ = writeln!(out, "      ↳ {} {}: {}", reply.id, reply.by, reply.text);
+        }
     }
     out
 }

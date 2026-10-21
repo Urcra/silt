@@ -91,6 +91,13 @@ pub enum CommentOp {
     Resolved {
         comment: DeltaId,
     },
+    /// An answer under the comment `parent`; a reply to a reply names the
+    /// first comment, so each comment has one flat conversation (ADR 0025).
+    Replied {
+        parent: DeltaId,
+        text: String,
+        by: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -407,6 +407,43 @@ fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
         )
     };
     assert_eq!(read(&mut deltas.iter()), read(&mut deltas.iter().rev()));
+
+    // Replies, a reply to a reply among them, sit under the first comment
+    // in the same order on every replica.
+    let first = deltas[4].span.first();
+    let mut replica = family.clone();
+    for delta in &deltas {
+        replica.apply(delta.clone(), &mut bases()).expect("applies");
+    }
+    let tip: Frontier = replica.thread_head(THREAD);
+    let reply = |actor: u128, parent, text: &str| {
+        replica.delta(
+            ActorId(actor),
+            THREAD,
+            Author::User,
+            0,
+            tip.clone(),
+            Op::Comment(CommentOp::Replied { parent, text: text.into(), by: "c".into() }),
+        )
+    };
+    let answer = reply(30, first, "agreed");
+    let nested = reply(31, answer.span.first(), "me too");
+    let other = reply(32, first, "but why");
+    let replied = |order: &[&Delta]| {
+        let mut copy = replica.clone();
+        for delta in order {
+            copy.apply((*delta).clone(), &mut bases()).expect("applies");
+        }
+        copy.comments(THREAD)
+            .into_iter()
+            .map(|comment| (comment.text, comment.replies.into_iter().map(|reply| reply.text).collect::<Vec<_>>()))
+            .collect::<Vec<_>>()
+    };
+    let forward = replied(&[&answer, &nested, &other]);
+    assert_eq!(forward, replied(&[&other, &answer, &nested]));
+    assert_eq!(forward[0].0, "first");
+    assert_eq!(forward[0].1.len(), 3);
+    assert!(forward[1].1.is_empty());
 }
 
 #[test]

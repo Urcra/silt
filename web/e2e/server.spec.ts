@@ -127,10 +127,15 @@ test('people sign in with a password', async ({ page }) => {
 })
 
 test('a device is approved in the browser', async ({ page }) => {
+  // Asked without a version, the server says which one it speaks.
+  const mismatch = (await fetch(`${base}/v1/device/start`, { method: 'POST' }).then((response) => response.json())) as {
+    supported: number[]
+  }
+  const protocol = String(mismatch.supported[0])
   const api = (path: string, body: unknown) =>
     fetch(`${base}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'silt-protocol': '3' },
+      headers: { 'content-type': 'application/json', 'silt-protocol': protocol },
       body: JSON.stringify(body),
     }).then((response) => response.json())
   const started = await api('/v1/device/start', { name: 'build-box' })

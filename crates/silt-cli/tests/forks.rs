@@ -345,10 +345,19 @@ fn the_inbox_hears_about_merge_requests_comments_and_mentions() {
 
     alice.silt(&["mr", "approve", &mr]);
     assert!(eventually(|| bob.stdout(&["inbox"]).contains("alice approved and merged your merge request")));
-    alice.silt(&["comment", &thread, "--entry", "0", "nice work @bob"]);
+    let praised = alice.stdout(&["comment", &thread, "--entry", "0", "nice work @bob"]);
+    let praise = praised.split_whitespace().nth(2).expect("the comment's id").to_owned();
     assert!(eventually(|| bob.stdout(&["inbox"]).contains("alice mentioned you")));
     bob.silt(&["comment", &thread, "--entry", "0", "thanks"]);
     assert!(eventually(|| alice.stdout(&["inbox"]).contains("bob commented on thread")));
+
+    // A reply goes under the comment and tells its author.
+    assert!(eventually(|| bob.try_stdout(&["comments", &thread]).contains(&praise)));
+    bob.silt(&["comment", &thread, "--reply", &praise, "glad to help"]);
+    assert!(eventually(|| alice.stdout(&["inbox"]).contains("bob replied on thread")), "{}", alice.stdout(&["inbox"]));
+    assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("↳")));
+    let listed = alice.stdout(&["comments", &thread]);
+    assert!(listed.contains("bob: glad to help"), "{listed}");
 
     alice.silt(&["inbox", "read", "--all"]);
     assert!(alice.stdout(&["inbox"]).contains("nothing new"));

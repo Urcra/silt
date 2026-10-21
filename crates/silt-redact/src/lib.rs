@@ -189,7 +189,7 @@ impl Redactor {
                 text(summary);
             }
             Op::Mr(MrOp::Declined { reason, .. }) => text(reason),
-            Op::Comment(CommentOp::Added { text: comment, .. }) => text(comment),
+            Op::Comment(CommentOp::Added { text: comment, .. } | CommentOp::Replied { text: comment, .. }) => text(comment),
             _ => {}
         }
         Redacted { delta, found }

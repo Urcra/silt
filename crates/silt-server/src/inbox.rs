@@ -125,6 +125,24 @@ impl Server {
                     }
                     mentioned.clone_from(text);
                 }
+                Op::Comment(CommentOp::Replied { parent, text, .. }) => {
+                    // The comment's author and those who replied before.
+                    let people = self.shared.index.lock().await.comment_people(*parent);
+                    for name in people.iter().filter(|name| **name != actor_name) {
+                        let Some(user) = crate::accounts::user_by_name(db, name).await? else {
+                            continue;
+                        };
+                        if viewers.sees(self, user.id, delta.thread).await? {
+                            notes.push(Note {
+                                user: user.id,
+                                kind: "reply",
+                                thread: delta.thread,
+                                text: format!("{actor_name} replied on thread {}: {}", delta.thread.short(), clip(text)),
+                            });
+                        }
+                    }
+                    mentioned.clone_from(text);
+                }
                 _ => {}
             }
             for name in mentions(&mentioned).into_iter().take(MENTIONS_LIMIT) {

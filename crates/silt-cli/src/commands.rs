@@ -756,6 +756,14 @@ pub fn comment(
     Ok(())
 }
 
+pub fn reply(thread: &str, comment: &str, text: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let request = Request::Reply { thread: thread.into(), comment: comment.into(), text: text.into(), cwd: current_dir()? };
+    let answered: CommentView = call(&request)?;
+    println!("replied to {}", answered.id);
+    Ok(())
+}
+
 pub fn comments(thread: &str, resolve: Option<&str>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     if let Some(comment) = resolve {

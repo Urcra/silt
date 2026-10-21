@@ -9,6 +9,7 @@ import { MainScroll } from '../scroll'
 import { useActions } from '../shortcuts'
 import { useThreadState } from '../threadState'
 import { Button, Input, toast } from '../ui'
+import { CommentThread } from './CommentThread'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
 import { LivePanel } from './Live'
@@ -84,12 +85,14 @@ function Entry({
   thread,
   comments,
   onComment,
+  onChanged,
 }: {
   entry: HistoryEntry
   turn: TurnInfo | undefined
   thread: string
   comments: CommentView[]
   onComment: (text: string) => Promise<void>
+  onChanged: () => Promise<unknown>
 }) {
   const [commenting, setCommenting] = useState(false)
   if (entry.kind === 'compaction' && entry.text.startsWith('(context compacted')) {
@@ -113,9 +116,9 @@ function Entry({
             {entry.text}
           </p>
           {comments.map((comment) => (
-            <p key={comment.id} className="ml-2 rounded-sm bg-accent-tint px-2 py-0.5 text-xs text-fg-1">
-              {comment.by}: {comment.text} {comment.resolved && '(resolved)'}
-            </p>
+            <div key={comment.id} className="ml-2 my-0.5">
+              <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
+            </div>
           ))}
           {turn && <TurnDiff thread={thread} turn={turn} />}
           {commenting && <CommentBox onSave={(text) => onComment(text).then(() => setCommenting(false))} />}
@@ -291,6 +294,7 @@ export function ThreadView({ id }: { id: string }) {
                     await api.addComment(id, { on: 'entry', index: entry.index }, text)
                     await reloadComments()
                   }}
+                  onChanged={reloadComments}
                 />
               </div>
             )
@@ -310,9 +314,7 @@ export function ThreadView({ id }: { id: string }) {
                   : 'unknown place'}
                 {comment.location.at === 'lines' && comment.location.outdated && ' (outdated)'}
               </p>
-              <p>
-                {comment.by}: {comment.text}
-              </p>
+              <CommentThread thread={id} comment={comment} onChanged={reloadComments} />
               {!comment.resolved && (
                 <button
                   className="text-xs text-accent-fg"

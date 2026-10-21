@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use silt_agents::Transcripts;
 use silt_crdt::{InodeId, InodeKind, Parent};
-use silt_log::{ConvOp, Delta, GitOp, MrOp, Op};
+use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
 use sqlx::{Sqlite, Transaction};
 
@@ -33,6 +33,10 @@ pub(crate) struct Index {
     /// may fetch the blob.
     blobs: HashMap<BlobHash, Vec<(FamilyId, DeltaId)>>,
     transcripts: Transcripts,
+    /// Who took part in each comment, its author first, by the comment's id.
+    comment_people: HashMap<DeltaId, Vec<String>>,
+    /// Each reply's comment.
+    reply_roots: HashMap<DeltaId, DeltaId>,
 }
 
 /// A row to write for a delta.
@@ -97,6 +101,19 @@ impl Index {
                 }
                 None
             }
+            Op::Comment(CommentOp::Added { by, .. }) => {
+                self.comment_people.entry(delta.span.first()).or_default().insert(0, by.clone());
+                None
+            }
+            Op::Comment(CommentOp::Replied { parent, by, .. }) => {
+                let root = self.reply_roots.get(parent).copied().unwrap_or(*parent);
+                self.reply_roots.insert(delta.span.first(), root);
+                let people = self.comment_people.entry(root).or_default();
+                if !people.contains(by) {
+                    people.push(by.clone());
+                }
+                None
+            }
             Op::Mr(MrOp::Approved { mr }) => {
                 if let Some(fork) = self.requests.get(mr) {
                     rows.push(Row::Merged { thread: *fork });
@@ -116,6 +133,12 @@ impl Index {
             rows.push(Row::Touch { thread, path, time_ms });
         }
         rows
+    }
+
+    /// Who took part in the comment a reply to `parent` joins, by name.
+    pub(crate) fn comment_people(&self, parent: DeltaId) -> Vec<String> {
+        let root = self.reply_roots.get(&parent).copied().unwrap_or(parent);
+        self.comment_people.get(&root).cloned().unwrap_or_default()
     }
 
     /// The fork a merge request came from.

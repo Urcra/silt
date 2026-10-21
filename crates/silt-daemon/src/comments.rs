@@ -11,7 +11,7 @@ use silt_types::{FamilyId, ThreadId};
 
 use crate::core::{Core, CoreError, RepoBases};
 use crate::forks::short_mr;
-use crate::protocol::{CommentLocation, CommentOn, CommentView};
+use crate::protocol::{CommentLocation, CommentOn, CommentView, ReplyView};
 
 impl Core {
     /// Projects a family known only from the server, reading its git blobs
@@ -115,15 +115,49 @@ impl Core {
         let thread = self.find_thread(selector)?;
         let family_id = self.threads[&thread].family;
         self.ensure_projected(family_id, cwd).await?;
-        let family = &self.families[&family_id];
-        let id = family
+        let id = self.comment_id(family_id, thread, comment)?;
+        let head = self.families[&family_id].thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Resolved { comment: id })).await?;
+        self.comment_view(selector, id)
+    }
+
+    /// Answers `comment`, or the comment a reply of that id answers.
+    pub(crate) async fn reply(
+        &mut self,
+        selector: &str,
+        comment: &str,
+        text: String,
+        cwd: &Path,
+    ) -> Result<CommentView, CoreError> {
+        if text.trim().is_empty() {
+            return Err(CoreError::Invalid("there is nothing to reply".into()));
+        }
+        let thread = self.find_thread(selector)?;
+        let family_id = self.threads[&thread].family;
+        self.ensure_projected(family_id, cwd).await?;
+        let parent = self.comment_id(family_id, thread, comment)?;
+        let by = match self.own_user() {
+            user if user.is_empty() => "you".to_owned(),
+            user => user,
+        };
+        let head = self.families[&family_id].thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Replied { parent, text, by })).await?;
+        self.comment_view(selector, parent)
+    }
+
+    /// The comment `name` (short or whole) names on the thread; a reply's
+    /// name means its comment.
+    fn comment_id(&self, family_id: FamilyId, thread: ThreadId, name: &str) -> Result<silt_types::DeltaId, CoreError> {
+        let named = |id: silt_types::DeltaId| short_mr(id) == name || id.to_string() == name;
+        self.families[&family_id]
             .comments(thread)
             .into_iter()
-            .find(|found| short_mr(found.id) == comment || found.id.to_string() == comment)
+            .find(|found| named(found.id) || found.replies.iter().any(|reply| named(reply.id)))
             .map(|found| found.id)
-            .ok_or_else(|| CoreError::Invalid(format!("no comment {comment} on this thread")))?;
-        let head = family.thread_head(thread);
-        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Resolved { comment: id })).await?;
+            .ok_or_else(|| CoreError::Invalid(format!("no comment {name} on this thread")))
+    }
+
+    fn comment_view(&mut self, selector: &str, id: silt_types::DeltaId) -> Result<CommentView, CoreError> {
         self.comments(selector)?
             .into_iter()
             .find(|found| found.id == short_mr(id))
@@ -176,6 +210,11 @@ impl Core {
                     text: comment.text,
                     resolved: comment.resolved,
                     location,
+                    replies: comment
+                        .replies
+                        .into_iter()
+                        .map(|reply| ReplyView { id: short_mr(reply.id), by: reply.by, time_ms: reply.time_ms, text: reply.text })
+                        .collect(),
                 }
             })
             .collect())

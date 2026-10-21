@@ -476,6 +476,7 @@ impl Core {
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
+            Request::Reply { thread, comment, text, cwd } => to_response(self.reply(&thread, &comment, text, &cwd).await),
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }

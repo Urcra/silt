@@ -93,7 +93,11 @@ export type CommentLocation = { "at": "entry", index: number, excerpt: string, }
 
 export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, };
 
-export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, location: CommentLocation, };
+export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, location: CommentLocation, 
+/**
+ * The conversation under it, oldest first (ADR 0025).
+ */
+replies: Array<ReplyView>, };
 
 export type DaemonStatus = { server: string | null, device: string | null, sync_error: string | null, threads: number, 
 /**
@@ -228,6 +232,8 @@ export type PromptAttachment = { name: string, mime: string,
 data: string, };
 
 export type Queued = { id: number, author: string, text: string, created_ms: number, };
+
+export type ReplyView = { id: string, by: string, time_ms: number, text: string, };
 
 export type Pulled = { thread: string, from: string, 
 /**

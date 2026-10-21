@@ -180,6 +180,16 @@ pub struct Comment {
     pub by: String,
     pub time_ms: i64,
     pub resolved: bool,
+    /// Oldest first, by causal order.
+    pub replies: Vec<Reply>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub id: DeltaId,
+    pub text: String,
+    pub by: String,
+    pub time_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -428,20 +438,50 @@ impl Family {
         let resolved: HashSet<DeltaId> = ops()
             .filter_map(|(_, op)| match op {
                 CommentOp::Resolved { comment } => Some(*comment),
-                CommentOp::Added { .. } => None,
+                _ => None,
             })
             .collect();
+        // A reply naming another reply, as an older or careless peer may
+        // send, still lands under the first comment.
+        let parent_of: HashMap<DeltaId, DeltaId> = ops()
+            .filter_map(|(delta, op)| match op {
+                CommentOp::Replied { parent, .. } => Some((delta.span.first(), *parent)),
+                _ => None,
+            })
+            .collect();
+        let root = |mut id: DeltaId| {
+            for _ in 0..parent_of.len() {
+                match parent_of.get(&id) {
+                    Some(parent) => id = *parent,
+                    None => break,
+                }
+            }
+            id
+        };
+        let mut replies: HashMap<DeltaId, Vec<Reply>> = HashMap::new();
+        for (delta, op) in ops() {
+            if let CommentOp::Replied { parent, text, by } = op {
+                let reply = Reply { id: delta.span.first(), text: text.clone(), by: by.clone(), time_ms: delta.time_ms };
+                replies.entry(root(*parent)).or_default().push(reply);
+            }
+        }
         let mut comments: Vec<Comment> = ops()
             .filter_map(|(delta, op)| match op {
-                CommentOp::Added { target, text, by } => Some(Comment {
-                    id: delta.span.first(),
-                    target: *target,
-                    text: text.clone(),
-                    by: by.clone(),
-                    time_ms: delta.time_ms,
-                    resolved: resolved.contains(&delta.span.first()),
-                }),
-                CommentOp::Resolved { .. } => None,
+                CommentOp::Added { target, text, by } => {
+                    let id = delta.span.first();
+                    let mut replies = replies.remove(&id).unwrap_or_default();
+                    replies.sort_by_key(|reply| Stamp::from(reply.id));
+                    Some(Comment {
+                        id,
+                        target: *target,
+                        text: text.clone(),
+                        by: by.clone(),
+                        time_ms: delta.time_ms,
+                        resolved: resolved.contains(&id),
+                        replies,
+                    })
+                }
+                _ => None,
             })
             .collect();
         comments.sort_by_key(|comment| Stamp::from(comment.id));

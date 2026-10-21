@@ -86,6 +86,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
+        .route("/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/api/search", get(search))
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
@@ -352,6 +353,19 @@ async fn add_comment(State(web): State<Web>, Path(thread): Path<String>, Json(bo
 async fn resolve_comment(State(web): State<Web>, Path((thread, comment)): Path<(String, String)>) -> HttpResponse {
     let request = Request::ResolveComment { thread, comment, cwd: no_clone() };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct NewReply {
+    text: String,
+}
+
+async fn reply(
+    State(web): State<Web>,
+    Path((thread, comment)): Path<(String, String)>,
+    Json(body): Json<NewReply>,
+) -> HttpResponse {
+    ask(&web, Request::Reply { thread, comment, text: body.text, cwd: no_clone() }).await
 }
 
 async fn search(State(web): State<Web>, Query(query): Query<HashMap<String, String>>) -> HttpResponse {

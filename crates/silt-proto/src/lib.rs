@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
-pub const PROTOCOL: u32 = 3;
+/// 4: comment replies and requested changes (ADR 0025).
+pub const PROTOCOL: u32 = 4;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -747,7 +748,8 @@ pub enum OrgChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notification {
     pub id: i64,
-    /// `mr_opened`, `mr_approved`, `mr_declined`, `comment` or `mention`.
+    /// `mr_opened`, `mr_approved`, `mr_declined`, `comment`, `reply` or
+    /// `mention`.
     pub kind: String,
     pub thread: ThreadId,
     /// Who caused it.

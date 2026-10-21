@@ -100,6 +100,8 @@ export const api = {
   comments: (id: string) => request<CommentView[]>('GET', `${thread(id)}/comments`),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
+  reply: (id: string, comment: string, text: string) =>
+    request<CommentView>('POST', `${thread(id)}/comments/${encodeURIComponent(comment)}/replies`, { text }),
   resolveComment: (id: string, comment: string) =>
     request<CommentView>('POST', `${thread(id)}/comments/${encodeURIComponent(comment)}/resolve`),
   search: (query: string, filters: SearchForm) => {

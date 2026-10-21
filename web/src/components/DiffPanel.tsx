@@ -7,6 +7,7 @@ import { keys, message } from '../query'
 import { type Lines, linesOf, reviewPrompt } from '../review'
 import { useActions } from '../shortcuts'
 import { Button, Input, Select, Tabs } from '../ui'
+import { CommentThread } from './CommentThread'
 
 type View = 'last-turn' | 'thread' | 'main' | 'other'
 
@@ -50,13 +51,17 @@ function LineComment({ at, onSave, onCancel }: { at: Lines; onSave: (text: strin
 
 /** A diff whose new lines take comments from the gutter; shift-click picks a range. */
 function ReviewDiff({
+  thread,
   text,
   comments,
   onComment,
+  onChanged,
 }: {
+  thread: string
   text: string
   comments: CommentView[]
   onComment: (at: Lines, text: string) => Promise<void>
+  onChanged: () => Promise<unknown>
 }) {
   const [picking, setPicking] = useState<Lines | null>(null)
   const [writing, setWriting] = useState(false)
@@ -99,9 +104,9 @@ function ReviewDiff({
               <span className="pr-2 whitespace-pre">{line.text || ' '}</span>
             </div>
             {endingAt(line.path, line.newLine).map((comment) => (
-              <p key={comment.id} className="mx-2 my-0.5 rounded-sm bg-accent-tint px-2 py-0.5 font-sans text-fg-1">
-                {comment.by}: {comment.text}
-              </p>
+              <div key={comment.id} className="mx-2 my-0.5">
+                <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
+              </div>
             ))}
             {writing && picking && picking.path === line.path && picking.end === line.newLine && (
               <LineComment
@@ -196,12 +201,14 @@ export function DiffPanel({
       {open && diff.data !== undefined && (
         <div className="mt-2">
           <ReviewDiff
+            thread={thread}
             text={diff.data}
             comments={comments}
             onComment={async (at, text) => {
               await api.addComment(thread, { on: 'lines', ...at }, text)
               await onCommented()
             }}
+            onChanged={onCommented}
           />
         </div>
       )}
