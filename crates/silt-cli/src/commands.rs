@@ -20,7 +20,6 @@ use silt_daemon::protocol::{
 use crate::CliError;
 use crate::render;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const HOOK_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn fail(message: impl Into<String>) -> Exn<CliError> {
@@ -29,8 +28,9 @@ fn fail(message: impl Into<String>) -> Exn<CliError> {
 
 /// Sends a request to the running daemon and decodes its answer.
 pub(crate) fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliError>> {
-    let response = client::send(&paths::socket_path(), request, REQUEST_TIMEOUT)
-        .or_raise(|| CliError("the Silt daemon is not answering; try `silt daemon start`".into()))?;
+    let response = client::send(&paths::socket_path(), request, None).or_raise(|| {
+        CliError("could not get an answer from the Silt daemon; check `silt daemon status`".into())
+    })?;
     match response {
         Response::Ok { data } => {
             serde_json::from_value(data).or_raise(|| CliError("unexpected answer from the daemon".into()))
@@ -40,7 +40,7 @@ pub(crate) fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliE
 }
 
 pub(crate) fn is_running() -> bool {
-    client::send(&paths::socket_path(), &Request::Ping, Duration::from_secs(2)).is_ok()
+    client::send(&paths::socket_path(), &Request::Ping, Some(Duration::from_secs(2))).is_ok()
 }
 
 /// Starts the daemon in the background unless it already runs.
@@ -576,7 +576,7 @@ pub fn hook(agent: Option<&str>, event: &str) {
         event: event.to_owned(),
         input,
     };
-    let Ok(Response::Ok { data }) = client::send(&paths::socket_path(), &request, HOOK_TIMEOUT) else {
+    let Ok(Response::Ok { data }) = client::send(&paths::socket_path(), &request, Some(HOOK_TIMEOUT)) else {
         return;
     };
     if let Ok(HookReply {
