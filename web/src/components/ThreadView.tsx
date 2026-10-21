@@ -13,6 +13,7 @@ import { CommentThread } from './CommentThread'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
 import { LivePanel } from './Live'
+import { ShareDialog } from './ShareDialog'
 
 const KIND_STYLE: Record<string, string> = {
   user: 'font-medium text-fg-1',
@@ -259,6 +260,7 @@ export function ThreadView({ id }: { id: string }) {
           <Copy command={`silt fork ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <ForkActions thread={fullId} forked={Boolean(summary?.forked_from)} />
           {summary && <ThreadStateActions summary={summary} />}
+          {summary && <ShareDialog thread={summary} />}
         </div>
         <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
         {history.data?.thread && (

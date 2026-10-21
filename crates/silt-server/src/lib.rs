@@ -543,7 +543,8 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         }
     }
     let rows = sqlx::query!(
-        r#"SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS "device_id?", l.epoch AS "epoch?", u.name AS owner
+        r#"SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS "device_id?", l.epoch AS "epoch?", u.name AS owner,
+             t.visibility
          FROM threads t
          JOIN users u ON u.id = t.owner_id
          LEFT JOIN leases l ON l.thread_id = t.id
@@ -552,10 +553,16 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
     .fetch_all(&server.shared.db)
     .await?;
     let mut shared = collab::collaborators(&server.shared.db).await?;
+    let mut visibility = Vec::new();
     let threads = rows
         .into_iter()
         .map(|row| (ThreadId(id_from(&row.id)), row))
         .filter(|(id, _)| viewer.sees_thread(*id))
+        .inspect(|(id, row)| {
+            if let Some(own) = row.visibility.as_deref().and_then(|own| own.parse::<silt_proto::Visibility>().ok()) {
+                visibility.push((*id, own));
+            }
+        })
         .map(|(id, row)| ThreadInfo {
             id,
             family: FamilyId(id_from(&row.family_id)),
@@ -570,7 +577,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         })
         .collect();
     let (deleted, purged) = server.lifecycle(&viewer).await?;
-    Ok(Json(Listing { families, threads, deleted, purged }))
+    Ok(Json(Listing { families, threads, deleted, purged, visibility }))
 }
 
 async fn register_thread(

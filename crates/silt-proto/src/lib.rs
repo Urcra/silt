@@ -270,6 +270,10 @@ pub struct Listing {
     /// Threads purged for good: every device drops them (ADR 0013).
     #[serde(default)]
     pub purged: Vec<ThreadId>,
+    /// The listed threads that have a visibility of their own; the others
+    /// follow their project's or org's.
+    #[serde(default)]
+    pub visibility: Vec<(ThreadId, Visibility)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

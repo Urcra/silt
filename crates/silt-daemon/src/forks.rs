@@ -364,6 +364,9 @@ impl Core {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;
                 remote.set_visibility(None, Some(thread), visibility.clone()).await.map_err(refused)?;
+                // Shown at once, before the next listing says so.
+                self.visibility.insert(thread, visibility.clone());
+                self.announce(crate::protocol::BusEvent::Threads);
                 Ok(format!("thread {} is now {visibility}; forks without a setting of their own follow it", thread.short(),))
             }
             None => {

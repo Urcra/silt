@@ -94,6 +94,7 @@ impl Core {
                     merged: merged.contains(record.id.to_string().as_str()),
                     review: reviewing.contains(record.id.to_string().as_str()),
                     mine: self.personal.mine(record.id),
+                    visibility: self.visibility.get(&record.id).cloned(),
                 }
             })
             .collect();

@@ -165,6 +165,9 @@ pub struct Core {
     pub(crate) trash_changed: HashMap<ThreadId, Instant>,
     /// Each thread's collaborators, from the server's listing.
     pub(crate) collaborators: HashMap<ThreadId, Vec<String>>,
+    /// The threads with a visibility of their own, as the server last listed
+    /// them.
+    pub(crate) visibility: HashMap<ThreadId, Visibility>,
     /// Clones this machine knows by repository, for projecting families
     /// that started elsewhere.
     pub(crate) clones: HashMap<String, PathBuf>,
@@ -343,6 +346,7 @@ impl Core {
             deleted: HashSet::new(),
             trash_changed: HashMap::new(),
             collaborators: HashMap::new(),
+            visibility: HashMap::new(),
             clones: HashMap::new(),
             pull_paused: HashMap::new(),
             acp: HashMap::new(),

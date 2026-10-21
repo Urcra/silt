@@ -497,3 +497,27 @@ test("an org's owners set it up in the web UI, and its members only see it", asy
   await alice.context().close()
   await bob.context().close()
 })
+
+test('the owner shares a thread from its page: who sees it, and who may write into it', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('link', { name: live.thread }).click()
+  await page.getByRole('button', { name: 'Share' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Share this thread' })
+  const collaborators = dialog.getByRole('list', { name: 'collaborators' })
+  await expect(collaborators).toContainText('bob')
+
+  await collaborators.getByRole('button', { name: 'Remove' }).click()
+  await expect(collaborators).toContainText('Nobody yet.')
+  await dialog.getByLabel('person to add').fill('bob')
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(collaborators).toContainText('bob')
+
+  await dialog.getByLabel('who sees it').selectOption('private')
+  await expect(dialog.getByLabel('who sees it')).toHaveValue('private')
+  await dialog.getByLabel('who sees it').selectOption('org')
+  await expect(dialog.getByLabel('who sees it')).toHaveValue('org')
+
+  await dialog.getByLabel('person to add').fill('nobody-by-that-name')
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(dialog).toContainText('could not share the thread')
+})

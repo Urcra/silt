@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS \"device_id?\", l.epoch AS \"epoch?\", u.name AS owner\n         FROM threads t\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN leases l ON l.thread_id = t.id\n         ORDER BY t.created_ms",
+  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS \"device_id?\", l.epoch AS \"epoch?\", u.name AS owner,\n             t.visibility\n         FROM threads t\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN leases l ON l.thread_id = t.id\n         ORDER BY t.created_ms",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "name"
           }
         }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "visibility"
+          }
+        }
       }
     ],
     "parameters": {
@@ -91,8 +102,9 @@
       false,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "72f98e76d442608849824c22d34176662fd77348ce5baba6e7999772a2100eb1"
+  "hash": "5d21f301012b6c91c1fb5a78563ae59d5a47f519e052cb974f24c510d145a4dc"
 }

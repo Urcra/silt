@@ -392,6 +392,11 @@ impl Core {
         let before = self.heard().then(|| self.listed_state());
         let remote_threads: HashSet<_> = listing.threads.iter().map(|thread| thread.id).collect();
         self.follow_trash(&listing.deleted, &listing.purged, &remote_threads, requested).await;
+        let visibility: HashMap<ThreadId, silt_proto::Visibility> = listing.visibility.into_iter().collect();
+        if visibility != self.visibility {
+            self.visibility = visibility;
+            self.announce(crate::protocol::BusEvent::Threads);
+        }
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {

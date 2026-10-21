@@ -375,7 +375,11 @@ merged: boolean,
 /**
  * A merge request into it waits for this person's review.
  */
-review: boolean, mine: Mine, };
+review: boolean, mine: Mine, 
+/**
+ * Its own visibility; none when it follows its project's or org's.
+ */
+visibility: Visibility | null, };
 
 export type TurnInfo = { 
 /**

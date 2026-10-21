@@ -473,6 +473,9 @@ pub struct ThreadSummary {
     pub review: bool,
     #[serde(default)]
     pub mine: Mine,
+    /// Its own visibility; none when it follows its project's or org's.
+    #[serde(default)]
+    pub visibility: Option<silt_proto::Visibility>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
