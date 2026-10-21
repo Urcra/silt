@@ -1,7 +1,7 @@
 //! Who records the session of an agent the wrapper runs: the daemon, or the
 //! wrapper itself when no daemon answers (ADR 0018). A wrapper recording on
-//! its own hands the session to the daemon once one answers, and takes it
-//! back if that daemon goes away.
+//! its own hands the session to a daemon once one answers, and takes it
+//! over itself whenever the daemon recording it goes away.
 
 use std::env;
 use std::io;
@@ -16,33 +16,35 @@ use silt_daemon::paths;
 use silt_daemon::protocol::{Request, Response, SessionStarted};
 
 use crate::CliError;
-use crate::commands::call;
 
-/// How often the wrapper recording on its own runs the capture step.
+/// How often the wrapper looks whether to run the capture step.
 const STEP_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a daemon may take to answer before it counts as not answering.
 const PING_WAIT: Duration = Duration::from_millis(500);
 
 /// Its end is recorded on every way out of the wrapper, errors included;
 /// otherwise later edits would be credited to an agent that is gone.
-pub(crate) enum Recording {
-    Daemon { thread: String, ended: bool },
-    Here { runtime: tokio::runtime::Runtime, local: Local },
+pub(crate) struct Recording {
+    runtime: tokio::runtime::Runtime,
+    local: Local,
 }
 
-/// A session this process records.
-pub(crate) struct Local {
+struct Local {
     thread: String,
-    /// `None` once the session's end is recorded.
+    /// While the daemon records the session, its recorder here, if any, is
+    /// kept to take the session back.
     recorder: Option<Box<silt_daemon::Recorder>>,
+    by_daemon: bool,
     /// Whether a daemon that answers may take the session over.
     hand_over: bool,
-    handed_over: bool,
+    ended: bool,
 }
 
 impl Recording {
-    pub(crate) fn by_daemon(thread: &str) -> Self {
-        Self::Daemon { thread: thread.to_owned(), ended: false }
+    /// A session the daemon started and records.
+    pub(crate) fn by_daemon(thread: &str) -> Result<Self, Exn<CliError>> {
+        let local = Local { thread: thread.to_owned(), recorder: None, by_daemon: true, hand_over: true, ended: false };
+        Ok(Self { runtime: runtime()?, local })
     }
 
     /// Starts the agent's session in this process. With `hand_over`, a
@@ -54,27 +56,24 @@ impl Recording {
         isolated: bool,
         hand_over: bool,
     ) -> Result<(SessionStarted, Self), Exn<CliError>> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .or_raise(|| CliError("cannot start the async runtime".into()))?;
+        let runtime = runtime()?;
         let run = silt_daemon::NewRun { cwd, agent: agent.id(), session_id, isolated };
         let (recorder, started) = runtime
             .block_on(silt_daemon::Recorder::start(&paths::data_dir(), run))
             .or_raise(|| CliError("could not start recording the session".into()))?;
-        let local = Local { thread: started.thread.clone(), recorder: Some(Box::new(recorder)), hand_over, handed_over: false };
-        Ok((started, Self::Here { runtime, local }))
+        let local = Local {
+            thread: started.thread.clone(),
+            recorder: Some(Box::new(recorder)),
+            by_daemon: false,
+            hand_over,
+            ended: false,
+        };
+        Ok((started, Self { runtime, local }))
     }
 
-    /// Runs `command` until it exits, running the capture step meanwhile
-    /// when recording here.
+    /// Runs `command` until it exits, stepping meanwhile.
     pub(crate) fn run(&mut self, command: Command) -> io::Result<std::process::ExitStatus> {
-        match self {
-            Self::Daemon { .. } => {
-                tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(run_until_exit(command, None))
-            }
-            Self::Here { runtime, local } => runtime.block_on(run_until_exit(command, Some(local))),
-        }
+        self.runtime.block_on(run_until_exit(command, &mut self.local))
     }
 
     pub(crate) fn end(mut self) -> Result<(), Exn<CliError>> {
@@ -82,28 +81,30 @@ impl Recording {
     }
 
     fn end_once(&mut self) -> Result<(), Exn<CliError>> {
-        match self {
-            Self::Daemon { ended: true, .. } => Ok(()),
-            Self::Daemon { thread, ended } => {
-                *ended = true;
-                call::<String>(&Request::EndSession { thread: thread.clone() })?;
-                Ok(())
-            }
-            Self::Here { runtime, local } => {
-                let Some(recorder) = local.recorder.take() else {
-                    return Ok(());
-                };
-                // A daemon that went away meanwhile leaves the end to this
-                // process.
-                if local.handed_over && call::<String>(&Request::EndSession { thread: local.thread.clone() }).is_ok() {
-                    return Ok(());
-                }
-                let ended =
-                    runtime.block_on((*recorder).end()).or_raise(|| CliError("could not record the end of the session".into()));
-                push_in_background(&local.thread);
-                ended
-            }
+        let local = &mut self.local;
+        if local.ended {
+            return Ok(());
         }
+        local.ended = true;
+        let thread = local.thread.clone();
+        let by_daemon = local.by_daemon
+            && self.runtime.block_on(daemon_answers())
+            && client::send(&paths::socket_path(), &Request::EndSession { thread: thread.clone() }, None)
+                .is_ok_and(|response| matches!(response, Response::Ok { .. }));
+        if by_daemon {
+            return Ok(());
+        }
+        // The daemon recording the session went away, or stopped answering.
+        let recorder = match local.recorder.take() {
+            Some(recorder) => *recorder,
+            None => self
+                .runtime
+                .block_on(silt_daemon::Recorder::attach(&paths::data_dir(), &thread))
+                .or_raise(|| CliError("could not record the end of the session".into()))?,
+        };
+        let ended = self.runtime.block_on(recorder.end()).or_raise(|| CliError("could not record the end of the session".into()));
+        push_in_background(&thread);
+        ended
     }
 }
 
@@ -113,24 +114,39 @@ impl Drop for Recording {
     }
 }
 
+fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))
+}
+
 impl Local {
-    /// Runs the capture step unless a daemon records the session, and hands
-    /// the session to a daemon that answers now.
+    /// Runs the capture step unless the daemon records the session, taking
+    /// the session over from a daemon that went away, and hands it to a
+    /// daemon that answers now.
     async fn step(&mut self) {
-        let Some(recorder) = self.recorder.as_mut() else {
-            return;
-        };
-        if self.handed_over {
+        if self.by_daemon {
             if silt_daemon::holds_lock(&paths::data_dir()) {
                 return;
             }
-            self.handed_over = false;
+            if self.recorder.is_none() {
+                match silt_daemon::Recorder::attach(&paths::data_dir(), &self.thread).await {
+                    Ok(recorder) => self.recorder = Some(Box::new(recorder)),
+                    Err(error) => {
+                        eprintln!("silt: could not take over recording: {}", silt_daemon::protocol::error_chain(&error));
+                        return;
+                    }
+                }
+            }
+            self.by_daemon = false;
         }
+        let recorder = self.recorder.as_mut().expect("recording here");
         if let Err(error) = recorder.tick().await {
             eprintln!("silt: could not record: {}", silt_daemon::protocol::error_chain(&error));
         }
         if self.hand_over && recorder.found() && daemon_answers().await {
-            self.handed_over = adopted(&self.thread).await;
+            self.by_daemon = adopted(&self.thread).await;
         }
     }
 }
@@ -154,9 +170,9 @@ async fn adopted(thread: &str) -> bool {
 /// Runs the agent until it exits. Ctrl-C and Ctrl-\ reach the agent from
 /// the terminal, which handles them; this wrapper stays to record the end of
 /// the session. A hangup or termination is passed on to the agent, and the
-/// wrapper still waits for it to exit. Recording `local`ly, it steps every
-/// `STEP_INTERVAL` meanwhile.
-async fn run_until_exit(command: Command, mut local: Option<&mut Local>) -> io::Result<std::process::ExitStatus> {
+/// wrapper still waits for it to exit. It steps every `STEP_INTERVAL`
+/// meanwhile.
+async fn run_until_exit(command: Command, local: &mut Local) -> io::Result<std::process::ExitStatus> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut child = tokio::process::Command::from(command).spawn()?;
     let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
@@ -175,7 +191,7 @@ async fn run_until_exit(command: Command, mut local: Option<&mut Local>) -> io::
             _ = quit.recv() => {}
             _ = hangup.recv() => pass_on(&child, rustix::process::Signal::HUP),
             _ = terminate.recv() => pass_on(&child, rustix::process::Signal::TERM),
-            _ = steps.tick(), if local.is_some() => local.as_mut().expect("only steps with one").step().await,
+            _ = steps.tick() => local.step().await,
         }
     }
 }

@@ -195,7 +195,7 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
             isolated,
             existing: false,
         })?;
-        let recording = Recording::by_daemon(&started.thread);
+        let recording = Recording::by_daemon(&started.thread)?;
         (started, recording)
     } else {
         // The agent starts without waiting for the daemon, which takes the
@@ -435,7 +435,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
         }
     };
     let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd };
-    let mut recording = Recording::by_daemon(&resumed.thread);
+    let mut recording = Recording::by_daemon(&resumed.thread)?;
     let status = run.launch(start, args, &mut recording)?;
     recording.end()?;
     exit_like(status)

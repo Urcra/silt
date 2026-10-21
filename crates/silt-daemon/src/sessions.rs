@@ -643,14 +643,22 @@ impl Core {
     /// which recorded it on its own until now: its sessions are live here,
     /// in the turn the log says, and what changed meanwhile is taken in.
     pub(crate) async fn adopt(&mut self, thread: ThreadId) -> Result<&'static str, CoreError> {
+        self.adopted.insert(thread);
+        tracing::info!(%thread, "took over recording the agent from its wrapper");
+        self.take_over_sessions(thread).await?;
+        Ok("adopted")
+    }
+
+    /// Records the thread's running agent from here on: its sessions are
+    /// live, in the turn the log says, and what changed meanwhile is taken
+    /// in.
+    pub(crate) async fn take_over_sessions(&mut self, thread: ThreadId) -> Result<(), CoreError> {
         let ids: Vec<String> = self
             .sessions
             .iter()
             .filter(|session| session.record.thread == thread)
             .map(|session| session.record.session_id.clone())
             .collect();
-        self.adopted.insert(thread);
-        tracing::info!(%thread, "took over recording the agent from its wrapper");
         let mut checkouts = HashSet::new();
         for id in &ids {
             let session = self.session(id).expect("listed above");
@@ -666,7 +674,7 @@ impl Core {
                 self.rescan(checkout).await?;
             }
         }
-        Ok("adopted")
+        Ok(())
     }
 
     /// The capture step for the thread's agent run by a process that isn't

@@ -1,8 +1,9 @@
 //! Recording an agent's session from the wrapper that runs it, without the
-//! daemon (ADR 0018). The wrapper starts the thread, runs the capture step
-//! every second for an agent without hooks, and once more when the agent
-//! exits; an agent with hooks captures through them. Each step is a turn at
-//! writing that first takes in what others stored.
+//! daemon (ADR 0018). The wrapper starts the thread, or takes it over from
+//! a daemon that went away, runs the capture step every second for an agent
+//! without hooks, and once more when the agent exits; an agent with hooks
+//! captures through them. Each step is a turn at writing that first takes
+//! in what others stored.
 
 use std::path::Path;
 
@@ -48,6 +49,25 @@ impl Recorder {
         core.end_turn().await?;
         drop(turn);
         Ok((Self { core, lock, thread, _recording: recording }, started))
+    }
+
+    /// Takes over recording the running agent of `thread` from a daemon
+    /// that went away.
+    pub async fn attach(data_dir: &Path, thread: &str) -> Result<Self, CoreError> {
+        let lock = CaptureLock::open(data_dir)?;
+        let turn = turn_in_time(&lock).await?;
+        let store = Store::open(data_dir).await?;
+        let actor = crate::server::load_actor(data_dir)?;
+        let mut core = Core::visiting(store, actor, data_dir).await?;
+        let thread = core.find_thread(thread)?;
+        let recording = RecordingLock::hold(data_dir, thread)?;
+        core.hold_family(core.threads[&thread].family).await?;
+        let sessions = core.store.sessions().await?.into_iter().filter(|record| record.thread == thread).collect();
+        core.take_sessions(sessions).await?;
+        core.take_over_sessions(thread).await?;
+        core.end_turn().await?;
+        drop(turn);
+        Ok(Self { core, lock, thread, _recording: recording })
     }
 
     /// Runs the capture step, when the agent needs one.

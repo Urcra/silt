@@ -43,6 +43,12 @@ hook() {
 say() {
     printf '%s\n' "$1" >> "$transcript"
 }
+# Lets a test act while the tool runs: says so, then waits to be let go.
+in_tool() {
+    [ -n "${FAKE_IN_TOOL:-}" ] || return 0
+    touch "$FAKE_IN_TOOL"
+    while [ ! -e "$FAKE_IN_TOOL.go" ]; do sleep 0.05; done
+}
 if [ -n "$resume" ]; then
     grep -q "\"cwd\":\"$(pwd)\"" "$transcript" || { echo "transcript not restored for $(pwd)" >&2; exit 3; }
     grep -q "Please add a farewell line" "$transcript" || { echo "conversation missing" >&2; exit 3; }
@@ -61,6 +67,7 @@ if [ -n "$resume" ]; then
     hook UserPromptSubmit toolu_2 > "$CLAUDE_CONFIG_DIR/last-hook-output"
     say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"file_path":"src/main.rs"}}]}}'
     hook PreToolUse toolu_2
+    in_tool
     printf '%s\n' "${FAKE_LINE:-fn home() {\}}" >> src/main.rs
     hook PostToolUse toolu_2
     say '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"edited","is_error":false}]}}'
@@ -73,6 +80,7 @@ say "{\"type\":\"user\",\"cwd\":\"$(pwd)\",\"sessionId\":\"$session\",\"message\
 hook UserPromptSubmit toolu_1
 say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"src/main.rs"}}]}}'
 hook PreToolUse toolu_1
+in_tool
 printf 'fn farewell() {}\n' >> src/main.rs
 hook PostToolUse toolu_1
 mkdir -p "$dir/$session/tool-results"

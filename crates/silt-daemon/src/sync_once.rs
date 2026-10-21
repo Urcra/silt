@@ -88,7 +88,7 @@ pub async fn sync_once(data_dir: &Path, thread: Option<&str>) -> Result<Synced, 
 
 impl Core {
     /// Takes on the family here with its checkouts and sync progress.
-    async fn hold_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
+    pub(crate) async fn hold_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
         let repo = self.family_repo(family_id).ok();
         let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
         self.take_loaded(family_id, loaded);
