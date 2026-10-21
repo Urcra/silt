@@ -1,23 +1,24 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short } from '../api'
-import { href } from '../router'
-import { useLoad } from '../useLoad'
+import { keys, message } from '../query'
 import { Conversation } from './Conversation'
 import { Diff } from './Diff'
 
 export function MergeRequests() {
-  const requests = useLoad(api.mergeRequests, 'mrs')
+  const requests = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests })
   return (
     <div>
       <h2 className="mb-2 text-lg font-semibold">Merge requests</h2>
-      {requests.error && <p className="text-rose-700">{requests.error}</p>}
+      {requests.error && <p className="text-rose-700">{message(requests.error)}</p>}
       <ul data-testid="merge-requests" className="space-y-1 text-sm">
         {requests.data?.length === 0 && <li className="text-neutral-500">No merge requests.</li>}
         {[...(requests.data ?? [])].reverse().map((request) => (
           <li key={request.id}>
-            <a className="text-sky-700" href={href({ page: 'mr', id: request.id })}>
+            <Link className="text-sky-700" to="/mr/$id" params={{ id: request.id }}>
               {request.title}
-            </a>{' '}
+            </Link>{' '}
             <span className="text-xs text-neutral-500">
               {short(request.fork)} → {short(request.target)} · {request.status}
             </span>
@@ -29,12 +30,16 @@ export function MergeRequests() {
 }
 
 export function MergeRequest({ id }: { id: string }) {
-  const details = useLoad(() => api.mergeRequest(id), `mr:${id}`)
+  const details = useQuery({ queryKey: keys.mr(id), queryFn: () => api.mergeRequest(id) })
+  const queries = useQueryClient()
   const [error, setError] = useState<string>()
   const [reason, setReason] = useState('')
   const act = (action: Promise<unknown>) =>
-    action.then(details.reload, (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)))
-  if (details.error) return <p className="text-rose-700">{details.error}</p>
+    action.then(
+      () => queries.invalidateQueries({ queryKey: keys.mrs }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  if (details.error) return <p className="text-rose-700">{message(details.error)}</p>
   if (!details.data) return <p className="text-neutral-500">Loading…</p>
   const { mr, diff, conflicts, conversation } = details.data
   return (
@@ -43,13 +48,13 @@ export function MergeRequest({ id }: { id: string }) {
         <h2 className="text-lg font-semibold">{mr.title}</h2>
         <p className="text-sm text-neutral-600">
           From fork{' '}
-          <a className="font-mono text-sky-700" href={href({ page: 'thread', id: mr.fork })}>
+          <Link className="font-mono text-sky-700" to="/t/$id" params={{ id: mr.fork }}>
             {short(mr.fork)}
-          </a>{' '}
+          </Link>{' '}
           into{' '}
-          <a className="font-mono text-sky-700" href={href({ page: 'thread', id: mr.target })}>
+          <Link className="font-mono text-sky-700" to="/t/$id" params={{ id: mr.target }}>
             {short(mr.target)}
-          </a>{' '}
+          </Link>{' '}
           · <span data-testid="mr-status">{mr.status}</span>
         </p>
         <p className="mt-2 whitespace-pre-wrap text-sm">{mr.summary}</p>

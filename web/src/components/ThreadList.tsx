@@ -1,17 +1,18 @@
+import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { api, short } from '../api'
-import { href } from '../router'
-import { useLoad } from '../useLoad'
+import { keys, message } from '../query'
 import { NewAgentThread } from './Agent'
 import { Search } from './Search'
 
 export function ThreadList() {
-  const threads = useLoad(api.threads, 'threads')
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   return (
     <div>
       <Search />
       <h2 className="mb-2 text-lg font-semibold">Threads</h2>
       <NewAgentThread />
-      {threads.error && <p className="text-rose-700">{threads.error}</p>}
+      {threads.error && <p className="text-rose-700">{message(threads.error)}</p>}
       <table className="w-full text-left text-sm">
         <thead className="text-xs text-neutral-500">
           <tr>
@@ -28,9 +29,9 @@ export function ThreadList() {
           {[...(threads.data ?? [])].reverse().map((thread) => (
             <tr key={thread.id} className="border-t border-neutral-100">
               <td className="py-1 font-mono">
-                <a className="text-sky-700" href={href({ page: 'thread', id: thread.id })}>
+                <Link className="text-sky-700" to="/t/$id" params={{ id: thread.id }}>
                   {short(thread.id)}
-                </a>
+                </Link>
               </td>
               <td>
                 {thread.title ?? <span className="text-neutral-400">untitled</span>}

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, short, type SearchForm, type SearchResult } from '../api'
-import { href } from '../router'
+import { Link } from '@tanstack/react-router'
 
 const FILTERS: [keyof SearchForm, string][] = [
   ['repo', 'repo'],
@@ -57,9 +57,9 @@ export function Search() {
           {results.length === 0 && <li className="text-neutral-500">No matches.</li>}
           {results.map((hit, index) => (
             <li key={index}>
-              <a className="font-mono text-sky-700" href={href({ page: 'thread', id: hit.thread })}>
+              <Link className="font-mono text-sky-700" to="/t/$id" params={{ id: hit.thread }}>
                 {short(hit.thread)}
-              </a>{' '}
+              </Link>{' '}
               <span className="text-xs text-neutral-500">
                 {[hit.owner, hit.status, hit.kind].filter(Boolean).join(' · ')}
               </span>{' '}

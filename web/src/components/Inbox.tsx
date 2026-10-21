@@ -1,16 +1,17 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { api, short } from '../api'
-import { href } from '../router'
-import { useLoad } from '../useLoad'
+import { api, short, type InboxRead } from '../api'
+import { keys, message } from '../query'
 
 export function Inbox() {
   const [all, setAll] = useState(false)
-  const [version, setVersion] = useState(0)
-  const inbox = useLoad(() => api.inbox(all), `inbox:${all}:${version}`)
+  const queries = useQueryClient()
+  const inbox = useQuery({ queryKey: keys.inbox(all), queryFn: () => api.inbox(all) })
   const notifications = inbox.data ?? []
-  const markRead = async (read: { ids?: number[]; all?: boolean }) => {
+  const markRead = async (read: Partial<InboxRead>) => {
     await api.readNotifications(read)
-    setVersion(version + 1)
+    await queries.invalidateQueries({ queryKey: ['inbox'] })
   }
   return (
     <div>
@@ -23,14 +24,14 @@ export function Inbox() {
           Mark all read
         </button>
       </div>
-      {inbox.error && <p className="text-rose-700">{inbox.error}</p>}
-      {!inbox.error && notifications.length === 0 && <p className="text-neutral-500">Nothing new.</p>}
+      {inbox.error && <p className="text-rose-700">{message(inbox.error)}</p>}
+      {inbox.isSuccess && notifications.length === 0 && <p className="text-neutral-500">Nothing new.</p>}
       <ul data-testid="inbox" className="space-y-2">
         {notifications.map((notification) => (
           <li key={notification.id} className={notification.read ? 'text-neutral-500' : ''}>
-            <a className="text-sky-700" href={href({ page: 'thread', id: notification.thread })}>
+            <Link className="text-sky-700" to="/t/$id" params={{ id: notification.thread }}>
               {short(notification.thread)}
-            </a>{' '}
+            </Link>{' '}
             {notification.text}{' '}
             {!notification.read && (
               <button

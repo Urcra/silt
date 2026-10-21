@@ -1,14 +1,11 @@
+import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, type AgentStatus, type Presence } from '../api'
-import { href } from '../router'
-import { useLoad } from '../useLoad'
-
-function message(failure: unknown): string {
-  return failure instanceof Error ? failure.message : String(failure)
-}
+import { keys, message } from '../query'
 
 function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
-  const choices = useLoad(api.agents, 'agents')
+  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
   return (
     <select
       aria-label="agent to start"
@@ -28,7 +25,8 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
 
 /** Starts an agent in a new thread of a clone this machine knows. */
 export function NewAgentThread() {
-  const choices = useLoad(api.agents, 'agents')
+  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
+  const navigate = useNavigate()
   const [agent, setAgent] = useState('')
   const [clone, setClone] = useState('')
   const [error, setError] = useState<string>()
@@ -41,7 +39,7 @@ export function NewAgentThread() {
         event.preventDefault()
         setError(undefined)
         api.startAgent(agent, { clone: clone || clones[0].path }).then(
-          (thread) => (window.location.hash = href({ page: 'thread', id: thread })),
+          (thread) => void navigate({ to: '/t/$id', params: { id: thread } }),
           (failure: unknown) => setError(message(failure)),
         )
       }}

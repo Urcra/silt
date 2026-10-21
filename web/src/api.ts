@@ -38,7 +38,7 @@ export async function takeTokenFromUrl(): Promise<void> {
       sessionStorage.setItem(TOKEN_KEY, token)
     }
   }
-  if (token || code) window.location.hash = '#/'
+  if (token || code) window.history.replaceState(null, '', window.location.pathname + window.location.search)
 }
 
 export class ApiError extends Error {}

@@ -2,11 +2,10 @@ import { render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from './App'
 import { lineClass } from './diffStyle'
-import { parseRoute } from './router'
+import { legacyPath } from './legacy'
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  window.location.hash = ''
 })
 
 test('lists threads from the daemon', async () => {
@@ -20,15 +19,17 @@ test('lists threads from the daemon', async () => {
     }),
   )
   render(<App />)
-  expect(screen.getByRole('heading', { name: 'Silt' })).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'Silt' })).toBeInTheDocument()
   expect(await screen.findByText('Fix the lexer')).toBeInTheDocument()
   expect(screen.getByText('456789abcdef')).toBeInTheDocument()
 })
 
-test('routes and diff lines are understood', () => {
-  expect(parseRoute('#/t/abc')).toEqual({ page: 'thread', id: 'abc' })
-  expect(parseRoute('#/mr/12ab.4')).toEqual({ page: 'mr', id: '12ab.4' })
-  expect(parseRoute('#token=1')).toEqual({ page: 'threads' })
+test('old hash links move to paths, and diff lines are understood', () => {
+  expect(legacyPath('#/t/abc')).toBe('/t/abc')
+  expect(legacyPath('#/mr/12ab.4')).toBe('/mr/12ab.4')
+  expect(legacyPath('#/inbox')).toBe('/inbox')
+  expect(legacyPath('#/')).toBe('/')
+  expect(legacyPath('#token=1')).toBeUndefined()
   expect(lineClass('+added')).toContain('emerald')
   expect(lineClass('+++ b/x')).toContain('neutral-500')
 })

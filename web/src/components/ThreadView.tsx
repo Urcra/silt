@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
+import { useWindowVirtualizer } from '@tanstack/react-virtual'
+import { useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
-import { href } from '../router'
-import { useLoad } from '../useLoad'
+import { keys, message } from '../query'
 import { Diff } from './Diff'
 import { LivePanel } from './Live'
 
@@ -33,7 +35,11 @@ function Copy({ command }: { command: string }) {
 
 function TurnDiff({ thread, turn }: { thread: string; turn: TurnInfo }) {
   const [open, setOpen] = useState(false)
-  const diff = useLoad(() => (open ? api.diff(thread, { turn: turn.number }) : Promise.resolve('')), `${thread}:${turn.number}:${open}`)
+  const diff = useQuery({
+    queryKey: keys.diff(thread, { turn: turn.number }),
+    queryFn: () => api.diff(thread, { turn: turn.number }),
+    enabled: open,
+  })
   return (
     <div className="my-1">
       <button className="text-xs text-sky-700" onClick={() => setOpen(!open)}>
@@ -149,21 +155,32 @@ function CodeComment({ onSave }: { onSave: (path: string, start: number, end: nu
 }
 
 export function ThreadView({ id }: { id: string }) {
-  const history = useLoad(() => api.history(id), `history:${id}`)
-  const turns = useLoad(() => api.turns(id), `turns:${id}`)
-  const comments = useLoad(() => api.comments(id), `comments:${id}`)
+  const queries = useQueryClient()
+  const history = useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
+  const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
+  const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
+  const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(id) })
   const [showDiff, setShowDiff] = useState(false)
   const [base, setBase] = useState('')
   const [agent, setAgent] = useState('')
   const [commit, setCommit] = useState('')
   const diffBase = base === 'commit' ? (commit ? `commit:${commit}` : '') : base
-  const diff = useLoad(
-    () => (showDiff ? api.diff(id, { base: diffBase }) : Promise.resolve('')),
-    `diff:${id}:${showDiff}:${diffBase}`,
-  )
-  const threads = useLoad(api.threads, 'threads')
+  const diff = useQuery({
+    queryKey: keys.diff(id, { base: diffBase }),
+    queryFn: () => api.diff(id, { base: diffBase }),
+    enabled: showDiff,
+  })
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const summary = threads.data?.find((thread) => thread.id === history.data?.thread)
   const fullId = history.data?.thread ?? id
+  const entries = history.data?.entries ?? []
+  const list = useRef<HTMLDivElement>(null)
+  const rows = useWindowVirtualizer({
+    count: entries.length,
+    estimateSize: () => 28,
+    overscan: 20,
+    scrollMargin: list.current?.offsetTop ?? 0,
+  })
 
   const turnAt = new Map((turns.data ?? []).filter((turn) => turn.entry !== null).map((turn) => [turn.entry, turn]))
   const entryComments = (index: number) =>
@@ -178,9 +195,9 @@ export function ThreadView({ id }: { id: string }) {
         {summary?.forked_from && (
           <p className="text-sm">
             Fork of{' '}
-            <a className="font-mono text-sky-700" href={href({ page: 'thread', id: summary.forked_from })}>
+            <Link className="font-mono text-sky-700" to="/t/$id" params={{ id: summary.forked_from }}>
               {short(summary.forked_from)}
-            </a>
+            </Link>
           </p>
         )}
         {summary?.agent && <p className="text-sm text-neutral-600">Recorded with {summary.agent}</p>}
@@ -235,41 +252,51 @@ export function ThreadView({ id }: { id: string }) {
             )}
           </div>
         )}
-        {showDiff && diff.error && <p className="text-sm text-rose-700">{diff.error}</p>}
+        {showDiff && diff.error && <p className="text-sm text-rose-700">{message(diff.error)}</p>}
         {showDiff && diff.data !== undefined && <Diff text={diff.data} />}
         {history.data?.thread && (
           <LivePanel
             thread={history.data.thread}
-            onChange={history.reload}
+            onChange={() => void queries.invalidateQueries({ queryKey: keys.thread(id) })}
             lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}
           />
         )}
-        {history.error && <p className="text-rose-700">{history.error}</p>}
-        <div className="mt-4 space-y-1">
-          {(history.data?.entries ?? []).map((entry, index, entries) => (
-            <div key={entry.index}>
-              {entry.origin !== 'own' && entries[index - 1]?.origin !== entry.origin && (
-                <h4 className="mt-4 text-xs font-semibold uppercase text-neutral-500">
-                  {entry.origin === 'inherited' ? 'from the source, before this fork' : 'upstream progress'} (thread {short(entry.thread)})
-                </h4>
-              )}
-              <Entry
-                entry={entry}
-                thread={id}
-                turn={turnAt.get(entry.index)}
-                comments={entryComments(entry.index)}
-                onComment={async (text) => {
-                  await api.addComment(id, { on: 'entry', index: entry.index }, text)
-                  comments.reload()
-                }}
-              />
-            </div>
-          ))}
+        {history.error && <p className="text-rose-700">{message(history.error)}</p>}
+        <div ref={list} className="relative mt-4" style={{ height: rows.getTotalSize() }} data-testid="history">
+          {rows.getVirtualItems().map((row) => {
+            const entry = entries[row.index]
+            return (
+              <div
+                key={entry.index}
+                data-index={row.index}
+                ref={rows.measureElement}
+                className="absolute left-0 w-full pb-1"
+                style={{ transform: `translateY(${row.start - rows.options.scrollMargin}px)` }}
+              >
+                {entry.origin !== 'own' && entries[row.index - 1]?.origin !== entry.origin && (
+                  <h4 className="mt-4 text-xs font-semibold uppercase text-neutral-500">
+                    {entry.origin === 'inherited' ? 'from the source, before this fork' : 'upstream progress'} (thread{' '}
+                    {short(entry.thread)})
+                  </h4>
+                )}
+                <Entry
+                  entry={entry}
+                  thread={id}
+                  turn={turnAt.get(entry.index)}
+                  comments={entryComments(entry.index)}
+                  onComment={async (text) => {
+                    await api.addComment(id, { on: 'entry', index: entry.index }, text)
+                    await reloadComments()
+                  }}
+                />
+              </div>
+            )
+          })}
         </div>
       </div>
       <aside className="text-sm">
         <h3 className="font-semibold">Comments on code</h3>
-        {comments.error && <p className="text-xs text-rose-700">{comments.error}</p>}
+        {comments.error && <p className="text-xs text-rose-700">{message(comments.error)}</p>}
         <ul data-testid="code-comments" className="mt-2 space-y-2">
           {codeComments.length === 0 && <li className="text-xs text-neutral-500">None yet.</li>}
           {codeComments.map((comment) => (
@@ -286,7 +313,7 @@ export function ThreadView({ id }: { id: string }) {
               {!comment.resolved && (
                 <button
                   className="text-xs text-sky-700"
-                  onClick={() => void api.resolveComment(id, comment.id).then(comments.reload)}
+                  onClick={() => void api.resolveComment(id, comment.id).then(reloadComments)}
                 >
                   resolve
                 </button>
@@ -297,7 +324,7 @@ export function ThreadView({ id }: { id: string }) {
         <CodeComment
           onSave={async (path, start, end, text) => {
             await api.addComment(id, { on: 'lines', path, start, end }, text)
-            comments.reload()
+            await reloadComments()
           }}
         />
       </aside>
