@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api, type CommentView } from '../api'
 import { parseDiff } from '../diffParse'
 import { lineClass } from '../diffStyle'
+import { appHref, diffFile, filePath } from '../permalink'
 import { keys, message } from '../query'
 import { type Lines, linesOf, reviewPrompt } from '../review'
 import { useActions } from '../shortcuts'
@@ -102,6 +103,11 @@ function ReviewDiff({
                 )}
               </span>
               <span className="pr-2 whitespace-pre">{line.text || ' '}</span>
+              {diffFile(line.text) !== null && (
+                <a className="font-sans text-accent-fg" href={appHref(filePath(thread, diffFile(line.text)!))}>
+                  view file
+                </a>
+              )}
             </div>
             {endingAt(line.path, line.newLine).map((comment) => (
               <div key={comment.id} className="mx-2 my-0.5">

@@ -359,6 +359,24 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
     assert_eq!(lines(&family, THREAD), vec![("source 1".into(), Own), ("source 2".into(), Own)]);
 }
 
+#[test]
+fn a_permalink_shows_a_file_as_it_was_and_only_within_its_thread() {
+    let mut family = Family::new();
+    let main = create_main(&mut family);
+    let first = insert(&mut family, CHECKOUT_A, THREAD, main, 0, "// one\n");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    insert(&mut family, CHECKOUT_A, THREAD, main, 0, "// two\n");
+    let forked = insert(&mut family, ActorId(9), FORK, main, 0, "// fork\n");
+
+    let then = Frontier::single(first.span.last());
+    assert_eq!(family.file_in_thread_at(THREAD, "src/main.rs", &then), Some(FileView::Text("// one\nfn main() {}\n".into())));
+    assert_eq!(family.file_in_thread_at(FORK, "src/main.rs", &then), Some(FileView::Text("// one\nfn main() {}\n".into())));
+    let in_fork = Frontier::single(forked.span.last());
+    assert_eq!(family.file_in_thread_at(THREAD, "src/main.rs", &in_fork), None, "the fork's work isn't the source's");
+    assert_eq!(family.file_in_thread_at(THREAD, "src/nothing.rs", &then), None);
+}
+
 fn pull(family: &mut Family, into: ThreadId, from: ThreadId) {
     let parents: Frontier = family.thread_head(into).ids().iter().chain(family.thread_head(from).ids()).copied().collect();
     on_thread(family, DAEMON.derive(into.0), into, parents, Op::Merge { from, mr: None });

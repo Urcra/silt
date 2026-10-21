@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
 import { Devices } from './components/Devices'
+import { FilePage } from './components/FilePage'
 import { Graph } from './components/Graph'
 import { Inbox } from './components/Inbox'
 import { Layout, MergeRequestPage, ThreadPage } from './components/Layout'
@@ -24,6 +25,7 @@ export const router = createRouter({
     createRoute({ getParentRoute: () => root, path: '/needs-you', component: NeedsYou }),
     createRoute({ getParentRoute: () => root, path: '/graph', component: Graph }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: ThreadPage }),
+    createRoute({ getParentRoute: () => root, path: '/t/$id/files/$', component: FilePage }),
     createRoute({ getParentRoute: () => root, path: '/mrs', component: MergeRequests }),
     createRoute({ getParentRoute: () => root, path: '/mr/$id', component: MergeRequestPage }),
     createRoute({ getParentRoute: () => root, path: '/inbox', component: Inbox }),

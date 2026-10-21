@@ -1,12 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
+import { Link, useRouterState } from '@tanstack/react-router'
+import { useEffect, useState } from 'react'
 import { api, short, type MrFile, type MrGuide } from '../api'
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { Banner, Button, Input, Textarea } from '../ui'
 import { Conversation } from './Conversation'
+import { CopyLink } from './CopyLink'
 import { Diff } from './Diff'
+
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
+}
 
 export function MergeRequests() {
   useTopic('mrs')
@@ -93,6 +102,12 @@ export function MergeRequest({ id }: { id: string }) {
   const [error, setError] = useState<string>()
   const [reason, setReason] = useState('')
   const [ticked, setTicked] = useState<Record<string, boolean>>({})
+  const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
+  const picked = /^file-(.+)$/.exec(safeDecode(hash))?.[1]
+  const loaded = details.data !== undefined
+  useEffect(() => {
+    if (loaded && picked) document.getElementById(`file-${picked}`)?.scrollIntoView({ block: 'start' })
+  }, [loaded, picked])
   const act = (action: Promise<unknown>) =>
     action.then(
       () => queries.invalidateQueries({ queryKey: keys.mrs }),
@@ -176,7 +191,7 @@ export function MergeRequest({ id }: { id: string }) {
           </div>
           <ul className="space-y-0.5 text-sm">
             {files.map((file) => (
-              <li key={file.path}>
+              <li key={file.path} className={`flex items-center gap-3 ${file.path === picked ? 'rounded bg-accent-tint' : ''}`}>
                 <label className="flex items-center gap-2 font-mono text-xs">
                   <input
                     type="checkbox"
@@ -190,6 +205,10 @@ export function MergeRequest({ id }: { id: string }) {
                   />
                   {file.path}
                 </label>
+                <Link className="text-xs text-accent-fg" to="/mr/$id" params={{ id }} hash={`file-${file.path}`}>
+                  diff
+                </Link>
+                <CopyLink path={`/mr/${id}#file-${file.path}`} label="link" />
               </li>
             ))}
           </ul>
@@ -197,7 +216,7 @@ export function MergeRequest({ id }: { id: string }) {
       )}
       <section>
         <h3 className="mb-1 font-semibold">Changes</h3>
-        <Diff text={diff} />
+        <Diff text={diff} anchors picked={picked} />
       </section>
       <section>
         <h3 className="mb-1 font-semibold">The fork's conversation</h3>

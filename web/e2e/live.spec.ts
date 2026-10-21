@@ -515,6 +515,67 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   await page.getByRole('button', { name: 'Stop agent' }).click()
 })
 
+test('permalinks open a turn, a comment and lines of a file, here and in the server-hosted app', async ({ browser, page }) => {
+  await startInNewThread(page, 'Fake agent')
+  for (const prompt of ['permalink first', 'permalink second']) {
+    await page.getByLabel('draft').fill(prompt)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
+  }
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
+  const copied = async (button: ReturnType<Page['getByRole']>) => {
+    await button.click()
+    const text = (await page.getByText(/^Link copied: /).last().textContent()) ?? ''
+    return text.replace(/^Link copied: /, '')
+  }
+  // This machine is on a server, so links point into the server's app.
+  const here = (link: string) => new URL(`/t/${thread}${new URL(link).hash}`, live.alice).toString()
+  const entry = (on: Page, text: string) => on.getByTestId('entry').filter({ hasText: `› ${text}` })
+
+  const turn = await copied(page.getByRole('button', { name: 'link to turn 1' }))
+  expect(turn).toMatch(/\/app\/t\/[0-9a-f]+#turn-1$/)
+  await page.goto(live.alice)
+  await page.goto(here(turn))
+  await expect(entry(page, 'permalink first')).toHaveAttribute('data-highlighted', 'true')
+  await expect(entry(page, 'permalink second')).not.toHaveAttribute('data-highlighted')
+
+  await entry(page, 'permalink second').getByText('› permalink second').hover()
+  await entry(page, 'permalink second').getByRole('button', { name: /^comment on entry \d+$/ }).click()
+  await page.getByLabel('comment', { exact: true }).fill('link to this')
+  await page.getByRole('button', { name: 'Comment', exact: true }).click()
+  const said = page.getByRole('group', { name: 'comment by alice' }).filter({ hasText: 'link to this' })
+  const comment = await copied(said.getByRole('button', { name: 'link', exact: true }))
+  expect(comment).toMatch(/#comment-/)
+  await page.goto(live.alice)
+  await page.goto(here(comment))
+  await expect(said).toHaveAttribute('data-highlighted', 'true')
+
+  await page.getByRole('button', { name: 'Show changes' }).click()
+  await page.getByRole('region', { name: 'changes' }).getByRole('link', { name: 'view file' }).first().click()
+  const file = page.getByTestId('file')
+  await expect(file).toContainText('fn acp() {}')
+  await page.getByRole('button', { name: 'line 1', exact: true }).click()
+  await page.getByRole('button', { name: 'line 2', exact: true }).click({ modifiers: ['Shift'] })
+  const lines = await copied(page.getByRole('button', { name: 'copy link to these lines' }))
+  expect(lines).toMatch(/\/app\/t\/[0-9a-f]+\/files\/src\/main\.rs\?at=[^#]+#L1-L2$/)
+
+  const hosted = await (await browser.newContext()).newPage()
+  await hosted.goto(turn)
+  await hosted.getByLabel('User').fill('alice')
+  await hosted.getByLabel('Password').fill('correct horse battery')
+  await hosted.getByRole('button', { name: 'Sign in' }).click()
+  await expect(async () => {
+    await hosted.goto(turn)
+    await expect(entry(hosted, 'permalink first')).toHaveAttribute('data-highlighted', 'true', { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  // The server asks one of Alice's machines for the file, as it lacks the git text it starts from.
+  await hosted.goto(lines)
+  await expect(hosted.getByTestId('file')).toContainText('fn acp() {}')
+  await expect(hosted.locator('[data-picked]')).toHaveCount(2)
+  await hosted.context().close()
+})
+
 test('a read-only link opens the conversation without signing in, until revoked', async ({ browser }) => {
   const owner = await (await browser.newContext()).newPage()
   await owner.goto(live.alice)
@@ -955,8 +1016,23 @@ test("a thread's page lists its commits with the turns they came in", async ({ p
   await expect(commits.getByRole('link', { name: /^turn \d+$/ }).last()).toBeVisible()
 })
 
-test('the graph shows turns, commits, forks and requests, and the details of one', async ({ page }) => {
-  await page.goto(live.alice)
+test('the graph shows turns, commits, forks, requests and merges, and opens a turn from its details', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await page.getByRole('button', { name: 'Fork', exact: true }).click()
+  await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByRole('button', { name: 'Start agent' }).click()
+  await page.getByLabel('draft').fill('work to merge')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText(/^Done: [\s\S]*work to merge$/)).toBeVisible()
+  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await page.getByRole('button', { name: 'Offer as merge request' }).click()
+  await page.getByLabel('merge request title').fill('Work to merge')
+  await page.getByRole('button', { name: 'Offer', exact: true }).click()
+  await page.getByRole('button', { name: 'Approve and merge' }).click()
+  await expect(page.getByTestId('mr-status')).toHaveText('approved')
+
   await page.getByRole('banner').getByRole('link', { name: 'Graph' }).click()
   // A test above settles threads, which the graph leaves out unless asked.
   await page.getByLabel('Settled too').check()
@@ -964,6 +1040,7 @@ test('the graph shows turns, commits, forks and requests, and the details of one
   await expect(graph.getByRole('button', { name: /^commit Add the farewell/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^fork forked from/ }).first()).toBeVisible()
   await expect(graph.getByRole('button', { name: /^request Fork work/ })).toBeVisible()
+  await expect(graph.getByRole('button', { name: /^merge / }).first()).toBeVisible()
 
   await page.getByLabel('what to show').selectOption({ label: 'Commits' })
   await expect(graph.getByRole('button', { name: /^turn/ })).toHaveCount(0)
@@ -971,4 +1048,5 @@ test('the graph shows turns, commits, forks and requests, and the details of one
   const details = page.getByRole('complementary', { name: 'details' })
   await details.getByRole('link', { name: /^Turn \d+ of thread/ }).click()
   await expect(page).toHaveURL(new RegExp(`/t/[0-9a-f]*${live.thread}#turn-\\d+$`))
+  await expect(page.locator('[data-testid="entry"][data-highlighted]')).toBeInViewport()
 })

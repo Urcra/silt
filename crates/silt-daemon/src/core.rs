@@ -508,6 +508,9 @@ impl Core {
             Request::FileHistory { thread, path } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_history(thread, &path)))
             }
+            Request::FileAt { thread, query } => {
+                to_response(self.find_thread(&thread).and_then(|thread| self.file_for_link(thread, &query)))
+            }
             Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),

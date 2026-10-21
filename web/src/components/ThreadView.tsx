@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
+import { appHref, filePath } from '../permalink'
 import { keys, message } from '../query'
 import { MainScroll } from '../scroll'
 import { hosted } from '../served'
@@ -11,6 +12,7 @@ import { useActions } from '../shortcuts'
 import { useThreadState } from '../threadState'
 import { Button, Input, toast } from '../ui'
 import { CommentThread } from './CommentThread'
+import { CopyLink } from './CopyLink'
 import { Diff } from './Diff'
 import { DiffPanel } from './DiffPanel'
 import { HostedLivePanel, LivePanel } from './Live'
@@ -72,6 +74,7 @@ function TurnDiff({ thread, turn, rewound }: { thread: string; turn: TurnInfo; r
       <button className="text-xs text-accent-fg" onClick={() => setOpen(!open)}>
         {open ? 'hide' : 'show'} what turn {turn.number} changed
       </button>
+      <CopyLink path={`/t/${thread}#turn-${turn.number}`} label={`link to turn ${turn.number}`} />
       {!hosted() && (
         <button className="text-xs text-accent-fg" onClick={() => void forkHere()} title="A fork with the code and conversation as this turn left them">
           fork from turn {turn.number}
@@ -99,6 +102,42 @@ function TurnDiff({ thread, turn, rewound }: { thread: string; turn: TurnInfo; r
       )}
     </div>
   )
+}
+
+/** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
+type Anchor = { entry?: number; comment?: string }
+
+/** Follows the page's hash once what it names has loaded, scrolling there with `scrollTo` (a row of `entries`). */
+function useAnchor(
+  entries: HistoryEntry[] | undefined,
+  turns: TurnInfo[] | undefined,
+  comments: CommentView[] | undefined,
+  scrollTo: (row: number) => void,
+): Anchor {
+  const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
+  const anchor = anchorOf(hash, turns, comments)
+  const followed = useRef('')
+  useEffect(() => {
+    if (!anchor || !entries || followed.current === hash) return
+    followed.current = hash
+    const row = anchor.entry === undefined ? -1 : entries.findIndex((candidate) => candidate.index === anchor.entry)
+    if (row >= 0) scrollTo(row)
+    else if (anchor.comment) document.getElementById(`comment-${anchor.comment}`)?.scrollIntoView({ block: 'center' })
+  }, [hash, anchor, entries, scrollTo])
+  return anchor ?? {}
+}
+
+/** What `hash` names, once what it names has loaded. */
+function anchorOf(hash: string, turns: TurnInfo[] | undefined, comments: CommentView[] | undefined): Anchor | undefined {
+  const turn = /^turn-(\d+)$/.exec(hash)
+  if (turn) {
+    const found = turns?.find((candidate) => candidate.number === Number(turn[1]))
+    return found && { entry: found.entry ?? undefined }
+  }
+  const commentId = /^comment-(.+)$/.exec(hash)?.[1]
+  const comment = commentId === undefined ? undefined : comments?.find((candidate) => candidate.id === commentId)
+  if (!comment) return undefined
+  return { comment: comment.id, entry: comment.location.at === 'entry' ? comment.location.index : undefined }
 }
 
 function CommentBox({ onSave }: { onSave: (text: string) => Promise<void> }) {
@@ -130,6 +169,7 @@ function Entry({
   comments,
   onComment,
   onChanged,
+  anchor,
 }: {
   entry: HistoryEntry
   turn: TurnInfo | undefined
@@ -137,6 +177,7 @@ function Entry({
   comments: CommentView[]
   onComment: (text: string) => Promise<void>
   onChanged: () => Promise<unknown>
+  anchor: Anchor
 }) {
   const [commenting, setCommenting] = useState(false)
   if (entry.kind === 'compaction' && entry.text.startsWith('(context compacted')) {
@@ -153,7 +194,8 @@ function Entry({
     <div
       data-testid="entry"
       data-rewound={entry.rewound || undefined}
-      className={`group ${entry.kind === 'user' ? 'mt-4' : ''} ${entry.rewound ? 'opacity-50' : ''}`}
+      data-highlighted={anchor.entry === entry.index || undefined}
+      className={`group ${entry.kind === 'user' ? 'mt-4' : ''} ${entry.rewound ? 'opacity-50' : ''} ${anchor.entry === entry.index ? 'rounded ring-2 ring-accent' : ''}`}
       title={entry.rewound ? 'Rewound by a revert: kept in the history, no longer part of the conversation' : undefined}
     >
       <div className="flex gap-2">
@@ -166,8 +208,8 @@ function Entry({
             {entry.text}
           </p>
           {comments.map((comment) => (
-            <div key={comment.id} className="ml-2 my-0.5">
-              <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
+            <div key={comment.id} id={`comment-${comment.id}`} className="ml-2 my-0.5">
+              <CommentThread thread={thread} comment={comment} onChanged={onChanged} highlighted={anchor.comment === comment.id} />
             </div>
           ))}
           {turn && <TurnDiff thread={thread} turn={turn} rewound={entry.rewound} />}
@@ -201,9 +243,9 @@ function ThreadCommits({ thread }: { thread: string }) {
               {commit.subject ?? ''}
             </span>
             {commit.turn !== null && (
-              <a className="shrink-0 text-accent-fg" href={`#turn-${commit.turn}`}>
+              <Link className="shrink-0 text-accent-fg" to="/t/$id" params={{ id: thread }} hash={`turn-${commit.turn}`}>
                 turn {commit.turn}
-              </a>
+              </Link>
             )}
           </li>
         ))}
@@ -294,6 +336,9 @@ export function ThreadView({ id }: { id: string }) {
     scrollMargin: list.current?.offsetTop ?? 0,
   })
 
+  const scrollTo = useCallback((row: number) => rows.scrollToIndex(row, { align: 'center' }), [rows])
+  const anchor = useAnchor(history.data?.entries, turns.data, comments.data, scrollTo)
+
   const turnAt = new Map((turns.data ?? []).filter((turn) => turn.entry !== null).map((turn) => [turn.entry, turn]))
   const entryComments = (index: number) =>
     (comments.data ?? []).filter((comment) => comment.location.at === 'entry' && comment.location.index === index)
@@ -373,6 +418,7 @@ export function ThreadView({ id }: { id: string }) {
                     await reloadComments()
                   }}
                   onChanged={reloadComments}
+                  anchor={anchor}
                 />
               </div>
             )
@@ -386,14 +432,23 @@ export function ThreadView({ id }: { id: string }) {
         <ul data-testid="code-comments" className="mt-2 space-y-2">
           {codeComments.length === 0 && <li className="text-xs text-fg-3">None yet.</li>}
           {codeComments.map((comment) => (
-            <li key={comment.id} className={comment.resolved ? 'opacity-50' : ''}>
+            <li key={comment.id} id={`comment-${comment.id}`} className={comment.resolved ? 'opacity-50' : ''}>
               <p className="font-mono text-xs">
-                {comment.location.at === 'lines'
-                  ? `${comment.location.path}:${comment.location.start}${comment.location.end !== comment.location.start ? `-${comment.location.end}` : ''}`
-                  : 'unknown place'}
+                {comment.location.at === 'lines' ? (
+                  <a
+                    className="text-accent-fg"
+                    href={appHref(filePath(fullId, comment.location.path, undefined, comment.location))}
+                    title="The file as the thread has it now"
+                  >
+                    {comment.location.path}:{comment.location.start}
+                    {comment.location.end !== comment.location.start ? `-${comment.location.end}` : ''}
+                  </a>
+                ) : (
+                  'unknown place'
+                )}
                 {comment.location.at === 'lines' && comment.location.outdated && ' (outdated)'}
               </p>
-              <CommentThread thread={id} comment={comment} onChanged={reloadComments} />
+              <CommentThread thread={fullId} comment={comment} onChanged={reloadComments} highlighted={anchor.comment === comment.id} />
               {!comment.resolved && (
                 <button
                   className="text-xs text-accent-fg"

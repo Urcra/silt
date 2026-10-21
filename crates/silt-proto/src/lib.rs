@@ -1038,6 +1038,12 @@ pub enum RemoteCommand {
         path: String,
         seen: bool,
     },
+    /// A file of the thread at a version, for a permalink (ADR 0031): the
+    /// server lacks the git texts most files start from.
+    FileAt {
+        path: String,
+        at: Option<String>,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1070,7 +1076,9 @@ impl Capabilities {
             | RemoteCommand::Preset { .. }
             | RemoteCommand::Mode { .. }
             | RemoteCommand::Setting { .. } => (self.run_agents, "start and stop agents"),
-            RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } => (self.review, "review merge requests"),
+            RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } | RemoteCommand::FileAt { .. } => {
+                (self.review, "review merge requests")
+            }
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

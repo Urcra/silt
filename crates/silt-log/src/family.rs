@@ -697,6 +697,19 @@ impl Family {
         })
     }
 
+    /// The file at `path` as of `at`, for a permalink into `thread`. `None`
+    /// unless `at` is within the thread's history, so a link to one thread
+    /// never shows another thread's work, or when no file was there then.
+    pub fn file_in_thread_at(&self, thread: ThreadId, path: &str, at: &Frontier) -> Option<FileView> {
+        let head = self.thread_head(thread);
+        if at.is_empty() || !at.ids().iter().all(|id| self.graph.is_ancestor(*id, &head)) {
+            return None;
+        }
+        let vv = self.graph.version_vector(at);
+        let inode = *self.tree().at(|id| vv.contains(id)).paths().get(path)?;
+        self.file_at(inode, &vv)
+    }
+
     pub fn text_doc(&self, inode: InodeId) -> Option<&TextDoc> {
         match &self.files.get(&inode)?.content {
             FileContent::Text(doc) => Some(doc),

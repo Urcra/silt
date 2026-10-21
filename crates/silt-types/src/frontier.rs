@@ -82,6 +82,30 @@ impl From<DeltaId> for Frontier {
     }
 }
 
+/// The ids comma-separated, as a permalink's `at` carries a version.
+impl std::fmt::Display for Frontier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, id) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str(",")?;
+            }
+            write!(f, "{id}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for Frontier {
+    type Err = crate::ParseIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Ok(Self::root());
+        }
+        s.split(',').map(str::parse).collect()
+    }
+}
+
 /// A point in a history: either a git object or a set of deltas.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Version {
@@ -119,6 +143,14 @@ mod tests {
     fn root_is_empty() {
         assert!(Frontier::root().is_root());
         assert!(!Frontier::single(id(1, 1)).is_root());
+    }
+
+    #[test]
+    fn reads_back_as_it_is_written() {
+        let frontier: Frontier = [id(1, 2), id(7, 9)].into_iter().collect();
+        assert_eq!(frontier.to_string().parse::<Frontier>().expect("parses"), frontier);
+        assert_eq!("".parse::<Frontier>().expect("parses"), Frontier::root());
+        assert!("nonsense".parse::<Frontier>().is_err());
     }
 
     #[test]

@@ -2,22 +2,30 @@ import { useState } from 'react'
 import { api, type CommentView } from '../api'
 import { message } from '../query'
 import { Button, Input } from '../ui'
+import { CopyLink } from './CopyLink'
 
 /** A comment with the conversation under it, and a box to add to it (ADR 0025). */
 export function CommentThread({
   thread,
   comment,
   onChanged,
+  highlighted = false,
 }: {
   thread: string
   comment: CommentView
   onChanged: () => Promise<unknown>
+  highlighted?: boolean
 }) {
   const [replying, setReplying] = useState(false)
   const [text, setText] = useState('')
   const [error, setError] = useState<string>()
   return (
-    <div role="group" aria-label={`comment by ${comment.by}`} className={`rounded-sm bg-accent-tint px-2 py-1 font-sans text-xs text-fg-1 ${comment.resolved ? 'opacity-60' : ''}`}>
+    <div
+      role="group"
+      aria-label={`comment by ${comment.by}`}
+      data-highlighted={highlighted || undefined}
+      className={`rounded-sm bg-accent-tint px-2 py-1 font-sans text-xs text-fg-1 ${comment.resolved ? 'opacity-60' : ''} ${highlighted ? 'ring-2 ring-accent' : ''}`}
+    >
       <p>
         {comment.by}: {comment.text} {comment.resolved && '(resolved)'}
       </p>
@@ -49,9 +57,12 @@ export function CommentThread({
           {error && <span className="text-danger">{error}</span>}
         </form>
       ) : (
-        <button type="button" className="mt-0.5 text-accent-fg" onClick={() => setReplying(true)}>
-          reply
-        </button>
+        <span className="mt-0.5 flex gap-3">
+          <button type="button" className="text-accent-fg" onClick={() => setReplying(true)}>
+            reply
+          </button>
+          <CopyLink path={`/t/${thread}#comment-${comment.id}`} label="link" />
+        </span>
       )}
     </div>
   )

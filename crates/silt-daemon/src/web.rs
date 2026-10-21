@@ -141,6 +141,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/trash", post(thread_delete))
         .route("/api/threads/{id}/restore", post(thread_restore))
         .route("/api/threads/{id}/files/history", get(file_history))
+        .route("/api/threads/{id}/files/at", get(file_at))
         .route("/api/threads/{id}/in-flight", get(in_flight))
         .route("/api/threads/{id}/search", get(thread_search))
         .route("/api/trash", get(trash))
@@ -830,6 +831,14 @@ struct PathQuery {
 
 async fn file_history(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
     ask(&web, Request::FileHistory { thread, path: query.path }).await
+}
+
+async fn file_at(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Query(query): Query<silt_proto::view::FileQuery>,
+) -> HttpResponse {
+    ask(&web, Request::FileAt { thread, query }).await
 }
 
 /// Other threads of the thread's repository that changed the path.

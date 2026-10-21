@@ -113,6 +113,16 @@ replies: Array<ReplyView>, };
 
 export type CommitView = { commit: string, subject: string | null, branch: string | null, turn: number | null, time_ms: number, };
 
+export type FileAt = { path: string, 
+/**
+ * The version shown, for a link that keeps showing it.
+ */
+at: string, 
+/**
+ * `None` for a binary file.
+ */
+text: string | null, };
+
 export type GraphQuery = { 
 /**
  * Only this project's threads, by its normalized remote.

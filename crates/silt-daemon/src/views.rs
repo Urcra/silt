@@ -8,6 +8,8 @@ use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
+use silt_proto::view::FileAt;
+
 use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 use crate::transcripts::native_entries;
 
@@ -273,6 +275,31 @@ impl Core {
             });
         }
         Ok(render_diff(&changes))
+    }
+
+    /// A file of the thread as a permalink shows it: at the version the link
+    /// names, or at the thread's head for a new link (ADR 0031).
+    pub(crate) fn file_for_link(&self, thread: ThreadId, query: &silt_proto::view::FileQuery) -> Result<FileAt, CoreError> {
+        let family_id = self.threads[&thread].family;
+        let family = self.families().get(&family_id).ok_or_else(|| {
+            CoreError::Invalid(format!("thread {} isn't on this machine yet; resume or fork it first", thread.short()))
+        })?;
+        let at = match &query.at {
+            Some(text) => text.parse().map_err(|_| CoreError::Invalid(format!("{text:?} is not a version")))?,
+            None => family.thread_head(thread),
+        };
+        let missing = || CoreError::Invalid(format!("the thread had no {} at that version", query.path));
+        let text = match family.file_in_thread_at(thread, &query.path, &at).ok_or_else(missing)? {
+            FileView::Text(text) => Some(text),
+            FileView::GitText(oid) => Some(
+                self.family_repos(family_id)
+                    .iter()
+                    .find_map(|repo| RepoBases(repo).text(oid))
+                    .ok_or_else(|| CoreError::Invalid(format!("this machine lacks the git blob {oid}")))?,
+            ),
+            FileView::Blob(_) => None,
+        };
+        Ok(FileAt { path: query.path.clone(), at: at.to_string(), text })
     }
 
     /// How the family's files differ between two versions.

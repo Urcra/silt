@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -38,6 +38,21 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/continue", post(continue_on))
         .route("/app/api/mrs/{id}", get(mr_details))
         .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
+        .route("/app/api/threads/{id}/files/at", get(file_at))
+}
+
+/// A file at a version for a permalink, from one of the person's devices,
+/// as the server has the thread's edits but not the git texts they start
+/// from (ADR 0031).
+async fn file_at(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Query(query): Query<silt_proto::view::FileQuery>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let command = RemoteCommand::FileAt { path: query.path, at: query.at };
+    Ok(Json(ask_any_device(&server, browser, thread, command).await?))
 }
 
 /// How long one device's view of a merge request stands in for asking

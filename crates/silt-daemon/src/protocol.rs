@@ -188,6 +188,11 @@ pub enum Request {
         thread: String,
         path: String,
     },
+    /// A file of the thread at a version, for a permalink (ADR 0031).
+    FileAt {
+        thread: String,
+        query: silt_proto::view::FileQuery,
+    },
     /// Other threads of the repository at `cwd` that changed `path`.
     InFlight {
         cwd: PathBuf,
@@ -887,6 +892,7 @@ mod tests {
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
+            silt_proto::view::FileAt::decl(&config),
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),
             DaemonStatus::decl(&config),

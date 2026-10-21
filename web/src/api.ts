@@ -10,6 +10,7 @@ import type {
   CommentView,
   CommitView,
   DaemonStatus,
+  FileAt,
   DeviceChange,
   DeviceView,
   GraphQuery,
@@ -106,6 +107,8 @@ export const api = {
   history: (id: string) => request<HistoryPage>('GET', `${thread(id)}/history`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
+  fileAt: (id: string, path: string, at?: string) =>
+    request<FileAt>('GET', `${thread(id)}/files/at?path=${encodeURIComponent(path)}${at ? `&at=${encodeURIComponent(at)}` : ''}`),
   graph: (query: GraphQuery) => {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) {

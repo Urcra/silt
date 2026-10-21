@@ -487,6 +487,26 @@ pub struct CommitView {
     pub time_ms: i64,
 }
 
+/// Which file of a thread a permalink shows, and at which version (ADR 0031):
+/// its frontier as `Frontier`'s text, the thread's head when left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileQuery {
+    pub path: String,
+    #[serde(default)]
+    pub at: Option<String>,
+}
+
+/// A file as a permalink shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileAt {
+    pub path: String,
+    /// The version shown, for a link that keeps showing it.
+    pub at: String,
+    /// `None` for a binary file.
+    pub text: Option<String>,
+}
+
 /// A read-only link to a thread (ADR 0027).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

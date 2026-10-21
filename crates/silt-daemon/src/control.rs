@@ -208,6 +208,7 @@ impl Core {
             RemoteCommand::Setting { id, value } => Request::AcpSetting { thread, id, value },
             RemoteCommand::MrShow { mr } => Request::MrShow { mr },
             RemoteCommand::MrSeen { mr, path, seen } => Request::MrSeen { mr, path, seen },
+            RemoteCommand::FileAt { path, at } => Request::FileAt { thread, query: silt_proto::view::FileQuery { path, at } },
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),
                 clone: None,
