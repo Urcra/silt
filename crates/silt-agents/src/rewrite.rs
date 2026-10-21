@@ -73,11 +73,10 @@ impl std::ops::Deref for CheckedSession {
 }
 
 /// Whether `name` names a file inside a session directory: plain names
-/// only, and not one ending in `/`, which `Path` would ignore.
+/// between slashes only. Checked by segment, as `Path` ignores a trailing
+/// `/` or `/.`, which would name the directory instead.
 pub fn is_side_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.ends_with('/')
-        && std::path::Path::new(name).components().all(|component| matches!(component, std::path::Component::Normal(_)))
+    name.split('/').all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 /// Replaces the paths and ids a session was recorded under with new ones.
@@ -180,6 +179,16 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_file_names_name_files_inside_the_session() {
+        for name in ["notes.txt", "tool-results/t1.txt", "a/b/c"] {
+            assert!(is_side_file_name(name), "{name}");
+        }
+        for name in ["", "/etc/passwd", "a/.", "a/..", "../a", "a//b", "a/", "./a"] {
+            assert!(!is_side_file_name(name), "{name}");
+        }
+    }
 
     #[test]
     fn rewrites_never_apply_to_their_own_output() {
