@@ -459,6 +459,9 @@ impl Core {
     async fn ingest_paths(&mut self, checkout_id: i64, paths: Vec<PathBuf>) -> Result<(), CoreError> {
         let checkout = self.checkout(checkout_id)?;
         let root = checkout.record.path.clone();
+        if paths.iter().any(|path| *path == root || path.file_name() == Some(".gitattributes".as_ref())) {
+            checkout.repo.attributes_changed();
+        }
         let mut candidates: Vec<String> = Vec::new();
         for path in paths {
             let Ok(relative) = path.strip_prefix(&root) else {

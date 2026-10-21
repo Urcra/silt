@@ -139,6 +139,40 @@ fn ident_attribute_falls_back_to_git() {
     assert_eq!(filters.to_git("a.c", smudged.as_bytes()).expect("clean"), b"/* $Id$ */\n");
 }
 
+fn loose_objects(root: &Path) -> usize {
+    fs::read_dir(root.join(".git/objects"))
+        .expect("objects")
+        .flatten()
+        .filter(|dir| dir.file_name().len() == 2)
+        .map(|dir| fs::read_dir(dir.path()).expect("fan-out").count())
+        .sum()
+}
+
+#[test]
+fn converting_through_git_leaves_no_objects_behind() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    fs::write(root.join(".gitattributes"), "*.c ident\n").expect("write");
+    let before = loose_objects(root);
+    let repo = Repo::discover(root).expect("discovers");
+    let mut filters = repo.filters().expect("filters");
+    let smudged = filters.to_worktree("a.c", b"/* $Id$ */ unsaved draft\n").expect("smudge");
+    filters.to_git("a.c", &smudged).expect("clean");
+    assert_eq!(loose_objects(root), before);
+}
+
+#[test]
+fn a_nested_attributes_file_counts_once_it_is_noticed() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let repo = Repo::discover(root).expect("discovers");
+    let id = |repo: &Repo| repo.filters().expect("filters").to_worktree("src/a.c", b"$Id$\n").expect("smudge");
+    assert_eq!(id(&repo), b"$Id$\n");
+    fs::write(root.join("src/.gitattributes"), "*.c ident\n").expect("write");
+    repo.attributes_changed();
+    assert_ne!(id(&repo), b"$Id$\n", "expanded by git");
+}
+
 #[test]
 fn checks_more_ignored_paths_than_a_pipe_holds() {
     let dir = tempfile::tempdir().expect("tempdir");

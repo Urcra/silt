@@ -7,6 +7,7 @@ mod checkout;
 mod filters;
 mod remote;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -54,6 +55,7 @@ pub struct TreeFile {
 pub struct Repo {
     root: PathBuf,
     repo: gix::Repository,
+    needs_git_cli_filters: Cell<Option<bool>>,
 }
 
 impl Repo {
@@ -63,7 +65,7 @@ impl Repo {
         let repo = gix::discover(path).map_err(|_| not_a_repo())?;
         let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
         let root = root.canonicalize().unwrap_or(root);
-        Ok(Self { root, repo })
+        Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None) })
     }
 
     pub fn root(&self) -> &Path {
@@ -191,8 +193,23 @@ impl Repo {
             .collect())
     }
 
+    /// Content conversion for this repository. Which attributes its
+    /// `.gitattributes` files use is looked up once; call
+    /// [`Repo::attributes_changed`] when one of them changes.
     pub fn filters(&self) -> Result<Filters<'_>, GitError> {
-        Filters::new(&self.repo, &self.root)
+        let use_git_cli = match self.needs_git_cli_filters.get() {
+            Some(known) => known,
+            None => {
+                let found = filters::uses_attributes_gix_gets_wrong(&self.root, self.repo.git_dir());
+                self.needs_git_cli_filters.set(Some(found));
+                found
+            }
+        };
+        Filters::new(&self.repo, &self.root, use_git_cli)
+    }
+
+    pub fn attributes_changed(&self) {
+        self.needs_git_cli_filters.set(None);
     }
 
     /// Runs `git` in the worktree, failing on a non-zero exit.
@@ -221,7 +238,7 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result
 /// named in its config; Silt's own git commands run neither (ADR 0016).
 const HARDENED: [&str; 4] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
 
-fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String, String)]) -> Result<Vec<u8>, GitError> {
+pub(crate) fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String, String)]) -> Result<Vec<u8>, GitError> {
     let mut command = Command::new("git");
     command
         .args(HARDENED)

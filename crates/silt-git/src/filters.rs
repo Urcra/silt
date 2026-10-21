@@ -6,7 +6,7 @@ use gix::bstr::ByteSlice;
 use gix::filter::plumbing::driver::apply::Delay;
 use gix::filter::plumbing::pipeline::convert::to_worktree;
 
-use crate::{GitError, run_git};
+use crate::{GitError, run_git, run_git_with};
 
 /// Converts between the content git stores ("clean") and what belongs on
 /// disk ("smudged"): line endings, `.gitattributes` and filter drivers.
@@ -17,26 +17,40 @@ pub struct Filters<'repo> {
     pipeline: gix::filter::Pipeline<'repo>,
     index: gix::worktree::IndexPersistedOrInMemory,
     root: PathBuf,
+    objects: PathBuf,
     use_git_cli: bool,
 }
 
 impl<'repo> Filters<'repo> {
-    pub(crate) fn new(repo: &'repo gix::Repository, root: &Path) -> Result<Self, GitError> {
+    pub(crate) fn new(repo: &'repo gix::Repository, root: &Path, use_git_cli: bool) -> Result<Self, GitError> {
         let (pipeline, index) = repo.filter_pipeline(None).map_err(GitError::gix)?;
         Ok(Self {
             pipeline,
             index,
             root: root.to_owned(),
-            use_git_cli: uses_attributes_gix_gets_wrong(root, repo.git_dir()),
+            objects: repo.common_dir().join("objects"),
+            use_git_cli,
         })
+    }
+
+    /// Runs git with the objects it writes going to a throwaway directory:
+    /// the git CLI only converts content by way of an object, which would
+    /// otherwise stay in the repository after every save.
+    fn git_scratch(&self, scratch: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {
+        let envs = [
+            ("GIT_OBJECT_DIRECTORY".to_owned(), scratch.to_string_lossy().into_owned()),
+            ("GIT_ALTERNATE_OBJECT_DIRECTORIES".to_owned(), self.objects.to_string_lossy().into_owned()),
+        ];
+        run_git_with(&self.root, args, stdin, &envs)
     }
 
     /// Disk content of `path` (relative to the worktree) as git stores it.
     pub fn to_git(&mut self, path: &str, worktree: &[u8]) -> Result<Vec<u8>, GitError> {
         if self.use_git_cli {
-            let oid = run_git(&self.root, &["hash-object", "-w", "--path", path, "--stdin"], Some(worktree))?;
+            let scratch = tempfile::tempdir()?;
+            let oid = self.git_scratch(scratch.path(), &["hash-object", "-w", "--path", path, "--stdin"], Some(worktree))?;
             let oid = String::from_utf8_lossy(&oid).trim().to_owned();
-            return run_git(&self.root, &["cat-file", "blob", &oid], None);
+            return self.git_scratch(scratch.path(), &["cat-file", "blob", &oid], None);
         }
         let mut outcome = self
             .pipeline
@@ -50,9 +64,10 @@ impl<'repo> Filters<'repo> {
     /// Stored content of `path` as it belongs on disk.
     pub fn to_worktree(&mut self, path: &str, clean: &[u8]) -> Result<Vec<u8>, GitError> {
         if self.use_git_cli {
-            let oid = run_git(&self.root, &["hash-object", "-w", "--no-filters", "--stdin"], Some(clean))?;
+            let scratch = tempfile::tempdir()?;
+            let oid = self.git_scratch(scratch.path(), &["hash-object", "-w", "--no-filters", "--stdin"], Some(clean))?;
             let oid = String::from_utf8_lossy(&oid).trim().to_owned();
-            return run_git(&self.root, &["cat-file", "--filters", &format!("--path={path}"), &oid], None);
+            return self.git_scratch(scratch.path(), &["cat-file", "--filters", &format!("--path={path}"), &oid], None);
         }
         let options = to_worktree::Options {
             can_delay: Delay::Forbid,
@@ -68,33 +83,62 @@ impl<'repo> Filters<'repo> {
     }
 }
 
-fn uses_attributes_gix_gets_wrong(root: &Path, git_dir: &Path) -> bool {
+/// Whether any attributes file of the repository sets what gix converts
+/// differently from git. The worktree's files are found through git, which
+/// leaves out ignored directories such as `node_modules`.
+pub(crate) fn uses_attributes_gix_gets_wrong(root: &Path, git_dir: &Path) -> bool {
     let mut candidates = vec![git_dir.join("info").join("attributes")];
-    candidates.extend(gitattributes_files(root));
-    candidates.into_iter().any(|path| {
-        fs::read_to_string(path).is_ok_and(|text| text.contains("working-tree-encoding") || text.contains("ident"))
-    })
+    let listed = run_git(
+        root,
+        &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ":(glob)**/.gitattributes"],
+        None,
+    )
+    .unwrap_or_default();
+    candidates.extend(
+        listed
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| root.join(String::from_utf8_lossy(path).as_ref())),
+    );
+    candidates
+        .into_iter()
+        .any(|path| fs::read_to_string(path).is_ok_and(|text| sets_attributes_gix_gets_wrong(&text)))
 }
 
-/// Every `.gitattributes` file in the worktree, skipping `.git`.
-fn gitattributes_files(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_owned()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_dir() && entry.file_name() != ".git" {
-                stack.push(path);
-            } else if kind.is_file() && entry.file_name() == ".gitattributes" {
-                found.push(path);
-            }
-        }
+/// Whether a rule of an attributes file sets `ident` or a
+/// `working-tree-encoding`: the attributes, not words such as "identity".
+fn sets_attributes_gix_gets_wrong(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .flat_map(|line| line.split_whitespace().skip(1))
+        .any(|attribute| attribute == "ident" || attribute.starts_with("working-tree-encoding="))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_set_attributes_count() {
+        assert!(sets_attributes_gix_gets_wrong("*.c ident\n"));
+        assert!(sets_attributes_gix_gets_wrong("*.txt text working-tree-encoding=UTF-16LE\n"));
+        assert!(!sets_attributes_gix_gets_wrong("# keeps the author's identity\n*.c text\n"));
+        assert!(!sets_attributes_gix_gets_wrong("ident text\n*.c -ident\n"));
     }
-    found
+
+    #[test]
+    fn attributes_files_in_ignored_directories_are_skipped() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        run_git(root, &["init", "-q"], None).expect("init");
+        fs::write(root.join(".gitignore"), "target/\n").expect("write");
+        fs::create_dir_all(root.join("target/dep")).expect("mkdir");
+        fs::write(root.join("target/dep/.gitattributes"), "*.c ident\n").expect("write");
+        let git_dir = root.join(".git");
+        assert!(!uses_attributes_gix_gets_wrong(root, &git_dir));
+        fs::create_dir(root.join("src")).expect("mkdir");
+        fs::write(root.join("src/.gitattributes"), "*.c ident\n").expect("write");
+        assert!(uses_attributes_gix_gets_wrong(root, &git_dir), "untracked but not ignored");
+    }
 }
