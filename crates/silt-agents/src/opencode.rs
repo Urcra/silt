@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, SessionIds, Start};
+use crate::{Agent, Capture, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, SessionIds, Start};
 
 pub const AGENT: &str = "opencode";
 
@@ -291,8 +291,8 @@ impl Agent for OpenCode {
             })
     }
 
-    fn reads_by_snapshot(&self) -> bool {
-        true
+    fn capture(&self) -> Capture {
+        Capture::Snapshot
     }
 
     fn snapshot(&self, found: &Found) -> io::Result<Vec<String>> {

@@ -8,7 +8,7 @@ use std::io::{Read as _, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use silt_agents::{Agent, Found, Mark, Reader, complete_lines_ending};
+use silt_agents::{Agent, Capture, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
@@ -526,7 +526,7 @@ impl Core {
                 transcript: transcript.clone(),
             };
             let agent = session.agent;
-            if !agent.reads_by_snapshot() {
+            if agent.capture() != Capture::Snapshot {
                 continue;
             }
             session.snapshot_running = true;
@@ -549,7 +549,7 @@ impl Core {
         let tokens: Vec<u64> = self
             .pending
             .iter()
-            .filter(|pending| pending.checkout_id == checkout && !pending.searching && !pending.agent.reads_by_snapshot())
+            .filter(|pending| pending.checkout_id == checkout && !pending.searching && pending.agent.capture() != Capture::Snapshot)
             .map(|pending| pending.token)
             .collect();
         for token in tokens {
@@ -668,7 +668,7 @@ impl Core {
                     transcript: session.transcript.clone()?,
                 };
                 let agent = session.agent;
-                agent.reads_by_snapshot().then_some((agent, found))
+                (agent.capture() == Capture::Snapshot).then_some((agent, found))
             });
             match snapshot {
                 Some((agent, found)) => {
@@ -734,7 +734,7 @@ impl Core {
                 found
             }
         };
-        if agent.reads_by_snapshot() {
+        if agent.capture() == Capture::Snapshot {
             return Ok(());
         }
         let mut files = vec![("main".to_owned(), transcript.clone())];
@@ -833,7 +833,7 @@ impl Core {
         if let (Some(read), Some(session)) = (read, self.session_mut(session_id)) {
             session.offsets.insert(key.to_owned(), read);
         }
-        if !agent.hooks() && key == "main" {
+        if agent.capture() != Capture::Hooks && key == "main" {
             for mark in parsed.marks {
                 self.apply_mark(session_id, mark).await?;
             }
@@ -935,7 +935,7 @@ impl Core {
         let ids: Vec<String> = self
             .sessions
             .iter()
-            .filter(|session| session.record.checkout_id == checkout && session.live && !session.agent.hooks())
+            .filter(|session| session.record.checkout_id == checkout && session.live && session.agent.capture() != Capture::Hooks)
             .map(|session| session.record.session_id.clone())
             .collect();
         for id in ids {
@@ -952,7 +952,7 @@ impl Core {
             || self
                 .sessions
                 .iter()
-                .any(|session| session.record.checkout_id == checkout && session.live && !session.agent.hooks())
+                .any(|session| session.record.checkout_id == checkout && session.live && session.agent.capture() != Capture::Hooks)
     }
 
     /// Takes the changes in again once the transcripts have caught up.
@@ -977,8 +977,7 @@ impl Core {
             .map(|session| attribution::SessionState {
                 agent: &session.record.agent,
                 session: &session.record.session_id,
-                hooks: session.agent.hooks(),
-                by_snapshot: session.agent.reads_by_snapshot(),
+                capture: session.agent.capture(),
                 live: session.live,
                 in_turn: session.in_turn,
                 open_tool: session.open_tool.as_deref(),
@@ -1006,7 +1005,7 @@ impl Core {
         let session_id = input.session_id.clone();
         let Some((thread, hooked)) = self
             .session(&session_id)
-            .map(|session| (session.record.thread, session.agent.hooks()))
+            .map(|session| (session.record.thread, session.agent.capture() == Capture::Hooks))
         else {
             return Some((Response::ok(HookReply::default()), reply));
         };

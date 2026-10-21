@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use silt_agents::Capture;
 use silt_log::Author;
 
 /// Marks read this close to an edit, before or after, were written around
@@ -16,12 +17,7 @@ pub(crate) const MARK_SETTLE: Duration = Duration::from_millis(1000);
 pub(crate) struct SessionState<'a> {
     pub(crate) agent: &'a str,
     pub(crate) session: &'a str,
-    /// The agent reports turns and tools through hooks rather than only in
-    /// its transcript.
-    pub(crate) hooks: bool,
-    /// The agent's sessions are read from a store by snapshot, which learns
-    /// of turns too late to bound edits by them.
-    pub(crate) by_snapshot: bool,
+    pub(crate) capture: Capture,
     pub(crate) live: bool,
     pub(crate) in_turn: bool,
     pub(crate) open_tool: Option<&'a str>,
@@ -51,8 +47,10 @@ pub(crate) fn author<'a>(importing: bool, sessions: &[SessionState<'a>], pending
     }
     // Without hooks, edits are only known to fall inside a turn; a store
     // read by snapshot learns even that late, so its whole run counts.
-    let in_turn = |session: &&SessionState<'_>| {
-        !session.hooks && (session.in_turn || session.turn_closed.is_some_and(settling) || (session.live && session.by_snapshot))
+    let in_turn = |session: &&SessionState<'_>| match session.capture {
+        Capture::Hooks => false,
+        Capture::Transcript => session.in_turn || session.turn_closed.is_some_and(settling),
+        Capture::Snapshot => session.in_turn || session.turn_closed.is_some_and(settling) || session.live,
     };
     if let Some(session) = sessions.iter().find(in_turn) {
         return Author::Agent {
@@ -79,8 +77,7 @@ mod tests {
         SessionState {
             agent: "codex",
             session: "s1",
-            hooks: false,
-            by_snapshot: false,
+            capture: Capture::Transcript,
             live: true,
             in_turn: false,
             open_tool: None,
@@ -112,11 +109,11 @@ mod tests {
         let now = Instant::now();
         let turning = SessionState { in_turn: true, ..quiet() };
         assert_eq!(author(false, std::slice::from_ref(&turning), None, now), agent(None));
-        let hooked = SessionState { hooks: true, ..turning };
+        let hooked = SessionState { capture: Capture::Hooks, ..turning };
         assert_eq!(author(false, &[hooked], None, now), Author::User, "hooks name the tool, so a turn alone isn't enough");
         let stopped = SessionState { turn_closed: Some(now), ..quiet() };
         assert_eq!(author(false, &[stopped], None, now + MARK_SETTLE / 2), agent(None), "a stop read just after");
-        let store = SessionState { by_snapshot: true, ..quiet() };
+        let store = SessionState { capture: Capture::Snapshot, ..quiet() };
         assert_eq!(author(false, &[store], None, now), agent(None), "a store read late counts its whole run");
     }
 

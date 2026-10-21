@@ -30,11 +30,31 @@ pub(crate) struct AcpRun {
     /// The conversation so far, for the first prompt of a session that
     /// could not be loaded.
     primer: Option<String>,
-    state: &'static str,
+    state: RunState,
     text: String,
     thought: String,
     asking: Vec<Permission>,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunState {
+    Starting,
+    Ready,
+    Working,
+    Exited,
+}
+
+impl RunState {
+    /// The name the web UI shows.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Working => "working",
+            Self::Exited => "exited",
+        }
+    }
 }
 
 /// What a running agent reports, tagged with its run so a stopped one's
@@ -87,7 +107,7 @@ impl Core {
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
                 let thread = self.find_thread(selector)?;
-                if self.acp.get(&thread).is_some_and(|run| run.state != "exited") {
+                if self.acp.get(&thread).is_some_and(|run| run.state != RunState::Exited) {
                     return Err(CoreError::Invalid("an agent is already running in this thread".into()));
                 }
                 let (checkout_id, checkout) = self.checkout_for_agent(thread).await?;
@@ -135,7 +155,7 @@ impl Core {
                 session: None,
                 load,
                 primer: None,
-                state: "starting",
+                state: RunState::Starting,
                 text: String::new(),
                 thought: String::new(),
                 asking: Vec::new(),
@@ -181,10 +201,10 @@ impl Core {
     pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         let run = self.running(thread)?;
-        if run.state == "starting" {
+        if run.state == RunState::Starting {
             return Err(CoreError::Invalid("the agent is still starting".into()));
         }
-        if run.state == "working" {
+        if run.state == RunState::Working {
             return Err(CoreError::Invalid("the agent is still working; wait for it or stop it".into()));
         }
         let me = self.own_user();
@@ -206,7 +226,7 @@ impl Core {
         }
         self.record_acp(thread, &acp::prompt(&said, &authors.join(", "))).await?;
         let run = self.acp.get_mut(&thread).expect("checked above");
-        run.state = "working";
+        run.state = RunState::Working;
         run.error = None;
         send(run, Command::Prompt(prompt));
         Ok("sent")
@@ -234,7 +254,7 @@ impl Core {
     fn running(&self, thread: ThreadId) -> Result<&AcpRun, CoreError> {
         self.acp
             .get(&thread)
-            .filter(|run| run.state != "exited")
+            .filter(|run| run.state != RunState::Exited)
             .ok_or_else(|| CoreError::Invalid("no agent is running in this thread".into()))
     }
 
@@ -242,7 +262,7 @@ impl Core {
         let run = self.acp.get(&thread)?;
         Some(AgentStatus {
             agent: run.info.name.clone(),
-            state: run.state.to_owned(),
+            state: run.state.name().to_owned(),
             streaming: run.text.clone(),
             thinking: run.thought.clone(),
             permissions: run
@@ -285,7 +305,7 @@ impl Core {
             }
             AcpEvent::Started(Err(error)) => {
                 run.error = Some(error);
-                run.state = "exited";
+                run.state = RunState::Exited;
             }
             AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => self.acp_ready(thread, &session, loaded, &agent).await?,
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
@@ -294,14 +314,14 @@ impl Core {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(&reason)).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = "ready";
+                run.state = RunState::Ready;
                 run.asking.clear();
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(error),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
-                run.state = "exited";
+                run.state = RunState::Exited;
                 run.handle = None;
                 run.asking.clear();
                 let session = run.session.clone();
@@ -319,7 +339,7 @@ impl Core {
     /// new one starts its own, primed with the thread's conversation.
     async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool, name: &str) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
-        run.state = "ready";
+        run.state = RunState::Ready;
         let (checkout_id, checkout, agent_id) = (run.checkout_id, run.checkout.clone(), run.info.id.clone());
         let earlier = run.load.take().filter(|(_, earlier)| loaded && earlier == native);
         if let Some(session) = earlier.and_then(|(id, _)| self.session_mut(&id)) {
@@ -429,7 +449,7 @@ fn send(run: &mut AcpRun, command: Command) {
 /// forwards what it does to the daemon's event loop.
 fn spawn_agent(events: mpsc::UnboundedSender<Event>, thread: ThreadId, run: u64, info: AgentInfo, data_dir: PathBuf, mut start: Start) {
     tokio::spawn(async move {
-        let (program, args, env) = match registry::command(&info, &data_dir).await {
+        let registry::AgentCommand { program, args, env } = match registry::command(&info, &data_dir).await {
             Ok(command) => command,
             Err(error) => {
                 let _ = events.send(Event::Acp {

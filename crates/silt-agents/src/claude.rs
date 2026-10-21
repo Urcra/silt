@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
-use crate::{Agent, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
+use crate::{Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
 
 pub const AGENT: &str = "claude-code";
 
@@ -156,8 +156,8 @@ impl Agent for ClaudeCode {
         }))
     }
 
-    fn hooks(&self) -> bool {
-        true
+    fn capture(&self) -> Capture {
+        Capture::Hooks
     }
 
     fn session_ids(&self) -> SessionIds {

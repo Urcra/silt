@@ -244,14 +244,30 @@ async fn download_text(url: &str) -> Result<String, String> {
     }
 }
 
+/// How to start an agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
 /// The command that starts `agent`, downloading and unpacking a binary
 /// distribution into `data_dir` first when needed.
-pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<(String, Vec<String>, Vec<(String, String)>), RegistryError> {
+pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
     match &agent.distribution {
-        Distribution::Command { program, args, env } => Ok((program.clone(), args.clone(), env.clone())),
+        Distribution::Command { program, args, env } => Ok(AgentCommand {
+            program: program.clone(),
+            args: args.clone(),
+            env: env.clone(),
+        }),
         Distribution::Binary { archive, cmd, args, sha256 } => {
             let program = installed(agent, archive, cmd, sha256.as_deref(), data_dir).await?;
-            Ok((program.to_string_lossy().into_owned(), args.clone(), Vec::new()))
+            Ok(AgentCommand {
+                program: program.to_string_lossy().into_owned(),
+                args: args.clone(),
+                env: Vec::new(),
+            })
         }
         Distribution::Unavailable => Err(RegistryError::NoBuild(agent.id.clone())),
     }

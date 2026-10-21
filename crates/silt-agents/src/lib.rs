@@ -60,6 +60,17 @@ impl Reader for Stateless {
     }
 }
 
+/// How Silt learns what an agent does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    /// An append-only transcript, which also marks turns and tools.
+    Transcript,
+    /// A transcript, with turns and tools reported through Silt's hooks.
+    Hooks,
+    /// A store, read whole with [`Agent::snapshot`].
+    Snapshot,
+}
+
 /// How a new session gets its id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionIds {
@@ -149,10 +160,8 @@ pub trait Agent: Send + Sync {
     fn display_name(&self) -> &'static str;
     fn native(&self) -> NativeConventions;
     fn reader(&self) -> Box<dyn Reader>;
-    /// Whether turn boundaries come from Silt's hooks rather than the
-    /// transcript.
-    fn hooks(&self) -> bool {
-        false
+    fn capture(&self) -> Capture {
+        Capture::Transcript
     }
     fn session_ids(&self) -> SessionIds;
     /// Where a session's main transcript is or will be.
@@ -173,11 +182,6 @@ pub trait Agent: Send + Sync {
     /// The newest session started in `cwd` no earlier than `since_ms` whose
     /// id isn't in `known`.
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found>;
-    /// Whether sessions live in a store rather than append-only files, and
-    /// are read with [`Agent::snapshot`].
-    fn reads_by_snapshot(&self) -> bool {
-        false
-    }
     /// The session's records as of now, for agents read by snapshot.
     fn snapshot(&self, _found: &Found) -> io::Result<Vec<String>> {
         Err(io::Error::other("this agent's sessions are files"))
