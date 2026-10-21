@@ -678,6 +678,106 @@ async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_
 }
 
 #[tokio::test]
+async fn the_hosted_app_comments_and_reviews_as_the_person() {
+    use silt_log::{ConvOp, MrStatus, SessionFile, SessionRef};
+    const FORK: ThreadId = ThreadId(303);
+    let mut world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let family = &mut world.family;
+    let said = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native {
+                session: SessionRef { agent: "claude-code".into(), id: "s".into() },
+                file: SessionFile::Main,
+                line: r#"{"type":"user","message":{"role":"user","content":"Tidy the parser"}}"#.into(),
+            }),
+        ),
+    );
+    assert_eq!(alice.push(vec![said]).await, StatusCode::OK);
+
+    let browser_of = |name: &'static str| {
+        let client = &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+        Browser::sign_in(client, name)
+    };
+    let (bob, carol, erin) = (browser_of("bob").await, browser_of("carol").await, browser_of("erin").await);
+    let comments = format!("/threads/{THREAD}/comments");
+    let entry = serde_json::json!({ "on": { "on": "entry", "index": 0 }, "text": "which parser?" });
+    let (status, comment) = bob.post(&comments, entry.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{comment}");
+    assert_eq!((comment["by"].as_str(), comment["location"]["at"].as_str()), (Some("bob"), Some("entry")));
+    let id = comment["id"].as_str().expect("an id").to_owned();
+    assert_eq!(carol.post(&comments, entry.clone()).await.0, StatusCode::OK, "whoever sees a thread comments on it");
+    assert_eq!(erin.post(&comments, entry).await.0, StatusCode::NOT_FOUND);
+    let (status, refused) = bob
+        .post(&comments, serde_json::json!({ "on": { "on": "lines", "path": "a.rs", "start": 1, "end": 1 }, "text": "here" }))
+        .await;
+    assert_eq!(
+        (status, refused["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("comment on code from a machine with the thread checked out"))
+    );
+
+    let me = Browser::sign_in(alice, "alice").await;
+    let (_, replied) = me.post(&format!("{comments}/{id}/replies"), serde_json::json!({ "text": "the toml one" })).await;
+    assert_eq!(
+        (replied["replies"][0]["by"].as_str(), replied["replies"][0]["text"].as_str()),
+        (Some("alice"), Some("the toml one"))
+    );
+    let (_, resolved) = me.post(&format!("{comments}/{id}/resolve"), serde_json::json!({})).await;
+    assert_eq!(resolved["resolved"], true);
+
+    // Bob offers a fork back; Alice asks for changes, then merges it.
+    let bobs = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
+    let info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 3,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    assert_eq!(bobs.send(bobs.request(Method::POST, "/v1/threads").json(&info)).await, StatusCode::NO_CONTENT);
+    let pulled_now: Vec<Delta> = pulled(alice).await.into_iter().map(|(_, delta)| delta).collect();
+    let mut replica = Family::new();
+    for delta in &pulled_now {
+        replica.apply(delta.clone(), &mut HashMap::new()).expect("what the server wrote applies");
+    }
+    let replica = &mut replica;
+    let head = replica.thread_head(THREAD);
+    let forked = applied(replica, replica.delta(ActorId(500), FORK, Author::User, 0, head, Op::Fork { from: THREAD }));
+    let work = applied(
+        replica,
+        replica.delta(ActorId(500), FORK, Author::User, 0, forked.span.last().into(), file("quiet.rs", Content::Empty)),
+    );
+    let opened = Op::Mr(silt_log::MrOp::Opened { target: THREAD, title: "Quiet work".into(), summary: "a quiet file".into() });
+    let opened = applied(replica, replica.delta(ActorId(500), FORK, Author::User, 0, work.span.last().into(), opened));
+    assert_eq!(bobs.push(vec![forked, work, opened]).await, StatusCode::OK);
+    let mr = opened_id(replica).to_string();
+
+    let (status, asked) = me.post(&format!("/mrs/{mr}/request-changes"), serde_json::json!({ "reason": "add a test" })).await;
+    assert_eq!((status, asked["changes_requested"].as_str()), (StatusCode::OK, Some("add a test")), "{asked}");
+    let (status, approved) = me.post(&format!("/mrs/{mr}/approve"), serde_json::json!({})).await;
+    assert_eq!((status, approved["status"].as_str()), (StatusCode::OK, Some("approved")), "{approved}");
+    assert_eq!(me.post(&format!("/mrs/{mr}/decline"), serde_json::json!({})).await.0, StatusCode::BAD_REQUEST, "once merged");
+
+    let mut replayed = Family::new();
+    for (_, delta) in pulled(alice).await {
+        replayed.apply(delta, &mut HashMap::new()).expect("the merge applies as a daemon's would");
+    }
+    assert_eq!(replayed.merge_requests()[0].status, MrStatus::Approved);
+    let comment = &replayed.comments(THREAD)[0];
+    assert!(comment.resolved && comment.replies.len() == 1);
+    let merged = replayed.log().iter().any(|delta| matches!(delta.op, Op::Merge { from: FORK, .. }) && delta.thread == THREAD);
+    assert!(merged, "the fork's work is merged into the thread");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

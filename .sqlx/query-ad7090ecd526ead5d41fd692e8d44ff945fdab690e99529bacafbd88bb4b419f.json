@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT actor FROM server_actors WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "actor",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "server_actors",
+            "name": "actor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ad7090ecd526ead5d41fd692e8d44ff945fdab690e99529bacafbd88bb4b419f"
+}

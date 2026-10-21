@@ -518,6 +518,32 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
     comments
 }
 
+/// Moves a thread's `head` past `delta`, one of the thread's own.
+fn advance_head(head: &mut Frontier, delta: &Delta, graph: &CausalGraph) {
+    let parents_are_head = delta.parents.ids().iter().all(|parent| head.contains(parent));
+    for parent in delta.parents.ids() {
+        head.remove(parent);
+    }
+    head.insert(delta.span.last());
+    if !parents_are_head && head.len() > 1 {
+        *head = graph.minimize(head.ids().iter().copied());
+    }
+}
+
+/// [`Family::thread_head`] over a family's deltas in the order they were
+/// taken, with the graph that holds them, such as a server's room.
+pub fn thread_head_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId) -> Frontier {
+    let mut own = log.iter().filter(|delta| delta.thread == thread).peekable();
+    if own.peek().is_none() {
+        return graph.frontier().clone();
+    }
+    let mut head = Frontier::default();
+    for delta in own {
+        advance_head(&mut head, delta, graph);
+    }
+    head
+}
+
 /// [`Family::merge_requests`] over any deltas of a family.
 pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
     let mut ops: Vec<(&Delta, &MrOp)> = log
@@ -793,14 +819,7 @@ impl Family {
     fn record(&mut self, delta: Delta) {
         let index = self.log.len();
         let thread = self.threads.entry(delta.thread).or_default();
-        let parents_are_head = delta.parents.ids().iter().all(|parent| thread.head.contains(parent));
-        for parent in delta.parents.ids() {
-            thread.head.remove(parent);
-        }
-        thread.head.insert(delta.span.last());
-        if !parents_are_head && thread.head.len() > 1 {
-            thread.head = self.graph.minimize(thread.head.ids().iter().copied());
-        }
+        advance_head(&mut thread.head, &delta, &self.graph);
         if let Op::Fork { from } = delta.op {
             thread.forked_from = Some(from);
             thread.fork_point = Some(delta.parents.clone());

@@ -365,6 +365,17 @@ pub struct Project {
     pub clone: Option<PathBuf>,
 }
 
+/// Where a new comment goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "on", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum CommentOn {
+    /// A history entry, by its index.
+    Entry { index: usize },
+    /// Lines `start..=end` (1-based) of a file as the thread has it now.
+    Lines { path: String, start: usize, end: usize },
+}
+
 /// One of the person's signed-in devices (ADR 0026).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

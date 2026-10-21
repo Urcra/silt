@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    CommentLocation, CommentView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit, HistoryEntry, HistoryPage,
-    InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, Project, ReplyView, SearchFilters, SearchResult, ShowLine,
-    StateChange, ThreadSummary, TurnInfo,
+    CommentLocation, CommentOn, CommentView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit, HistoryEntry,
+    HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, Project, ReplyView, SearchFilters, SearchResult,
+    ShowLine, StateChange, ThreadSummary, TurnInfo,
 };
 
 /// One request per line on the daemon socket, answered by one response line.
@@ -522,16 +522,6 @@ pub struct InFlight {
     pub owner: String,
     pub files: Vec<String>,
     pub last_ms: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "on", rename_all = "snake_case")]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum CommentOn {
-    /// A history entry, by its index.
-    Entry { index: usize },
-    /// Lines `start..=end` (1-based) of a file as the thread has it now.
-    Lines { path: String, start: usize, end: usize },
 }
 
 /// Deltas for the browser's replica (ADR 0014).

@@ -50,6 +50,7 @@ mod projects;
 mod relayed;
 mod sign_in;
 mod visibility;
+mod writes;
 
 pub use accounts::{AccountError, Admin, User};
 pub use config::{Config, ConfigError};
@@ -170,6 +171,8 @@ struct Shared {
     purged: Mutex<std::collections::HashSet<ThreadId>>,
     presence: Mutex<presence::Board>,
     control: control::Control,
+    /// Held while the server writes a delta for someone (`writes`).
+    writes: Mutex<()>,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
 }
@@ -238,6 +241,7 @@ impl Server {
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
                 control: control::Control::default(),
+                writes: Mutex::new(()),
                 passwords: accounts::PasswordChecks::default(),
                 config,
                 http,

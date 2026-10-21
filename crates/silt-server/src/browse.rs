@@ -295,12 +295,51 @@ async fn turns(
 }
 
 /// How a daemon shortens an id it shows, so links from either work.
-fn short(id: DeltaId) -> String {
+pub(crate) fn short(id: DeltaId) -> String {
     let actor = id.actor.to_string();
     format!("{}.{}", &actor[actor.len() - 6..], id.lamport.0)
 }
 
-async fn comments(
+/// A thread the person sees, with its history entries and the comments on
+/// it as they may read them, and the person's name.
+pub(crate) struct SeenThread {
+    pub(crate) thread: ThreadId,
+    pub(crate) family: FamilyId,
+    pub(crate) entries: Vec<(DeltaId, HistoryEntry)>,
+    pub(crate) comments: Vec<silt_log::Comment>,
+    pub(crate) me: String,
+}
+
+pub(crate) async fn seen_thread(server: &Server, user: UserId, selector: &str) -> Result<SeenThread, ApiError> {
+    let readable = Readable::load(server, Browser { user }).await?;
+    let row = readable.row(selector)?;
+    let log = readable.of(row);
+    Ok(SeenThread {
+        thread: row.id,
+        family: row.family,
+        entries: entries(log, row.id),
+        comments: comments_in(log, row.id),
+        me: readable.me.clone(),
+    })
+}
+
+/// A merge request the person sees, by its id or a daemon's short one, and
+/// the person's name.
+pub(crate) async fn seen_request(
+    server: &Server,
+    user: UserId,
+    selector: &str,
+) -> Result<(FamilyId, MergeRequest, String), ApiError> {
+    let readable = Readable::load(server, Browser { user }).await?;
+    let (family, request) = readable
+        .requests()
+        .into_iter()
+        .find(|(_, request)| short(request.id) == selector || request.id.to_string() == selector)
+        .ok_or_else(not_found)?;
+    Ok((family, request, readable.me))
+}
+
+pub(crate) async fn comments(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
@@ -389,7 +428,7 @@ async fn merge_requests(
     Ok(Json(requests.iter().map(|(family, request)| mr_summary(&readable.deltas[family], request)).collect()))
 }
 
-async fn merge_request(
+pub(crate) async fn merge_request(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,

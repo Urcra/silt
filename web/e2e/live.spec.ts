@@ -271,6 +271,28 @@ test("another of Alice's machines directs the agent running on the first, throug
   await laptop.context().close()
 })
 
+test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
+  const hosted = await (await browser.newContext()).newPage()
+  await hosted.goto(`${live.server}/app/t/${live.thread}`)
+  await hosted.getByLabel('User').fill('bob')
+  await hosted.getByLabel('Password').fill('correct horse battery')
+  await hosted.getByRole('button', { name: 'Sign in' }).click()
+  await hosted.getByText('› Please add a farewell line to main').hover()
+  await hosted.getByRole('button', { name: 'comment on entry 0' }).click()
+  await hosted.getByLabel('comment', { exact: true }).fill('said in the browser')
+  await hosted.getByRole('button', { name: 'Comment', exact: true }).click()
+  await expect(hosted.getByText(/: said in the browser/)).toBeVisible()
+
+  const machine = await (await browser.newContext()).newPage()
+  await machine.goto(live.alice)
+  await expect(async () => {
+    await machine.goto(new URL(`/t/${live.thread}`, live.alice).toString())
+    await expect(machine.getByText(/bob: said in the browser/)).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await hosted.context().close()
+  await machine.context().close()
+})
+
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByRole('banner').getByRole('link', { name: 'Devices' }).click()

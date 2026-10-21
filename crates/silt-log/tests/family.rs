@@ -86,6 +86,13 @@ fn edits_from_two_checkouts_based_on_the_same_disk_version_merge() {
     );
     assert_eq!(text(&family, main), "use a;\nfn main() {}\n// b\n");
     assert_eq!(family.thread(THREAD).expect("thread").head().len(), 2);
+    assert_eq!(
+        silt_log::thread_head_in(family.log(), family.graph(), THREAD),
+        family.thread_head(THREAD),
+        "a server's copy of the log finds the same head"
+    );
+    let other = ThreadId(8);
+    assert_eq!(silt_log::thread_head_in(family.log(), family.graph(), other), family.thread_head(other));
 }
 
 #[test]

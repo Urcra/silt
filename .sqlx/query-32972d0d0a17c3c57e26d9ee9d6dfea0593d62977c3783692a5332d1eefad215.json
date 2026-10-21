@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO server_actors (user_id, actor) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "32972d0d0a17c3c57e26d9ee9d6dfea0593d62977c3783692a5332d1eefad215"
+}
