@@ -21,12 +21,14 @@ mod resume;
 mod server;
 mod sessions;
 mod sync;
+mod sync_once;
 mod transcripts;
 mod views;
 mod watch;
 mod web;
 
-pub use capture::capture_here;
+pub use capture::{Captured, capture_here};
 pub use core::CoreError;
 pub use recorder::{NewRun, Recorder};
 pub use server::{RunError, holds_lock, run};
+pub use sync_once::{Synced, sync_once};

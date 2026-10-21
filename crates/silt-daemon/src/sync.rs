@@ -51,44 +51,11 @@ impl Core {
             });
         }
         for family in self.family_ids() {
-            let local_len = self.local_log(family).len() as u64;
-            let sync = self.syncs.entry(family).or_default();
-            if let Some(push) = sync.next_push(local_len) {
-                let mut found = Vec::new();
-                let batch: Vec<Delta> = self.local_log(family)[push.from as usize..push.to as usize]
-                    .iter()
-                    .map(|delta| {
-                        let redacted = self.redactor.redact_delta(delta);
-                        found.extend(redacted.found);
-                        redacted.delta
-                    })
-                    .collect();
-                self.learn_secrets(found);
-                let blobs = referenced_blobs(&batch);
+            if let Some(batch) = self.next_push(family) {
                 let (events, remote, store, uploaded) =
                     (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
-                let epoch = self.sync_epoch(family);
                 tokio::spawn(async move {
-                    // Deltas go only after their blobs, or others would get
-                    // deltas whose content they can't fetch.
-                    if let Err(error) = upload_blobs(&remote, &store, &uploaded, blobs).await {
-                        let _ = events.send(Event::Pushed {
-                            family,
-                            epoch,
-                            generation: None,
-                            outcome: Outcome::Failed,
-                            error: Some(format!("could not upload a file to the server: {error}")),
-                        });
-                        return;
-                    }
-                    let (generation, outcome, error) = remote.push(family, batch).await;
-                    let _ = events.send(Event::Pushed {
-                        family,
-                        epoch,
-                        generation,
-                        outcome,
-                        error: error.map(|error| error.to_string()),
-                    });
+                    let _ = events.send(send_push(&remote, &store, &uploaded, batch).await.into());
                 });
             }
             if self.pull_paused.get(&family).is_some_and(|until| Instant::now() < *until) {
@@ -109,6 +76,24 @@ impl Core {
                 });
             }
         }
+    }
+
+    /// The family's next deltas to push, redacted, unless a push is in
+    /// flight or there is nothing to push.
+    pub(crate) fn next_push(&mut self, family: FamilyId) -> Option<PushBatch> {
+        let local_len = self.local_log(family).len() as u64;
+        let push = self.syncs.entry(family).or_default().next_push(local_len)?;
+        let mut found = Vec::new();
+        let deltas: Vec<Delta> = self.local_log(family)[push.from as usize..push.to as usize]
+            .iter()
+            .map(|delta| {
+                let redacted = self.redactor.redact_delta(delta);
+                found.extend(redacted.found);
+                redacted.delta
+            })
+            .collect();
+        self.learn_secrets(found);
+        Some(PushBatch { family, epoch: self.sync_epoch(family), blobs: referenced_blobs(&deltas), deltas })
     }
 
     /// Starts the family's sync over from `sync`. Answers to requests sent
@@ -461,6 +446,57 @@ pub(crate) fn thread_info(thread: &ThreadRecord) -> ThreadInfo {
         owner: String::new(),
         collaborators: Vec::new(),
     }
+}
+
+pub(crate) struct PushBatch {
+    family: FamilyId,
+    epoch: u64,
+    deltas: Vec<Delta>,
+    blobs: Vec<BlobHash>,
+}
+
+impl PushBatch {
+    pub(crate) fn len(&self) -> usize {
+        self.deltas.len()
+    }
+}
+
+/// How the server answered a push, for `Core::pushed`.
+pub(crate) struct PushAnswer {
+    pub(crate) family: FamilyId,
+    pub(crate) epoch: u64,
+    pub(crate) generation: Option<u64>,
+    pub(crate) outcome: Outcome,
+    pub(crate) error: Option<String>,
+}
+
+impl From<PushAnswer> for Event {
+    fn from(answer: PushAnswer) -> Self {
+        let PushAnswer { family, epoch, generation, outcome, error } = answer;
+        Event::Pushed { family, epoch, generation, outcome, error }
+    }
+}
+
+pub(crate) async fn send_push(
+    remote: &Remote,
+    store: &Store,
+    uploaded: &Mutex<HashSet<BlobHash>>,
+    batch: PushBatch,
+) -> PushAnswer {
+    let PushBatch { family, epoch, deltas, blobs } = batch;
+    // Deltas go only after their blobs, or others would get deltas whose
+    // content they can't fetch.
+    if let Err(error) = upload_blobs(remote, store, uploaded, blobs).await {
+        return PushAnswer {
+            family,
+            epoch,
+            generation: None,
+            outcome: Outcome::Failed,
+            error: Some(format!("could not upload a file to the server: {error}")),
+        };
+    }
+    let (generation, outcome, error) = remote.push(family, deltas).await;
+    PushAnswer { family, epoch, generation, outcome, error: error.map(|error| error.to_string()) }
 }
 
 fn referenced_blobs(deltas: &[Delta]) -> Vec<BlobHash> {

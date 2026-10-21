@@ -95,14 +95,28 @@ fn the_wrapper_records_an_agent_without_hooks_when_no_daemon_runs() {
     let world = world();
     let laptop = &world.laptop;
     laptop.silt(&["daemon", "stop"]);
-    laptop.silt_with(&["codex"], &[("SILT_DAEMONLESS_CAPTURE", "1")]);
-    assert_eq!(laptop.stdout(&["daemon", "status"]).trim(), "not running", "the wrapper recorded it alone");
+    let ran = laptop.silt_with(&["codex"], &[("SILT_DAEMONLESS_CAPTURE", "1")]);
+    let stderr = String::from_utf8_lossy(&ran.stderr);
+    let thread = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("silt: recording thread "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("the wrapper names the thread")
+        .to_owned();
+    assert!(
+        eventually(|| world.home.log_line(&thread).is_some_and(|line| line.contains("1 edits"))),
+        "the wrapper pushed the session when the agent exited"
+    );
+    assert_eq!(laptop.stdout(&["daemon", "status"]).trim(), "not running", "the laptop recorded and pushed it alone");
 
-    let thread = thread_of(laptop);
-    let show = laptop.stdout(&["show", &thread]);
+    let checkout = resume_on_home(&world, &[&thread], &[("FAKE_EXPECT", "Please-add-a-farewell-line")]);
+    assert_eq!(
+        fs::read_to_string(checkout.join("src/main.rs")).expect("read"),
+        "fn main() {}\nfn farewell() {}\nfn codex() {}\n"
+    );
+    let show = world.home.stdout(&["show", &thread]);
     assert!(show.contains("> Please add a farewell line to main") && show.contains("Codex says done."), "{show}");
-    assert!(show.contains("    ✎ src/main.rs"), "the edit is credited to the tool call: {show}");
-    assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains("Codex says done.")), "and it syncs");
+    assert!(show.contains("    ✎ src/main.rs +17"), "the edit is credited to the tool call: {show}");
 }
 
 #[test]

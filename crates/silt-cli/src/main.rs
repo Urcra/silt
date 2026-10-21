@@ -193,6 +193,14 @@ enum Command {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Push what this machine recorded to the server once, in this process,
+    /// as is done when no daemon runs
+    Sync {
+        /// One thread's family; defaults to every thread here
+        thread: Option<String>,
+        #[arg(long, required = true)]
+        once: bool,
+    },
     /// Manage the background daemon
     Daemon {
         #[command(subcommand)]
@@ -628,6 +636,7 @@ fn run() -> Result<(), Exn<CliError>> {
             ServerCommand::Backup { dest, data } => admin::backup(data, &dest),
             ServerCommand::Restore { backup, data, replace } => admin::restore(&backup, data, replace),
         },
+        Command::Sync { thread, once: _ } => commands::sync_once(thread.as_deref()),
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),

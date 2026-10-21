@@ -24,19 +24,29 @@ use crate::protocol::HookReply;
 /// daemon stopped while writing can't hang the agent.
 const TURN_WAIT: Duration = Duration::from_secs(10);
 
+/// What a hook captured in its own process.
+#[derive(Debug, Default)]
+pub struct Captured {
+    pub reply: HookReply,
+    /// The session's thread, when Silt records the session.
+    pub thread: Option<String>,
+}
+
 /// Runs a hook's capture step in this process, without the daemon, for the
 /// data in `data_dir`.
-pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value) -> Result<HookReply, CoreError> {
+pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value) -> Result<Captured, CoreError> {
     let input: HookInput = serde_json::from_value(input).map_err(CoreError::HookInput)?;
     let lock = CaptureLock::open(data_dir)?;
     let _turn = turn_in_time(&lock).await?;
     let store = Store::open(data_dir).await?;
     let Some(record) = store.sessions().await?.into_iter().find(|record| record.session_id == input.session_id) else {
-        return Ok(HookReply::default());
+        return Ok(Captured::default());
     };
+    let thread = record.thread.to_string();
     let actor = crate::server::load_actor(data_dir)?;
     let mut core = Core::for_session(store, actor, data_dir, record).await?;
-    core.capture(event, &input).await
+    let reply = core.capture(event, &input).await?;
+    Ok(Captured { reply, thread: Some(thread) })
 }
 
 /// Waits for this process's turn at writing, for at most `TURN_WAIT`.

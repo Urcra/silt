@@ -222,7 +222,8 @@ fn record_here(
     let (recorder, started) = runtime
         .block_on(silt_daemon::Recorder::start(&paths::data_dir(), run))
         .or_raise(|| CliError("could not start recording the session".into()))?;
-    Ok((started, Recording::Here { runtime, recorder: Some(Box::new(recorder)) }))
+    let thread = started.thread.clone();
+    Ok((started, Recording::Here { runtime, recorder: Some(Box::new(recorder)), thread }))
 }
 
 /// Exits as the agent did: with its code, or 128 + the signal that ended it,
@@ -250,6 +251,7 @@ enum Recording {
     Here {
         runtime: tokio::runtime::Runtime,
         recorder: Option<Box<silt_daemon::Recorder>>,
+        thread: String,
     },
 }
 
@@ -264,7 +266,7 @@ impl Recording {
             Self::Daemon { .. } => {
                 tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(run_until_exit(command, None))
             }
-            Self::Here { runtime, recorder } => runtime.block_on(run_until_exit(command, recorder.as_deref_mut())),
+            Self::Here { runtime, recorder, .. } => runtime.block_on(run_until_exit(command, recorder.as_deref_mut())),
         }
     }
 
@@ -280,9 +282,12 @@ impl Recording {
                 call::<String>(&Request::EndSession { thread: thread.clone() })?;
                 Ok(())
             }
-            Self::Here { runtime, recorder } => {
+            Self::Here { runtime, recorder, thread } => {
                 let recorder = recorder.take().expect("matched above");
-                runtime.block_on((*recorder).end()).or_raise(|| CliError("could not record the end of the session".into()))
+                let ended =
+                    runtime.block_on((*recorder).end()).or_raise(|| CliError("could not record the end of the session".into()));
+                push_in_background(thread);
+                ended
             }
         }
     }
@@ -629,18 +634,63 @@ fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
     }
 }
 
-/// Captures the hook in this process. A hook never fails the agent: what it
-/// couldn't record is told on stderr.
+/// Captures the hook in this process, and once the agent's turn stops,
+/// pushes what was recorded. A hook never fails the agent: what it couldn't
+/// record is told on stderr.
 fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
     let captured = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(silt_daemon::CoreError::from)
         .and_then(|runtime| runtime.block_on(silt_daemon::capture_here(&paths::data_dir(), event, input)));
-    captured.unwrap_or_else(|error| {
-        eprintln!("silt: could not record the {event} hook: {}", silt_daemon::protocol::error_chain(&error));
-        HookReply::default()
-    })
+    match captured {
+        Ok(captured) => {
+            if let (Some(thread), "Stop") = (&captured.thread, event) {
+                push_in_background(thread);
+            }
+            captured.reply
+        }
+        Err(error) => {
+            eprintln!("silt: could not record the {event} hook: {}", silt_daemon::protocol::error_chain(&error));
+            HookReply::default()
+        }
+    }
+}
+
+/// Starts `silt sync --once` for the thread, detached, when this machine
+/// syncs with a server: what was recorded without the daemon reaches it
+/// without the agent waiting.
+fn push_in_background(thread: &str) {
+    use std::os::unix::process::CommandExt;
+    if silt_daemon::remote::load_config(&paths::data_dir()).is_none() {
+        return;
+    }
+    let Ok(exe) = env::current_exe() else {
+        return;
+    };
+    let started = Command::new(exe)
+        .args(["sync", "--once", thread])
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    if let Err(error) = started {
+        eprintln!("silt: could not start pushing to the server: {error}");
+    }
+}
+
+pub fn sync_once(thread: Option<&str>) -> Result<(), Exn<CliError>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    let synced = runtime
+        .block_on(silt_daemon::sync_once(&paths::data_dir(), thread))
+        .or_raise(|| CliError("could not sync with the server".into()))?;
+    println!("pushed {} deltas of {} thread families", synced.deltas, synced.families);
+    Ok(())
 }
 
 pub fn pull(thread: Option<String>) -> Result<(), Exn<CliError>> {

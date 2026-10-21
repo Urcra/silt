@@ -96,6 +96,8 @@ pub enum CoreError {
     HookInput(#[source] serde_json::Error),
     #[error("another process kept the capture lock too long")]
     LockTimeout,
+    #[error("could not push to the server: {0}")]
+    Push(String),
     #[error("could not {doing}")]
     Agent {
         doing: &'static str,
