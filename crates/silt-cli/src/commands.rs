@@ -49,8 +49,8 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
         warn_of_other_agent_homes();
         return Ok(false);
     }
-    if silt_daemon::holds_lock(&paths::data_dir()) {
-        return wait_for_busy_daemon().map(|()| false);
+    if silt_daemon::holds_lock(&paths::data_dir()) && wait_for_busy_daemon()? == Waited::Answered {
+        return Ok(false);
     }
     fs::create_dir_all(paths::data_dir()).or_raise(|| CliError("cannot create the Silt data directory".into()))?;
     let log = OpenOptions::new()
@@ -111,12 +111,23 @@ fn warn_of_other_agent_homes() {
 /// while it records a long transcript.
 const BUSY_DAEMON_WAIT: Duration = Duration::from_secs(60);
 
-fn wait_for_busy_daemon() -> Result<(), Exn<CliError>> {
+#[derive(Debug, PartialEq, Eq)]
+enum Waited {
+    /// It answers now.
+    Answered,
+    /// It let go of the data directory: it stopped, or was stopping.
+    Gone,
+}
+
+fn wait_for_busy_daemon() -> Result<Waited, Exn<CliError>> {
     eprintln!("the Silt daemon is busy; waiting for it");
     let deadline = Instant::now() + BUSY_DAEMON_WAIT;
     while Instant::now() < deadline {
         if is_running() {
-            return Ok(());
+            return Ok(Waited::Answered);
+        }
+        if !silt_daemon::holds_lock(&paths::data_dir()) {
+            return Ok(Waited::Gone);
         }
         std::thread::sleep(Duration::from_millis(200));
     }

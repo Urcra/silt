@@ -32,6 +32,9 @@ pub enum RunError {
     AlreadyRunning(String),
 }
 
+const LOCK_ATTEMPTS: u32 = 10;
+const LOCK_RETRY: Duration = Duration::from_millis(100);
+
 fn lock_path(data_dir: &Path) -> std::path::PathBuf {
     data_dir.join("daemon.lock")
 }
@@ -58,11 +61,19 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     // One daemon per data directory: a second would take over the socket
     // and fight the first over the store.
     let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(lock_path(data_dir))?;
-    if let Err(error) = lock.try_lock() {
-        return match error {
-            fs::TryLockError::WouldBlock => Err(RunError::AlreadyRunning(data_dir.display().to_string())),
-            fs::TryLockError::Error(error) => Err(error.into()),
-        };
+    // `holds_lock` takes the lock for a moment to look, and a daemon that is
+    // stopping lets go shortly: only a lock held for a while means another
+    // daemon runs.
+    let mut attempts = 0;
+    while let Err(error) = lock.try_lock() {
+        match error {
+            fs::TryLockError::WouldBlock if attempts < LOCK_ATTEMPTS => {
+                attempts += 1;
+                tokio::time::sleep(LOCK_RETRY).await;
+            }
+            fs::TryLockError::WouldBlock => return Err(RunError::AlreadyRunning(data_dir.display().to_string())),
+            fs::TryLockError::Error(error) => return Err(error.into()),
+        }
     }
     let store = Store::open(data_dir).await?;
     let actor = load_actor(data_dir)?;
