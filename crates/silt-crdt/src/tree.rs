@@ -55,9 +55,9 @@ pub enum TreeError {
 
 /// Total order on operations that agrees with causality: a later operation
 /// always has a higher lamport, and the actor breaks ties between concurrent
-/// ones.
+/// ones. Last-writer-wins registers use it as well.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-struct Stamp(Lamport, ActorId);
+pub struct Stamp(Lamport, ActorId);
 
 impl From<DeltaId> for Stamp {
     fn from(id: DeltaId) -> Self {

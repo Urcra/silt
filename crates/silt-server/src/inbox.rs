@@ -31,10 +31,6 @@ struct Note {
     text: String,
 }
 
-fn short(thread: ThreadId) -> String {
-    let text = thread.to_string();
-    text[text.len().saturating_sub(12)..].to_owned()
-}
 
 /// The user names mentioned as `@name` in `text`.
 pub(crate) fn mentions(text: &str) -> Vec<String> {
@@ -101,7 +97,7 @@ impl Server {
                             user: owner,
                             kind: "mr_opened",
                             thread: *target,
-                            text: format!("{actor_name} asks to merge \"{}\" from fork {} into your thread {}", clip(title), short(delta.thread), short(*target)),
+                            text: format!("{actor_name} asks to merge \"{}\" from fork {} into your thread {}", clip(title), delta.thread.short(), target.short()),
                         });
                     }
                     mentioned = format!("{title}\n{summary}");
@@ -120,7 +116,7 @@ impl Server {
                             user: owner,
                             kind,
                             thread: fork,
-                            text: format!("{actor_name} {verb} your merge request from fork {}", short(fork)),
+                            text: format!("{actor_name} {verb} your merge request from fork {}", fork.short()),
                         });
                     }
                 }
@@ -130,7 +126,7 @@ impl Server {
                             user: owner,
                             kind: "comment",
                             thread: delta.thread,
-                            text: format!("{actor_name} commented on thread {}: {}", short(delta.thread), clip(text)),
+                            text: format!("{actor_name} commented on thread {}: {}", delta.thread.short(), clip(text)),
                         });
                     }
                     mentioned.clone_from(text);
@@ -150,7 +146,7 @@ impl Server {
                         user: user.id,
                         kind: "mention",
                         thread,
-                        text: format!("{actor_name} mentioned you in thread {}: {}", short(thread), clip(&mentioned)),
+                        text: format!("{actor_name} mentioned you in thread {}: {}", thread.short(), clip(&mentioned)),
                     });
                 }
             }

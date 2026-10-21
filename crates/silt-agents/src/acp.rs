@@ -59,8 +59,7 @@ pub fn stop(reason: &str) -> String {
 pub fn read_line(line: &str) -> Read {
     let mut read = Read::default();
     let Ok(record) = serde_json::from_str::<Value>(line) else {
-        read.entries.push(Entry::Other { kind: "unparseable".into() });
-        return read;
+        return Read::unparseable();
     };
     let field = |key: &str| record[key].as_str().unwrap_or_default().to_owned();
     match record["t"].as_str().unwrap_or_default() {

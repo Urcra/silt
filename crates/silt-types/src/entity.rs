@@ -28,6 +28,14 @@ macro_rules! hex_id {
                 s.parse::<crate::ActorId>().map(|id| Self(id.0))
             }
         }
+
+        impl $name {
+            /// The last 12 hex digits, enough to tell ids apart where
+            /// people read them: UUID v7 ids share their leading time digits.
+            pub fn short(&self) -> String {
+                format!("{:012x}", self.0 & 0xffff_ffff_ffff)
+            }
+        }
     };
 }
 
@@ -92,5 +100,7 @@ mod tests {
     fn ids_round_trip_as_hex() {
         let thread = ThreadId(0x0001_92ab);
         assert_eq!(thread.to_string().parse::<ThreadId>(), Ok(thread));
+        let thread = ThreadId(0x0192_ab00_0000_7000_8000_1234_5678_9abc);
+        assert_eq!(thread.short(), thread.to_string()[20..]);
     }
 }

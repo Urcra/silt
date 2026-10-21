@@ -18,11 +18,11 @@ use silt_daemon::protocol::{
 };
 
 use crate::CliError;
-use crate::render;
+use crate::render::{self, short};
 
 const HOOK_TIMEOUT: Duration = Duration::from_secs(20);
 
-fn fail(message: impl Into<String>) -> Exn<CliError> {
+pub(crate) fn fail(message: impl Into<String>) -> Exn<CliError> {
     Exn::new(CliError(message.into()))
 }
 
@@ -330,7 +330,7 @@ impl Run<'_> {
                     self.checkout.to_string_lossy().into_owned(),
                 ],
             },
-            hook_command: format!("{} hook", shell_quote(&exe)),
+            hook_command: format!("{} hook", silt_agents::shell_quote(&exe.to_string_lossy())),
             instructions: agent_conventions::session_instructions(&rules, &skills, native, self.checkout),
             skills: agent_conventions::skills_to_give(&skills, native, self.checkout)
                 .into_iter()
@@ -891,14 +891,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
-}
-
-fn short(thread: &str) -> &str {
-    &thread[thread.len().saturating_sub(12)..]
-}
-
-fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
 /// Runs `command` in the sandbox, exiting with its status. Silt's own data

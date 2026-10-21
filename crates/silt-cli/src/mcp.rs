@@ -13,6 +13,7 @@ use silt_agents::conventions::{self, Skill};
 use silt_daemon::{client, paths};
 
 use crate::CliError;
+use crate::render::short;
 
 const DEFAULT_LIMIT: usize = 40;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -240,6 +241,3 @@ fn clip(text: &str) -> String {
     }
 }
 
-fn short(thread: &str) -> &str {
-    &thread[thread.len().saturating_sub(12)..]
-}

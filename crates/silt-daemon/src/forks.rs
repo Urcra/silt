@@ -38,7 +38,7 @@ impl Core {
         let family = self.families.get(&family_id).ok_or_else(|| {
             CoreError::Invalid(format!(
                 "thread {} isn't on this machine yet; resume or fork it first",
-                short(thread)
+                thread.short()
             ))
         })?;
         Ok((family_id, family))
@@ -52,7 +52,7 @@ impl Core {
         if !owner.is_empty() && !user.is_empty() && *owner != user {
             return Err(CoreError::Invalid(format!(
                 "thread {} belongs to {owner}; fork it to continue the work",
-                short(thread)
+                thread.short()
             )));
         }
         let (_, family) = self.loaded_family(thread)?;
@@ -61,7 +61,7 @@ impl Core {
         match (lease, device) {
             (Some((holder, _)), Some(device)) if holder != device => Err(CoreError::Invalid(format!(
                 "thread {} is being worked on from another device; run this there, or fork the thread",
-                short(thread)
+                thread.short()
             ))),
             _ => Ok(()),
         }
@@ -104,7 +104,7 @@ impl Core {
         let source = family
             .thread(thread)
             .and_then(|state| state.forked_from)
-            .ok_or_else(|| CoreError::Invalid(format!("thread {} is not a fork; there is nothing to pull", short(thread))))?;
+            .ok_or_else(|| CoreError::Invalid(format!("thread {} is not a fork; there is nothing to pull", thread.short())))?;
         let head = family.thread_head(thread);
         let source_head = family.thread_head(source);
         let mut pulled = Pulled {
@@ -163,12 +163,12 @@ impl Core {
         let target = family.thread(thread).and_then(|state| state.forked_from).ok_or_else(|| {
             CoreError::Invalid(format!(
                 "thread {} is not a fork; merge requests go from a fork to its source",
-                short(thread)
+                thread.short()
             ))
         })?;
         let title = title
             .or_else(|| family.thread(thread).and_then(|state| state.title.clone()))
-            .unwrap_or_else(|| format!("Changes from fork {}", short(thread)));
+            .unwrap_or_else(|| format!("Changes from fork {}", thread.short()));
         let head = family.thread_head(thread);
         let summary = match summary {
             Some(summary) => summary,
@@ -362,7 +362,7 @@ impl Core {
                 remote.set_visibility(None, Some(thread), visibility.clone()).await.map_err(refused)?;
                 Ok(format!(
                     "thread {} is now {visibility}; forks without a setting of their own follow it",
-                    short(thread),
+                    thread.short(),
                 ))
             }
             None => {
@@ -461,10 +461,6 @@ pub(crate) fn short_mr(id: DeltaId) -> String {
     format!("{}.{}", &actor[actor.len() - 6..], id.lamport.0)
 }
 
-pub(crate) fn short(thread: ThreadId) -> String {
-    let id = thread.to_string();
-    id[id.len().saturating_sub(12)..].to_owned()
-}
 
 fn status_text(status: &MrStatus) -> String {
     match status {

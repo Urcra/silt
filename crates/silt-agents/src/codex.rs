@@ -19,9 +19,7 @@ pub const AGENT: &str = "codex";
 const TRANSLATED_VERSION: &str = "0.163.0";
 
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| crate::home().map(|home| home.join(".codex")))
+    crate::agent_home("CODEX_HOME", ".codex")
 }
 
 /// Every rollout under `sessions/`, newest day first.
@@ -126,10 +124,7 @@ fn session_meta(path: &Path) -> Option<Value> {
 /// The conversation steps and turn marks in one rollout line.
 pub fn read_line(line: &str) -> Read {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return Read {
-            entries: vec![Entry::Other { kind: "unparseable".into() }],
-            marks: Vec::new(),
-        };
+        return Read::unparseable();
     };
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
     let payload = value.get("payload").cloned().unwrap_or(Value::Null);

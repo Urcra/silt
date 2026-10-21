@@ -204,8 +204,7 @@ impl Reader for GeminiReader {
     fn push(&mut self, line: &str) -> Read {
         let mut read = Read::default();
         let Ok(value) = serde_json::from_str::<Value>(line) else {
-            read.entries.push(Entry::Other { kind: "unparseable".into() });
-            return read;
+            return Read::unparseable();
         };
         if value.get("id").is_some() {
             self.message(&value, &mut read);

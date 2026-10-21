@@ -3,10 +3,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use silt_crdt::{
-    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, TextDoc, TextError, TextEvent,
+    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, Stamp, TextDoc, TextError, TextEvent,
     TreeError, TreeEvent, TreeOp, VersionVector,
 };
-use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, Lamport, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op};
 
@@ -53,17 +53,6 @@ pub enum FileView {
     /// Unchanged since it came from git.
     GitText(GitOid),
     Blob(BlobHash),
-}
-
-/// Last-writer-wins order: causally later deltas always have a higher
-/// lamport; the actor breaks ties between concurrent ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Stamp(Lamport, ActorId);
-
-impl From<DeltaId> for Stamp {
-    fn from(id: DeltaId) -> Self {
-        Self(id.lamport, id.actor)
-    }
 }
 
 #[derive(Debug, Clone)]

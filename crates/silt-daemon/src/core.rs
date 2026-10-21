@@ -1351,7 +1351,7 @@ impl Core {
         if !remove {
             names.push(user.to_owned());
         }
-        let short = crate::forks::short(thread);
+        let short = thread.short();
         Ok(if remove {
             format!("{user} no longer writes into thread {short}")
         } else {

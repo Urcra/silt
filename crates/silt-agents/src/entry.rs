@@ -15,6 +15,11 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// A record that isn't the JSON its agent writes.
+    pub fn unparseable() -> Self {
+        Self::Other { kind: "unparseable".into() }
+    }
+
     /// Short label for display and the search index.
     pub fn kind(&self) -> &str {
         match self {

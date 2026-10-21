@@ -46,7 +46,7 @@ impl Core {
                 .await
                 .map_err(|source| CoreError::Server { doing: "change the thread", source })?;
         }
-        let short = crate::forks::short(thread);
+        let short = thread.short();
         self.trash_changed.insert(thread, std::time::Instant::now());
         match change {
             Lifecycle::Delete => {

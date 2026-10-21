@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use entry::Entry;
 pub use render::{Role, render_transcript, translated_text};
-pub use rewrite::{RecordedSession, Rewrites, is_safe_id};
+pub use rewrite::{RecordedSession, Rewrites, is_safe_id, is_side_file_name};
 pub use tail::{complete_lines, complete_lines_ending};
 
 use conventions::NativeConventions;
@@ -43,6 +43,15 @@ pub enum Mark {
 pub struct Read {
     pub entries: Vec<Entry>,
     pub marks: Vec<Mark>,
+}
+
+impl Read {
+    pub fn unparseable() -> Self {
+        Self {
+            entries: vec![Entry::unparseable()],
+            marks: Vec::new(),
+        }
+    }
 }
 
 /// Reads one transcript file's records in order. Some agents write a
@@ -296,6 +305,11 @@ impl Transcripts {
     }
 }
 
+/// An agent's home: `$variable` when set, else `dir` in the user's home.
+pub(crate) fn agent_home(variable: &str, dir: &str) -> Option<PathBuf> {
+    std::env::var_os(variable).map(PathBuf::from).or_else(|| home().map(|home| home.join(dir)))
+}
+
 pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
@@ -330,6 +344,11 @@ pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<
 }
 
 /// Milliseconds since the epoch of a file's last change.
+/// `text` as one word for a POSIX shell.
+pub fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
 /// Links each skill directory into `dir` under its directory name, made
 /// safe as a file name. Of skills sharing a name the first is kept, as Silt
 /// lists the repository's before the personal ones.

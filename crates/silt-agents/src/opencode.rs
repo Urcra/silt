@@ -95,8 +95,7 @@ impl Reader for OpenCodeReader {
     fn push(&mut self, line: &str) -> Read {
         let mut read = Read::default();
         let Ok(value) = serde_json::from_str::<Value>(line) else {
-            read.entries.push(Entry::Other { kind: "unparseable".into() });
-            return read;
+            return Read::unparseable();
         };
         if let Some(message) = value.get("message") {
             let role = message.get("role").and_then(Value::as_str).unwrap_or_default().to_owned();

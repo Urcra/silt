@@ -15,13 +15,9 @@ use silt_proto::{OrgChange, Visibility};
 use silt_server::{Admin, Config};
 
 use crate::CliError;
-use crate::commands::{call, is_running};
+use crate::commands::{call, fail, is_running};
 
 const SERVER_UNIT: &str = include_str!("../../../packaging/systemd/silt-server.service");
-
-fn fail(message: impl Into<String>) -> Exn<CliError> {
-    Exn::new(CliError(message.into()))
-}
 
 fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
     tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))

@@ -539,9 +539,8 @@ impl Core {
         }
         let dir = self.data_dir.join("side-files").join(new_id);
         for (name, bytes) in &recorded.attachments {
-            let relative = Path::new(name);
-            if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
-                let path = dir.join(relative);
+            if silt_agents::is_side_file_name(name) {
+                let path = dir.join(name);
                 std::fs::create_dir_all(path.parent().expect("joined onto the dir"))?;
                 std::fs::write(path, bytes)?;
             }

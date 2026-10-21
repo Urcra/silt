@@ -5,7 +5,7 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -72,11 +72,10 @@ pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &Record
         }
     }
     for (name, bytes) in &session.attachments {
-        let relative = Path::new(name);
-        if !relative.components().all(|component| matches!(component, Component::Normal(_))) {
+        if !crate::is_side_file_name(name) {
             continue;
         }
-        let path = paths.session_dir.join(relative);
+        let path = paths.session_dir.join(name);
         fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
         fs::write(path, bytes)?;
     }
@@ -294,9 +293,7 @@ fn skills_plugin(scratch: &Path, skills: &[PathBuf]) -> io::Result<PathBuf> {
 /// The conversation steps recorded in one transcript line.
 pub fn normalize(line: &str) -> Vec<Entry> {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return vec![Entry::Other {
-            kind: "unparseable".into(),
-        }];
+        return vec![Entry::unparseable()];
     };
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
     match kind {

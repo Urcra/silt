@@ -123,22 +123,22 @@ impl Core {
             let delta = item.delta;
             if (item.source, delta.thread) != segment && (item.source != HistorySource::Own || segment.0 != HistorySource::Own) {
                 let label = match item.source {
-                    HistorySource::Inherited => format!("from thread {} (before this fork)", short_id(delta.thread)),
-                    HistorySource::Upstream => format!("upstream progress in thread {}", short_id(delta.thread)),
-                    HistorySource::Own => format!("thread {}", short_id(thread)),
+                    HistorySource::Inherited => format!("from thread {} (before this fork)", delta.thread.short()),
+                    HistorySource::Upstream => format!("upstream progress in thread {}", delta.thread.short()),
+                    HistorySource::Own => format!("thread {}", thread.short()),
                 };
                 lines.push(ShowLine::Segment { label });
             }
             segment = (item.source, delta.thread);
             match &delta.op {
                 Op::Merge { from, mr: None } => lines.push(ShowLine::Event {
-                    text: format!("pulled newer work from thread {}", short_id(*from)),
+                    text: format!("pulled newer work from thread {}", from.short()),
                 }),
                 Op::Conv(ConvOp::Merged { from, title, summary, .. }) => lines.push(ShowLine::Event {
                     text: format!(
                         "merged \"{title}\" from fork {} (read it with `silt show {}`): {summary}",
-                        short_id(*from),
-                        short_id(*from)
+                        from.short(),
+                        from.short()
                     ),
                 }),
                 Op::Conv(ConvOp::Turn { mark, .. }) => {
@@ -532,10 +532,6 @@ fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
         .collect()
 }
 
-fn short_id(thread: ThreadId) -> String {
-    let id = thread.to_string();
-    id[id.len().saturating_sub(12)..].to_owned()
-}
 
 #[cfg(test)]
 mod tests {

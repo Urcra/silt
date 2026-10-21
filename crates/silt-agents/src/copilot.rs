@@ -17,9 +17,7 @@ pub const AGENT: &str = "copilot-cli";
 const TRANSLATED_VERSION: &str = "1.0.100";
 
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("COPILOT_HOME")
-        .map(PathBuf::from)
-        .or_else(|| crate::home().map(|home| home.join(".copilot")))
+    crate::agent_home("COPILOT_HOME", ".copilot")
 }
 
 fn session_dir(home: &Path, id: &str) -> PathBuf {
@@ -69,10 +67,7 @@ impl Reader for CopilotReader {
 /// The conversation steps and turn marks in one event.
 pub fn read_line(line: &str) -> Read {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return Read {
-            entries: vec![Entry::Other { kind: "unparseable".into() }],
-            marks: Vec::new(),
-        };
+        return Read::unparseable();
     };
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
     let data = value.get("data").cloned().unwrap_or(Value::Null);
@@ -161,9 +156,8 @@ pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSess
     crate::replace_transcript(&dir.join("events.jsonl"), &rewrites.lines(&session.main))?;
     fs::write(dir.join("workspace.yaml"), workspace_yaml(&session.id, cwd, root))?;
     for (name, bytes) in &session.attachments {
-        let relative = Path::new(name);
-        if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
-            let path = dir.join(relative);
+        if crate::is_side_file_name(name) {
+            let path = dir.join(name);
             fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
             fs::write(path, bytes)?;
         }
@@ -331,7 +325,7 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
     if let Some(instructions) = &plan.instructions {
         let context = dir.join("session-start.json");
         fs::write(&context, json!({ "additionalContext": instructions }).to_string())?;
-        hooks.insert("sessionStart".into(), command(format!("cat {}", shell_quote(&context.to_string_lossy()))));
+        hooks.insert("sessionStart".into(), command(format!("cat {}", crate::shell_quote(&context.to_string_lossy()))));
     }
     hooks.insert(
         "userPromptSubmitted".into(),
@@ -340,10 +334,6 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
     fs::create_dir_all(dir.join("hooks"))?;
     fs::write(dir.join("hooks/hooks.json"), json!({"version": 1, "hooks": hooks}).to_string())?;
     Ok(dir)
-}
-
-pub(crate) fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 #[cfg(test)]

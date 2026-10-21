@@ -11,7 +11,7 @@ pub fn safe(text: &str) -> String {
 }
 
 /// The last 12 hex digits: UUIDv7 ids share their leading time digits.
-fn short(id: &str) -> &str {
+pub(crate) fn short(id: &str) -> &str {
     &id[id.len().saturating_sub(12)..]
 }
 
