@@ -101,6 +101,8 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
+/** Names which server to ask, on a machine signed in to several (ADR 0032). */
+const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
 
 export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
@@ -183,7 +185,8 @@ export const api = {
   removeQueued: (id: string, item: number) => request<string>('DELETE', `${thread(id)}/queue/${item}`),
   sendQueued: (id: string, item: number) => request<string>('POST', `${thread(id)}/queue/${item}/send`),
   inbox: (all: boolean) => request<InboxEntry[]>('GET', `/api/inbox${all ? '?all=true' : ''}`),
-  readNotifications: (read: Partial<InboxRead>) => request<string>('POST', '/api/inbox/read', read),
+  readNotifications: (read: Partial<InboxRead>, server?: string | null) =>
+    request<string>('POST', `/api/inbox/read${onServer(server)}`, read),
   pushKey: () => request<string>('GET', '/api/push/key'),
   subscribePush: (subscription: PushSubscriptionJSON) => request<null>('POST', '/api/push/subscriptions', subscription),
   notificationSettings: () => request<KindSetting[]>('GET', '/api/me/notifications'),

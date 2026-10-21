@@ -652,6 +652,7 @@ async fn inbox(
                 read: note.read,
                 action: note.action,
                 notify: note.notify,
+                server: None,
             })
             .collect(),
     ))
@@ -715,6 +716,7 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
                     threads: info.threads,
                     clone: None,
                     home: None,
+                    server: None,
                 }
             })
             .collect(),

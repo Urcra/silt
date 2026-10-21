@@ -295,7 +295,12 @@ export type HistoryPage = { thread: string, total: number, entries: Array<Histor
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
-export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, action: InboxAction | null, notify: boolean, };
+export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, action: InboxAction | null, notify: boolean, 
+/**
+ * The server it came from, on a machine signed in to several (ADR
+ * 0032); ids are that server's.
+ */
+server: string | null, };
 
 export type LiveState = { deltas: number, 
 /**
@@ -397,7 +402,11 @@ clone: string | null,
  * Where its new threads go from this machine (ADR 0032): a server's
  * URL, or `local`; none for the default server.
  */
-home: string | null, };
+home: string | null, 
+/**
+ * The server this record is from; none for a clone no server knows.
+ */
+server: string | null, };
 
 export type PromptAttachment = { name: string, mime: string, 
 /**

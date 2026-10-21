@@ -372,6 +372,10 @@ pub struct InboxEntry {
     pub action: Option<InboxAction>,
     #[serde(default)]
     pub notify: bool,
+    /// The server it came from, on a machine signed in to several (ADR
+    /// 0032); ids are that server's.
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 /// A project as the web UI shows it (ADR 0023): the server's record when
@@ -397,6 +401,9 @@ pub struct Project {
     /// URL, or `local`; none for the default server.
     #[serde(default)]
     pub home: Option<String>,
+    /// The server this record is from; none for a clone no server knows.
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 /// Where a new comment goes.

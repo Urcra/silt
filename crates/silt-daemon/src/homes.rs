@@ -68,9 +68,31 @@ impl Core {
         self.remote_for(thread).is_some_and(|remote| remote.config.url == url)
     }
 
-    /// The server what belongs to no thread is asked of.
+    /// The first server signed in to, where new projects' threads go.
     pub(crate) fn default_remote(&self) -> Option<&Remote> {
         self.remotes.first()
+    }
+
+    /// The server what belongs to no thread is asked of: the one the request
+    /// names with `Request::OnServer`, or the default.
+    pub(crate) fn asked_remote(&self) -> Option<&Remote> {
+        match &self.asked_server {
+            Some(url) => self.remotes.iter().find(|remote| remote.config.url == *url),
+            None => self.default_remote(),
+        }
+    }
+
+    /// The servers what belongs to no thread and spans them, such as the
+    /// inbox, is read from: the one the request names, or all of them.
+    pub(crate) fn asked_remotes(&self) -> Result<Vec<Remote>, CoreError> {
+        let remotes: Vec<Remote> = match &self.asked_server {
+            Some(_) => self.asked_remote().into_iter().cloned().collect(),
+            None => self.remotes.clone(),
+        };
+        if remotes.is_empty() {
+            return Err(CoreError::Invalid("not connected to a server; use `silt auth login`".into()));
+        }
+        Ok(remotes)
     }
 
     /// This machine's user on the thread's server; empty without one.

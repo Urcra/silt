@@ -191,6 +191,9 @@ pub struct Core {
     pub(crate) homes: HashMap<FamilyId, Home>,
     /// Where each project's new families go, by repository.
     pub(crate) project_homes: HashMap<String, Home>,
+    /// The server the request being handled asks, for what belongs to no
+    /// thread; see [`Core::asked_remote`].
+    pub(crate) asked_server: Option<String>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests
     /// made before aren't taken as answers to new ones.
@@ -388,6 +391,7 @@ impl Core {
             remotes: remote::load_sign_ins(data_dir).into_iter().map(Remote::new).collect(),
             homes: HashMap::new(),
             project_homes: HashMap::new(),
+            asked_server: None,
             syncs: HashMap::new(),
             sync_epochs: HashMap::new(),
             redactor: redactor(data_dir),
@@ -424,6 +428,17 @@ impl Core {
 
     /// Handles a request. Some answer `reply` later, off the event loop.
     pub async fn request(&mut self, request: Request, reply: oneshot::Sender<Response>) {
+        if let Request::OnServer { server, asking } = request {
+            let server = server.trim_end_matches('/').to_owned();
+            if !self.remotes.iter().any(|remote| remote.config.url == server) {
+                let _ = reply.send(Response::error(format!("this machine isn't signed in to {server}")));
+                return;
+            }
+            self.asked_server = Some(server);
+            Box::pin(self.request(*asking, reply)).await;
+            self.asked_server = None;
+            return;
+        }
         match self.elsewhere(&request) {
             Some(crate::control::Elsewhere::PassOn(thread, command)) => {
                 return answer_later(reply, self.pass_on(thread, command));
@@ -435,6 +450,7 @@ impl Core {
             None => {}
         }
         let response = match request {
+            Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Ping => Response::ok("pong"),
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
@@ -1503,24 +1519,24 @@ impl Core {
         Ok(if once { web.one_time_url() } else { web.url() })
     }
 
-    /// The server what belongs to no thread, such as the inbox, is asked of.
-    fn connected(&self) -> Result<Remote, CoreError> {
-        self.default_remote()
-            .cloned()
-            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
-    }
-
     fn inbox(
         &self,
         all: bool,
     ) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
-        let remote = self.connected()?;
+        let remotes = self.asked_remotes()?;
         Ok(async move {
-            let reply = remote.inbox(all).await.map_err(|source| CoreError::Server { doing: "read the inbox", source })?;
-            Ok(reply
-                .notifications
-                .into_iter()
-                .map(|notification| crate::protocol::InboxEntry {
+            let mut entries = Vec::new();
+            let mut failed = None;
+            for remote in &remotes {
+                let reply = match remote.inbox(all).await {
+                    Ok(reply) => reply,
+                    Err(source) => {
+                        warn!(%source, server = remote.config.url, "could not read a server's inbox");
+                        failed = Some(source);
+                        continue;
+                    }
+                };
+                entries.extend(reply.notifications.into_iter().map(|notification| crate::protocol::InboxEntry {
                     id: notification.id,
                     kind: notification.kind,
                     thread: notification.thread.to_string(),
@@ -1530,18 +1546,30 @@ impl Core {
                     read: notification.read,
                     action: notification.action,
                     notify: notification.notify,
-                })
-                .collect())
+                    server: Some(remote.config.url.clone()),
+                }));
+            }
+            if entries.is_empty()
+                && let Some(source) = failed
+            {
+                return Err(CoreError::Server { doing: "read the inbox", source });
+            }
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_ms));
+            Ok(entries)
         })
     }
 
+    /// Marks notifications read on the server named, or on every server
+    /// for all of them.
     fn inbox_read(
         &self,
         read: silt_proto::InboxRead,
     ) -> Result<impl Future<Output = Result<&'static str, CoreError>> + use<>, CoreError> {
-        let remote = self.connected()?;
+        let remotes = self.asked_remotes()?;
         Ok(async move {
-            remote.inbox_read(&read).await.map_err(|source| CoreError::Server { doing: "mark the inbox read", source })?;
+            for remote in &remotes {
+                remote.inbox_read(&read).await.map_err(|source| CoreError::Server { doing: "mark the inbox read", source })?;
+            }
             Ok("read")
         })
     }

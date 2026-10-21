@@ -52,7 +52,7 @@ export async function subscribeToPush(): Promise<void> {
 }
 
 /** An item is new again when the server brings it up to date. */
-const keyOf = (item: InboxEntry) => `${item.id}:${item.created_ms}`
+const keyOf = (item: InboxEntry) => `${item.server ?? ''}:${item.id}:${item.created_ms}`
 
 /** Shows a browser notification for each new unread item whose kind notifies. */
 export function useNotifier() {

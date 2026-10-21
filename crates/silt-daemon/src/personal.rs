@@ -11,6 +11,7 @@ use tracing::warn;
 
 use crate::core::{Core, CoreError, Event, now_ms};
 use crate::protocol::{BusEvent, Mine, StateChange};
+use crate::remote::Remote;
 
 /// How often the server is asked for what other devices changed.
 const STATES_INTERVAL: Duration = Duration::from_secs(10);
@@ -50,6 +51,14 @@ impl Personal {
 }
 
 /// What a sync brought back (ADR 0024).
+/// What one server is sent in a sync of this person's state: its own
+/// threads' states and its own requests' marks.
+struct Round {
+    remote: Remote,
+    sending: Vec<ThreadState>,
+    marking: Vec<(String, SeenMark)>,
+}
+
 pub(crate) struct Synced {
     /// Thread states the server took, each with how it then stood.
     sent: Vec<(ThreadState, ThreadState)>,
@@ -143,55 +152,72 @@ impl Core {
     }
 
     /// Sends what changed here and fetches what changed elsewhere, when due
-    /// and not already under way.
-    /// Only the default server keeps this person's state so far; what's of
-    /// another server's threads stays here rather than reach it.
+    /// and not already under way: each server gets only what is of its own
+    /// threads (ADR 0032), and what all of them hold is merged here.
     pub(crate) fn drive_thread_states(&mut self) {
-        let Some(remote) = self.default_remote().cloned() else {
+        if self.remotes.is_empty() {
             return;
-        };
+        }
         let due = self.personal.last_sync.is_none_or(|last| last.elapsed() >= STATES_INTERVAL);
         if self.personal.syncing || !due {
             return;
         }
         self.personal.syncing = true;
         self.personal.last_sync = Some(Instant::now());
-        let server = remote.config.url.clone();
-        let sending: Vec<ThreadState> = self
-            .personal
-            .pending
+        let rounds: Vec<Round> = self
+            .remotes
             .iter()
-            .filter(|thread| self.homed_at(**thread, &server))
-            .filter_map(|thread| self.personal.states.get(thread).cloned())
-            .collect();
-        let marking: Vec<(String, SeenMark)> = self
-            .personal
-            .seen_pending
-            .iter()
-            .filter(|key| {
-                self.find_mr(&key.0).is_ok_and(|(family, _)| self.remote_of(family).is_some_and(|at| at.config.url == server))
+            .map(|remote| {
+                let server = remote.config.url.as_str();
+                let sending = self
+                    .personal
+                    .pending
+                    .iter()
+                    .filter(|thread| self.homed_at(**thread, server))
+                    .filter_map(|thread| self.personal.states.get(thread).cloned())
+                    .collect();
+                let marking = self
+                    .personal
+                    .seen_pending
+                    .iter()
+                    .filter(|key| {
+                        self.find_mr(&key.0)
+                            .is_ok_and(|(family, _)| self.remote_of(family).is_some_and(|at| at.config.url == server))
+                    })
+                    .filter_map(|key| self.personal.seen.get(key).map(|mark| (key.0.clone(), mark.clone())))
+                    .collect();
+                Round { remote: remote.clone(), sending, marking }
             })
-            .filter_map(|key| self.personal.seen.get(key).map(|mark| (key.0.clone(), mark.clone())))
             .collect();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let mut sent = Vec::new();
-            for state in sending {
-                match remote.change_thread_state(&state).await {
-                    Ok(merged) => sent.push((state, merged)),
-                    Err(error) => warn!(%error, "could not send a thread's state to the server"),
+            let mut synced = Synced { sent: Vec::new(), fetched: Ok(Vec::new()), marks_sent: Vec::new(), marks: Ok(Vec::new()) };
+            for Round { remote, sending, marking } in rounds {
+                let server = remote.config.url.clone();
+                for state in sending {
+                    match remote.change_thread_state(&state).await {
+                        Ok(merged) => synced.sent.push((state, merged)),
+                        Err(error) => warn!(%error, server, "could not send a thread's state to the server"),
+                    }
+                }
+                for (mr, mark) in marking {
+                    match remote.mark_seen(&mr, &mark).await {
+                        Ok(()) => synced.marks_sent.push((mr, mark)),
+                        Err(error) => warn!(%error, server, "could not send a seen mark to the server"),
+                    }
+                }
+                match (remote.thread_states().await, &mut synced.fetched) {
+                    (Ok(states), Ok(all)) => all.extend(states),
+                    (Err(error), _) => warn!(%error, server, "could not fetch thread states from the server"),
+                    (Ok(_), Err(_)) => {}
+                }
+                match (remote.seen().await, &mut synced.marks) {
+                    (Ok(marks), Ok(all)) => all.extend(marks),
+                    (Err(error), _) => warn!(%error, server, "could not fetch seen marks from the server"),
+                    (Ok(_), Err(_)) => {}
                 }
             }
-            let mut marks_sent = Vec::new();
-            for (mr, mark) in marking {
-                match remote.mark_seen(&mr, &mark).await {
-                    Ok(()) => marks_sent.push((mr, mark)),
-                    Err(error) => warn!(%error, "could not send a seen mark to the server"),
-                }
-            }
-            let fetched = remote.thread_states().await.map_err(|error| error.to_string());
-            let marks = remote.seen().await.map_err(|error| error.to_string());
-            let _ = events.send(Event::Personal(Box::new(Synced { sent, fetched, marks_sent, marks })));
+            let _ = events.send(Event::Personal(Box::new(synced)));
         });
     }
 

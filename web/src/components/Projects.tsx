@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, type Project } from '../api'
 import { keys, message } from '../query'
-import { hosted } from '../served'
+import { hosted, serverName } from '../served'
 import { Button, EmptyState, Input, Select, Skeleton, Tabs, Tag, toast } from '../ui'
 
 /** Where a clone of `project` might go: next to this machine's other clones. */
@@ -139,6 +139,8 @@ function AddProject() {
 /** The projects the person works in, with this machine's clone of each (ADR 0023). */
 export function Projects() {
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
+  const several = (status.data?.servers.length ?? 0) > 1
   const all = projects.data ?? []
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -150,11 +152,12 @@ export function Projects() {
       )}
       <ul data-testid="projects" className="divide-y divide-line-subtle rounded-md border border-line">
         {all.map((project) => (
-          <li key={project.repo} aria-label={project.name} className="space-y-1 px-3 py-2 text-sm">
+          <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="space-y-1 px-3 py-2 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{project.name}</span>
               <span className="font-mono text-xs text-fg-3">{project.repo}</span>
               {project.org && <Tag>{project.org}</Tag>}
+              {several && project.server && <Tag>{serverName(project.server)}</Tag>}
               <span className="ml-auto text-xs text-fg-2">
                 {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
                 {project.open_mrs > 0 && `, ${project.open_mrs} open merge ${project.open_mrs === 1 ? 'request' : 'requests'}`}

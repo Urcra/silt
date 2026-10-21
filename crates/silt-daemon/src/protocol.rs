@@ -228,6 +228,12 @@ pub enum Request {
         thread: Option<String>,
         visibility: silt_proto::Visibility,
     },
+    /// `request` asked of the server at `server` where it belongs to no
+    /// thread, such as orgs and devices, rather than the default (ADR 0032).
+    OnServer {
+        server: String,
+        asking: Box<Request>,
+    },
     /// The server's notifications for this user (ADR 0013).
     Inbox {
         #[serde(default)]

@@ -10,6 +10,8 @@ use similar::TextDiff;
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
 use silt_proto::view::FileAt;
 
+use crate::homes::Home;
+
 use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 use crate::transcripts::native_entries;
 
@@ -351,48 +353,74 @@ impl Core {
         changes
     }
 
+    /// Searches every server signed in to, and this machine for the threads
+    /// it keeps to itself (ADR 0032). Without a server answering, it
+    /// searches this machine alone.
     pub(crate) async fn search(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
-        if let Some(remote) = self.default_remote() {
-            let request = silt_proto::SearchQuery {
-                q: query.to_owned(),
-                repo: filters.repo.clone(),
-                author: filters.author.clone(),
-                status: filters.status,
-                branch: filters.branch.clone(),
-                file: filters.file.clone(),
-                since: filters.since,
-                until: filters.until,
-                limit: Some(limit),
-            };
-            match remote.search(&request).await {
-                Ok(reply) => {
-                    let hits = reply
-                        .hits
-                        .into_iter()
-                        .map(|hit| SearchResult {
-                            thread: hit.thread.to_string(),
-                            kind: hit.kind,
-                            snippet: hit.snippet,
-                            owner: Some(hit.owner),
-                            status: Some(hit.status),
-                            repo: Some(hit.repo),
-                            time_ms: Some(hit.time_ms),
-                            turn: None,
-                            before_compaction: false,
-                        })
-                        .collect::<Vec<_>>();
-                    let deltas = vec![None; hits.len()];
-                    return Ok(self.placed(hits, &deltas));
-                }
-                Err(error) if !filters.is_empty() => {
-                    return Err(CoreError::Invalid(format!("the server could not search: {error}")));
-                }
-                Err(error) => tracing::warn!(%error, "server search failed; searching this machine"),
-            }
-        } else if !filters.is_empty() {
+        let remotes = self.asked_remotes().unwrap_or_default();
+        if remotes.is_empty() && !filters.is_empty() {
             return Err(CoreError::Invalid("search filters need a server; use `silt auth login`".into()));
         }
-        let hits = self.store().search(query, limit).await?;
+        let request = silt_proto::SearchQuery {
+            q: query.to_owned(),
+            repo: filters.repo.clone(),
+            author: filters.author.clone(),
+            status: filters.status,
+            branch: filters.branch.clone(),
+            file: filters.file.clone(),
+            since: filters.since,
+            until: filters.until,
+            limit: Some(limit),
+        };
+        let mut found = Vec::new();
+        let mut answered = false;
+        for remote in &remotes {
+            match remote.search(&request).await {
+                Ok(reply) => {
+                    answered = true;
+                    found.extend(reply.hits.into_iter().map(|hit| SearchResult {
+                        thread: hit.thread.to_string(),
+                        kind: hit.kind,
+                        snippet: hit.snippet,
+                        owner: Some(hit.owner),
+                        status: Some(hit.status),
+                        repo: Some(hit.repo),
+                        time_ms: Some(hit.time_ms),
+                        turn: None,
+                        before_compaction: false,
+                    }));
+                }
+                Err(error) if !filters.is_empty() => {
+                    return Err(CoreError::Invalid(format!("{} could not search: {error}", remote.config.url)));
+                }
+                Err(error) => tracing::warn!(%error, server = remote.config.url, "server search failed"),
+            }
+        }
+        if answered {
+            let mut deltas = vec![None; found.len()];
+            if filters.is_empty() {
+                let kept_here = |thread: ThreadId| {
+                    self.threads.get(&thread).is_some_and(|record| self.homes.get(&record.family) == Some(&Home::Local))
+                };
+                let (here, here_deltas) = self.local_hits(query, limit, kept_here).await?;
+                found.extend(here);
+                deltas.extend(here_deltas);
+            }
+            return Ok(self.placed(found, &deltas));
+        }
+        let (hits, deltas) = self.local_hits(query, limit, |_| true).await?;
+        Ok(self.placed(hits, &deltas))
+    }
+
+    /// This machine's search hits in the threads `keep` keeps, with the
+    /// deltas they're in.
+    async fn local_hits(
+        &self,
+        query: &str,
+        limit: u32,
+        keep: impl Fn(ThreadId) -> bool,
+    ) -> Result<(Vec<SearchResult>, Vec<Option<DeltaId>>), CoreError> {
+        let hits: Vec<_> = self.store().search(query, limit).await?.into_iter().filter(|hit| keep(hit.thread)).collect();
         let times = self.delta_times(hits.iter().map(|hit| (hit.thread, hit.delta)));
         let deltas: Vec<Option<DeltaId>> = hits.iter().map(|hit| Some(hit.delta)).collect();
         let hits = hits
@@ -409,7 +437,7 @@ impl Core {
                 before_compaction: false,
             })
             .collect();
-        Ok(self.placed(hits, &deltas))
+        Ok((hits, deltas))
     }
 
     /// When each of these deltas was made, from the families here.

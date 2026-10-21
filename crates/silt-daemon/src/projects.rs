@@ -13,24 +13,22 @@ use crate::core::{Core, CoreError, Event};
 use crate::protocol::{Project, Request, Response};
 
 impl Core {
-    /// The projects to show: the server's when it answers, each with its
-    /// clone here, then the clones the server doesn't know.
+    /// The projects to show: each server's that answers, with its clone
+    /// here, then the clones no server knows.
     pub(crate) fn projects(&self) -> impl Future<Output = Result<Vec<Project>, CoreError>> + Send + 'static {
         let local = self.local_projects();
-        let remote = self.default_remote().cloned();
+        let remotes = self.asked_remotes().unwrap_or_default();
         let homes: BTreeMap<String, String> =
             self.project_homes.iter().map(|(repo, home)| (repo.clone(), home.shown().to_owned())).collect();
         async move {
-            let mut projects = match remote {
-                None => local,
-                Some(remote) => match remote.projects().await {
-                    Ok(reply) => merged(reply.projects, local),
-                    Err(error) => {
-                        warn!(%error, "could not list the server's projects; showing this machine's");
-                        local
-                    }
-                },
-            };
+            let mut listed = Vec::new();
+            for remote in remotes {
+                match remote.projects().await {
+                    Ok(reply) => listed.push((remote.config.url.clone(), reply.projects)),
+                    Err(error) => warn!(%error, server = remote.config.url, "could not list a server's projects"),
+                }
+            }
+            let mut projects = merged(listed, local);
             for project in &mut projects {
                 project.home = homes.get(&project.repo).cloned();
             }
@@ -211,9 +209,7 @@ impl Core {
     }
 
     fn signed_in(&self) -> Result<crate::remote::Remote, CoreError> {
-        self.default_remote()
-            .cloned()
-            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+        self.asked_remote().cloned().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }
 }
 
@@ -230,6 +226,7 @@ fn project(repo: &str) -> Project {
         open_mrs: 0,
         clone: None,
         home: None,
+        server: None,
     }
 }
 
@@ -257,18 +254,20 @@ fn check_clone_target(url: &str, path: &Path) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// The server's projects with what this machine knows of each, then the
-/// clones of projects the server doesn't list.
-fn merged(server: Vec<ProjectInfo>, local: Vec<Project>) -> Vec<Project> {
-    let mut here: BTreeMap<String, Project> = local.into_iter().map(|project| (project.repo.clone(), project)).collect();
-    let mut projects: Vec<Project> = server
-        .into_iter()
-        .map(|info| {
-            let mine = here.remove(&info.repo);
-            Project {
-                origin_url: info.origin_url.or_else(|| mine.as_ref().and_then(|mine| mine.origin_url.clone())),
-                open_mrs: mine.as_ref().map_or(0, |mine| mine.open_mrs),
-                clone: mine.and_then(|mine| mine.clone),
+/// Each server's projects, by its URL, with what this machine knows of
+/// each, then the clones of projects no server lists.
+fn merged(servers: Vec<(String, Vec<ProjectInfo>)>, local: Vec<Project>) -> Vec<Project> {
+    let here: BTreeMap<String, Project> = local.into_iter().map(|project| (project.repo.clone(), project)).collect();
+    let mut listed = std::collections::BTreeSet::new();
+    let mut projects: Vec<Project> = Vec::new();
+    for (server, infos) in servers {
+        for info in infos {
+            let mine = here.get(&info.repo);
+            listed.insert(info.repo.clone());
+            projects.push(Project {
+                origin_url: info.origin_url.or_else(|| mine.and_then(|mine| mine.origin_url.clone())),
+                open_mrs: mine.map_or(0, |mine| mine.open_mrs),
+                clone: mine.and_then(|mine| mine.clone.clone()),
                 repo: info.repo,
                 name: info.name,
                 org: info.org,
@@ -277,11 +276,12 @@ fn merged(server: Vec<ProjectInfo>, local: Vec<Project>) -> Vec<Project> {
                 default_preset: info.default_preset,
                 threads: info.threads,
                 home: None,
-            }
-        })
-        .collect();
-    projects.extend(here.into_values());
-    projects.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.repo.cmp(&b.repo)));
+                server: Some(server.clone()),
+            });
+        }
+    }
+    projects.extend(here.into_values().filter(|project| !listed.contains(&project.repo)));
+    projects.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.repo.cmp(&b.repo)).then_with(|| a.server.cmp(&b.server)));
     projects
 }
 
@@ -314,7 +314,7 @@ mod tests {
             ..project(repo)
         };
         let projects = merged(
-            vec![info("github.com/acme/web", 3), info("github.com/acme/api", 1)],
+            vec![("https://work.example".into(), vec![info("github.com/acme/web", 3), info("github.com/acme/api", 1)])],
             vec![here("github.com/acme/api", "/src/api"), here("example.com/mine", "/src/mine")],
         );
         let names: Vec<&str> = projects.iter().map(|project| project.name.as_str()).collect();
@@ -323,8 +323,24 @@ mod tests {
         assert_eq!((api.threads, api.open_mrs, api.clone.as_deref()), (1, 2, Some(Path::new("/src/api"))));
         assert_eq!(api.default_agent.as_deref(), Some("claude-acp"));
         assert_eq!(api.origin_url.as_deref(), Some("https://github.com/acme/api.git"));
-        assert_eq!((projects[1].org.as_deref(), projects[1].threads), (None, 9));
+        assert_eq!(api.server.as_deref(), Some("https://work.example"));
+        assert_eq!((projects[1].org.as_deref(), projects[1].threads, projects[1].server.as_deref()), (None, 9, None));
         assert_eq!(projects[2].clone, None);
+    }
+
+    #[test]
+    fn a_project_on_two_servers_shows_on_each_with_its_clone() {
+        let here = Project { clone: Some(PathBuf::from("/src/app")), ..project("github.com/acme/app") };
+        let projects = merged(
+            vec![
+                ("https://work.example".into(), vec![info("github.com/acme/app", 3)]),
+                ("https://oss.example".into(), vec![info("github.com/acme/app", 1)]),
+            ],
+            vec![here],
+        );
+        let servers: Vec<Option<&str>> = projects.iter().map(|project| project.server.as_deref()).collect();
+        assert_eq!(servers, [Some("https://oss.example"), Some("https://work.example")]);
+        assert!(projects.iter().all(|project| project.clone.as_deref() == Some(Path::new("/src/app"))));
     }
 
     #[test]

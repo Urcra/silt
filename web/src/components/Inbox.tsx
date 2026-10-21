@@ -77,8 +77,8 @@ export function Inbox() {
   const queries = useQueryClient()
   const inbox = useQuery({ queryKey: keys.inbox(all), queryFn: () => api.inbox(all) })
   const notifications = inbox.data ?? []
-  const markRead = async (read: Partial<InboxRead>) => {
-    await api.readNotifications(read)
+  const markRead = async (read: Partial<InboxRead>, server?: string | null) => {
+    await api.readNotifications(read, server)
     await queries.invalidateQueries({ queryKey: ['inbox'] })
   }
   return (
@@ -97,17 +97,17 @@ export function Inbox() {
       {inbox.isSuccess && notifications.length === 0 && <p className="text-fg-3">Nothing new.</p>}
       <ul data-testid="inbox" className="space-y-2">
         {notifications.map((notification) => (
-          <li key={notification.id} className={notification.read ? 'text-fg-3' : ''}>
+          <li key={`${notification.server ?? ''}:${notification.id}`} className={notification.read ? 'text-fg-3' : ''}>
             <Link className="text-accent-fg" to="/t/$id" params={{ id: notification.thread }}>
               {short(notification.thread)}
             </Link>{' '}
             {notification.text}
-            <Actions notification={notification} done={() => markRead({ ids: [notification.id] })} />{' '}
+            <Actions notification={notification} done={() => markRead({ ids: [notification.id] }, notification.server)} />{' '}
             {!notification.read && (
               <button
                 className="text-xs text-accent-fg"
                 aria-label={`mark ${notification.id} read`}
-                onClick={() => void markRead({ ids: [notification.id] })}
+                onClick={() => void markRead({ ids: [notification.id] }, notification.server)}
               >
                 mark read
               </button>

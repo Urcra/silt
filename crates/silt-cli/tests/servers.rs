@@ -65,6 +65,21 @@ fn each_thread_syncs_with_its_own_server_only() {
     std::thread::sleep(Duration::from_secs(4));
     assert!(!threads(&world.oss_peer).contains(&at_work), "the work thread never reached the open-source server");
     assert!(!threads(&world.work_peer).contains(&in_the_open), "the open-source thread never reached work");
+
+    // What belongs to no thread comes from both, each saying where from.
+    let servers = |path: &str| -> HashSet<String> {
+        laptop
+            .web("GET", path, None)
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["server"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let both: HashSet<String> = [world.work.url.clone(), world.oss.url.clone()].into();
+    assert!(eventually(|| servers("/api/projects") == both), "the project as each server has it: {:?}", servers("/api/projects"));
+    let asked = format!("/api/projects?server={}", world.oss.url);
+    assert_eq!(servers(&asked), [world.oss.url.clone()].into(), "one server, when named");
 }
 
 #[test]

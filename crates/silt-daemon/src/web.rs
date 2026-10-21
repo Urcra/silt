@@ -492,24 +492,49 @@ async fn thread_state(
     ask(&web, Request::ThreadState { thread, change }).await
 }
 
-async fn orgs(State(web): State<Web>) -> HttpResponse {
-    ask(&web, Request::Orgs).await
+/// Which server a request that belongs to no thread asks, on a machine
+/// signed in to several (ADR 0032); the default when left out.
+#[derive(Deserialize, Default)]
+struct OnServer {
+    #[serde(default)]
+    server: Option<String>,
 }
 
-async fn org_change(State(web): State<Web>, Json(change): Json<silt_proto::OrgChange>) -> HttpResponse {
-    ask(&web, Request::OrgChange { change }).await
+impl OnServer {
+    fn ask(self, request: Request) -> Request {
+        match self.server {
+            Some(server) => Request::OnServer { server, asking: Box::new(request) },
+            None => request,
+        }
+    }
 }
 
-async fn projects(State(web): State<Web>) -> HttpResponse {
-    ask(&web, Request::Projects).await
+async fn orgs(State(web): State<Web>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::Orgs)).await
 }
 
-async fn notification_settings(State(web): State<Web>) -> HttpResponse {
-    ask(&web, Request::NotificationSettings).await
+async fn org_change(
+    State(web): State<Web>,
+    Query(on): Query<OnServer>,
+    Json(change): Json<silt_proto::OrgChange>,
+) -> HttpResponse {
+    ask(&web, on.ask(Request::OrgChange { change })).await
 }
 
-async fn notification_setting(State(web): State<Web>, Json(setting): Json<silt_proto::KindSetting>) -> HttpResponse {
-    ask(&web, Request::NotificationSetting { setting }).await
+async fn projects(State(web): State<Web>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::Projects)).await
+}
+
+async fn notification_settings(State(web): State<Web>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::NotificationSettings)).await
+}
+
+async fn notification_setting(
+    State(web): State<Web>,
+    Query(on): Query<OnServer>,
+    Json(setting): Json<silt_proto::KindSetting>,
+) -> HttpResponse {
+    ask(&web, on.ask(Request::NotificationSetting { setting })).await
 }
 
 async fn thread_links(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
@@ -528,24 +553,25 @@ async fn thread_link_revoke(State(web): State<Web>, Path((thread, link)): Path<(
     ask(&web, Request::ThreadLinkRevoke { thread, link }).await
 }
 
-async fn pair_phone(State(web): State<Web>) -> HttpResponse {
-    ask(&web, Request::PairPhone).await
+async fn pair_phone(State(web): State<Web>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::PairPhone)).await
 }
 
-async fn devices(State(web): State<Web>) -> HttpResponse {
-    ask(&web, Request::Devices).await
+async fn devices(State(web): State<Web>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::Devices)).await
 }
 
 async fn device_change(
     State(web): State<Web>,
     Path(id): Path<String>,
+    Query(on): Query<OnServer>,
     Json(change): Json<crate::protocol::DeviceChange>,
 ) -> HttpResponse {
-    ask(&web, Request::DeviceChange { id, change }).await
+    ask(&web, on.ask(Request::DeviceChange { id, change })).await
 }
 
-async fn device_revoke(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
-    ask(&web, Request::DeviceRevoke { id }).await
+async fn device_revoke(State(web): State<Web>, Path(id): Path<String>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::DeviceRevoke { id })).await
 }
 
 async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
@@ -683,12 +709,12 @@ struct InboxQuery {
     all: bool,
 }
 
-async fn inbox(State(web): State<Web>, Query(query): Query<InboxQuery>) -> HttpResponse {
-    ask(&web, Request::Inbox { all: query.all }).await
+async fn inbox(State(web): State<Web>, Query(query): Query<InboxQuery>, Query(on): Query<OnServer>) -> HttpResponse {
+    ask(&web, on.ask(Request::Inbox { all: query.all })).await
 }
 
-async fn inbox_read(State(web): State<Web>, Json(read): Json<silt_proto::InboxRead>) -> HttpResponse {
-    ask(&web, Request::InboxRead { read }).await
+async fn inbox_read(State(web): State<Web>, Query(on): Query<OnServer>, Json(read): Json<silt_proto::InboxRead>) -> HttpResponse {
+    ask(&web, on.ask(Request::InboxRead { read })).await
 }
 
 async fn merge_requests(State(web): State<Web>) -> HttpResponse {

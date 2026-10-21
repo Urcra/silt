@@ -11,6 +11,15 @@ export function apiUrl(path: string): string {
   return basePath() + path.replace(/^\//, '')
 }
 
+/** A server as people tell servers apart: its host, from its URL. */
+export function serverName(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
 /** Whether the server hosts the app, so nothing on this machine runs agents for it. */
 export function hosted(): boolean {
   return document.querySelector('meta[name="silt-served-by"]')?.getAttribute('content') === 'server'
