@@ -189,7 +189,7 @@ impl Core {
             return Err(CoreError::Invalid("there is nothing to send".into()));
         }
         let mut prompt = said.clone();
-        if let Some(notices) = self.take_notices(thread) {
+        if let Some(notices) = self.take_notices(thread).await {
             prompt = format!("{prompt}\n\n{notices}");
         }
         if let Some(primer) = self.acp.get_mut(&thread).and_then(|run| run.primer.take()) {

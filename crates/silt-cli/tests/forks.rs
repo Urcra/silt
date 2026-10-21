@@ -153,6 +153,8 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
     let show = alice.stdout(&["show", &thread]);
     assert!(show.contains("merged \"Add bob\" from fork"), "{show}");
     assert!(!show.contains("Bob here: adding bob"), "the fork's conversation stays in the fork: {show}");
+    alice.silt(&["daemon", "stop"]);
+    alice.stdout(&["log"]);
     let context = prompt_hook(alice, &alice_session);
     assert!(context.contains("merged the merge request \\\"Add bob\\\""), "{context}");
     assert!(eventually(|| bob.stdout(&["mr", "list"]).contains("approved")));

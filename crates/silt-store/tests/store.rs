@@ -77,6 +77,21 @@ async fn a_snapshot_lasts_until_the_family_s_deltas_are_replaced() {
 }
 
 #[tokio::test]
+async fn notices_are_handed_over_once_in_order_and_go_with_their_thread() {
+    let (dir, store) = store_with_thread().await;
+    store.add_notice(THREAD, "first", 1).await.expect("adds");
+    store.add_notice(THREAD, "second", 2).await.expect("adds");
+    drop(store);
+
+    let store = Store::open(dir.path()).await.expect("reopens");
+    assert_eq!(store.take_notices(THREAD).await.expect("takes"), ["first", "second"]);
+    assert!(store.take_notices(THREAD).await.expect("takes").is_empty(), "taken once");
+    store.add_notice(THREAD, "unread", 3).await.expect("adds");
+    store.remove_thread(THREAD).await.expect("removes");
+    assert!(store.take_notices(THREAD).await.expect("takes").is_empty());
+}
+
+#[tokio::test]
 async fn checkouts_and_disk_state() {
     let (_dir, store) = store_with_thread().await;
     let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");

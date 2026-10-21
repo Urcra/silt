@@ -991,7 +991,8 @@ impl Core {
     /// What the agent hears with a prompt: Silt's notices and teammates'
     /// live drafts.
     async fn prompt_context(&mut self, thread: ThreadId) -> Option<String> {
-        let parts: Vec<String> = [self.take_notices(thread), self.teammates_drafts(thread).await].into_iter().flatten().collect();
+        let parts: Vec<String> =
+            [self.take_notices(thread).await, self.teammates_drafts(thread).await].into_iter().flatten().collect();
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 

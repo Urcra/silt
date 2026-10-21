@@ -10,8 +10,9 @@ use silt_log::{Author, ConvOp, Delta, Family, HistorySource, MergeRequest, MrOp,
 use silt_proto::Visibility;
 use silt_types::{DeltaId, FamilyId, Frontier, ThreadId};
 use similar::{DiffTag, TextDiff};
+use tracing::warn;
 
-use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
+use crate::core::{CanonicalCwd, Core, CoreError, now_ms, touched_inode};
 use crate::protocol::{MrDetails, MrSummary, Pulled};
 use crate::transcripts::native_entries;
 use crate::views::FileChange;
@@ -143,7 +144,8 @@ impl Core {
                 pulled.messages,
                 files_note(&pulled.files)
             ),
-        );
+        )
+        .await;
         Ok(pulled)
     }
 
@@ -267,7 +269,8 @@ impl Core {
                 request.summary,
                 request.fork
             ),
-        );
+        )
+        .await;
         let request =
             self.families[&family_id].merge_requests().into_iter().find(|found| found.id == request.id).expect("still there");
         Ok(mr_summary(&request))
@@ -324,16 +327,24 @@ impl Core {
         }
     }
 
-    /// Queues a message for the agent working in `thread`, handed over on
-    /// its next prompt.
-    pub(crate) fn notify(&mut self, thread: ThreadId, message: String) {
-        self.notices.entry(thread).or_default().push(message);
+    /// Keeps a message for the agent working in `thread`, handed over on its
+    /// next prompt. One that can't be kept is only logged: what it tells of
+    /// has happened either way.
+    pub(crate) async fn notify(&self, thread: ThreadId, message: String) {
+        if let Err(error) = self.store.add_notice(thread, &message, now_ms()).await {
+            warn!(%error, %thread, "could not keep a message for the agent");
+        }
     }
 
     /// Takes the messages waiting for `thread`'s agent.
-    pub(crate) fn take_notices(&mut self, thread: ThreadId) -> Option<String> {
-        let notices = self.notices.remove(&thread)?;
-        Some(notices.join("\n\n"))
+    pub(crate) async fn take_notices(&self, thread: ThreadId) -> Option<String> {
+        match self.store.take_notices(thread).await {
+            Ok(notices) => (!notices.is_empty()).then(|| notices.join("\n\n")),
+            Err(error) => {
+                warn!(%error, %thread, "could not read the messages for the agent");
+                None
+            }
+        }
     }
 }
 

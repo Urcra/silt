@@ -185,8 +185,6 @@ pub struct Core {
     pub(crate) heads: HashMap<CheckoutId, GitOid>,
     /// How much of each family's log its stored snapshot covers.
     pub(crate) snapshotted: HashMap<FamilyId, usize>,
-    /// Messages for each thread's agent, handed over on its next prompt.
-    pub(crate) notices: HashMap<ThreadId, Vec<String>>,
     pub(crate) web: Option<crate::web::WebInfo>,
     /// What recovery forks this daemon made, for `silt auth status`.
     pub(crate) recoveries: Vec<String>,
@@ -249,7 +247,6 @@ impl Core {
             sync_error: None,
             heads: HashMap::new(),
             snapshotted: HashMap::new(),
-            notices: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
             uploaded: std::sync::Arc::default(),

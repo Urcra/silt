@@ -74,7 +74,7 @@ impl Core {
                  the server's version is kept and the work from this machine continues in recovery thread {recovery}"
             );
             warn!("{note}");
-            self.notices.entry(recovery).or_default().push(format!("Silt: {note}."));
+            self.notify(recovery, format!("Silt: {note}.")).await;
             self.recoveries.push(note);
         }
         Ok(())

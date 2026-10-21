@@ -292,14 +292,14 @@ impl Core {
         if self.families.contains_key(&family_id) {
             self.lease_changes(&fresh, &heads_before).await?;
             self.update_checkouts(family_id, &fresh).await?;
-            self.announce_requests(&fresh);
+            self.announce_requests(&fresh).await;
         }
         Ok(stopped)
     }
 
     /// Tells the agent of a thread here about merge requests opened on it
     /// elsewhere, on its next prompt.
-    fn announce_requests(&mut self, deltas: &[Delta]) {
+    async fn announce_requests(&self, deltas: &[Delta]) {
         for delta in deltas {
             if let Op::Mr(silt_log::MrOp::Opened { target, title, .. }) = &delta.op
                 && self.sessions.iter().any(|session| session.record.thread == *target)
@@ -310,7 +310,8 @@ impl Core {
                         "A merge request \"{title}\" was opened on this thread from fork {}. The user can review it with `silt mr show` and `silt mr approve` or `silt mr decline`.",
                         delta.thread
                     ),
-                );
+                )
+                .await;
             }
         }
     }

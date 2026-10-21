@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notices WHERE thread_id = ? RETURNING id AS \"id!\", message",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notices",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notices",
+            "name": "message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "184a89b83702368bb87e8994c0d06cfbf3a49c393715204f735a629706e0cf27"
+}

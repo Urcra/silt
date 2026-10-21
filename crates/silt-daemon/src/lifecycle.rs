@@ -135,7 +135,6 @@ impl Core {
             }
         }
         for thread in threads {
-            self.notices.remove(thread);
             self.deleted.remove(thread);
             self.threads.remove(thread);
             self.store.remove_thread(*thread).await?;

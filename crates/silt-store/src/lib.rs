@@ -375,6 +375,26 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps a message for the agent in `thread`, for its next prompt.
+    pub async fn add_notice(&self, thread: ThreadId, message: &str, now_ms: i64) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!("INSERT INTO notices (thread_id, message, created_ms) VALUES (?, ?, ?)", thread, message, now_ms)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The messages waiting for the agent in `thread`, oldest first, taken
+    /// so that only one prompt hands them over.
+    pub async fn take_notices(&self, thread: ThreadId) -> Result<Vec<String>, StoreError> {
+        let thread = id_bytes(thread.0);
+        let mut taken = sqlx::query!(r#"DELETE FROM notices WHERE thread_id = ? RETURNING id AS "id!", message"#, thread)
+            .fetch_all(&self.pool)
+            .await?;
+        taken.sort_by_key(|notice| notice.id);
+        Ok(taken.into_iter().map(|notice| notice.message).collect())
+    }
+
     /// The family's projection snapshot, if one was saved since its deltas
     /// were last replaced.
     pub async fn snapshot(&self, family: FamilyId) -> Result<Option<Snapshot>, StoreError> {
