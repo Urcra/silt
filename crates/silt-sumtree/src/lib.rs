@@ -601,10 +601,11 @@ impl<T: Item> SumTree<T> {
         f: impl FnOnce(T) -> I,
         cx: <T::Summary as Summary>::Context<'_>,
     ) -> bool {
+        debug_assert!((1..=2 * TREE_BASE).contains(&max_items), "a splice must keep its leaf neither empty nor overfull");
         if !self.leaf_has_room(&mut found, max_items) {
             return false;
         }
-        self.splice_item_recursive(&mut found, f, cx).is_some()
+        self.splice_item_recursive(&mut found, max_items, f, cx).is_some()
     }
 
     fn leaf_has_room(&self, found: &mut impl FnMut(&T::Summary) -> bool, max_items: usize) -> bool {
@@ -622,13 +623,14 @@ impl<T: Item> SumTree<T> {
     fn splice_item_recursive<I: IntoIterator<Item = T>>(
         &mut self,
         found: &mut impl FnMut(&T::Summary) -> bool,
+        max_items: usize,
         f: impl FnOnce(T) -> I,
         cx: <T::Summary as Summary>::Context<'_>,
     ) -> Option<T::Summary> {
         match Arc::make_mut(&mut self.0) {
             Node::Internal { summary, child_summaries, child_trees, .. } => {
                 let index = child_summaries.iter().position(&mut *found)?;
-                child_summaries[index] = child_trees[index].splice_item_recursive(found, f, cx)?;
+                child_summaries[index] = child_trees[index].splice_item_recursive(found, max_items, f, cx)?;
                 *summary = sum(child_summaries.iter(), cx);
                 Some(summary.clone())
             }
@@ -636,11 +638,14 @@ impl<T: Item> SumTree<T> {
                 let index = item_summaries.iter().position(&mut *found)?;
                 let item = items.remove(index);
                 item_summaries.remove(index);
+                let mut count = 0;
                 for (offset, new_item) in f(item).into_iter().enumerate() {
                     let new_summary = new_item.summary(cx);
                     items.insert(index + offset, new_item).unwrap_oob();
                     item_summaries.insert(index + offset, new_summary).unwrap_oob();
+                    count += 1;
                 }
+                debug_assert!((1..=max_items).contains(&count), "splice made {count} items, not 1 to {max_items}");
                 *summary = sum(item_summaries.iter(), cx);
                 Some(summary.clone())
             }
