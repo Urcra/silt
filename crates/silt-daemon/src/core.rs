@@ -5,10 +5,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::Repo;
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
-use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
+use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
 use silt_types::{ActorId, BlobHash, DeviceId, FamilyId, Frontier, GitOid, ThreadId};
 use tokio::sync::{mpsc, oneshot};
@@ -27,7 +27,7 @@ pub enum Event {
     /// `noticed`; `settled` once the agents' transcripts have had time to
     /// catch up.
     Changed {
-        checkout: i64,
+        checkout: CheckoutId,
         paths: Vec<PathBuf>,
         noticed: Instant,
         settled: bool,
@@ -119,7 +119,7 @@ pub struct Core {
     /// because there's no local clone to read git blobs from.
     pub(crate) raw: HashMap<FamilyId, Vec<Delta>>,
     pub(crate) threads: HashMap<ThreadId, ThreadRecord>,
-    pub(crate) checkouts: BTreeMap<i64, Checkout>,
+    pub(crate) checkouts: BTreeMap<CheckoutId, Checkout>,
     pub(crate) sessions: Vec<Session>,
     pub(crate) pending: Vec<PendingSession>,
     /// Readers for indexing what other machines record.
@@ -160,7 +160,7 @@ pub struct Core {
     pub(crate) last_listing: Option<Instant>,
     pub(crate) sync_error: Option<String>,
     /// The HEAD commit each checkout was last seen at.
-    pub(crate) heads: HashMap<i64, GitOid>,
+    pub(crate) heads: HashMap<CheckoutId, GitOid>,
     /// Messages for each thread's agent, handed over on its next prompt.
     pub(crate) notices: HashMap<ThreadId, Vec<String>>,
     pub(crate) web: Option<crate::web::WebInfo>,
@@ -413,7 +413,7 @@ impl Core {
         let _ = reply.send(response);
     }
 
-    pub async fn changed(&mut self, checkout: i64, paths: Vec<PathBuf>, noticed: Instant, settled: bool) {
+    pub async fn changed(&mut self, checkout: CheckoutId, paths: Vec<PathBuf>, noticed: Instant, settled: bool) {
         if !settled && self.marks_from_transcripts(checkout) {
             self.settle_changes(checkout, paths, noticed);
             return;
@@ -421,7 +421,7 @@ impl Core {
         self.tail_marked_sessions(checkout).await;
         self.change_noticed = Some(noticed);
         if let Err(error) = self.ingest_paths(checkout, paths).await {
-            warn!(%error, checkout, "could not record changes");
+            warn!(%error, %checkout, "could not record changes");
         }
         self.change_noticed = None;
     }
@@ -466,13 +466,13 @@ impl Core {
         Ok(())
     }
 
-    pub(crate) async fn rescan(&mut self, checkout: i64) -> Result<(), CoreError> {
+    pub(crate) async fn rescan(&mut self, checkout: CheckoutId) -> Result<(), CoreError> {
         let root = self.checkout(checkout)?.record.path.clone();
         self.ingest_paths(checkout, vec![root]).await
     }
 
     /// Records changes under `paths` (absolute; directories are scanned).
-    async fn ingest_paths(&mut self, checkout_id: i64, paths: Vec<PathBuf>) -> Result<(), CoreError> {
+    async fn ingest_paths(&mut self, checkout_id: CheckoutId, paths: Vec<PathBuf>) -> Result<(), CoreError> {
         let checkout = self.checkout(checkout_id)?;
         let root = checkout.record.path.clone();
         if paths.iter().any(|path| *path == root || path.file_name() == Some(".gitattributes".as_ref())) {
@@ -521,10 +521,10 @@ impl Core {
 
     /// Records each vanished file whose exact bytes reappeared at a new path
     /// in the same batch as a move. Returns the paths it handled.
-    async fn ingest_renames(&mut self, checkout_id: i64, paths: &[String]) -> Result<Vec<String>, CoreError> {
+    async fn ingest_renames(&mut self, checkout_id: CheckoutId, paths: &[String]) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
         let entries = self.checkout(checkout_id)?.bridge.entries().clone();
-        let mut vanished: BTreeMap<[u8; 32], Vec<&String>> = BTreeMap::new();
+        let mut vanished: BTreeMap<BlobHash, Vec<&String>> = BTreeMap::new();
         let mut appeared = Vec::new();
         for path in paths {
             // An unreadable file is left to `ingest_file`, which reports it.
@@ -564,7 +564,7 @@ impl Core {
         Ok(handled)
     }
 
-    fn files_under(&self, checkout: i64, relative: &str) -> Result<Vec<String>, CoreError> {
+    fn files_under(&self, checkout: CheckoutId, relative: &str) -> Result<Vec<String>, CoreError> {
         let files = self.checkout(checkout)?.repo.worktree_files_under(relative)?;
         Ok(files
             .into_iter()
@@ -572,7 +572,7 @@ impl Core {
             .collect())
     }
 
-    fn family_paths(&self, checkout: i64) -> Vec<String> {
+    fn family_paths(&self, checkout: CheckoutId) -> Vec<String> {
         let Ok(checkout) = self.checkout(checkout) else {
             return Vec::new();
         };
@@ -591,7 +591,7 @@ impl Core {
 
     /// Records one file's disk state. Returns paths that changed again
     /// meanwhile and need another pass.
-    pub(crate) async fn ingest_file(&mut self, checkout_id: i64, path: &str) -> Result<Vec<String>, CoreError> {
+    pub(crate) async fn ingest_file(&mut self, checkout_id: CheckoutId, path: &str) -> Result<Vec<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
         let entry = self.checkout(checkout_id)?.bridge.entries().get(path).cloned();
         // Same size and modification time as recorded: unchanged, without
@@ -632,7 +632,7 @@ impl Core {
         Ok(again)
     }
 
-    async fn disk_file(&self, checkout: i64, path: &str, raw: RawFile) -> Result<DiskFile, CoreError> {
+    async fn disk_file(&self, checkout: CheckoutId, path: &str, raw: RawFile) -> Result<DiskFile, CoreError> {
         let content = if raw.is_text() {
             let clean = self.checkout(checkout)?.repo.filters()?.to_git(path, &raw.bytes)?;
             match String::from_utf8(clean) {
@@ -658,9 +658,9 @@ impl Core {
 
     /// Brings other checkouts of the family up to date with `deltas`, taking
     /// in what changed in them meanwhile.
-    async fn propagate(&mut self, from: i64, deltas: &[Delta]) -> Result<(), CoreError> {
+    async fn propagate(&mut self, from: CheckoutId, deltas: &[Delta]) -> Result<(), CoreError> {
         let family_id = self.checkout(from)?.family;
-        let others: Vec<i64> = self
+        let others: Vec<CheckoutId> = self
             .checkouts
             .iter()
             .filter(|(id, checkout)| **id != from && checkout.family == family_id)
@@ -680,14 +680,14 @@ impl Core {
 
     /// Applies disk actions, skipping files that changed on disk since they
     /// were last recorded; those are returned to be ingested first.
-    pub(crate) async fn perform(&mut self, checkout_id: i64, actions: Vec<DiskAction>) -> Result<Vec<String>, CoreError> {
+    pub(crate) async fn perform(&mut self, checkout_id: CheckoutId, actions: Vec<DiskAction>) -> Result<Vec<String>, CoreError> {
         self.perform_with(checkout_id, actions, false).await
     }
 
     /// Where the filesystem folds case, paths of the thread that differ only
     /// in case would be one file, each write replacing the other. Only the
     /// first of them, in path order, is written.
-    fn without_case_clashes(&self, checkout_id: i64, mut actions: Vec<DiskAction>) -> Result<Vec<DiskAction>, CoreError> {
+    fn without_case_clashes(&self, checkout_id: CheckoutId, mut actions: Vec<DiskAction>) -> Result<Vec<DiskAction>, CoreError> {
         let checkout = self.checkout(checkout_id)?;
         if !checkout.repo.ignores_case() {
             return Ok(actions);
@@ -719,7 +719,7 @@ impl Core {
     /// even when the checkout never recorded them (materializing a thread).
     pub(crate) async fn perform_with(
         &mut self,
-        checkout_id: i64,
+        checkout_id: CheckoutId,
         actions: Vec<DiskAction>,
         force: bool,
     ) -> Result<Vec<String>, CoreError> {
@@ -739,7 +739,12 @@ impl Core {
 
     /// Applies one disk action; returns the path when the file changed on
     /// disk since it was last recorded.
-    async fn perform_action(&mut self, checkout_id: i64, action: DiskAction, force: bool) -> Result<Option<String>, CoreError> {
+    async fn perform_action(
+        &mut self,
+        checkout_id: CheckoutId,
+        action: DiskAction,
+        force: bool,
+    ) -> Result<Option<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
         match action {
             DiskAction::Write { path, inode, content, executable, version, moved_from } => {
@@ -755,7 +760,7 @@ impl Core {
                 };
                 let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
                 let unchanged =
-                    |current: Option<[u8; 32]>| current.is_none() || current == recorded || (force && recorded.is_none());
+                    |current: Option<BlobHash>| current.is_none() || current == recorded || (force && recorded.is_none());
                 let current = disk::read(&root, &path)?;
                 if !unchanged(current.as_ref().map(|current| current.hash)) {
                     return Ok(Some(path));
@@ -763,7 +768,7 @@ impl Core {
                 let modes_count = self.checkout(checkout_id)?.repo.tracks_file_mode();
                 let written = match current {
                     Some(current)
-                        if current.hash == *blake3::hash(&bytes).as_bytes()
+                        if current.hash == silt_store::BlobStore::hash(&bytes)
                             && (current.executable == executable || !modes_count) =>
                     {
                         current
@@ -787,7 +792,12 @@ impl Core {
 
     /// Removes a file the thread no longer has there, unless it changed on
     /// disk since it was recorded; then returns its path.
-    async fn remove_from_disk(&mut self, checkout_id: i64, root: &Path, path: String) -> Result<Option<String>, CoreError> {
+    async fn remove_from_disk(
+        &mut self,
+        checkout_id: CheckoutId,
+        root: &Path,
+        path: String,
+    ) -> Result<Option<String>, CoreError> {
         let current = disk::read(root, &path)?;
         let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
         if current.as_ref().is_some_and(|current| Some(current.hash) != recorded) {
@@ -802,7 +812,11 @@ impl Core {
     /// Takes in files that changed on disk while the thread's version was
     /// being written there. Ignored files stay out: a peer's file of the
     /// same name must not make this machine record its own `.env`.
-    pub(crate) async fn ingest_changed_meanwhile(&mut self, checkout_id: i64, paths: Vec<String>) -> Result<(), CoreError> {
+    pub(crate) async fn ingest_changed_meanwhile(
+        &mut self,
+        checkout_id: CheckoutId,
+        paths: Vec<String>,
+    ) -> Result<(), CoreError> {
         for path in self.trackable(checkout_id, paths)? {
             Box::pin(self.ingest_file(checkout_id, &path)).await?;
         }
@@ -810,7 +824,7 @@ impl Core {
     }
 
     /// `paths` without Silt's and git's own data and ignored files.
-    fn trackable(&self, checkout_id: i64, mut paths: Vec<String>) -> Result<Vec<String>, CoreError> {
+    fn trackable(&self, checkout_id: CheckoutId, mut paths: Vec<String>) -> Result<Vec<String>, CoreError> {
         paths.retain(|path| !disk::is_internal(path));
         if paths.is_empty() {
             return Ok(paths);
@@ -831,7 +845,7 @@ impl Core {
         Ok(paths)
     }
 
-    async fn persist_entry(&self, checkout: i64, path: &str) -> Result<(), CoreError> {
+    async fn persist_entry(&self, checkout: CheckoutId, path: &str) -> Result<(), CoreError> {
         match self.checkout(checkout)?.bridge.entries().get(path) {
             Some(entry) => {
                 let file = silt_store::DiskFile {
@@ -918,7 +932,7 @@ impl Core {
         } else {
             self.raw.insert(family_id, deltas);
         }
-        let ids: Vec<i64> =
+        let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
             let entries = stored_entries(&self.store, id).await?;
@@ -928,7 +942,7 @@ impl Core {
         Ok(())
     }
 
-    fn checkout(&self, id: i64) -> Result<&Checkout, CoreError> {
+    fn checkout(&self, id: CheckoutId) -> Result<&Checkout, CoreError> {
         self.checkouts.get(&id).ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
     }
 
@@ -995,10 +1009,10 @@ impl Core {
 
     /// Records commits made in checkouts since the last look, with bundles.
     pub(crate) async fn check_commits(&mut self) -> Result<(), CoreError> {
-        let ids: Vec<i64> = self.checkouts.keys().copied().collect();
+        let ids: Vec<CheckoutId> = self.checkouts.keys().copied().collect();
         for id in ids {
             if let Err(error) = self.check_commit(id).await {
-                warn!(%error, checkout = id, "could not record a new commit");
+                warn!(%error, checkout = %id, "could not record a new commit");
             }
         }
         Ok(())
@@ -1008,7 +1022,7 @@ impl Core {
     /// thread has, which also catches commits made while the daemon was
     /// down. The head is remembered only once it is recorded, so a failure
     /// is retried next time.
-    async fn check_commit(&mut self, id: i64) -> Result<(), CoreError> {
+    async fn check_commit(&mut self, id: CheckoutId) -> Result<(), CoreError> {
         let checkout = &self.checkouts[&id];
         let Some(head) = checkout.repo.head_commit()? else {
             return Ok(());
@@ -1064,7 +1078,7 @@ impl Core {
                 .get(&thread)
                 .and_then(|record| self.families.get(&record.family))
                 .and_then(|family| family.thread(thread))
-                .and_then(|state| state.lease)
+                .and_then(ThreadState::lease)
                 .map(|(holder, _)| holder)
         };
         for thread in moved_threads(deltas, device, holder) {
@@ -1077,7 +1091,7 @@ impl Core {
     /// a fork from `at` (by default the thread's head), so nothing written
     /// here lands in the moved thread and nothing from there lands here.
     pub(crate) async fn thread_moved(&mut self, thread: ThreadId, at: Option<Frontier>) -> Result<(), CoreError> {
-        let ids: Vec<i64> =
+        let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.record.thread == thread).map(|(id, _)| *id).collect();
         if ids.is_empty() {
             return Ok(());
@@ -1408,7 +1422,7 @@ fn moved_threads(deltas: &[Delta], device: DeviceId, holder: impl Fn(ThreadId) -
 }
 
 /// What the store says a checkout's files on disk were last recorded as.
-async fn stored_entries(store: &Store, checkout: i64) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
+async fn stored_entries(store: &Store, checkout: CheckoutId) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
     Ok(store
         .disk_files(checkout)
         .await?

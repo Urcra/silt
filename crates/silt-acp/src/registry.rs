@@ -1,6 +1,7 @@
 //! The agents Silt can start (ADR 0005): the public ACP registry, cached for
 //! a day with a bundled snapshot to fall back on, plus the user's own.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -60,56 +61,83 @@ fn platform() -> Option<&'static str> {
     }
 }
 
-fn strings(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
-        .unwrap_or_default()
+/// A registry document. Agents are read one by one, so one this version
+/// can't read leaves the others.
+#[derive(Deserialize)]
+struct Document {
+    #[serde(default)]
+    agents: Vec<Value>,
 }
 
-fn env(value: Option<&Value>) -> Vec<(String, String)> {
-    value
-        .and_then(Value::as_object)
-        .map(|vars| vars.iter().filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned()))).collect())
-        .unwrap_or_default()
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Entry {
+    id: String,
+    name: String,
+    description: String,
+    distribution: Distributions,
 }
 
-fn distribution(value: &Value) -> Distribution {
-    if let Some(npx) = value.get("npx") {
-        let mut args = vec!["-y".to_owned(), npx["package"].as_str().unwrap_or_default().to_owned()];
-        args.extend(strings(npx.get("args")));
-        return Distribution::Command { program: "npx".into(), args, env: env(npx.get("env")) };
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Distributions {
+    npx: Option<Package>,
+    uvx: Option<Package>,
+    /// Builds by platform name.
+    binary: HashMap<String, Build>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Package {
+    package: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Build {
+    archive: String,
+    cmd: String,
+    args: Vec<String>,
+    sha256: Option<String>,
+}
+
+impl Distributions {
+    fn for_this_machine(self) -> Distribution {
+        if let Some(npx) = self.npx {
+            let args = ["-y".to_owned(), npx.package].into_iter().chain(npx.args).collect();
+            return Distribution::Command { program: "npx".into(), args, env: npx.env.into_iter().collect() };
+        }
+        if let Some(uvx) = self.uvx {
+            let args = std::iter::once(uvx.package).chain(uvx.args).collect();
+            return Distribution::Command { program: "uvx".into(), args, env: uvx.env.into_iter().collect() };
+        }
+        let mut binary = self.binary;
+        match platform().and_then(|platform| binary.remove(platform)) {
+            Some(build) => {
+                Distribution::Binary { archive: build.archive, cmd: build.cmd, args: build.args, sha256: build.sha256 }
+            }
+            None => Distribution::Unavailable,
+        }
     }
-    if let Some(uvx) = value.get("uvx") {
-        let mut args = vec![uvx["package"].as_str().unwrap_or_default().to_owned()];
-        args.extend(strings(uvx.get("args")));
-        return Distribution::Command { program: "uvx".into(), args, env: env(uvx.get("env")) };
-    }
-    if let Some(build) = platform().and_then(|platform| value.get("binary")?.get(platform)) {
-        return Distribution::Binary {
-            archive: build["archive"].as_str().unwrap_or_default().to_owned(),
-            cmd: build["cmd"].as_str().unwrap_or_default().to_owned(),
-            args: strings(build.get("args")),
-            sha256: build["sha256"].as_str().map(str::to_owned),
-        };
-    }
-    Distribution::Unavailable
 }
 
 /// The agents in a registry document.
 pub fn parse(text: &str) -> Vec<AgentInfo> {
-    let Ok(document) = serde_json::from_str::<Value>(text) else {
+    let Ok(document) = serde_json::from_str::<Document>(text) else {
         return Vec::new();
     };
-    document["agents"]
-        .as_array()
+    document
+        .agents
         .into_iter()
-        .flatten()
-        .map(|agent| AgentInfo {
-            id: agent["id"].as_str().unwrap_or_default().to_owned(),
-            name: agent["name"].as_str().unwrap_or_default().to_owned(),
-            description: agent["description"].as_str().unwrap_or_default().to_owned(),
-            distribution: distribution(&agent["distribution"]),
+        .filter_map(|agent| serde_json::from_value::<Entry>(agent).ok())
+        .map(|entry| AgentInfo {
+            id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            distribution: entry.distribution.for_this_machine(),
         })
         .filter(|agent| agent.distribution != Distribution::Unavailable)
         .collect()
@@ -206,31 +234,46 @@ pub fn custom(data_dir: &Path) -> Vec<AgentInfo> {
     let Ok(text) = std::fs::read_to_string(data_dir.join("agents.json")) else {
         return Vec::new();
     };
-    let Ok(Value::Array(agents)) = serde_json::from_str::<Value>(&text) else {
+    let Ok(agents) = serde_json::from_str::<Vec<Value>>(&text) else {
         tracing::warn!("agents.json is not a list of agents");
         return Vec::new();
     };
-    agents
-        .iter()
-        .filter_map(|agent| {
-            Some(AgentInfo {
-                id: agent["id"].as_str()?.to_owned(),
-                name: agent["name"].as_str().unwrap_or_else(|| agent["id"].as_str().unwrap_or_default()).to_owned(),
-                description: agent["description"].as_str().unwrap_or_default().to_owned(),
-                distribution: Distribution::Command {
-                    program: agent["command"].as_str()?.to_owned(),
-                    args: strings(agent.get("args")),
-                    env: env(agent.get("env"))
-                        .into_iter()
-                        .chain(strings(agent.get("pass_env")).into_iter().filter_map(|name| {
-                            let value = std::env::var(&name).ok()?;
-                            Some((name, value))
-                        }))
-                        .collect(),
-                },
-            })
-        })
-        .collect()
+    agents.into_iter().filter_map(|agent| serde_json::from_value::<Custom>(agent).ok()).map(Custom::into_info).collect()
+}
+
+/// An agent in `agents.json`.
+#[derive(Deserialize)]
+struct Custom {
+    id: String,
+    name: Option<String>,
+    #[serde(default)]
+    description: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    pass_env: Vec<String>,
+}
+
+impl Custom {
+    fn into_info(self) -> AgentInfo {
+        let passed = self.pass_env.into_iter().filter_map(|name| {
+            let value = std::env::var(&name).ok()?;
+            Some((name, value))
+        });
+        AgentInfo {
+            name: self.name.unwrap_or_else(|| self.id.clone()),
+            id: self.id,
+            description: self.description,
+            distribution: Distribution::Command {
+                program: self.command,
+                args: self.args,
+                env: self.env.into_iter().chain(passed).collect(),
+            },
+        }
+    }
 }
 
 /// Every agent to offer: custom ones first, then the registry's.
@@ -411,6 +454,25 @@ mod tests {
         }
         let unverified = command(&agent("ok", "agent", None), dir.path()).await;
         assert!(matches!(unverified, Err(RegistryError::Unverified(_))), "{unverified:?}");
+    }
+
+    #[test]
+    fn an_agent_this_version_cannot_read_leaves_the_others() {
+        let document = r#"{"agents": [
+            {"id": "odd", "distribution": {"npx": {"package": 7}}},
+            {"id": "fine", "name": "Fine", "distribution": {"uvx": {"package": "fine", "args": ["--acp"], "env": {"A": "1"}}}},
+            {"id": "elsewhere", "distribution": {"binary": {"plan9-mips": {"archive": "x", "cmd": "y"}}}}
+        ]}"#;
+        let agents = parse(document);
+        assert_eq!(agents.len(), 1, "{agents:?}");
+        assert_eq!(
+            agents[0].distribution,
+            Distribution::Command {
+                program: "uvx".into(),
+                args: vec!["fine".into(), "--acp".into()],
+                env: vec![("A".into(), "1".into())]
+            }
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile, ImportFile, import};
 use silt_log::{Author, Delta, Family, FileView};
-use silt_types::{ActorId, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, GitOid, ThreadId};
 
 const THREAD: ThreadId = ThreadId(1);
 
@@ -101,12 +101,12 @@ fn touched_inode(delta: &Delta) -> Option<silt_crdt::InodeId> {
 }
 
 /// Stand-in for a content hash; only equality matters here.
-fn content_hash(text: &str) -> [u8; 32] {
+fn content_hash(text: &str) -> BlobHash {
     let mut hash = [0u8; 32];
     for (index, byte) in text.bytes().enumerate() {
         hash[index % 32] = hash[index % 32].wrapping_mul(31).wrapping_add(byte);
     }
-    hash
+    BlobHash(hash)
 }
 
 fn imported_family() -> Family {
@@ -260,7 +260,7 @@ fn a_binary_file_moved_elsewhere_is_written_before_it_leaves_its_old_path() {
     let logo = ImportFile { path: "logo.png".into(), oid: oid(3), executable: false };
     import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[logo], 0).expect("imports");
     let inode = family.tree().paths()["logo.png"];
-    let entry = DiskEntry { inode, hash: [3; 32], size: 3, mtime_ns: 0, version: family.thread_head(THREAD) };
+    let entry = DiskEntry { inode, hash: BlobHash([3; 32]), size: 3, mtime_ns: 0, version: family.thread_head(THREAD) };
     let bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::from([("logo.png".to_owned(), entry)]));
     let moved = family.delta(
         ActorId(2),

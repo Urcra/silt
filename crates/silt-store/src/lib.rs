@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use silt_log::Delta;
-use silt_types::{ActorId, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
@@ -53,9 +53,19 @@ pub struct SyncState {
     pub view: u64,
 }
 
+/// A checkout's row in this machine's store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CheckoutId(pub i64);
+
+impl std::fmt::Display for CheckoutId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckoutRecord {
-    pub id: i64,
+    pub id: CheckoutId,
     pub thread: ThreadId,
     pub path: PathBuf,
     pub actor: ActorId,
@@ -67,7 +77,7 @@ pub struct CheckoutRecord {
 pub struct DiskFile {
     /// The id of the delta that created the file's inode.
     pub inode: DeltaId,
-    pub hash: [u8; 32],
+    pub hash: BlobHash,
     pub size: u64,
     pub mtime_ns: i64,
     pub version: Frontier,
@@ -78,7 +88,7 @@ pub struct SessionRecord {
     pub agent: String,
     pub session_id: String,
     pub thread: ThreadId,
-    pub checkout_id: i64,
+    pub checkout_id: CheckoutId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,14 +396,14 @@ impl Store {
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
-        Ok(CheckoutRecord { id, thread, path: path.to_owned(), actor, managed })
+        Ok(CheckoutRecord { id: CheckoutId(id), thread, path: path.to_owned(), actor, managed })
     }
 
     /// Hands an existing checkout to another thread, forgetting what it
     /// recorded about the disk for the previous one.
-    pub async fn rebind_checkout(&self, checkout: i64, thread: ThreadId, actor: ActorId) -> Result<(), StoreError> {
+    pub async fn rebind_checkout(&self, checkout: CheckoutId, thread: ThreadId, actor: ActorId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        let (thread, actor) = (id_bytes(thread.0), id_bytes(actor.0));
+        let (checkout, thread, actor) = (checkout.0, id_bytes(thread.0), id_bytes(actor.0));
         sqlx::query!("UPDATE checkouts SET thread_id = ?, actor = ? WHERE id = ?", thread, actor, checkout)
             .execute(&mut *tx)
             .await?;
@@ -404,9 +414,9 @@ impl Store {
 
     /// Points a checkout, and the sessions recorded in it, at another thread
     /// of the same family, keeping what it knows about the disk.
-    pub async fn move_checkout(&self, checkout: i64, thread: ThreadId) -> Result<(), StoreError> {
+    pub async fn move_checkout(&self, checkout: CheckoutId, thread: ThreadId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
-        let thread = id_bytes(thread.0);
+        let (checkout, thread) = (checkout.0, id_bytes(thread.0));
         sqlx::query!("UPDATE checkouts SET thread_id = ? WHERE id = ?", thread, checkout).execute(&mut *tx).await?;
         sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -421,7 +431,7 @@ impl Store {
         rows.into_iter()
             .map(|row| {
                 Ok(CheckoutRecord {
-                    id: row.id,
+                    id: CheckoutId(row.id),
                     thread: ThreadId(id_from(&row.thread_id)?),
                     path: PathBuf::from(row.path),
                     actor: ActorId(id_from(&row.actor)?),
@@ -431,7 +441,8 @@ impl Store {
             .collect()
     }
 
-    pub async fn disk_files(&self, checkout: i64) -> Result<HashMap<String, DiskFile>, StoreError> {
+    pub async fn disk_files(&self, checkout: CheckoutId) -> Result<HashMap<String, DiskFile>, StoreError> {
+        let checkout = checkout.0;
         let rows =
             sqlx::query!("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?", checkout)
                 .fetch_all(&self.pool)
@@ -442,7 +453,7 @@ impl Store {
                     row.path,
                     DiskFile {
                         inode: postcard::from_bytes(&row.inode)?,
-                        hash: row.hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?,
+                        hash: BlobHash(row.hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?),
                         size: u64::try_from(row.size).unwrap_or_default(),
                         mtime_ns: row.mtime_ns,
                         version: postcard::from_bytes(&row.version)?,
@@ -452,9 +463,10 @@ impl Store {
             .collect()
     }
 
-    pub async fn put_disk_file(&self, checkout: i64, path: &str, file: &DiskFile) -> Result<(), StoreError> {
+    pub async fn put_disk_file(&self, checkout: CheckoutId, path: &str, file: &DiskFile) -> Result<(), StoreError> {
+        let checkout = checkout.0;
         let (inode, hash, version) =
-            (postcard::to_allocvec(&file.inode)?, file.hash.as_slice(), postcard::to_allocvec(&file.version)?);
+            (postcard::to_allocvec(&file.inode)?, file.hash.0.as_slice(), postcard::to_allocvec(&file.version)?);
         let size = i64::try_from(file.size).unwrap_or(i64::MAX);
         sqlx::query!(
             "INSERT INTO disk_files (checkout_id, path, inode, hash, size, mtime_ns, version) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -473,20 +485,21 @@ impl Store {
         Ok(())
     }
 
-    pub async fn remove_disk_file(&self, checkout: i64, path: &str) -> Result<(), StoreError> {
+    pub async fn remove_disk_file(&self, checkout: CheckoutId, path: &str) -> Result<(), StoreError> {
+        let checkout = checkout.0;
         sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?", checkout, path).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn add_session(&self, session: &SessionRecord, now_ms: i64) -> Result<(), StoreError> {
-        let thread = id_bytes(session.thread.0);
+        let (thread, checkout) = (id_bytes(session.thread.0), session.checkout_id.0);
         sqlx::query!(
             "INSERT INTO sessions (agent, session_id, thread_id, checkout_id, created_ms) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (agent, session_id) DO NOTHING",
             session.agent,
             session.session_id,
             thread,
-            session.checkout_id,
+            checkout,
             now_ms,
         )
         .execute(&self.pool)
@@ -504,7 +517,7 @@ impl Store {
                     agent: row.agent,
                     session_id: row.session_id,
                     thread: ThreadId(id_from(&row.thread_id)?),
-                    checkout_id: row.checkout_id,
+                    checkout_id: CheckoutId(row.checkout_id),
                 })
             })
             .collect()

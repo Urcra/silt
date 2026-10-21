@@ -10,6 +10,8 @@ use silt_sync::ClientSync;
 use silt_types::{FamilyId, ThreadId};
 use tracing::warn;
 
+use silt_store::CheckoutId;
+
 use crate::core::{Core, CoreError, RepoBases, now_ms};
 use crate::protocol::ThreadSummary;
 
@@ -116,7 +118,7 @@ impl Core {
     pub(crate) async fn drop_threads(&mut self, threads: &HashSet<ThreadId>) -> Result<(), CoreError> {
         let families: HashSet<FamilyId> =
             threads.iter().filter_map(|thread| self.threads.get(thread).map(|record| record.family)).collect();
-        let checkouts: Vec<i64> = self
+        let checkouts: Vec<CheckoutId> = self
             .checkouts
             .values()
             .filter(|checkout| threads.contains(&checkout.record.thread))

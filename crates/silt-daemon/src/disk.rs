@@ -4,6 +4,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use silt_store::BlobStore;
+use silt_types::BlobHash;
+
 /// Files larger than this are stored whole instead of as text.
 const TEXT_LIMIT: usize = 4 * 1024 * 1024;
 
@@ -11,7 +14,7 @@ const TEXT_LIMIT: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct RawFile {
     pub bytes: Vec<u8>,
-    pub hash: [u8; 32],
+    pub hash: BlobHash,
     pub mtime_ns: i64,
     pub executable: bool,
 }
@@ -104,7 +107,7 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
         Err(error) => return Err(error),
     };
     Ok(Some(RawFile {
-        hash: *blake3::hash(&bytes).as_bytes(),
+        hash: BlobStore::hash(&bytes),
         mtime_ns: mtime_ns(&metadata),
         executable: metadata.permissions().mode() & 0o111 != 0,
         bytes,
@@ -122,7 +125,7 @@ pub fn replace(
     path: &str,
     bytes: &[u8],
     executable: bool,
-    unchanged: impl FnOnce(Option<[u8; 32]>) -> bool,
+    unchanged: impl FnOnce(Option<BlobHash>) -> bool,
 ) -> io::Result<Option<RawFile>> {
     let full = inside(root, path, true)?;
     let dir = full.parent().unwrap_or(root);
@@ -140,7 +143,7 @@ pub fn replace(
     file.sync_all()?;
     drop(file);
     let current = match fs::read(&full) {
-        Ok(current) => Some(*blake3::hash(&current).as_bytes()),
+        Ok(current) => Some(BlobStore::hash(&current)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
@@ -151,7 +154,7 @@ pub fn replace(
     fs::rename(&temporary, &full)?;
     fs::File::open(dir)?.sync_all()?;
     let metadata = fs::metadata(&full)?;
-    Ok(Some(RawFile { hash: *blake3::hash(bytes).as_bytes(), mtime_ns: mtime_ns(&metadata), executable, bytes: bytes.to_vec() }))
+    Ok(Some(RawFile { hash: BlobStore::hash(bytes), mtime_ns: mtime_ns(&metadata), executable, bytes: bytes.to_vec() }))
 }
 
 pub fn remove(root: &Path, path: &str) -> io::Result<()> {

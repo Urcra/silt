@@ -4208,7 +4208,6 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
- "blake3",
  "futures-util",
  "notify",
  "notify-debouncer-full",

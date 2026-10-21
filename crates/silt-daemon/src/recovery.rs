@@ -11,6 +11,8 @@ use silt_sync::ClientSync;
 use silt_types::{ActorId, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
+use silt_store::CheckoutId;
+
 use crate::core::{Core, CoreError, RepoBases};
 
 impl Core {
@@ -80,7 +82,7 @@ impl Core {
     /// Moves `from`'s checkouts and sessions here to `to`, with fresh actors,
     /// and records what is on disk as `to`'s changes.
     async fn move_work(&mut self, from: ThreadId, to: ThreadId) -> Result<(), CoreError> {
-        let ids: Vec<i64> =
+        let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.record.thread == from).map(|(id, _)| *id).collect();
         for id in ids {
             let actor = ActorId(uuid::Uuid::new_v4().as_u128());

@@ -5,7 +5,7 @@ use silt_agents::{Agent, Entry, RecordedSession, Rewrites, SessionIds, Transcrip
 use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, LogError, Op, SessionFile, SessionRef};
-use silt_store::ThreadRecord;
+use silt_store::{CheckoutId, ThreadRecord};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
@@ -154,7 +154,7 @@ impl Core {
 
     /// Materializes `thread` in a managed checkout of the clone at `cwd`,
     /// for an agent the web UI starts. Returns the checkout's id and path.
-    pub(crate) async fn check_out_managed(&mut self, thread: ThreadId, cwd: &Path) -> Result<(i64, PathBuf), CoreError> {
+    pub(crate) async fn check_out_managed(&mut self, thread: ThreadId, cwd: &Path) -> Result<(CheckoutId, PathBuf), CoreError> {
         let (repo, base) = self.prepare_thread(thread, cwd, false).await?;
         self.take_lease(thread).await?;
         let path = managed_checkout_path(&repo, thread, base)?;
@@ -316,7 +316,7 @@ impl Core {
         Ok(())
     }
 
-    async fn attach_checkout(&mut self, thread: ThreadId, path: &Path, managed: bool) -> Result<i64, CoreError> {
+    async fn attach_checkout(&mut self, thread: ThreadId, path: &Path, managed: bool) -> Result<CheckoutId, CoreError> {
         let actor = ActorId(uuid::Uuid::new_v4().as_u128());
         let existing =
             self.checkouts.values().find(|checkout| checkout.record.path == path).map(|checkout| checkout.record.clone());
@@ -335,7 +335,7 @@ impl Core {
 
     /// Writes the family's files into a fresh checkout and removes files the
     /// thread deleted, so the following rescan finds nothing to record.
-    async fn materialize(&mut self, checkout_id: i64) -> Result<(), CoreError> {
+    async fn materialize(&mut self, checkout_id: CheckoutId) -> Result<(), CoreError> {
         let checkout = &self.checkouts[&checkout_id];
         let family_id = checkout.family;
         let family = &self.families[&family_id];

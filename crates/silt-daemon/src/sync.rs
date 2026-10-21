@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use silt_crdt::InodeId;
 use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
-use silt_store::{SearchRow, Store, SyncState, ThreadRecord};
+use silt_store::{CheckoutId, SearchRow, Store, SyncState, ThreadRecord};
 use silt_sync::{ClientSync, Effect, Outcome};
 use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
@@ -317,7 +317,7 @@ impl Core {
 
     /// Writes deltas made elsewhere into this family's checkouts.
     pub(crate) async fn update_checkouts(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
-        let ids: Vec<i64> =
+        let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
             let checkout = &self.checkouts[&id];

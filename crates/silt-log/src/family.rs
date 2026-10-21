@@ -107,21 +107,44 @@ impl FileState {
     }
 }
 
+/// What the family's log says of one thread; only applying deltas changes it.
 #[derive(Debug, Clone, Default)]
 pub struct ThreadState {
-    pub head: Frontier,
+    head: Frontier,
     /// Indices into the family log of the thread's conversation deltas.
-    pub conversation: Vec<usize>,
-    pub title: Option<String>,
+    conversation: Vec<usize>,
+    title: Option<String>,
     title_stamp: Option<Stamp>,
-    /// The device that may write to the thread, with the lease's epoch.
-    pub lease: Option<(DeviceId, u64)>,
-    /// The thread this one was forked from.
-    pub forked_from: Option<ThreadId>,
-    /// Where it forked: the fork delta's parents.
-    pub fork_point: Option<Frontier>,
+    lease: Option<(DeviceId, u64)>,
+    forked_from: Option<ThreadId>,
+    fork_point: Option<Frontier>,
     /// Indices into the family log of the thread's merges.
-    pub merges: Vec<usize>,
+    merges: Vec<usize>,
+}
+
+impl ThreadState {
+    pub fn head(&self) -> &Frontier {
+        &self.head
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// The device that may write to the thread, with the lease's epoch.
+    pub fn lease(&self) -> Option<(DeviceId, u64)> {
+        self.lease
+    }
+
+    /// The thread this one was forked from.
+    pub fn forked_from(&self) -> Option<ThreadId> {
+        self.forked_from
+    }
+
+    /// Where it forked: the fork delta's parents.
+    pub fn fork_point(&self) -> Option<&Frontier> {
+        self.fork_point.as_ref()
+    }
 }
 
 /// One step of a thread's history as [`Family::history`] tells it.

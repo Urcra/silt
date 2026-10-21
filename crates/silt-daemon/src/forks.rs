@@ -6,7 +6,7 @@ use std::path::Path;
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::VersionVector;
-use silt_log::{Author, ConvOp, Delta, Family, HistorySource, MergeRequest, MrOp, MrStatus, Op};
+use silt_log::{Author, ConvOp, Delta, Family, HistorySource, MergeRequest, MrOp, MrStatus, Op, ThreadState};
 use silt_proto::Visibility;
 use silt_types::{DeltaId, FamilyId, Frontier, ThreadId};
 use similar::{DiffTag, TextDiff};
@@ -54,7 +54,7 @@ impl Core {
             )));
         }
         let (_, family) = self.loaded_family(thread)?;
-        let lease = family.thread(thread).and_then(|state| state.lease);
+        let lease = family.thread(thread).and_then(ThreadState::lease);
         let device = self.remote.as_ref().map(|remote| remote.config.device);
         match (lease, device) {
             (Some((holder, _)), Some(device)) if holder != device => Err(CoreError::Invalid(format!(
@@ -106,7 +106,7 @@ impl Core {
         let (family_id, family) = self.loaded_family(thread)?;
         let source = family
             .thread(thread)
-            .and_then(|state| state.forked_from)
+            .and_then(ThreadState::forked_from)
             .ok_or_else(|| CoreError::Invalid(format!("thread {} is not a fork; there is nothing to pull", thread.short())))?;
         let head = family.thread_head(thread);
         let source_head = family.thread_head(source);
@@ -154,11 +154,11 @@ impl Core {
         let thread = self.thread_at(selector, cwd)?;
         self.ensure_writer(thread)?;
         let (family_id, family) = self.loaded_family(thread)?;
-        let target = family.thread(thread).and_then(|state| state.forked_from).ok_or_else(|| {
+        let target = family.thread(thread).and_then(ThreadState::forked_from).ok_or_else(|| {
             CoreError::Invalid(format!("thread {} is not a fork; merge requests go from a fork to its source", thread.short()))
         })?;
         let title = title
-            .or_else(|| family.thread(thread).and_then(|state| state.title.clone()))
+            .or_else(|| family.thread(thread).and_then(ThreadState::title).map(str::to_owned))
             .unwrap_or_else(|| format!("Changes from fork {}", thread.short()));
         let head = family.thread_head(thread);
         let summary = match summary {

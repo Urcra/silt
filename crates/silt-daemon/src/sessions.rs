@@ -12,7 +12,7 @@ use silt_agents::{Agent, Capture, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
-use silt_store::{SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
+use silt_store::{CheckoutId, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, FamilyId, ThreadId};
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -78,7 +78,7 @@ pub(crate) struct PendingSession {
     pub(crate) agent: &'static dyn Agent,
     pub(crate) thread: ThreadId,
     pub(crate) family: FamilyId,
-    pub(crate) checkout_id: i64,
+    pub(crate) checkout_id: CheckoutId,
     pub(crate) agent_cwd: PathBuf,
     pub(crate) checkout_root: PathBuf,
     pub(crate) since_ms: i64,
@@ -91,7 +91,7 @@ pub(crate) struct PendingSession {
 pub(crate) struct CreatedThread {
     pub(crate) thread: ThreadId,
     pub(crate) family: FamilyId,
-    pub(crate) checkout_id: i64,
+    pub(crate) checkout_id: CheckoutId,
     pub(crate) checkout: PathBuf,
     pub(crate) agent_cwd: PathBuf,
     pub(crate) repo: Repo,
@@ -104,7 +104,7 @@ pub(crate) struct NewSession {
     pub(crate) id: String,
     pub(crate) thread: ThreadId,
     pub(crate) family: FamilyId,
-    pub(crate) checkout_id: i64,
+    pub(crate) checkout_id: CheckoutId,
     pub(crate) agent_cwd: PathBuf,
     pub(crate) checkout_root: PathBuf,
     pub(crate) transcript: Option<PathBuf>,
@@ -279,7 +279,7 @@ impl Core {
         agent: &'static dyn Agent,
         thread: ThreadId,
         family: FamilyId,
-        checkout_id: i64,
+        checkout_id: CheckoutId,
         agent_cwd: &Path,
         checkout_root: &Path,
     ) {
@@ -505,7 +505,7 @@ impl Core {
     /// Looks for the sessions still unknown on `checkout` right away, so
     /// their edits are credited to their tool calls. Agents found through
     /// their own CLI are left to the background search.
-    async fn discover_now(&mut self, checkout: i64) {
+    async fn discover_now(&mut self, checkout: CheckoutId) {
         let known: Vec<String> = self.sessions.iter().map(|session| session.record.session_id.clone()).collect();
         let tokens: Vec<u64> = self
             .pending
@@ -615,7 +615,7 @@ impl Core {
             .collect();
         // Edits still waiting for the transcript are taken in now, while
         // the marks just read still own them.
-        let checkouts: HashSet<i64> = self
+        let checkouts: HashSet<CheckoutId> = self
             .sessions
             .iter()
             .filter(|session| session.record.thread == thread)
@@ -865,7 +865,7 @@ impl Core {
 
     /// Reads the transcripts of agents that mark turns in them before the
     /// edits of `checkout` are attributed.
-    pub(crate) async fn tail_marked_sessions(&mut self, checkout: i64) {
+    pub(crate) async fn tail_marked_sessions(&mut self, checkout: CheckoutId) {
         self.discover_now(checkout).await;
         let ids: Vec<String> = self
             .sessions
@@ -882,7 +882,7 @@ impl Core {
 
     /// Whether a running agent on `checkout` marks its turns only in its
     /// transcript.
-    pub(crate) fn marks_from_transcripts(&self, checkout: i64) -> bool {
+    pub(crate) fn marks_from_transcripts(&self, checkout: CheckoutId) -> bool {
         self.pending.iter().any(|pending| pending.checkout_id == checkout)
             || self.sessions.iter().any(|session| {
                 session.record.checkout_id == checkout && session.live && session.agent.capture() != Capture::Hooks
@@ -890,7 +890,7 @@ impl Core {
     }
 
     /// Takes the changes in again once the transcripts have caught up.
-    pub(crate) fn settle_changes(&mut self, checkout: i64, paths: Vec<PathBuf>, noticed: Instant) {
+    pub(crate) fn settle_changes(&mut self, checkout: CheckoutId, paths: Vec<PathBuf>, noticed: Instant) {
         let events = self.events.clone();
         tokio::spawn(async move {
             tokio::time::sleep(TRANSCRIPT_LAG).await;
@@ -898,7 +898,7 @@ impl Core {
         });
     }
 
-    pub(crate) fn author_for(&self, checkout: i64) -> Author {
+    pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
         let sessions: Vec<attribution::SessionState<'_>> = self
             .sessions
             .iter()

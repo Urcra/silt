@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
 use silt_store::{BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Store, ThreadRecord};
-use silt_types::{ActorId, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
+use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
 const THREAD: ThreadId = ThreadId(11);
 const FAMILY: FamilyId = FamilyId(22);
@@ -63,7 +63,7 @@ async fn checkouts_and_disk_state() {
     let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
     let file = DiskFile {
         inode: DeltaId::new(ActorId(1), Lamport(1)),
-        hash: [1; 32],
+        hash: BlobHash([1; 32]),
         size: 3,
         mtime_ns: 99,
         version: Frontier::single(DeltaId::new(ActorId(5), Lamport(2))),

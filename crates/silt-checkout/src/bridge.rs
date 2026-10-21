@@ -11,7 +11,7 @@ use crate::diff::text_edits;
 pub struct DiskEntry {
     pub inode: InodeId,
     /// Hash of the bytes on disk, to recognise our own writes.
-    pub hash: [u8; 32],
+    pub hash: BlobHash,
     pub size: u64,
     pub mtime_ns: i64,
     /// A family version whose content of this file is what's on disk.
@@ -23,7 +23,7 @@ pub struct DiskEntry {
 pub struct DiskFile {
     pub content: DiskContent,
     pub executable: bool,
-    pub hash: [u8; 32],
+    pub hash: BlobHash,
     pub size: u64,
     pub mtime_ns: i64,
 }

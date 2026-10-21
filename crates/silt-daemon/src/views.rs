@@ -431,7 +431,7 @@ fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<Ve
     };
     let version = match base {
         None | Some("start") => start_version(family, thread),
-        Some("merge-base") => match family.thread(thread).and_then(|state| state.forked_from) {
+        Some("merge-base") => match family.thread(thread).and_then(|state| state.forked_from()) {
             Some(source) => return Ok(in_thread.intersection(&graph.version_vector(&family.thread_head(source)))),
             None => start_version(family, thread),
         },
@@ -458,7 +458,7 @@ fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<Ve
 /// Where the thread's own work starts: its fork point, or the import of
 /// its files.
 fn start_version(family: &Family, thread: ThreadId) -> Frontier {
-    family.thread(thread).and_then(|state| state.fork_point.clone()).unwrap_or_else(|| imported_version(family, thread))
+    family.thread(thread).and_then(|state| state.fork_point().cloned()).unwrap_or_else(|| imported_version(family, thread))
 }
 
 /// The version right after the thread's files were imported.

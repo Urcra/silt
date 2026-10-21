@@ -12,6 +12,8 @@ use silt_types::ThreadId;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use silt_store::CheckoutId;
+
 use crate::core::{Core, CoreError, Event};
 use crate::protocol::{AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked};
 use crate::sessions::NewSession;
@@ -19,7 +21,7 @@ use crate::sessions::NewSession;
 pub(crate) struct AcpRun {
     run: u64,
     info: AgentInfo,
-    checkout_id: i64,
+    checkout_id: CheckoutId,
     checkout: PathBuf,
     handle: Option<AgentHandle>,
     /// Commands given before the agent was up.
@@ -159,7 +161,7 @@ impl Core {
         Ok(thread.to_string())
     }
 
-    async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(i64, PathBuf), CoreError> {
+    async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
         if let Some(checkout) = self.checkouts.values().find(|checkout| checkout.record.thread == thread) {
             return Ok((checkout.record.id, checkout.record.path.clone()));
         }

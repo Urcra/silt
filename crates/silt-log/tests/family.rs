@@ -85,7 +85,7 @@ fn edits_from_two_checkouts_based_on_the_same_disk_version_merge() {
         Op::Text { inode: main, op: TextOp::Insert { pos: 13, content: "// b\n".into() } },
     );
     assert_eq!(text(&family, main), "use a;\nfn main() {}\n// b\n");
-    assert_eq!(family.thread(THREAD).expect("thread").head.len(), 2);
+    assert_eq!(family.thread(THREAD).expect("thread").head().len(), 2);
 }
 
 #[test]
@@ -120,8 +120,8 @@ fn conversation_is_recorded_per_thread() {
     write_on_head(&mut family, DAEMON, Op::Conv(ConvOp::Title("Fix the parser".into())));
     let lines: Vec<&Op> = family.conversation(THREAD).map(|delta| &delta.op).collect();
     assert_eq!(lines.len(), 3);
-    assert_eq!(family.thread(THREAD).and_then(|t| t.title.clone()).as_deref(), Some("Fix the parser"));
-    assert_eq!(family.thread(THREAD).expect("thread").head.len(), 1);
+    assert_eq!(family.thread(THREAD).and_then(|t| t.title()), Some("Fix the parser"));
+    assert_eq!(family.thread(THREAD).expect("thread").head().len(), 1);
 }
 
 #[test]
@@ -400,7 +400,11 @@ fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
             assert_eq!(replica.apply(delta.clone(), &mut bases()), Ok(Applied::New));
         }
         let comments: Vec<String> = replica.comments(THREAD).into_iter().map(|comment| comment.text).collect();
-        (replica.merge_requests()[0].status.clone(), replica.thread(THREAD).and_then(|state| state.title.clone()), comments)
+        (
+            replica.merge_requests()[0].status.clone(),
+            replica.thread(THREAD).and_then(|state| state.title().map(str::to_owned)),
+            comments,
+        )
     };
     assert_eq!(read(&mut deltas.iter()), read(&mut deltas.iter().rev()));
 }
