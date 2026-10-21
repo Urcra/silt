@@ -31,6 +31,11 @@ pub enum Request {
     EndSession {
         thread: String,
     },
+    /// This machine's clone of the thread's repository, for requests made
+    /// from the web UI, which has no working directory.
+    CloneOf {
+        thread: String,
+    },
     /// Take over recording the running agent in `thread` from the wrapper
     /// that recorded it on its own until the daemon answered (ADR 0018).
     Adopt {

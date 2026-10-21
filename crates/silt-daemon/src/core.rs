@@ -384,6 +384,7 @@ impl Core {
                 Ok(thread) => to_response(self.end_session(thread).await),
                 Err(error) => Response::error(error),
             },
+            Request::CloneOf { thread } => to_response(self.find_thread(&thread).and_then(|thread| self.clone_of(thread))),
             Request::Adopt { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.adopt(thread).await),
                 Err(error) => Response::error(error),
@@ -1409,6 +1410,19 @@ impl Core {
             .filter(|person| !person.draft.trim().is_empty())
             .map(|person| (person.user, person.draft.trim().to_owned()))
             .collect()
+    }
+
+    /// This machine's clone of the thread's repository: the one it was
+    /// recorded in, or one known for its repository.
+    pub(crate) fn clone_of(&self, thread: ThreadId) -> Result<PathBuf, CoreError> {
+        let record = &self.threads[&thread];
+        if !record.repo_root.as_os_str().is_empty() && record.repo_root.join(".git").exists() {
+            return Ok(record.repo_root.clone());
+        }
+        self.clones
+            .get(&record.repo)
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid(format!("no clone of {} on this machine; run `silt open` in one", record.repo)))
     }
 
     /// Notes the clone at `cwd`, here and in the store, so agents can start

@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use axum::extract::{Path, Query, Request as HttpRequest, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response as HttpResponse};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -99,6 +100,19 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
         .route("/api/mrs/{id}/decline", post(decline))
+        .route("/api/threads/{id}", delete(thread_purge))
+        .route("/api/threads/{id}/fork", post(fork))
+        .route("/api/threads/{id}/resume", post(resume))
+        .route("/api/threads/{id}/pull", post(pull))
+        .route("/api/threads/{id}/mrs", post(mr_create))
+        .route("/api/threads/{id}/visibility", post(visibility))
+        .route("/api/threads/{id}/share", post(share))
+        .route("/api/threads/{id}/trash", post(thread_delete))
+        .route("/api/threads/{id}/restore", post(thread_restore))
+        .route("/api/threads/{id}/files/history", get(file_history))
+        .route("/api/threads/{id}/in-flight", get(in_flight))
+        .route("/api/threads/{id}/search", get(thread_search))
+        .route("/api/trash", get(trash))
         .layer(middleware::from_fn_with_state(web.clone(), authenticate));
     let app = api
         .route("/api/exchange", post(exchange))
@@ -182,15 +196,49 @@ async fn asset(request: HttpRequest) -> HttpResponse {
 
 /// Sends a request through the daemon's event loop.
 async fn ask(web: &Web, request: Request) -> HttpResponse {
+    match answer(web, request).await {
+        Ok(data) => Json(data).into_response(),
+        Err(failed) => failed.into_response(),
+    }
+}
+
+/// A request the daemon didn't carry out.
+struct Failed {
+    status: StatusCode,
+    message: String,
+}
+
+impl IntoResponse for Failed {
+    fn into_response(self) -> HttpResponse {
+        (self.status, Json(json!({"error": self.message}))).into_response()
+    }
+}
+
+async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed> {
+    let unavailable = |message: &str| Failed { status: StatusCode::SERVICE_UNAVAILABLE, message: message.to_owned() };
     let (reply, answer) = oneshot::channel();
     if web.events.send(Event::Request(request, reply)).is_err() {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "the daemon is stopping"}))).into_response();
+        return Err(unavailable("the daemon is stopping"));
     }
     match answer.await {
-        Ok(Response::Ok { data }) => Json(data).into_response(),
-        Ok(Response::Error { message }) => (StatusCode::BAD_REQUEST, Json(json!({"error": message}))).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "the daemon stopped"}))).into_response(),
+        Ok(Response::Ok { data }) => Ok(data),
+        Ok(Response::Error { message }) => Err(Failed { status: StatusCode::BAD_REQUEST, message }),
+        Err(_) => Err(unavailable("the daemon stopped")),
     }
+}
+
+/// Asks the request `make` builds for this machine's clone of `thread`, as
+/// requests the CLI makes from a working directory need one.
+async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Request) -> HttpResponse {
+    let clone = match answer(web, Request::CloneOf { thread: thread.to_owned() }).await {
+        Ok(clone) => clone,
+        Err(failed) => return failed.into_response(),
+    };
+    let Ok(clone) = serde_json::from_value::<PathBuf>(clone) else {
+        let message = "unexpected answer from the daemon".to_owned();
+        return Failed { status: StatusCode::INTERNAL_SERVER_ERROR, message }.into_response();
+    };
+    ask(web, make(clone)).await
 }
 
 async fn status(State(web): State<Web>) -> HttpResponse {
@@ -416,6 +464,106 @@ struct Decline {
 async fn decline(State(web): State<Web>, Path(mr): Path<String>, body: Option<Json<Decline>>) -> HttpResponse {
     let reason = body.map(|Json(body)| body).unwrap_or_default().reason;
     ask(&web, Request::MrDecline { mr, reason }).await
+}
+
+#[derive(Deserialize, Default)]
+struct Continue {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    private: bool,
+}
+
+/// A fork in a checkout of its own, to start an agent in from the UI.
+async fn fork(State(web): State<Web>, Path(thread): Path<String>, body: Option<Json<Continue>>) -> HttpResponse {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let request =
+        |cwd| Request::Fork { thread: thread.clone(), cwd, here: false, agent: body.agent.clone(), private: body.private };
+    ask_in_clone(&web, &thread, request).await
+}
+
+async fn resume(State(web): State<Web>, Path(thread): Path<String>, body: Option<Json<Continue>>) -> HttpResponse {
+    let agent = body.and_then(|Json(body)| body.agent);
+    ask_in_clone(&web, &thread, |cwd| Request::Resume { thread: thread.clone(), cwd, here: false, agent }).await
+}
+
+async fn pull(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask_in_clone(&web, &thread, |cwd| Request::Pull { thread: Some(thread.clone()), cwd }).await
+}
+
+#[derive(Deserialize, Default)]
+struct NewMr {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+async fn mr_create(State(web): State<Web>, Path(thread): Path<String>, body: Option<Json<NewMr>>) -> HttpResponse {
+    let NewMr { title, summary } = body.map(|Json(body)| body).unwrap_or_default();
+    ask_in_clone(&web, &thread, |cwd| Request::MrCreate { thread: Some(thread.clone()), cwd, title, summary }).await
+}
+
+#[derive(Deserialize)]
+struct NewVisibility {
+    visibility: silt_proto::Visibility,
+}
+
+async fn visibility(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<NewVisibility>) -> HttpResponse {
+    let request = |cwd| Request::SetVisibility { cwd, thread: Some(thread.clone()), visibility: body.visibility };
+    ask_in_clone(&web, &thread, request).await
+}
+
+#[derive(Deserialize)]
+struct Share {
+    user: String,
+    #[serde(default)]
+    remove: bool,
+}
+
+async fn share(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<Share>) -> HttpResponse {
+    ask(&web, Request::ThreadShare { thread, user: body.user, remove: body.remove }).await
+}
+
+async fn trash(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Trash).await
+}
+
+async fn thread_delete(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadDelete { thread }).await
+}
+
+async fn thread_restore(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadRestore { thread }).await
+}
+
+async fn thread_purge(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadPurge { thread }).await
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    path: String,
+}
+
+async fn file_history(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
+    ask(&web, Request::FileHistory { thread, path: query.path }).await
+}
+
+/// Other threads of the thread's repository that changed the path.
+async fn in_flight(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
+    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path }).await
+}
+
+#[derive(Deserialize)]
+struct ThreadSearch {
+    q: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+async fn thread_search(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<ThreadSearch>) -> HttpResponse {
+    ask(&web, Request::HistorySearch { thread, query: query.q, limit: query.limit.unwrap_or(50) }).await
 }
 
 #[cfg(test)]

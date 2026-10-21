@@ -316,6 +316,73 @@ fn the_agent_starts_without_waiting_for_the_daemon_which_takes_over_once_it_answ
     assert!(show.contains("Done: farewell added."), "{show}");
 }
 
+/// The web UI's API, as a browser on this machine calls it.
+struct Api {
+    base: String,
+    token: String,
+}
+
+impl Api {
+    fn open(env: &Env) -> Self {
+        let url = env.stdout(&["open", "--no-browser"]);
+        let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+        Self { base: base.to_owned(), token: token.to_owned() }
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> (bool, serde_json::Value) {
+        let mut command = Command::new("curl");
+        command
+            .args(["-s", "-w", "\n%{http_code}", "-X", method, "-H", "Content-Type: application/json", "-H"])
+            .arg(format!("Authorization: Bearer {}", self.token));
+        if let Some(body) = body {
+            command.arg("--data").arg(body.to_string());
+        }
+        let output = command.arg(format!("{}{path}", self.base)).output().expect("curl runs");
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (json, status) = text.rsplit_once('\n').expect("a status line");
+        (status == "200", serde_json::from_str(json).unwrap_or(serde_json::Value::Null))
+    }
+
+    fn ok(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
+        let (ok, answer) = self.call(method, path, body);
+        assert!(ok, "{method} {path}: {answer}");
+        answer
+    }
+}
+
+#[test]
+fn the_web_ui_forks_offers_and_trashes_without_the_cli() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let api = Api::open(&env);
+    let threads = api.ok("GET", "/api/threads", None);
+    let thread = threads[0]["id"].as_str().expect("a thread").to_owned();
+
+    let forked = api.ok("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
+    let (fork, checkout) =
+        (forked["thread"].as_str().expect("the fork").to_owned(), forked["checkout"].as_str().expect("its checkout"));
+    let main = Path::new(checkout).join("src/main.rs");
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn forked() {}\n").expect("edit the fork");
+    assert!(eventually(|| env.stdout(&["diff", &fork]).contains("+fn forked() {}")));
+    let mr = api.ok("POST", &format!("/api/threads/{fork}/mrs"), Some(serde_json::json!({ "title": "Add forked" })));
+    assert_eq!(mr["title"], "Add forked");
+    assert!(api.ok("GET", "/api/mrs", None).to_string().contains("Add forked"));
+
+    let in_flight = api.ok("GET", &format!("/api/threads/{thread}/in-flight?path=src/main.rs"), None);
+    assert!(in_flight.to_string().contains(&fork), "the fork changes main.rs too: {in_flight}");
+    let history = api.ok("GET", &format!("/api/threads/{thread}/files/history?path=src/main.rs"), None);
+    assert!(history.as_array().is_some_and(|changes| !changes.is_empty()), "{history}");
+    let hits = api.ok("GET", &format!("/api/threads/{thread}/search?q=farewell"), None);
+    assert!(hits.as_array().is_some_and(|hits| !hits.is_empty()), "{hits}");
+
+    api.ok("POST", &format!("/api/threads/{fork}/trash"), None);
+    assert!(api.ok("GET", "/api/trash", None).to_string().contains(&fork));
+    api.ok("POST", &format!("/api/threads/{fork}/restore"), None);
+    assert!(!api.ok("GET", "/api/trash", None).to_string().contains(&fork));
+    let (ok, answer) = api.call("POST", "/api/threads/nosuchthread/fork", Some(serde_json::json!({})));
+    assert!(!ok && answer["error"].is_string(), "{answer}");
+}
+
 #[test]
 fn isolated_sessions_work_in_a_managed_checkout() {
     let env = Env::new();
