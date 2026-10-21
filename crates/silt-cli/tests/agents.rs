@@ -24,6 +24,31 @@ fn world() -> World {
     World { laptop, home, server, root }
 }
 
+#[test]
+fn a_wrapper_told_to_stop_ends_the_agent_and_its_session() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let world = world();
+    let laptop = &world.laptop;
+    let waiting = world.root.path().join("waiting-agent");
+    fs::write(&waiting, "#!/bin/sh\nexec sleep 60\n").expect("write");
+    fs::set_permissions(&waiting, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let waiting = waiting.to_string_lossy().into_owned();
+    let mut wrapper = laptop
+        .command(&["claude"], &[("SILT_CLAUDE_BIN", &waiting)])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("starts");
+    let runs = laptop.silt_home.join("runs");
+    assert!(eventually(|| fs::read_dir(&runs).is_ok_and(|mut entries| entries.next().is_some())), "the run starts");
+
+    let pid = wrapper.id().to_string();
+    assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().expect("kill").success());
+    let status = wrapper.wait().expect("waits");
+    assert_eq!(status.code(), Some(128 + 15), "the agent was ended by the passed-on signal");
+    assert!(fs::read_dir(&runs).expect("lists").next().is_none(), "the run's scratch is gone");
+}
+
 /// Records a first session with `agent` on the laptop and waits until the
 /// home machine has all of it.
 fn recorded(world: &World, agent: &str, said: &str) -> String {

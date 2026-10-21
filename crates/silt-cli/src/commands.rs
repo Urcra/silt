@@ -168,19 +168,96 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
         checkout: &started.checkout,
         cwd: &started.agent_cwd,
     };
+    let session = SessionEnd::new(&started.thread);
     let status = run.launch(Start::New { id: session_id }, args)?;
-    call::<String>(&Request::EndSession {
-        thread: started.thread.clone(),
-    })?;
+    session.end()?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
     exit_like(status)
 }
 
+/// Exits as the agent did: with its code, or 128 + the signal that ended it,
+/// as a shell would report.
 fn exit_like(status: std::process::ExitStatus) -> Result<(), Exn<CliError>> {
+    use std::os::unix::process::ExitStatusExt as _;
+    if let Some(signal) = status.signal() {
+        std::process::exit(128 + signal);
+    }
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())
+}
+
+/// Tells the daemon the agent is done with the thread, on every way out of
+/// the wrapper, errors included; otherwise later edits would be credited to
+/// an agent that is gone.
+struct SessionEnd {
+    thread: String,
+    ended: bool,
+}
+
+impl SessionEnd {
+    fn new(thread: &str) -> Self {
+        Self {
+            thread: thread.to_owned(),
+            ended: false,
+        }
+    }
+
+    fn end(mut self) -> Result<(), Exn<CliError>> {
+        self.ended = true;
+        call::<String>(&Request::EndSession {
+            thread: self.thread.clone(),
+        })?;
+        Ok(())
+    }
+}
+
+impl Drop for SessionEnd {
+    fn drop(&mut self) {
+        if !self.ended {
+            let _ = call::<String>(&Request::EndSession {
+                thread: self.thread.clone(),
+            });
+        }
+    }
+}
+
+/// A directory for one run, removed however the run ends.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Runs the agent until it exits. Ctrl-C and Ctrl-\ reach the agent from
+/// the terminal, which handles them; this wrapper stays to record the end of
+/// the session. A hangup or termination is passed on to the agent, and the
+/// wrapper still waits for it to exit.
+fn run_until_exit(command: Command) -> io::Result<std::process::ExitStatus> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    runtime.block_on(async {
+        let mut child = tokio::process::Command::from(command).spawn()?;
+        let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
+        let (mut hangup, mut terminate) = (signal(SignalKind::hangup())?, signal(SignalKind::terminate())?);
+        let pass_on = |child: &tokio::process::Child, sent: rustix::process::Signal| {
+            if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id.cast_signed())) {
+                let _ = rustix::process::kill_process(pid, sent);
+            }
+        };
+        loop {
+            tokio::select! {
+                status = child.wait() => return status,
+                _ = interrupt.recv() => {}
+                _ = quit.recv() => {}
+                _ = hangup.recv() => pass_on(&child, rustix::process::Signal::HUP),
+                _ = terminate.recv() => pass_on(&child, rustix::process::Signal::TERM),
+            }
+        }
+    })
 }
 
 /// One run of an agent in a thread's checkout.
@@ -200,6 +277,7 @@ impl Run<'_> {
             .join("runs")
             .join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
+        let _scratch = Scratch(scratch.clone());
         let home = env::var_os("HOME").map(PathBuf::from);
         let native = self.agent.native();
         let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
@@ -230,14 +308,12 @@ impl Run<'_> {
             .agent
             .launch(&plan)
             .or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
-        let status = Command::new(&launch.program)
+        let mut command = Command::new(&launch.program);
+        command
             .args(&launch.args)
             .envs(launch.envs.iter().map(|(key, value)| (key, value)))
-            .current_dir(self.cwd)
-            .status()
-            .or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())));
-        let _ = fs::remove_dir_all(&scratch);
-        status
+            .current_dir(self.cwd);
+        run_until_exit(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
     }
 }
 
@@ -394,10 +470,9 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
         checkout: &resumed.checkout,
         cwd: &resumed.agent_cwd,
     };
+    let session = SessionEnd::new(&resumed.thread);
     let status = run.launch(start, args)?;
-    call::<String>(&Request::EndSession {
-        thread: resumed.thread.clone(),
-    })?;
+    session.end()?;
     exit_like(status)
 }
 

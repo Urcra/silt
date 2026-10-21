@@ -238,7 +238,13 @@ impl Machine {
     }
 
     pub fn run_with(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
-        silt_command()
+        self.command(args, envs).output().expect("silt runs")
+    }
+
+    /// `silt` with `args` as this machine runs it, to start and watch.
+    pub fn command(&self, args: &[&str], envs: &[(&str, &str)]) -> Command {
+        let mut command = silt_command();
+        command
             .args(args)
             .current_dir(&self.repo)
             .env("SILT_HOME", &self.silt_home)
@@ -255,9 +261,8 @@ impl Machine {
             .env("FAKE_LOG_DIR", self.agents.join("logs"))
             .env("HOME", self.agents.parent().expect("the machine's home"))
             .env("SILT_HOOK", format!("{} hook", env!("CARGO_BIN_EXE_silt")))
-            .envs(envs.iter().copied())
-            .output()
-            .expect("silt runs")
+            .envs(envs.iter().copied());
+        command
     }
 
     pub fn silt(&self, args: &[&str]) -> Output {

@@ -4167,6 +4167,7 @@ dependencies = [
  "clap",
  "exn",
  "rpassword",
+ "rustix",
  "serde",
  "serde_json",
  "silt-acp",
