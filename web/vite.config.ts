@@ -6,6 +6,8 @@ import { defineConfig } from 'vitest/config'
 const daemon = process.env.SILT_DAEMON_URL
 
 export default defineConfig({
+  // Relative, so the page's `<base href>` decides where the assets come from.
+  base: './',
   plugins: [react(), tailwindcss()],
   server: daemon
     ? {

@@ -126,6 +126,20 @@ test('people sign in with a password', async ({ page }) => {
   await expect(page.getByText('Signed in as alice')).toBeVisible()
 })
 
+test('the server hosts the web app for someone signed in', async ({ page }) => {
+  await page.goto(`${base}/app/new`)
+  await expect(page).toHaveURL(/\/login\?next=%2Fapp%2Fnew$/)
+  await page.getByLabel('User').fill('alice')
+  await page.getByLabel('Password').fill('correct horse battery')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page).toHaveURL(`${base}/app/new`)
+  await expect(page.getByRole('link', { name: 'Silt' })).toBeVisible()
+  // Nothing here runs agents, so new threads start on a device.
+  await expect(page.getByText('New threads start on your devices')).toBeVisible()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'All threads' }).click()
+  await expect(page).toHaveURL(`${base}/app/`)
+})
+
 test('a device is approved in the browser', async ({ page }) => {
   // Asked without a version, the server says which one it speaks.
   const mismatch = (await fetch(`${base}/v1/device/start`, { method: 'POST' }).then((response) => response.json())) as {

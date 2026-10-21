@@ -42,7 +42,7 @@ button, .button {{ display: inline-block; margin-top: 1rem; padding: .5rem 1rem;
 /// Only paths on this server, so sign-in can't redirect elsewhere. Browsers
 /// drop tabs and line breaks from URLs, turning `/\t/evil.example` into
 /// `//evil.example`, so no whitespace or control character passes.
-fn safe_next(next: Option<&str>) -> String {
+pub(crate) fn safe_next(next: Option<&str>) -> String {
     match next {
         Some(next)
             if next.starts_with('/')
@@ -76,13 +76,13 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(|(_, value)| value.to_owned())
 }
 
-async fn signed_in(server: &Server, headers: &HeaderMap) -> Option<User> {
+pub(crate) async fn signed_in(server: &Server, headers: &HeaderMap) -> Option<User> {
     let token = cookie_value(headers, SESSION_COOKIE)?;
     accounts::session_user(server.db(), &token).await.ok().flatten()
 }
 
 /// Rejects form posts sent from other sites, on top of the SameSite cookie.
-fn same_origin(server: &Server, headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(server: &Server, headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
         return true;
     };

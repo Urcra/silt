@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, type Project } from '../api'
 import { keys, message } from '../query'
+import { hosted } from '../served'
 import { Button, EmptyState, Input, Skeleton, Tabs, Tag, toast } from '../ui'
 
 /** Where a clone of `project` might go: next to this machine's other clones. */
@@ -130,7 +131,7 @@ export function Projects() {
             {project.clone ? (
               <p className="font-mono text-xs text-fg-2">Here at {project.clone}</p>
             ) : (
-              <CloneHere project={project} projects={all} />
+              !hosted() && <CloneHere project={project} projects={all} />
             )}
             {(project.default_agent || project.default_preset) && (
               <p className="text-xs text-fg-3">
@@ -140,7 +141,7 @@ export function Projects() {
           </li>
         ))}
       </ul>
-      <AddProject />
+      {!hosted() && <AddProject />}
     </div>
   )
 }

@@ -6,10 +6,12 @@ import { NewThread } from './components/NewThread'
 import { Orgs } from './components/Orgs'
 import { Projects } from './components/Projects'
 import { ThreadList } from './components/ThreadList'
+import { basePath } from './served'
 
 const root = createRootRoute({ component: Layout })
 
 export const router = createRouter({
+  basepath: basePath(),
   routeTree: root.addChildren([
     createRoute({ getParentRoute: () => root, path: '/', component: ThreadList }),
     createRoute({ getParentRoute: () => root, path: '/new', component: NewThread }),

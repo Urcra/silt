@@ -31,6 +31,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 
 pub mod accounts;
+mod app;
 pub mod backup;
 mod collab;
 pub mod config;
@@ -298,6 +299,7 @@ impl Server {
         Router::new()
             .merge(api)
             .merge(pages)
+            .merge(app::router(self))
             // Bundles and git pushes are bigger than axum's default limit.
             .layer(DefaultBodyLimit::max(SMALL_BODY))
             .with_state(self.clone())

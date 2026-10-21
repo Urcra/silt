@@ -6,6 +6,7 @@ import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSum
 import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { MainScroll } from '../scroll'
+import { hosted } from '../served'
 import { useActions } from '../shortcuts'
 import { useThreadState } from '../threadState'
 import { Button, Input, toast } from '../ui'
@@ -263,7 +264,7 @@ export function ThreadView({ id }: { id: string }) {
           {summary && <ShareDialog thread={summary} />}
         </div>
         <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
-        {history.data?.thread && (
+        {history.data?.thread && !hosted() && (
           <LivePanel
             thread={history.data.thread}
             lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}

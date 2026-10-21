@@ -193,6 +193,47 @@ async fn sign_in_page(base: &str, user: &str, password: &str) -> String {
 }
 
 #[tokio::test]
+async fn the_hosted_app_signs_in_first_and_takes_changes_only_from_its_own_pages() {
+    let data = tempfile::tempdir().expect("temp dir");
+    Admin::open(data.path()).await.expect("opens").add_user("alice", Some("correct horse battery"), false).await.expect("adds");
+    let base = start(data.path(), |_| Config::default()).await;
+    let http = browser();
+
+    let away = http.get(format!("{base}/app/t/abc")).send().await.expect("sends");
+    assert_eq!(away.status(), StatusCode::SEE_OTHER);
+    assert_eq!(away.headers()[LOCATION], "/login?next=%2Fapp%2Ft%2Fabc", "signing in comes first, then back to the page");
+    let anonymous = http.get(format!("{base}/app/api/status")).send().await.expect("sends");
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = sign_in_page(&base, "alice", "correct horse battery").await;
+    let status = http.get(format!("{base}/app/api/status")).header(COOKIE, &cookie).send().await.expect("sends");
+    assert_eq!(status.status(), StatusCode::OK);
+    let status: serde_json::Value = status.json().await.expect("json");
+    assert_eq!(status["server"], base.as_str());
+
+    // A change needs the header other sites can't send, from this origin.
+    let post = |extra: Option<(&'static str, String)>| {
+        let mut request = http.post(format!("{base}/app/api/status")).header(COOKIE, &cookie);
+        if let Some((name, value)) = extra {
+            request = request.header(name, value);
+        }
+        request.send()
+    };
+    assert_eq!(post(None).await.expect("sends").status(), StatusCode::FORBIDDEN);
+    let elsewhere = http
+        .post(format!("{base}/app/api/status"))
+        .header(COOKIE, &cookie)
+        .header("x-silt-request", "1")
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(elsewhere.status(), StatusCode::FORBIDDEN);
+    let ours = post(Some(("x-silt-request", "1".to_owned()))).await.expect("sends");
+    assert_eq!(ours.status(), StatusCode::METHOD_NOT_ALLOWED, "past the checks, to the route");
+}
+
+#[tokio::test]
 async fn devices_sign_in_through_the_browser() {
     let data = tempfile::tempdir().expect("temp dir");
     Admin::open(data.path()).await.expect("opens").add_user("alice", Some("correct horse battery"), false).await.expect("adds");

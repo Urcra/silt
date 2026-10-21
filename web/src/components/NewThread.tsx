@@ -5,6 +5,7 @@ import { rememberedModes } from '../agentModes'
 import { PRESETS } from '../agentState'
 import { api, type Preset } from '../api'
 import { keys, message } from '../query'
+import { hosted } from '../served'
 import { Button, EmptyState, Select, Textarea, toast } from '../ui'
 import { AgentPicker } from './Agent'
 
@@ -49,6 +50,13 @@ export function NewThread() {
   const agentName = choices.data?.agents.find((candidate) => candidate.id === agent)?.name ?? ''
   const modes = agentName ? rememberedModes(agentName) : []
 
+  if (hosted()) {
+    return (
+      <EmptyState title="New threads start on your devices">
+        Open Silt from the machine that should run the agent, with <code>silt open</code>.
+      </EmptyState>
+    )
+  }
   if (choices.isSuccess && clones.length === 0) {
     return (
       <EmptyState title="No projects on this machine yet">

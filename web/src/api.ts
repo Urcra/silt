@@ -1,7 +1,9 @@
-// Talks to the daemon that served this page (ADR 0011). The token arrives
-// once in the URL fragment from `silt open`, or is traded for the one-time
-// code a browser opened by `silt open` carries, and is kept for the tab.
+// Talks to the daemon that served this page (ADR 0011), or the server when
+// it hosts the app (ADR 0026), with its session cookie. A daemon's token
+// arrives once in the URL fragment from `silt open`, or is traded for the
+// one-time code a browser opened by `silt open` carries, and is kept for the tab.
 
+import { apiUrl } from './served'
 import type {
   AgentChoices,
   CommentOn,
@@ -40,7 +42,7 @@ export async function takeTokenFromUrl(): Promise<void> {
   if (token) {
     sessionStorage.setItem(TOKEN_KEY, token[1])
   } else if (code) {
-    const response = await fetch('/api/exchange', {
+    const response = await fetch(apiUrl('/api/exchange'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: code[1] }),
@@ -60,10 +62,12 @@ export function token(): string {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     method,
     headers: {
       Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ''}`,
+      // The server takes changes only with it, which other sites can't add (ADR 0026).
+      'X-Silt-Request': '1',
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),

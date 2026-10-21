@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The server rewrites both when it hosts the app at /app/ (ADR 0026). -->
+    <base href="/" />
+    <meta name="silt-served-by" content="daemon" />
     <title>Silt</title>
   </head>
   <body>

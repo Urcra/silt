@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { token, type BusEvent } from './api'
 import { keys } from './query'
+import { apiUrl } from './served'
 
 const RECONNECT_MS = 1000
 
@@ -48,7 +49,7 @@ class Bus {
   private connect() {
     if (this.socket || this.retry || typeof WebSocket === 'undefined') return
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const socket = new WebSocket(`${scheme}://${window.location.host}/api/events?token=${token()}`)
+    const socket = new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/events')}?token=${token()}`)
     this.socket = socket
     let opened = false
     socket.onopen = () => {
