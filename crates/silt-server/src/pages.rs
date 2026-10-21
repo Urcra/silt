@@ -11,19 +11,15 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Deserialize;
 use silt_types::DeviceId;
 
-use crate::{Server, now_ms};
 use crate::accounts::{self, AccountError, NewUser, SignInState, User};
 use crate::config::SignupPolicy;
 use crate::sign_in;
+use crate::{Server, now_ms};
 
 const SESSION_COOKIE: &str = "silt_session";
 
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 fn page(title: &str, body: &str) -> Html<String> {
@@ -109,14 +105,13 @@ async fn start_session(server: &Server, user: i64, next: &str) -> Response {
     let secure = if server.config().public_url().starts_with("https://") { "; Secure" } else { "" };
     let cookie = format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}");
     let mut response = Redirect::to(next).into_response();
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("token is ASCII"));
+    response.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("token is ASCII"));
     response
 }
 
 fn error_page(status: StatusCode, message: &str) -> Response {
-    (status, page("Something went wrong", &format!("<p class=\"error\">{}</p><p><a href=\"/\">Back</a></p>", escape(message)))).into_response()
+    (status, page("Something went wrong", &format!("<p class=\"error\">{}</p><p><a href=\"/\">Back</a></p>", escape(message))))
+        .into_response()
 }
 
 fn provider_buttons(server: &Server, next: &str, invite: Option<&str>) -> String {
@@ -127,7 +122,9 @@ fn provider_buttons(server: &Server, next: &str, invite: Option<&str>) -> String
     }
     let mut buttons = String::new();
     if config.auth.github.is_some() {
-        buttons.push_str(&format!("<p><a class=\"button secondary\" href=\"/auth/github/start?{query}\">Continue with GitHub</a></p>"));
+        buttons.push_str(&format!(
+            "<p><a class=\"button secondary\" href=\"/auth/github/start?{query}\">Continue with GitHub</a></p>"
+        ));
     }
     if let Some(oidc) = &config.auth.oidc {
         buttons.push_str(&format!(
@@ -271,10 +268,9 @@ pub(crate) async fn logout(State(server): State<Server>, headers: HeaderMap) -> 
         let _ = accounts::end_session(server.db(), &token).await;
     }
     let mut response = Redirect::to("/login").into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static("silt_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"),
-    );
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, HeaderValue::from_static("silt_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"));
     response
 }
 
@@ -434,7 +430,10 @@ pub(crate) async fn signup(State(server): State<Server>, headers: HeaderMap, For
             if let Some(claimed) = claimed
                 && claimed.complete(server.db(), user).await.is_err()
             {
-                return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Your account exists, but joining the invite's org failed.");
+                return error_page(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Your account exists, but joining the invite's org failed.",
+                );
             }
             start_session(&server, user, &next).await
         }
@@ -477,11 +476,11 @@ pub(crate) async fn provider_start(
         return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not start signing in.");
     }
     let mut response =
-        Redirect::to(&sign_in::authorize_url(&endpoints, &redirect_uri(&server, &provider), &state, &saved.verifier)).into_response();
-    let cookie = format!("{SIGN_IN_COOKIE}={state}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=900{}", secure_attribute(&server));
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("the state is ASCII"));
+        Redirect::to(&sign_in::authorize_url(&endpoints, &redirect_uri(&server, &provider), &state, &saved.verifier))
+            .into_response();
+    let cookie =
+        format!("{SIGN_IN_COOKIE}={state}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=900{}", secure_attribute(&server));
+    response.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("the state is ASCII"));
     response
 }
 
@@ -505,17 +504,16 @@ pub(crate) async fn provider_callback(
         return error_page(StatusCode::BAD_REQUEST, "The provider sent no code.");
     };
     if cookie_value(&headers, SIGN_IN_COOKIE).as_deref() != Some(state.as_str()) {
-        return error_page(
-            StatusCode::BAD_REQUEST,
-            "This sign-in was started in another browser; start it again here.",
-        );
+        return error_page(StatusCode::BAD_REQUEST, "This sign-in was started in another browser; start it again here.");
     }
     let saved = match accounts::take_sign_in(server.db(), &provider, &state).await {
         Ok(Some(saved)) => saved,
         _ => return error_page(StatusCode::BAD_REQUEST, "This sign-in expired or was already used; try again."),
     };
     let identity = match sign_in::endpoints(server.config(), server.http(), &provider).await {
-        Ok(endpoints) => sign_in::finish(server.http(), &endpoints, &redirect_uri(&server, &provider), &code, &saved.verifier).await,
+        Ok(endpoints) => {
+            sign_in::finish(server.http(), &endpoints, &redirect_uri(&server, &provider), &code, &saved.verifier).await
+        }
         Err(error) => Err(error),
     };
     let identity = match identity {
@@ -524,10 +522,9 @@ pub(crate) async fn provider_callback(
     };
     match account_for(&server, &identity, saved.invite.as_deref()).await {
         Ok(Some(user)) => start_session(&server, user, &saved.next).await,
-        Ok(None) => error_page(
-            StatusCode::FORBIDDEN,
-            "There is no account for you here, and this server needs an invite to create one.",
-        ),
+        Ok(None) => {
+            error_page(StatusCode::FORBIDDEN, "There is no account for you here, and this server needs an invite to create one.")
+        }
         Err(_) => error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
     }
 }
@@ -535,7 +532,11 @@ pub(crate) async fn provider_callback(
 /// The account an identity signs in to: the one it is linked to, else the
 /// one with its verified email, else a new one when the sign-up policy or
 /// an invite allows.
-async fn account_for(server: &Server, identity: &sign_in::Identity, invite: Option<&str>) -> Result<Option<i64>, accounts::AccountError> {
+async fn account_for(
+    server: &Server,
+    identity: &sign_in::Identity,
+    invite: Option<&str>,
+) -> Result<Option<i64>, accounts::AccountError> {
     let db = server.db();
     if let Some(user) = accounts::identity_user(db, &identity.provider, &identity.subject).await? {
         return Ok(Some(user));
@@ -554,9 +555,11 @@ async fn account_for(server: &Server, identity: &sign_in::Identity, invite: Opti
     let allowed = claimed.is_some()
         || signup.policy == SignupPolicy::Open
         || (signup.policy == SignupPolicy::Domains
-            && identity.email.as_deref().and_then(|email| email.rsplit_once('@')).is_some_and(|(_, domain)| {
-                signup.domains.iter().any(|allowed| allowed.eq_ignore_ascii_case(domain))
-            }));
+            && identity
+                .email
+                .as_deref()
+                .and_then(|email| email.rsplit_once('@'))
+                .is_some_and(|(_, domain)| signup.domains.iter().any(|allowed| allowed.eq_ignore_ascii_case(domain))));
     if !allowed {
         return Ok(None);
     }

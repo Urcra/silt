@@ -122,12 +122,7 @@ fn bundles_carry_commits_origin_does_not_have() {
     let clone_dir = tempfile::tempdir().expect("temp dir");
     let clone = clone_dir.path().join("a");
     let other = clone_dir.path().join("b");
-    let status = std::process::Command::new("git")
-        .args(["clone", "-q"])
-        .arg(origin.path())
-        .arg(&clone)
-        .status()
-        .expect("clone");
+    let status = std::process::Command::new("git").args(["clone", "-q"]).arg(origin.path()).arg(&clone).status().expect("clone");
     assert!(status.success());
     std::process::Command::new("git").args(["clone", "-q"]).arg(origin.path()).arg(&other).status().expect("clone");
 
@@ -159,15 +154,16 @@ fn bundles_carry_commits_origin_does_not_have() {
 
 #[test]
 fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
-    use std::os::unix::fs::PermissionsExt;
     use silt_git::conventions::{LinkOutcome, PrepareOutcome, link_shared_paths, run_prepare};
+    use std::os::unix::fs::PermissionsExt;
 
     let dir = source_repo();
     let root = dir.path();
     fs::create_dir_all(root.join(".agents")).expect("mkdir");
     fs::write(root.join(".gitignore"), "node_modules/\n.env\n").expect("write");
     fs::write(root.join(".agents/linked"), "node_modules\n.env\ncache\na.txt\n").expect("write");
-    fs::write(root.join(".agents/prepare"), "#!/bin/sh\npwd > prepared.txt\necho \"$SILT_THREAD\" >> prepared.txt\n").expect("write");
+    fs::write(root.join(".agents/prepare"), "#!/bin/sh\npwd > prepared.txt\necho \"$SILT_THREAD\" >> prepared.txt\n")
+        .expect("write");
     fs::set_permissions(root.join(".agents/prepare"), fs::Permissions::from_mode(0o755)).expect("chmod");
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "conventions"]);
@@ -189,10 +185,7 @@ fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
             LinkOutcome::NotIgnored { path: "a.txt".into() },
         ]
     );
-    assert_eq!(
-        fs::read_to_string(checkout.path.join("node_modules/left-pad/index.js")).expect("seeded"),
-        "pad"
-    );
+    assert_eq!(fs::read_to_string(checkout.path.join("node_modules/left-pad/index.js")).expect("seeded"), "pad");
     assert_eq!(stdout(git(&checkout.path, &["status", "--porcelain"])), "", "links are ignored");
     let again = link_shared_paths(&checkout_repo, root, shared.path()).expect("links again");
     assert_eq!(again[0], LinkOutcome::AlreadyLinked { path: "node_modules".into() });

@@ -12,8 +12,8 @@ use silt_types::{DeltaId, FamilyId, Frontier, ThreadId};
 use similar::{DiffTag, TextDiff};
 
 use crate::core::{Core, CoreError, touched_inode};
-use crate::transcripts::native_entries;
 use crate::protocol::{MrDetails, MrSummary, Pulled};
+use crate::transcripts::native_entries;
 
 /// Longest agent message quoted in a generated merge request summary.
 const QUOTE_CHARS: usize = 600;
@@ -36,10 +36,7 @@ impl Core {
     fn loaded_family(&self, thread: ThreadId) -> Result<(FamilyId, &Family), CoreError> {
         let family_id = self.threads[&thread].family;
         let family = self.families.get(&family_id).ok_or_else(|| {
-            CoreError::Invalid(format!(
-                "thread {} isn't on this machine yet; resume or fork it first",
-                thread.short()
-            ))
+            CoreError::Invalid(format!("thread {} isn't on this machine yet; resume or fork it first", thread.short()))
         })?;
         Ok((family_id, family))
     }
@@ -85,7 +82,12 @@ impl Core {
 
     /// Writes what changed between two versions of the family into the
     /// checkouts whose threads now see it.
-    async fn bring_checkouts_to(&mut self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Result<(), CoreError> {
+    async fn bring_checkouts_to(
+        &mut self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+    ) -> Result<(), CoreError> {
         let changed: Vec<Delta> = self.families[&family_id]
             .log()
             .iter()
@@ -107,12 +109,7 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("thread {} is not a fork; there is nothing to pull", thread.short())))?;
         let head = family.thread_head(thread);
         let source_head = family.thread_head(source);
-        let mut pulled = Pulled {
-            thread: thread.to_string(),
-            from: source.to_string(),
-            messages: 0,
-            files: Vec::new(),
-        };
+        let mut pulled = Pulled { thread: thread.to_string(), from: source.to_string(), messages: 0, files: Vec::new() };
         if source_head.ids().iter().all(|id| family.graph().is_ancestor(*id, &head)) {
             return Ok(pulled);
         }
@@ -131,11 +128,7 @@ impl Core {
             .flat_map(|item| native_entries(&mut transcripts, item.delta))
             .filter(|entry| matches!(entry, Entry::User { .. } | Entry::Assistant { .. }))
             .count();
-        pulled.files = self
-            .changes(family_id, &before, &after)
-            .iter()
-            .map(|change| change.path().to_owned())
-            .collect();
+        pulled.files = self.changes(family_id, &before, &after).iter().map(|change| change.path().to_owned()).collect();
         self.bring_checkouts_to(family_id, &before, &after).await?;
         self.notify(
             thread,
@@ -161,10 +154,7 @@ impl Core {
         self.ensure_writer(thread)?;
         let (family_id, family) = self.loaded_family(thread)?;
         let target = family.thread(thread).and_then(|state| state.forked_from).ok_or_else(|| {
-            CoreError::Invalid(format!(
-                "thread {} is not a fork; merge requests go from a fork to its source",
-                thread.short()
-            ))
+            CoreError::Invalid(format!("thread {} is not a fork; merge requests go from a fork to its source", thread.short()))
         })?;
         let title = title
             .or_else(|| family.thread(thread).and_then(|state| state.title.clone()))
@@ -174,9 +164,7 @@ impl Core {
             Some(summary) => summary,
             None => {
                 let graph = family.graph();
-                let base = graph
-                    .version_vector(&head)
-                    .intersection(&graph.version_vector(&family.thread_head(target)));
+                let base = graph.version_vector(&head).intersection(&graph.version_vector(&family.thread_head(target)));
                 let files: Vec<String> = self
                     .changes(family_id, &base, &graph.version_vector(&head))
                     .iter()
@@ -185,9 +173,7 @@ impl Core {
                 generated_summary(family, thread, &files)
             }
         };
-        let delta = self
-            .append_op(family_id, thread, head, Op::Mr(MrOp::Opened { target, title, summary }))
-            .await?;
+        let delta = self.append_op(family_id, thread, head, Op::Mr(MrOp::Opened { target, title, summary })).await?;
         let request = self.families[&family_id]
             .merge_requests()
             .into_iter()
@@ -255,12 +241,7 @@ impl Core {
                 .filter(|item| item.source != HistorySource::Inherited && offered.contains(item.delta.span.first()))
                 .collect(),
         );
-        Ok(MrDetails {
-            mr: mr_summary(&request),
-            diff: crate::views::render_diff(&theirs),
-            conflicts,
-            conversation,
-        })
+        Ok(MrDetails { mr: mr_summary(&request), diff: crate::views::render_diff(&theirs), conflicts, conversation })
     }
 
     /// Merges a merge request into its target on the device that holds the
@@ -271,29 +252,17 @@ impl Core {
         let head = family.thread_head(request.target);
         let before = family.graph().version_vector(&head);
         let parents: Frontier = head.ids().iter().copied().chain([request.id]).collect();
-        let merge = Op::Merge {
-            from: request.fork,
-            mr: Some(request.id),
-        };
+        let merge = Op::Merge { from: request.fork, mr: Some(request.id) };
         self.append_op(family_id, request.target, parents, merge).await?;
         let head = self.families[&family_id].thread_head(request.target);
-        self.append_op(family_id, request.target, head, Op::Mr(MrOp::Approved { mr: request.id }))
-            .await?;
-        let merged = ConvOp::Merged {
-            from: request.fork,
-            mr: request.id,
-            title: request.title.clone(),
-            summary: request.summary.clone(),
-        };
+        self.append_op(family_id, request.target, head, Op::Mr(MrOp::Approved { mr: request.id })).await?;
+        let merged =
+            ConvOp::Merged { from: request.fork, mr: request.id, title: request.title.clone(), summary: request.summary.clone() };
         self.append_conv(family_id, request.target, Author::User, merged).await?;
 
         let family = &self.families[&family_id];
         let after = family.graph().version_vector(&family.thread_head(request.target));
-        let files: Vec<String> = self
-            .changes(family_id, &before, &after)
-            .iter()
-            .map(|change| change.path().to_owned())
-            .collect();
+        let files: Vec<String> = self.changes(family_id, &before, &after).iter().map(|change| change.path().to_owned()).collect();
         self.bring_checkouts_to(family_id, &before, &after).await?;
         self.notify(
             request.target,
@@ -307,27 +276,18 @@ impl Core {
                 request.fork
             ),
         );
-        let request = self.families[&family_id]
-            .merge_requests()
-            .into_iter()
-            .find(|found| found.id == request.id)
-            .expect("still there");
+        let request =
+            self.families[&family_id].merge_requests().into_iter().find(|found| found.id == request.id).expect("still there");
         Ok(mr_summary(&request))
     }
 
     pub(crate) async fn mr_decline(&mut self, selector: &str, reason: Option<String>) -> Result<MrSummary, CoreError> {
         let (family_id, request) = self.open_request(selector)?;
         let head = self.families[&family_id].thread_head(request.target);
-        let declined = MrOp::Declined {
-            mr: request.id,
-            reason: reason.unwrap_or_default(),
-        };
+        let declined = MrOp::Declined { mr: request.id, reason: reason.unwrap_or_default() };
         self.append_op(family_id, request.target, head, Op::Mr(declined)).await?;
-        let request = self.families[&family_id]
-            .merge_requests()
-            .into_iter()
-            .find(|found| found.id == request.id)
-            .expect("still there");
+        let request =
+            self.families[&family_id].merge_requests().into_iter().find(|found| found.id == request.id).expect("still there");
         Ok(mr_summary(&request))
     }
 
@@ -351,19 +311,14 @@ impl Core {
         selector: Option<&str>,
         visibility: Visibility,
     ) -> Result<String, CoreError> {
-        let remote = self
-            .remote
-            .clone()
-            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
+        let remote =
+            self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?;
         let refused = |source| CoreError::Server { doing: "change the visibility", source };
         match selector {
             Some(selector) => {
                 let thread = self.find_thread(selector)?;
                 remote.set_visibility(None, Some(thread), visibility.clone()).await.map_err(refused)?;
-                Ok(format!(
-                    "thread {} is now {visibility}; forks without a setting of their own follow it",
-                    thread.short(),
-                ))
+                Ok(format!("thread {} is now {visibility}; forks without a setting of their own follow it", thread.short(),))
             }
             None => {
                 let repo = silt_git::Repo::discover(&cwd.canonicalize()?)?;
@@ -371,10 +326,7 @@ impl Core {
                     .remote_url("origin")?
                     .map(|url| silt_git::normalize_remote(&url))
                     .ok_or_else(|| CoreError::Invalid("this clone has no origin remote".into()))?;
-                remote
-                    .set_visibility(Some(identity.clone()), None, visibility.clone())
-                    .await
-                    .map_err(refused)?;
+                remote.set_visibility(Some(identity.clone()), None, visibility.clone()).await.map_err(refused)?;
                 Ok(format!("project {identity} is now {visibility}"))
             }
         }
@@ -408,13 +360,10 @@ fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> Str
         .filter(|item| item.source == HistorySource::Own)
         .flat_map(|item| native_entries(&mut transcripts, item.delta))
         .collect();
-    let last_message = own
-        .into_iter()
-        .rev()
-        .find_map(|entry| match entry {
-            Entry::Assistant { text } if !text.trim().is_empty() => Some(text),
-            _ => None,
-        });
+    let last_message = own.into_iter().rev().find_map(|entry| match entry {
+        Entry::Assistant { text } if !text.trim().is_empty() => Some(text),
+        _ => None,
+    });
     if let Some(message) = last_message {
         let quoted: String = message.trim().chars().take(QUOTE_CHARS).collect();
         summary.push_str("\nThe fork's agent last said: ");
@@ -460,7 +409,6 @@ pub(crate) fn short_mr(id: DeltaId) -> String {
     let actor = id.actor.to_string();
     format!("{}.{}", &actor[actor.len() - 6..], id.lamport.0)
 }
-
 
 fn status_text(status: &MrStatus) -> String {
     match status {

@@ -64,13 +64,8 @@ async fn discover(http: &reqwest::Client, issuer: &str) -> Result<Discovery, Sig
     {
         return Ok(discovery.clone());
     }
-    let discovery: Discovery = http
-        .get(format!("{issuer}/.well-known/openid-configuration"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let discovery: Discovery =
+        http.get(format!("{issuer}/.well-known/openid-configuration")).send().await?.error_for_status()?.json().await?;
     *DISCOVERED.lock().expect("lock") = Some((issuer.to_owned(), discovery.clone(), std::time::Instant::now()));
     Ok(discovery)
 }
@@ -155,11 +150,7 @@ pub(crate) async fn finish(
         .and_then(Value::as_str)
         .ok_or_else(|| SignInError::Provider(format!("no access token: {token}")))?;
     let get = |url: String| {
-        http.get(url)
-            .bearer_auth(access)
-            .header("accept", "application/json")
-            .header("user-agent", "silt-server")
-            .send()
+        http.get(url).bearer_auth(access).header("accept", "application/json").header("user-agent", "silt-server").send()
     };
     if endpoints.provider == "github" {
         let user: Value = get(format!("{}/user", endpoints.userinfo)).await?.error_for_status()?.json().await?;
@@ -185,14 +176,8 @@ pub(crate) async fn finish(
         });
     }
     let claims: Value = get(endpoints.userinfo.clone()).await?.error_for_status()?.json().await?;
-    let subject = claims["sub"]
-        .as_str()
-        .ok_or_else(|| SignInError::Provider("the userinfo has no subject".into()))?
-        .to_owned();
-    let email = claims["email"]
-        .as_str()
-        .filter(|_| claims["email_verified"] == true)
-        .map(str::to_owned);
+    let subject = claims["sub"].as_str().ok_or_else(|| SignInError::Provider("the userinfo has no subject".into()))?.to_owned();
+    let email = claims["email"].as_str().filter(|_| claims["email_verified"] == true).map(str::to_owned);
     let login = claims["preferred_username"]
         .as_str()
         .map(str::to_owned)

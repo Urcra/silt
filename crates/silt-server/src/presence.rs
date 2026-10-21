@@ -55,10 +55,7 @@ impl Board {
 }
 
 async fn user_name(server: &Server, user: i64) -> Result<String, ApiError> {
-    Ok(crate::accounts::user_by_id(server.db(), user)
-        .await?
-        .map(|user| user.name)
-        .unwrap_or_default())
+    Ok(crate::accounts::user_by_id(server.db(), user).await?.map(|user| user.name).unwrap_or_default())
 }
 
 pub(crate) async fn update(
@@ -92,9 +89,7 @@ pub(crate) async fn update(
             },
         );
     }
-    Ok(Json(PresenceReply {
-        people: board.others(update.thread, caller.device),
-    }))
+    Ok(Json(PresenceReply { people: board.others(update.thread, caller.device) }))
 }
 
 #[derive(Deserialize)]

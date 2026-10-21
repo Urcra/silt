@@ -12,12 +12,7 @@ pub fn format_timestamp(ms: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 /// Howard Hinnant's days-to-civil algorithm.
@@ -33,7 +28,6 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year, month, day)
 }
-
 
 /// Milliseconds since the epoch of an RFC 3339 time in UTC, such as
 /// `2025-10-20T12:00:00.123Z`, as agents write them.

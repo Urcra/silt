@@ -23,11 +23,7 @@ impl Core {
         let log = self.local_log(family);
         let after = after.min(log.len());
         let bytes = postcard::to_allocvec(&log[after..]).map_err(|error| CoreError::Invalid(error.to_string()))?;
-        Ok(ReplicaDeltas {
-            total: log.len(),
-            deltas: BASE64.encode(bytes),
-            writable: self.may_write(thread),
-        })
+        Ok(ReplicaDeltas { total: log.len(), deltas: BASE64.encode(bytes), writable: self.may_write(thread) })
     }
 
     /// The text of a git blob of the thread's repository.
@@ -43,9 +39,7 @@ impl Core {
     pub(crate) async fn receive_from_browser(&mut self, selector: &str, encoded: &str) -> Result<usize, CoreError> {
         let thread = self.find_thread(selector)?;
         if !self.may_write(thread) {
-            return Err(CoreError::Invalid(
-                "this thread belongs to someone else; ask its owner to share it with you".into(),
-            ));
+            return Err(CoreError::Invalid("this thread belongs to someone else; ask its owner to share it with you".into()));
         }
         let bytes = BASE64.decode(encoded).map_err(|error| CoreError::Invalid(error.to_string()))?;
         let deltas: Vec<Delta> = postcard::from_bytes(&bytes).map_err(|error| CoreError::Invalid(error.to_string()))?;
@@ -73,9 +67,6 @@ impl Core {
     pub(crate) fn live_state(&self, selector: &str) -> Result<LiveState, CoreError> {
         let thread = self.find_thread(selector)?;
         let family = self.threads[&thread].family;
-        Ok(LiveState {
-            deltas: self.local_log(family).len(),
-            agent: self.agent_status(thread),
-        })
+        Ok(LiveState { deltas: self.local_log(family).len(), agent: self.agent_status(thread) })
     }
 }

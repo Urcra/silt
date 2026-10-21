@@ -36,9 +36,7 @@ impl Core {
         let thread = self.find_thread(selector)?;
         let deleted = self.deleted.contains(&thread);
         if change == Lifecycle::Purge && !deleted {
-            return Err(CoreError::Invalid(
-                "delete the thread first (`silt thread delete`); purging works on the trash".into(),
-            ));
+            return Err(CoreError::Invalid("delete the thread first (`silt thread delete`); purging works on the trash".into()));
         }
         if let Some(remote) = &self.remote {
             remote
@@ -116,10 +114,8 @@ impl Core {
     /// Forgets threads here and every delta of theirs that no remaining
     /// thread builds on.
     pub(crate) async fn drop_threads(&mut self, threads: &HashSet<ThreadId>) -> Result<(), CoreError> {
-        let families: HashSet<FamilyId> = threads
-            .iter()
-            .filter_map(|thread| self.threads.get(thread).map(|record| record.family))
-            .collect();
+        let families: HashSet<FamilyId> =
+            threads.iter().filter_map(|thread| self.threads.get(thread).map(|record| record.family)).collect();
         let checkouts: Vec<i64> = self
             .checkouts
             .values()

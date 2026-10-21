@@ -64,9 +64,7 @@ fn diamond_types_text(events: &[TextEvent]) -> String {
 }
 
 fn run(replica_count: usize, actions: &[Action]) {
-    let mut replicas: Vec<TextReplica> = (0..replica_count)
-        .map(|index| TextReplica::new(ActorId(index as u128 + 1)))
-        .collect();
+    let mut replicas: Vec<TextReplica> = (0..replica_count).map(|index| TextReplica::new(ActorId(index as u128 + 1))).collect();
     let mut seen: Vec<(Frontier, String)> = Vec::new();
 
     for action in actions {
@@ -142,9 +140,12 @@ proptest! {
 fn regression_ancestor_through_earlier_run() {
     let ins = |replica, text: &str| Action::Insert { replica, pos: 0, text: text.into() };
     let actions = vec![
-        ins(0, "aa"), ins(0, "a"), ins(2, "a"),
+        ins(0, "aa"),
+        ins(0, "a"),
+        ins(2, "a"),
         Action::Deliver { from: 0, to: 1, fraction: 128 },
-        ins(2, "a"), ins(1, "a"),
+        ins(2, "a"),
+        ins(1, "a"),
         Action::Deliver { from: 2, to: 1, fraction: 128 },
         ins(1, "e"),
     ];

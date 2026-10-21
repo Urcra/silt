@@ -70,15 +70,8 @@ pub fn read_line(line: &str) -> Read {
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
         "tool_call" => {
-            read.marks.push(Mark::ToolStarted {
-                tool_use_id: field("id"),
-                tool: field("title"),
-            });
-            read.entries.push(Entry::ToolCall {
-                id: field("id"),
-                name: field("title"),
-                input: record["input"].clone(),
-            });
+            read.marks.push(Mark::ToolStarted { tool_use_id: field("id"), tool: field("title") });
+            read.entries.push(Entry::ToolCall { id: field("id"), name: field("title"), input: record["input"].clone() });
         }
         "tool_result" => {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
@@ -120,12 +113,7 @@ impl Agent for Acp {
     }
 
     fn native(&self) -> NativeConventions {
-        NativeConventions {
-            rules: &[],
-            skill_dirs: &[],
-            personal_skills: false,
-            given_skills: false,
-        }
+        NativeConventions { rules: &[], skill_dirs: &[], personal_skills: false, given_skills: false }
     }
 
     fn reader(&self) -> Box<dyn Reader> {
@@ -169,7 +157,8 @@ mod tests {
             stop("end_turn"),
         ];
         let reads: Vec<Read> = lines.iter().map(|line| read_line(line)).collect();
-        let entries: Vec<Entry> = reads.iter().flat_map(|read| read.entries.clone()).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
+        let entries: Vec<Entry> =
+            reads.iter().flat_map(|read| read.entries.clone()).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
         assert_eq!(entries[0], Entry::User { text: "add acp".into() });
         assert_eq!(entries[1], Entry::Thinking { text: "planning".into() });
         assert_eq!(entries[4], Entry::Assistant { text: "Done".into() });

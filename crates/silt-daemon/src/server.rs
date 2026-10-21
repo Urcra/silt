@@ -83,10 +83,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     if socket.exists() {
         fs::remove_file(socket)?;
     }
-    let listener = UnixListener::bind(socket).map_err(|source| RunError::Listen {
-        path: socket.display().to_string(),
-        source,
-    })?;
+    let listener =
+        UnixListener::bind(socket).map_err(|source| RunError::Listen { path: socket.display().to_string(), source })?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let accept_events = events.clone();
     let (answered, mut answered_rx) = mpsc::unbounded_channel();
@@ -121,31 +119,18 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 return Ok(());
             }
             Event::Request(request, reply) => core.request(request, reply).await,
-            Event::Changed {
-                checkout,
-                paths,
-                noticed,
-                settled,
-            } => core.changed(checkout, paths, noticed, settled).await,
+            Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
             Event::Tick => core.tick().await,
             Event::CloseTool { session_id, reply } => core.close_tool(&session_id, reply).await,
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
-            Event::Pushed {
-                family,
-                epoch,
-                generation,
-                outcome,
-                error,
-            } => core.pushed(family, epoch, generation, outcome, error).await,
-            Event::Pulled {
-                family,
-                epoch,
-                generation,
-                outcome,
-                error,
-            } => core.pulled(family, epoch, generation, outcome, error).await,
+            Event::Pushed { family, epoch, generation, outcome, error } => {
+                core.pushed(family, epoch, generation, outcome, error).await
+            }
+            Event::Pulled { family, epoch, generation, outcome, error } => {
+                core.pulled(family, epoch, generation, outcome, error).await
+            }
             Event::Listed(listing, requested) => core.listed(listing, requested).await,
         }
     }

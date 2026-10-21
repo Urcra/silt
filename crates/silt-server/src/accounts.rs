@@ -49,10 +49,7 @@ pub(crate) fn random_token() -> String {
 }
 
 pub(crate) fn hash_password(password: &str) -> String {
-    Argon2::default()
-        .hash_password(password.as_bytes())
-        .expect("hashing with a generated salt succeeds")
-        .to_string()
+    Argon2::default().hash_password(password.as_bytes()).expect("hashing with a generated salt succeeds").to_string()
 }
 
 pub(crate) fn verify_password(stored: &str, password: &str) -> bool {
@@ -109,30 +106,15 @@ macro_rules! users_query {
 }
 
 pub(crate) async fn user_by_id(db: &SqlitePool, id: i64) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE id = ?"))
-        .bind(id)
-        .fetch_optional(db)
-        .await?
-        .as_ref()
-        .map(user_from))
+    Ok(sqlx::query(users_query!("WHERE id = ?")).bind(id).fetch_optional(db).await?.as_ref().map(user_from))
 }
 
 pub(crate) async fn user_by_name(db: &SqlitePool, name: &str) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE name = ?"))
-        .bind(name)
-        .fetch_optional(db)
-        .await?
-        .as_ref()
-        .map(user_from))
+    Ok(sqlx::query(users_query!("WHERE name = ?")).bind(name).fetch_optional(db).await?.as_ref().map(user_from))
 }
 
 pub(crate) async fn user_by_email(db: &SqlitePool, email: &str) -> Result<Option<User>, sqlx::Error> {
-    Ok(sqlx::query(users_query!("WHERE lower(email) = lower(?)"))
-        .bind(email)
-        .fetch_optional(db)
-        .await?
-        .as_ref()
-        .map(user_from))
+    Ok(sqlx::query(users_query!("WHERE lower(email) = lower(?)")).bind(email).fetch_optional(db).await?.as_ref().map(user_from))
 }
 
 pub(crate) struct NewUser<'a> {
@@ -201,10 +183,7 @@ pub(crate) struct PasswordChecks {
 
 impl Default for PasswordChecks {
     fn default() -> Self {
-        Self {
-            running: tokio::sync::Semaphore::new(CONCURRENT_CHECKS),
-            failures: std::sync::Mutex::default(),
-        }
+        Self { running: tokio::sync::Semaphore::new(CONCURRENT_CHECKS), failures: std::sync::Mutex::default() }
     }
 }
 
@@ -230,9 +209,7 @@ impl PasswordChecks {
         let Ok(_permit) = self.running.acquire().await else {
             return false;
         };
-        tokio::task::spawn_blocking(move || verify_password(&stored, &password))
-            .await
-            .unwrap_or(false)
+        tokio::task::spawn_blocking(move || verify_password(&stored, &password)).await.unwrap_or(false)
     }
 }
 
@@ -249,15 +226,10 @@ pub(crate) async fn check_password(server: &Server, name: &str, password: &str) 
     if checks.cooling_down(name) {
         return Err(PasswordError::TooManyFailures);
     }
-    let row = sqlx::query(users_query!("WHERE name = ?"))
-        .bind(name)
-        .fetch_optional(server.db())
-        .await?;
+    let row = sqlx::query(users_query!("WHERE name = ?")).bind(name).fetch_optional(server.db()).await?;
     let stored: Option<String> = row.as_ref().and_then(|row| row.get("password_hash"));
-    let matches = checks
-        .verify(stored.clone().unwrap_or_else(|| DUMMY_HASH.to_owned()), password.to_owned())
-        .await
-        && stored.is_some();
+    let matches =
+        checks.verify(stored.clone().unwrap_or_else(|| DUMMY_HASH.to_owned()), password.to_owned()).await && stored.is_some();
     checks.record(name, matches);
     Ok(row.filter(|_| matches).map(|row| user_from(&row)).filter(|user| !user.disabled))
 }
@@ -275,16 +247,8 @@ pub(crate) async fn issue_device(db: &SqlitePool, user: i64, name: &str) -> Resu
         .bind(user)
         .execute(db)
         .await?;
-    let name = sqlx::query("SELECT name FROM users WHERE id = ?")
-        .bind(user)
-        .fetch_one(db)
-        .await?
-        .get("name");
-    Ok(LoginReply {
-        device,
-        token,
-        user: name,
-    })
+    let name = sqlx::query("SELECT name FROM users WHERE id = ?").bind(user).fetch_one(db).await?.get("name");
+    Ok(LoginReply { device, token, user: name })
 }
 
 /// The device and user a device token stands for, unless the token lapsed
@@ -304,11 +268,7 @@ pub(crate) async fn device_caller(db: &SqlitePool, token: &str) -> Result<Option
     };
     let device: Vec<u8> = row.get("id");
     if row.get::<i64, _>("last_used_ms") < now - DEVICE_USE_GRANULARITY_MS {
-        sqlx::query("UPDATE devices SET last_used_ms = ? WHERE id = ?")
-            .bind(now)
-            .bind(&device)
-            .execute(db)
-            .await?;
+        sqlx::query("UPDATE devices SET last_used_ms = ? WHERE id = ?").bind(now).bind(&device).execute(db).await?;
     }
     Ok(Some((DeviceId(id_from(&device)), row.get("user_id"))))
 }
@@ -347,10 +307,7 @@ pub(crate) async fn revoke_device(db: &SqlitePool, user: i64, device: DeviceId) 
         .await?
         .rows_affected()
         == 1;
-    sqlx::query("DELETE FROM leases WHERE device_id = ?")
-        .bind(id_bytes(device.0))
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query("DELETE FROM leases WHERE device_id = ?").bind(id_bytes(device.0)).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(revoked)
 }
@@ -362,18 +319,9 @@ pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: i64) -> Result<()
         .bind(user)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM devices WHERE user_id = ?")
-        .bind(user)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM web_sessions WHERE user_id = ?")
-        .bind(user)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM device_requests WHERE user_id = ?")
-        .bind(user)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query("DELETE FROM devices WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM web_sessions WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM device_requests WHERE user_id = ?").bind(user).execute(&mut *tx).await?;
     tx.commit().await
 }
 
@@ -411,10 +359,7 @@ pub(crate) async fn session_user(db: &SqlitePool, token: &str) -> Result<Option<
 }
 
 pub(crate) async fn end_session(db: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM web_sessions WHERE token_hash = ?")
-        .bind(hash(token).to_vec())
-        .execute(db)
-        .await?;
+    sqlx::query("DELETE FROM web_sessions WHERE token_hash = ?").bind(hash(token).to_vec()).execute(db).await?;
     Ok(())
 }
 
@@ -435,11 +380,7 @@ fn user_code() -> String {
 
 pub(crate) fn normalize_user_code(code: &str) -> String {
     let letters: String = code.chars().filter(char::is_ascii_alphanumeric).map(|ch| ch.to_ascii_uppercase()).collect();
-    if letters.len() == 8 {
-        format!("{}-{}", &letters[..4], &letters[4..])
-    } else {
-        letters
-    }
+    if letters.len() == 8 { format!("{}-{}", &letters[..4], &letters[4..]) } else { letters }
 }
 
 /// Starts a device sign-in; returns the device's secret and the code the
@@ -468,13 +409,14 @@ pub(crate) async fn device_request(db: &SqlitePool, user_code: &str) -> Result<O
 }
 
 pub(crate) async fn approve_device(db: &SqlitePool, user_code: &str, user: i64) -> Result<bool, sqlx::Error> {
-    let updated = sqlx::query("UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
-        .bind(user)
-        .bind(normalize_user_code(user_code))
-        .bind(now_ms())
-        .execute(db)
-        .await?
-        .rows_affected();
+    let updated =
+        sqlx::query("UPDATE device_requests SET user_id = ? WHERE user_code = ? AND expires_ms > ? AND user_id IS NULL")
+            .bind(user)
+            .bind(normalize_user_code(user_code))
+            .bind(now_ms())
+            .execute(db)
+            .await?
+            .rows_affected();
     Ok(updated == 1)
 }
 
@@ -490,13 +432,8 @@ pub(crate) async fn sweep_expired(db: &SqlitePool) -> Result<(), sqlx::Error> {
     ] {
         sqlx::query(statement).bind(now).execute(db).await?;
     }
-    sqlx::query("DELETE FROM devices WHERE last_used_ms <= ?")
-        .bind(now - DEVICE_IDLE_MS)
-        .execute(db)
-        .await?;
-    sqlx::query("DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)")
-        .execute(db)
-        .await?;
+    sqlx::query("DELETE FROM devices WHERE last_used_ms <= ?").bind(now - DEVICE_IDLE_MS).execute(db).await?;
+    sqlx::query("DELETE FROM leases WHERE device_id NOT IN (SELECT id FROM devices)").execute(db).await?;
     Ok(())
 }
 
@@ -519,9 +456,7 @@ pub(crate) async fn poll_device(db: &SqlitePool, device_code: &str) -> Result<De
         .await?;
     if let Some(row) = approved {
         let name: String = row.get("name");
-        return Ok(DevicePollReply::Approved {
-            login: issue_device(db, row.get("user_id"), &name).await?,
-        });
+        return Ok(DevicePollReply::Approved { login: issue_device(db, row.get("user_id"), &name).await? });
     }
     let waiting = sqlx::query("SELECT expires_ms FROM device_requests WHERE code_hash = ?")
         .bind(hash(device_code).to_vec())
@@ -565,11 +500,12 @@ pub(crate) struct ClaimedInvite {
 /// Takes the invite for one sign-up: only one of two sign-ups racing for
 /// it gets it. Complete it once the account exists, or release it.
 pub(crate) async fn claim_invite(db: &SqlitePool, token: &str) -> Result<Option<ClaimedInvite>, sqlx::Error> {
-    let Some(row) = sqlx::query("SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
-        .bind(hash(token).to_vec())
-        .bind(now_ms())
-        .fetch_optional(db)
-        .await?
+    let Some(row) =
+        sqlx::query("SELECT org, expires_ms FROM invites WHERE token_hash = ? AND expires_ms > ? AND used_by IS NULL")
+            .bind(hash(token).to_vec())
+            .bind(now_ms())
+            .fetch_optional(db)
+            .await?
     else {
         return Ok(None);
     };
@@ -580,11 +516,7 @@ pub(crate) async fn claim_invite(db: &SqlitePool, token: &str) -> Result<Option<
         .execute(db)
         .await?
         .rows_affected();
-    Ok((taken == 1).then(|| ClaimedInvite {
-        token: token.to_owned(),
-        org: row.get("org"),
-        expires_ms,
-    }))
+    Ok((taken == 1).then(|| ClaimedInvite { token: token.to_owned(), org: row.get("org"), expires_ms }))
 }
 
 impl ClaimedInvite {
@@ -640,15 +572,17 @@ pub(crate) struct SignInState {
 }
 
 pub(crate) async fn save_sign_in(db: &SqlitePool, provider: &str, state: &str, saved: &SignInState) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO sign_in_states (state_hash, provider, verifier, invite, next, expires_ms) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(hash(state).to_vec())
-        .bind(provider)
-        .bind(&saved.verifier)
-        .bind(&saved.invite)
-        .bind(&saved.next)
-        .bind(now_ms() + SIGN_IN_TTL_MS)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sign_in_states (state_hash, provider, verifier, invite, next, expires_ms) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(hash(state).to_vec())
+    .bind(provider)
+    .bind(&saved.verifier)
+    .bind(&saved.invite)
+    .bind(&saved.next)
+    .bind(now_ms() + SIGN_IN_TTL_MS)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -662,11 +596,7 @@ pub(crate) async fn take_sign_in(db: &SqlitePool, provider: &str, state: &str) -
     .bind(now_ms())
     .fetch_optional(db)
     .await?
-    .map(|row| SignInState {
-        verifier: row.get("verifier"),
-        invite: row.get("invite"),
-        next: row.get("next"),
-    }))
+    .map(|row| SignInState { verifier: row.get("verifier"), invite: row.get("invite"), next: row.get("next") }))
 }
 
 /// Account administration on the server's host, without the server
@@ -678,33 +608,16 @@ pub struct Admin {
 impl Admin {
     pub async fn open(data_dir: &Path) -> Result<Self, ServerError> {
         tokio::fs::create_dir_all(data_dir).await?;
-        Ok(Self {
-            db: open_db(data_dir).await?,
-        })
+        Ok(Self { db: open_db(data_dir).await? })
     }
 
     pub async fn add_user(&self, name: &str, password: Option<&str>, admin: bool) -> Result<(), AccountError> {
-        create_user(
-            &self.db,
-            &NewUser {
-                name,
-                display_name: None,
-                email: None,
-                password,
-                admin,
-            },
-        )
-        .await?;
+        create_user(&self.db, &NewUser { name, display_name: None, email: None, password, admin }).await?;
         Ok(())
     }
 
     pub async fn users(&self) -> Result<Vec<User>, AccountError> {
-        Ok(sqlx::query(users_query!("ORDER BY name"))
-            .fetch_all(&self.db)
-            .await?
-            .iter()
-            .map(user_from)
-            .collect())
+        Ok(sqlx::query(users_query!("ORDER BY name")).fetch_all(&self.db).await?.iter().map(user_from).collect())
     }
 
     pub async fn set_password(&self, name: &str, password: &str) -> Result<(), AccountError> {
@@ -773,7 +686,11 @@ mod tests {
         for _ in 0..200 {
             let code = user_code();
             assert_eq!(code.len(), 9, "{code}");
-            assert!(code.chars().enumerate().all(|(at, char)| if at == 4 { char == '-' } else { CODE_LETTERS.contains(&(char as u8)) }));
+            assert!(code.chars().enumerate().all(|(at, char)| if at == 4 {
+                char == '-'
+            } else {
+                CODE_LETTERS.contains(&(char as u8))
+            }));
             assert_eq!(normalize_user_code(&code.to_lowercase()), code);
         }
     }

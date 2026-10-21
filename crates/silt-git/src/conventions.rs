@@ -16,10 +16,7 @@ const SHARED_DIR: &str = ".agents";
 
 /// The project file `name` in `checkout`, preferring `.silt/<name>`.
 pub fn project_file(checkout: &Path, name: &str) -> Option<PathBuf> {
-    [OVERRIDE_DIR, SHARED_DIR]
-        .into_iter()
-        .map(|dir| checkout.join(dir).join(name))
-        .find(|path| path.is_file())
+    [OVERRIDE_DIR, SHARED_DIR].into_iter().map(|dir| checkout.join(dir).join(name)).find(|path| path.is_file())
 }
 
 /// Paths listed in a `linked` file: one repo-relative path per line, `#`
@@ -36,13 +33,22 @@ pub fn parse_linked(text: &str) -> Vec<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
-    Linked { path: String, seeded: bool },
-    AlreadyLinked { path: String },
+    Linked {
+        path: String,
+        seeded: bool,
+    },
+    AlreadyLinked {
+        path: String,
+    },
     /// The path is tracked or not ignored, so linking it would change the
     /// thread's files.
-    NotIgnored { path: String },
+    NotIgnored {
+        path: String,
+    },
     /// Something other than the link is already there.
-    Occupied { path: String },
+    Occupied {
+        path: String,
+    },
 }
 
 /// Links each path in the checkout's `linked` file to `<shared>/<path>`.
@@ -55,11 +61,8 @@ pub fn link_shared_paths(checkout: &Repo, source: &Path, shared: &Path) -> Resul
     let paths = parse_linked(&fs::read_to_string(file)?);
     let is_linked = |path: &str| fs::read_link(checkout.root().join(path)).is_ok_and(|current| current == shared.join(path));
     // Git refuses to look past a symlink, so linked paths aren't asked about.
-    let candidates: Vec<String> = paths
-        .iter()
-        .filter(|path| !is_linked(path))
-        .flat_map(|path| [path.clone(), format!("{path}/")])
-        .collect();
+    let candidates: Vec<String> =
+        paths.iter().filter(|path| !is_linked(path)).flat_map(|path| [path.clone(), format!("{path}/")]).collect();
     let ignored = checkout.ignored(&candidates)?;
     let mut outcomes = Vec::new();
     let mut excluded = Vec::new();
@@ -79,11 +82,7 @@ pub fn link_shared_paths(checkout: &Repo, source: &Path, shared: &Path) -> Resul
             outcomes.push(LinkOutcome::Occupied { path });
             continue;
         }
-        let seeded = if target.symlink_metadata().is_ok() {
-            false
-        } else {
-            seed(&source.join(&path), &target)?
-        };
+        let seeded = if target.symlink_metadata().is_ok() { false } else { seed(&source.join(&path), &target)? };
         fs::create_dir_all(link.parent().expect("joined onto the checkout"))?;
         std::os::unix::fs::symlink(&target, &link)?;
         excluded.push(path.clone());
@@ -101,12 +100,7 @@ fn seed(from: &Path, target: &Path) -> io::Result<bool> {
         fs::create_dir_all(target)?;
         return Ok(false);
     }
-    let status = Command::new("cp")
-        .args(["-a", "--reflink=auto"])
-        .arg(from)
-        .arg(target)
-        .stdin(Stdio::null())
-        .status()?;
+    let status = Command::new("cp").args(["-a", "--reflink=auto"]).arg(from).arg(target).stdin(Stdio::null()).status()?;
     if status.success() {
         Ok(true)
     } else {
@@ -137,16 +131,11 @@ fn exclude(checkout: &Repo, paths: &[String]) -> Result<(), GitError> {
     if paths.is_empty() {
         return Ok(());
     }
-    let exclude = String::from_utf8_lossy(&checkout.git(&["rev-parse", "--git-path", "info/exclude"], None)?)
-        .trim()
-        .to_owned();
+    let exclude = String::from_utf8_lossy(&checkout.git(&["rev-parse", "--git-path", "info/exclude"], None)?).trim().to_owned();
     let exclude = checkout.root().join(exclude);
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
-    let missing: Vec<String> = paths
-        .iter()
-        .map(|path| ignore_rule(path))
-        .filter(|rule| !existing.lines().any(|line| line == rule))
-        .collect();
+    let missing: Vec<String> =
+        paths.iter().map(|path| ignore_rule(path)).filter(|rule| !existing.lines().any(|line| line == rule)).collect();
     if missing.is_empty() {
         return Ok(());
     }
@@ -178,11 +167,7 @@ pub fn run_prepare(checkout: &Path, envs: &[(&str, &str)]) -> io::Result<Option<
     if fs::metadata(&script)?.permissions().mode() & 0o111 == 0 {
         return Ok(Some(PrepareOutcome::NotExecutable { script }));
     }
-    let status = Command::new(&script)
-        .current_dir(checkout)
-        .envs(envs.iter().copied())
-        .stdin(Stdio::null())
-        .status()?;
+    let status = Command::new(&script).current_dir(checkout).envs(envs.iter().copied()).stdin(Stdio::null()).status()?;
     Ok(Some(PrepareOutcome::Ran { script, status }))
 }
 

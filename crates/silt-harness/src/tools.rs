@@ -84,7 +84,9 @@ mod beneath {
         let (name, dirs) = path.split_last().ok_or(io::ErrorKind::InvalidInput)?;
         let dir = open_dir(root, dirs, true)?;
         let mode = match statat(&dir, *name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => Mode::from_raw_mode(stat.st_mode & 0o7777),
+            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => {
+                Mode::from_raw_mode(stat.st_mode & 0o7777)
+            }
             Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")),
             Err(rustix::io::Errno::NOENT) => Mode::from_raw_mode(0o644),
             Err(error) => return Err(error.into()),
@@ -106,10 +108,7 @@ mod beneath {
 
 impl Workspace {
     pub fn new(root: &Path) -> std::io::Result<Self> {
-        Ok(Self {
-            root: root.canonicalize()?,
-            seen: HashMap::new(),
-        })
+        Ok(Self { root: root.canonicalize()?, seen: HashMap::new() })
     }
 
     pub fn root(&self) -> &Path {

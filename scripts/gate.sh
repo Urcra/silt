@@ -10,6 +10,7 @@ if [ -f web/package.json ]; then
     pnpm -C web test
 fi
 
+cargo fmt --all -- --check
 cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 # The sandbox's tests skip where namespaces are off; here they must run.

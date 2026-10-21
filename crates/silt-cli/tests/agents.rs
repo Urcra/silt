@@ -61,10 +61,7 @@ fn recorded(world: &World, agent: &str, said: &str) -> String {
     // to be the agent's, not which tool call's.
     let credited = if agent == "opencode" { "src/main.rs +17" } else { "    ✎ src/main.rs" };
     assert!(show.contains(credited), "the edit is credited to the agent: {show}");
-    assert!(
-        eventually(|| world.home.try_stdout(&["show", &thread]).contains(said)),
-        "the home machine gets the thread"
-    );
+    assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains(said)), "the home machine gets the thread");
     assert!(world.root.path().exists() && world.server.data.exists());
     thread
 }
@@ -89,10 +86,7 @@ fn codex_sessions_are_found_and_continue_natively_elsewhere() {
         "fn main() {}\nfn farewell() {}\nfn codex() {}\n"
     );
     let id = fs::read_to_string(world.home.agents.join("codex/last-session")).expect("resumed");
-    assert!(
-        world.home.stdout(&["show", &thread]).contains("> Continuing in codex"),
-        "the continued session is recorded"
-    );
+    assert!(world.home.stdout(&["show", &thread]).contains("> Continuing in codex"), "the continued session is recorded");
     assert!(!id.is_empty());
 }
 
@@ -144,10 +138,8 @@ fn a_thread_moves_from_claude_to_codex_and_back() {
         &[("FAKE_EXPECT", "Please-add-a-farewell-line Done:-farewell-added")],
     );
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").ends_with("fn codex() {}\n"));
-    let rollouts: String = walk(&world.home.agents.join("codex/sessions"))
-        .iter()
-        .map(|path| fs::read_to_string(path).unwrap_or_default())
-        .collect();
+    let rollouts: String =
+        walk(&world.home.agents.join("codex/sessions")).iter().map(|path| fs::read_to_string(path).unwrap_or_default()).collect();
     let saved = rollouts
         .split("saved to ")
         .nth(1)

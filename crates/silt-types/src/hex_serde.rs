@@ -6,11 +6,7 @@ macro_rules! hex_serde {
     ($name:ident) => {
         impl serde::Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                if serializer.is_human_readable() {
-                    serializer.collect_str(self)
-                } else {
-                    self.0.serialize(serializer)
-                }
+                if serializer.is_human_readable() { serializer.collect_str(self) } else { self.0.serialize(serializer) }
             }
         }
 

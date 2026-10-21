@@ -31,7 +31,6 @@ struct Note {
     text: String,
 }
 
-
 /// The user names mentioned as `@name` in `text`.
 pub(crate) fn mentions(text: &str) -> Vec<String> {
     let mut names: Vec<String> = text
@@ -55,11 +54,7 @@ async fn owner(db: &SqlitePool, thread: ThreadId) -> Result<Option<i64>, sqlx::E
 
 fn clip(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
-    if text.chars().count() > 140 {
-        text.chars().take(140).collect::<String>() + "…"
-    } else {
-        text
-    }
+    if text.chars().count() > 140 { text.chars().take(140).collect::<String>() + "…" } else { text }
 }
 
 /// Viewers loaded once per notified user within one push.
@@ -80,11 +75,8 @@ impl Server {
     /// Writes the notifications `stored` deltas, pushed by `actor`, cause.
     pub(crate) async fn notify(&self, stored: &[Delta], actor: Caller) -> Result<(), sqlx::Error> {
         let db = self.db();
-        let actor_name: String = sqlx::query("SELECT name FROM users WHERE id = ?")
-            .bind(actor.user)
-            .fetch_one(db)
-            .await?
-            .get("name");
+        let actor_name: String =
+            sqlx::query("SELECT name FROM users WHERE id = ?").bind(actor.user).fetch_one(db).await?.get("name");
         let mut viewers = Viewers::default();
         let mut notes = Vec::new();
         for delta in stored {
@@ -97,7 +89,12 @@ impl Server {
                             user: owner,
                             kind: "mr_opened",
                             thread: *target,
-                            text: format!("{actor_name} asks to merge \"{}\" from fork {} into your thread {}", clip(title), delta.thread.short(), target.short()),
+                            text: format!(
+                                "{actor_name} asks to merge \"{}\" from fork {} into your thread {}",
+                                clip(title),
+                                delta.thread.short(),
+                                target.short()
+                            ),
                         });
                     }
                     mentioned = format!("{title}\n{summary}");
@@ -108,7 +105,9 @@ impl Server {
                         && let Some(owner) = owner(db, fork).await?
                     {
                         let (kind, verb) = match decision {
-                            MrOp::Declined { reason, .. } if !reason.is_empty() => ("mr_declined", format!("declined ({})", clip(reason))),
+                            MrOp::Declined { reason, .. } if !reason.is_empty() => {
+                                ("mr_declined", format!("declined ({})", clip(reason)))
+                            }
                             MrOp::Declined { .. } => ("mr_declined", "declined".to_owned()),
                             _ => ("mr_approved", "approved and merged".to_owned()),
                         };

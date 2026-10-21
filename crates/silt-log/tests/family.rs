@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use silt_crdt::{InodeId, InodeKind, Parent, TextOp};
-use silt_log::{
-    Applied, Author, Content, ConvOp, Delta, Family, FileView, LogError, Op, SessionFile, SessionRef,
-};
+use silt_log::{Applied, Author, Content, ConvOp, Delta, Family, FileView, LogError, Op, SessionFile, SessionRef};
 use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
 
 const DAEMON: ActorId = ActorId(1);
@@ -35,13 +33,7 @@ fn create_main(family: &mut Family) -> InodeId {
     let src = write_on_head(
         family,
         DAEMON,
-        Op::Create {
-            kind: InodeKind::Dir,
-            parent: Parent::Root,
-            name: "src".into(),
-            content: Content::Empty,
-            executable: false,
-        },
+        Op::Create { kind: InodeKind::Dir, parent: Parent::Root, name: "src".into(), content: Content::Empty, executable: false },
     );
     let main = write_on_head(
         family,
@@ -71,17 +63,7 @@ fn git_files_stay_lazy_until_edited() {
     assert_eq!(family.file(main), Some(FileView::GitText(oid(1))));
     assert_eq!(family.tree().path_of(main).as_deref(), Some("src/main.rs"));
 
-    write_on_head(
-        &mut family,
-        CHECKOUT_A,
-        Op::Text {
-            inode: main,
-            op: TextOp::Insert {
-                pos: 0,
-                content: "// hi\n".into(),
-            },
-        },
-    );
+    write_on_head(&mut family, CHECKOUT_A, Op::Text { inode: main, op: TextOp::Insert { pos: 0, content: "// hi\n".into() } });
     assert_eq!(text(&family, main), "// hi\nfn main() {}\n");
 }
 
@@ -94,25 +76,13 @@ fn edits_from_two_checkouts_based_on_the_same_disk_version_merge() {
         &mut family,
         CHECKOUT_A,
         disk_version.clone(),
-        Op::Text {
-            inode: main,
-            op: TextOp::Insert {
-                pos: 0,
-                content: "use a;\n".into(),
-            },
-        },
+        Op::Text { inode: main, op: TextOp::Insert { pos: 0, content: "use a;\n".into() } },
     );
     write(
         &mut family,
         CHECKOUT_B,
         disk_version,
-        Op::Text {
-            inode: main,
-            op: TextOp::Insert {
-                pos: 13,
-                content: "// b\n".into(),
-            },
-        },
+        Op::Text { inode: main, op: TextOp::Insert { pos: 13, content: "// b\n".into() } },
     );
     assert_eq!(text(&family, main), "use a;\nfn main() {}\n// b\n");
     assert_eq!(family.thread(THREAD).expect("thread").head.len(), 2);
@@ -125,28 +95,10 @@ fn replacing_content_wins_over_concurrent_edits_in_any_order() {
     let base = original.thread_head(THREAD);
 
     let mut a = original.clone();
-    let edit = write(
-        &mut a,
-        CHECKOUT_A,
-        base.clone(),
-        Op::Text {
-            inode: main,
-            op: TextOp::Insert {
-                pos: 0,
-                content: "x".into(),
-            },
-        },
-    );
+    let edit =
+        write(&mut a, CHECKOUT_A, base.clone(), Op::Text { inode: main, op: TextOp::Insert { pos: 0, content: "x".into() } });
     let mut b = original.clone();
-    let replace = write(
-        &mut b,
-        CHECKOUT_B,
-        base,
-        Op::SetContent {
-            inode: main,
-            content: Content::Blob(BlobHash([9; 32])),
-        },
-    );
+    let replace = write(&mut b, CHECKOUT_B, base, Op::SetContent { inode: main, content: Content::Blob(BlobHash([9; 32])) });
 
     a.apply(replace, &mut bases()).expect("applies");
     b.apply(edit, &mut bases()).expect("applies");
@@ -157,19 +109,12 @@ fn replacing_content_wins_over_concurrent_edits_in_any_order() {
 #[test]
 fn conversation_is_recorded_per_thread() {
     let mut family = Family::new();
-    let session = SessionRef {
-        agent: "claude-code".into(),
-        id: "s1".into(),
-    };
+    let session = SessionRef { agent: "claude-code".into(), id: "s1".into() };
     for line in ["{\"type\":\"user\"}", "{\"type\":\"assistant\"}"] {
         write_on_head(
             &mut family,
             DAEMON,
-            Op::Conv(ConvOp::Native {
-                session: session.clone(),
-                file: SessionFile::Main,
-                line: line.into(),
-            }),
+            Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: line.into() }),
         );
     }
     write_on_head(&mut family, DAEMON, Op::Conv(ConvOp::Title("Fix the parser".into())));
@@ -190,18 +135,9 @@ fn missing_base_text_rejects_without_changes() {
         Author::User,
         0,
         family.thread_head(THREAD),
-        Op::Text {
-            inode: main,
-            op: TextOp::Insert {
-                pos: 0,
-                content: "x".into(),
-            },
-        },
+        Op::Text { inode: main, op: TextOp::Insert { pos: 0, content: "x".into() } },
     );
-    assert_eq!(
-        family.apply(delta.clone(), &mut HashMap::new()),
-        Err(LogError::MissingBase(oid(1)))
-    );
+    assert_eq!(family.apply(delta.clone(), &mut HashMap::new()), Err(LogError::MissingBase(oid(1))));
     assert_eq!(family.log().len(), before);
     assert!(!family.graph().contains(delta.span.first()));
     assert_eq!(family.apply(delta, &mut bases()), Ok(Applied::New));
@@ -211,14 +147,7 @@ fn missing_base_text_rejects_without_changes() {
 fn replaying_the_log_reproduces_the_family() {
     let mut family = Family::new();
     let main = create_main(&mut family);
-    write_on_head(
-        &mut family,
-        CHECKOUT_A,
-        Op::Text {
-            inode: main,
-            op: TextOp::Delete { pos: 0, len: 3 },
-        },
-    );
+    write_on_head(&mut family, CHECKOUT_A, Op::Text { inode: main, op: TextOp::Delete { pos: 0, len: 3 } });
     let mut replica = Family::new();
     for delta in family.log() {
         replica.apply(delta.clone(), &mut bases()).expect("replays");
@@ -237,31 +166,14 @@ fn replaying_the_log_reproduces_the_family() {
 fn edits_interleaved_with_conversation_stay_fast() {
     let mut family = Family::new();
     let main = create_main(&mut family);
-    let session = SessionRef {
-        agent: "claude-code".into(),
-        id: "s".into(),
-    };
+    let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
     let started = std::time::Instant::now();
     for round in 0..4000 {
-        write_on_head(
-            &mut family,
-            CHECKOUT_A,
-            Op::Text {
-                inode: main,
-                op: TextOp::Insert {
-                    pos: round,
-                    content: "x".into(),
-                },
-            },
-        );
+        write_on_head(&mut family, CHECKOUT_A, Op::Text { inode: main, op: TextOp::Insert { pos: round, content: "x".into() } });
         write_on_head(
             &mut family,
             DAEMON,
-            Op::Conv(ConvOp::Native {
-                session: session.clone(),
-                file: SessionFile::Main,
-                line: "{}".into(),
-            }),
+            Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: "{}".into() }),
         );
     }
     assert!(text(&family, main).starts_with(&"x".repeat(4000)));
@@ -284,10 +196,7 @@ fn say(family: &mut Family, thread: ThreadId, line: &str) -> Delta {
         thread,
         head,
         Op::Conv(ConvOp::Native {
-            session: SessionRef {
-                agent: "claude-code".into(),
-                id: format!("s{}", thread.0),
-            },
+            session: SessionRef { agent: "claude-code".into(), id: format!("s{}", thread.0) },
             file: SessionFile::Main,
             line: line.into(),
         }),
@@ -296,19 +205,7 @@ fn say(family: &mut Family, thread: ThreadId, line: &str) -> Delta {
 
 fn insert(family: &mut Family, actor: ActorId, thread: ThreadId, inode: InodeId, pos: usize, content: &str) -> Delta {
     let head = family.thread_head(thread);
-    on_thread(
-        family,
-        actor,
-        thread,
-        head,
-        Op::Text {
-            inode,
-            op: TextOp::Insert {
-                pos,
-                content: content.into(),
-            },
-        },
-    )
+    on_thread(family, actor, thread, head, Op::Text { inode, op: TextOp::Insert { pos, content: content.into() } })
 }
 
 fn lines(family: &Family, thread: ThreadId) -> Vec<(String, silt_log::HistorySource)> {
@@ -347,20 +244,11 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
     say(&mut family, FORK, "fork 1");
     insert(&mut family, ActorId(9), FORK, main, 0, "// fork\n");
 
-    assert_eq!(
-        lines(&family, FORK),
-        vec![("source 1".into(), Inherited), ("fork 1".into(), Own)]
-    );
+    assert_eq!(lines(&family, FORK), vec![("source 1".into(), Inherited), ("fork 1".into(), Own)]);
     assert_eq!(view_text(&family, FORK, main), "// fork\n// a\nfn main() {}\n");
     assert_eq!(view_text(&family, THREAD, main), "// a\n// a2\nfn main() {}\n");
 
-    let parents: Frontier = family
-        .thread_head(FORK)
-        .ids()
-        .iter()
-        .chain(family.thread_head(THREAD).ids())
-        .copied()
-        .collect();
+    let parents: Frontier = family.thread_head(FORK).ids().iter().chain(family.thread_head(THREAD).ids()).copied().collect();
     on_thread(&mut family, DAEMON.derive(FORK.0), FORK, parents, Op::Merge { from: THREAD, mr: None });
     assert_eq!(
         lines(&family, FORK),
@@ -377,13 +265,7 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
 }
 
 fn pull(family: &mut Family, into: ThreadId, from: ThreadId) {
-    let parents: Frontier = family
-        .thread_head(into)
-        .ids()
-        .iter()
-        .chain(family.thread_head(from).ids())
-        .copied()
-        .collect();
+    let parents: Frontier = family.thread_head(into).ids().iter().chain(family.thread_head(from).ids()).copied().collect();
     on_thread(family, DAEMON.derive(into.0), into, parents, Op::Merge { from, mr: None });
 }
 
@@ -434,8 +316,15 @@ fn a_forks_new_content_and_mode_stay_in_the_fork() {
     let head = family.thread_head(THREAD);
     on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
     let head = family.thread_head(FORK);
-    let replaced = on_thread(&mut family, CHECKOUT_B, FORK, head, Op::SetContent { inode: main, content: Content::Blob(BlobHash([7; 32])) });
-    on_thread(&mut family, CHECKOUT_B, FORK, Frontier::single(replaced.span.last()), Op::SetExecutable { inode: main, executable: true });
+    let replaced =
+        on_thread(&mut family, CHECKOUT_B, FORK, head, Op::SetContent { inode: main, content: Content::Blob(BlobHash([7; 32])) });
+    on_thread(
+        &mut family,
+        CHECKOUT_B,
+        FORK,
+        Frontier::single(replaced.span.last()),
+        Op::SetExecutable { inode: main, executable: true },
+    );
 
     let source = family.thread_view(THREAD);
     assert_eq!(source.file(main), Some(FileView::GitText(oid(1))), "the source keeps its content");
@@ -486,11 +375,7 @@ fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
         ActorId(9),
         FORK,
         head,
-        Op::Mr(MrOp::Opened {
-            target: THREAD,
-            title: "Add a comment".into(),
-            summary: String::new(),
-        }),
+        Op::Mr(MrOp::Opened { target: THREAD, title: "Add a comment".into(), summary: String::new() }),
     );
     let mr = opened.span.first();
     let head: Frontier = family.thread_head(THREAD).ids().iter().copied().chain([mr]).collect();
@@ -500,8 +385,14 @@ fn concurrent_decisions_titles_and_comments_read_alike_in_any_order() {
         concurrent(21, Op::Mr(MrOp::Declined { mr, reason: "no".into() })),
         concurrent(22, Op::Conv(ConvOp::Title("one".into()))),
         concurrent(23, Op::Conv(ConvOp::Title("two".into()))),
-        concurrent(24, Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "first".into(), by: "a".into() })),
-        concurrent(25, Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "second".into(), by: "b".into() })),
+        concurrent(
+            24,
+            Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "first".into(), by: "a".into() }),
+        ),
+        concurrent(
+            25,
+            Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: mr }, text: "second".into(), by: "b".into() }),
+        ),
     ];
     let read = |order: &mut dyn Iterator<Item = &Delta>| {
         let mut replica = family.clone();
@@ -528,11 +419,7 @@ fn merge_requests_open_and_resolve_once() {
         ActorId(9),
         FORK,
         head,
-        Op::Mr(MrOp::Opened {
-            target: THREAD,
-            title: "Add a comment".into(),
-            summary: "One line.".into(),
-        }),
+        Op::Mr(MrOp::Opened { target: THREAD, title: "Add a comment".into(), summary: "One line.".into() }),
     );
     let mr = opened.span.first();
     assert_eq!(family.merge_requests()[0].status, MrStatus::Open);
@@ -543,16 +430,7 @@ fn merge_requests_open_and_resolve_once() {
     let head = family.thread_head(THREAD);
     on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, head, Op::Mr(MrOp::Approved { mr }));
     let head = family.thread_head(THREAD);
-    on_thread(
-        &mut family,
-        DAEMON.derive(THREAD.0),
-        THREAD,
-        head,
-        Op::Mr(MrOp::Declined {
-            mr,
-            reason: "too late".into(),
-        }),
-    );
+    on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, head, Op::Mr(MrOp::Declined { mr, reason: "too late".into() }));
     assert_eq!(family.merge_requests()[0].status, MrStatus::Approved);
     assert_eq!(view_text(&family, THREAD, main), "// fork\nfn main() {}\n");
     assert_eq!(view_text(&family, FORK, main), "// fork\nfn main() {}\n");

@@ -14,10 +14,7 @@ fn oid(byte: u8) -> GitOid {
 }
 
 fn bases() -> HashMap<GitOid, String> {
-    HashMap::from([
-        (oid(1), "fn main() {\n    println!(\"hi\");\n}\n".to_owned()),
-        (oid(2), "# readme\n".to_owned()),
-    ])
+    HashMap::from([(oid(1), "fn main() {\n    println!(\"hi\");\n}\n".to_owned()), (oid(2), "# readme\n".to_owned())])
 }
 
 struct Checkout {
@@ -31,10 +28,7 @@ impl Checkout {
     }
 
     fn on_thread(actor: u128, thread: ThreadId, family: &Family) -> Self {
-        let mut checkout = Self {
-            bridge: Bridge::new(ActorId(actor), thread, BTreeMap::new()),
-            disk: BTreeMap::new(),
-        };
+        let mut checkout = Self { bridge: Bridge::new(ActorId(actor), thread, BTreeMap::new()), disk: BTreeMap::new() };
         let inodes = family.tree().inodes();
         let actions = checkout.bridge.reconcile(family, &mut bases(), inodes);
         checkout.perform(actions);
@@ -57,21 +51,14 @@ impl Checkout {
             Some(text) => self.disk.insert(path.to_owned(), text.to_owned()),
             None => self.disk.remove(path),
         };
-        let ingested = self
-            .bridge
-            .ingest(family, &mut bases(), path, text.map(Self::file), &Author::User, 0)
-            .expect("ingests");
+        let ingested = self.bridge.ingest(family, &mut bases(), path, text.map(Self::file), &Author::User, 0).expect("ingests");
         self.perform(ingested.actions);
         ingested.deltas
     }
 
     /// Deltas from elsewhere were applied to the family.
     fn sync(&mut self, family: &Family, deltas: &[Delta]) {
-        let inodes: Vec<_> = deltas
-            .iter()
-            .filter(|delta| !self.bridge.is_own(delta))
-            .filter_map(touched_inode)
-            .collect();
+        let inodes: Vec<_> = deltas.iter().filter(|delta| !self.bridge.is_own(delta)).filter_map(touched_inode).collect();
         let actions = self.bridge.reconcile(family, &mut bases(), inodes);
         self.perform(actions);
     }
@@ -79,27 +66,14 @@ impl Checkout {
     fn perform(&mut self, actions: Vec<DiskAction>) {
         for action in actions {
             match action {
-                DiskAction::Write {
-                    path,
-                    inode,
-                    content: DiskContent::Text(text),
-                    version,
-                    moved_from,
-                    ..
-                } => {
+                DiskAction::Write { path, inode, content: DiskContent::Text(text), version, moved_from, .. } => {
                     if let Some(old) = moved_from {
                         self.bridge.record_removed(&old);
                         self.disk.remove(&old);
                     }
                     self.bridge.record_written(
                         &path,
-                        DiskEntry {
-                            inode,
-                            hash: content_hash(&text),
-                            size: text.len() as u64,
-                            mtime_ns: 0,
-                            version,
-                        },
+                        DiskEntry { inode, hash: content_hash(&text), size: text.len() as u64, mtime_ns: 0, version },
                     );
                     self.disk.insert(path, text);
                 }
@@ -122,13 +96,7 @@ fn touched_inode(delta: &Delta) -> Option<silt_crdt::InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_)
-        | Op::Git(_)
-        | Op::Lease { .. }
-        | Op::Fork { .. }
-        | Op::Merge { .. }
-        | Op::Mr(_)
-        | Op::Comment(_) => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => None,
     }
 }
 
@@ -149,16 +117,8 @@ fn imported_family() -> Family {
         THREAD,
         Some((oid(9), Some("main".into()))),
         &[
-            ImportFile {
-                path: "README.md".into(),
-                oid: oid(2),
-                executable: false,
-            },
-            ImportFile {
-                path: "src/main.rs".into(),
-                oid: oid(1),
-                executable: false,
-            },
+            ImportFile { path: "README.md".into(), oid: oid(2), executable: false },
+            ImportFile { path: "src/main.rs".into(), oid: oid(1), executable: false },
         ],
         0,
     )
@@ -253,14 +213,8 @@ fn a_fork_sees_its_own_edits_and_the_source_does_not() {
     let mut family = imported_family();
     let mut source = Checkout::new(1, &family);
     let fork = ThreadId(2);
-    let fork_delta = family.delta(
-        ActorId(100),
-        fork,
-        Author::User,
-        0,
-        family.thread_head(THREAD),
-        silt_log::Op::Fork { from: THREAD },
-    );
+    let fork_delta =
+        family.delta(ActorId(100), fork, Author::User, 0, family.thread_head(THREAD), silt_log::Op::Fork { from: THREAD });
     family.apply(fork_delta, &mut bases()).expect("forks");
     let mut forked = Checkout::on_thread(3, fork, &family);
     assert_eq!(forked.disk["README.md"], "# readme\n");
@@ -272,7 +226,10 @@ fn a_fork_sees_its_own_edits_and_the_source_does_not() {
     let from_source = source.edit(&mut family, "src/new.rs", Some("// source work\n"));
     forked.sync(&family, &from_source);
     assert!(!forked.disk.contains_key("src/new.rs"), "the fork doesn't see later source edits");
-    assert_eq!(family.thread_view(fork).file(family.tree().paths()["README.md"]), Some(FileView::Text("# readme\nfork work\n".into())));
+    assert_eq!(
+        family.thread_view(fork).file(family.tree().paths()["README.md"]),
+        Some(FileView::Text("# readme\nfork work\n".into()))
+    );
 }
 
 #[test]
@@ -280,7 +237,8 @@ fn an_edit_without_a_record_of_the_disk_does_not_take_in_a_forks_work() {
     let mut family = imported_family();
     let mut source = Checkout::new(1, &family);
     let fork = ThreadId(2);
-    let fork_delta = family.delta(ActorId(100), fork, Author::User, 0, family.thread_head(THREAD), silt_log::Op::Fork { from: THREAD });
+    let fork_delta =
+        family.delta(ActorId(100), fork, Author::User, 0, family.thread_head(THREAD), silt_log::Op::Fork { from: THREAD });
     family.apply(fork_delta, &mut bases()).expect("forks");
     let mut forked = Checkout::on_thread(3, fork, &family);
     forked.edit(&mut family, "README.md", Some("# readme\nfork work\n"));
@@ -299,20 +257,10 @@ fn an_edit_without_a_record_of_the_disk_does_not_take_in_a_forks_work() {
 #[test]
 fn a_binary_file_moved_elsewhere_is_written_before_it_leaves_its_old_path() {
     let mut family = Family::new();
-    let logo = ImportFile {
-        path: "logo.png".into(),
-        oid: oid(3),
-        executable: false,
-    };
+    let logo = ImportFile { path: "logo.png".into(), oid: oid(3), executable: false };
     import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[logo], 0).expect("imports");
     let inode = family.tree().paths()["logo.png"];
-    let entry = DiskEntry {
-        inode,
-        hash: [3; 32],
-        size: 3,
-        mtime_ns: 0,
-        version: family.thread_head(THREAD),
-    };
+    let entry = DiskEntry { inode, hash: [3; 32], size: 3, mtime_ns: 0, version: family.thread_head(THREAD) };
     let bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::from([("logo.png".to_owned(), entry)]));
     let moved = family.delta(
         ActorId(2),
@@ -347,11 +295,7 @@ fn a_file_replaced_by_a_directory_keeps_the_directorys_files() {
 #[test]
 fn a_binary_git_file_that_becomes_text_is_replaced() {
     let mut family = Family::new();
-    let logo = ImportFile {
-        path: "logo.png".into(),
-        oid: oid(3),
-        executable: false,
-    };
+    let logo = ImportFile { path: "logo.png".into(), oid: oid(3), executable: false };
     import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[logo], 0).expect("imports");
     let mut bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::new());
     bridge

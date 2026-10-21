@@ -28,15 +28,18 @@ pub(crate) struct SessionState<'a> {
 /// The author of an edit noticed at `noticed`, given the checkout's
 /// sessions and, if an agent is running that hasn't written its session
 /// yet, that agent.
-pub(crate) fn author<'a>(importing: bool, sessions: &[SessionState<'a>], pending_agent: Option<&str>, noticed: Instant) -> Author {
+pub(crate) fn author<'a>(
+    importing: bool,
+    sessions: &[SessionState<'a>],
+    pending_agent: Option<&str>,
+    noticed: Instant,
+) -> Author {
     if importing {
         return Author::Import;
     }
     let settling = |at: Instant| at.max(noticed) - at.min(noticed) < MARK_SETTLE;
     let tool_of = |session: &SessionState<'a>| -> Option<&'a str> {
-        session
-            .open_tool
-            .or_else(|| session.closed_tool.filter(|(_, at)| settling(*at)).map(|(tool, _)| tool))
+        session.open_tool.or_else(|| session.closed_tool.filter(|(_, at)| settling(*at)).map(|(tool, _)| tool))
     };
     if let Some((session, tool)) = sessions.iter().find_map(|session| Some((session, tool_of(session)?))) {
         return Author::Agent {
@@ -53,18 +56,10 @@ pub(crate) fn author<'a>(importing: bool, sessions: &[SessionState<'a>], pending
         Capture::Snapshot => session.in_turn || session.turn_closed.is_some_and(settling) || session.live,
     };
     if let Some(session) = sessions.iter().find(in_turn) {
-        return Author::Agent {
-            agent: session.agent.to_owned(),
-            session: session.session.to_owned(),
-            tool_use_id: None,
-        };
+        return Author::Agent { agent: session.agent.to_owned(), session: session.session.to_owned(), tool_use_id: None };
     }
     match pending_agent {
-        Some(agent) => Author::Agent {
-            agent: agent.to_owned(),
-            session: String::new(),
-            tool_use_id: None,
-        },
+        Some(agent) => Author::Agent { agent: agent.to_owned(), session: String::new(), tool_use_id: None },
         None => Author::User,
     }
 }
@@ -87,11 +82,7 @@ mod tests {
     }
 
     fn agent(tool: Option<&str>) -> Author {
-        Author::Agent {
-            agent: "codex".into(),
-            session: "s1".into(),
-            tool_use_id: tool.map(str::to_owned),
-        }
+        Author::Agent { agent: "codex".into(), session: "s1".into(), tool_use_id: tool.map(str::to_owned) }
     }
 
     #[test]
@@ -120,11 +111,7 @@ mod tests {
     #[test]
     fn a_pending_agent_or_an_import_or_else_the_user() {
         let now = Instant::now();
-        let pending = Author::Agent {
-            agent: "gemini-cli".into(),
-            session: String::new(),
-            tool_use_id: None,
-        };
+        let pending = Author::Agent { agent: "gemini-cli".into(), session: String::new(), tool_use_id: None };
         assert_eq!(author(false, &[quiet()], Some("gemini-cli"), now), pending);
         assert_eq!(author(true, &[SessionState { open_tool: Some("t1"), ..quiet() }], None, now), Author::Import);
         assert_eq!(author(false, &[quiet()], None, now), Author::User);

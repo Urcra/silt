@@ -39,7 +39,8 @@ to see who else is changing a path. silt_skills lists the repository's skills an
 
 /// The tools' names, descriptions and input schemas.
 pub fn tools() -> Value {
-    let thread = json!({"type": "string", "description": "Thread id or its last 12 characters; defaults to this session's thread"});
+    let thread =
+        json!({"type": "string", "description": "Thread id or its last 12 characters; defaults to this session's thread"});
     let page = |required: &[&str]| {
         json!({
             "type": "object",
@@ -198,10 +199,7 @@ mod tests {
         }
 
         fn prompts(&mut self) -> Vec<Prompt> {
-            vec![Prompt {
-                name: "land".into(),
-                description: "Land the branch".into(),
-            }]
+            vec![Prompt { name: "land".into(), description: "Land the branch".into() }]
         }
 
         fn prompt(&mut self, name: &str) -> Result<String, String> {
@@ -212,11 +210,7 @@ mod tests {
     fn exchange(lines: &[&str]) -> Vec<Value> {
         let mut output = Vec::new();
         serve(lines.join("\n").as_bytes(), &mut output, &mut Echo).expect("serves");
-        String::from_utf8(output)
-            .expect("utf-8")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("json"))
-            .collect()
+        String::from_utf8(output).expect("utf-8").lines().map(|line| serde_json::from_str(line).expect("json")).collect()
     }
 
     #[test]

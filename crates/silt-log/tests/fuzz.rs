@@ -84,11 +84,7 @@ fn step() -> impl Strategy<Value = Step> {
 
 /// Picks one of `taken` by `index`, or an id nothing has when there are none.
 fn pick(taken: &[DeltaId], index: usize) -> DeltaId {
-    if taken.is_empty() {
-        DeltaId::new(ActorId(99), Lamport(index as u64))
-    } else {
-        taken[index % taken.len()]
-    }
+    if taken.is_empty() { DeltaId::new(ActorId(99), Lamport(index as u64)) } else { taken[index % taken.len()] }
 }
 
 fn delta(family: &Family, taken: &[DeltaId], inodes: &[DeltaId], step: &Step) -> Delta {
@@ -108,20 +104,16 @@ fn delta(family: &Family, taken: &[DeltaId], inodes: &[DeltaId], step: &Step) ->
             content: if *git { Content::GitText(GitOid([1; 20])) } else { Content::Empty },
             executable: false,
         },
-        OpChoice::Move { inode: moved, parent: at, name } => Op::Move {
-            inode: inode(*moved),
-            parent: parent(at),
-            name: NAMES[*name].to_owned(),
-        },
+        OpChoice::Move { inode: moved, parent: at, name } => {
+            Op::Move { inode: inode(*moved), parent: parent(at), name: NAMES[*name].to_owned() }
+        }
         OpChoice::Delete { inode: deleted } => Op::Delete { inode: inode(*deleted) },
-        OpChoice::Insert { inode: edited, pos, text } => Op::Text {
-            inode: inode(*edited),
-            op: TextOp::Insert { pos: *pos, content: text.clone() },
-        },
-        OpChoice::Remove { inode: edited, pos, len } => Op::Text {
-            inode: inode(*edited),
-            op: TextOp::Delete { pos: *pos, len: *len },
-        },
+        OpChoice::Insert { inode: edited, pos, text } => {
+            Op::Text { inode: inode(*edited), op: TextOp::Insert { pos: *pos, content: text.clone() } }
+        }
+        OpChoice::Remove { inode: edited, pos, len } => {
+            Op::Text { inode: inode(*edited), op: TextOp::Delete { pos: *pos, len: *len } }
+        }
         OpChoice::Executable { inode: changed } => Op::SetExecutable { inode: inode(*changed), executable: true },
         OpChoice::Title(title) => Op::Conv(ConvOp::Title(title.clone())),
         OpChoice::Fork => Op::Fork { from: other },

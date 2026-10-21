@@ -5,11 +5,7 @@ use similar::{Algorithm, DiffOp, capture_diff_slices_deadline};
 /// larger, still correct one: a big file changed throughout would otherwise
 /// hold up the daemon. The browser has no clock to read, so it doesn't stop.
 fn diff_deadline() -> Option<std::time::Instant> {
-    if cfg!(target_arch = "wasm32") {
-        None
-    } else {
-        Some(std::time::Instant::now() + std::time::Duration::from_secs(1))
-    }
+    if cfg!(target_arch = "wasm32") { None } else { Some(std::time::Instant::now() + std::time::Duration::from_secs(1)) }
 }
 
 /// Edits turning `old` into `new`, to be applied in order; positions count
@@ -38,10 +34,7 @@ pub fn text_edits(old: &str, new: &str) -> Vec<TextOp> {
         let removed = &old_chars[old_range.clone()];
         let added = &new_chars[new_range];
         let prefix = common_prefix(removed, added);
-        let suffix = common_prefix(
-            removed[prefix..].iter().rev(),
-            added[prefix..].iter().rev(),
-        );
+        let suffix = common_prefix(removed[prefix..].iter().rev(), added[prefix..].iter().rev());
         let (prefix, suffix) = whole_tokens(removed, added, prefix, suffix);
         hunks.push((
             old_range.start + prefix,
@@ -112,10 +105,7 @@ fn char_starts(lines: &[&str]) -> Vec<usize> {
     starts
 }
 
-fn common_prefix<'a>(
-    a: impl IntoIterator<Item = &'a char>,
-    b: impl IntoIterator<Item = &'a char>,
-) -> usize {
+fn common_prefix<'a>(a: impl IntoIterator<Item = &'a char>, b: impl IntoIterator<Item = &'a char>) -> usize {
     a.into_iter().zip(b).take_while(|(x, y)| x == y).count()
 }
 
@@ -143,16 +133,7 @@ mod tests {
     #[test]
     fn a_one_char_change_is_one_char() {
         let ops = text_edits("fn main() {}\nlet x = 1;\n", "fn main() {}\nlet x = 2;\n");
-        assert_eq!(
-            ops,
-            vec![
-                TextOp::Delete { pos: 21, len: 1 },
-                TextOp::Insert {
-                    pos: 21,
-                    content: "2".into()
-                }
-            ]
-        );
+        assert_eq!(ops, vec![TextOp::Delete { pos: 21, len: 1 }, TextOp::Insert { pos: 21, content: "2".into() }]);
     }
 
     #[test]
@@ -184,7 +165,8 @@ mod tests {
         let ops = text_edits(old, new);
         assert_eq!(apply(old, &ops), new);
         assert!(
-            ops.iter().any(|op| matches!(op, TextOp::Insert { content, .. } if content == "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
+            ops.iter()
+                .any(|op| matches!(op, TextOp::Insert { content, .. } if content == "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
             "{ops:?}"
         );
         let ops = text_edits("let x = 1;\n", "let y = 1;\n");

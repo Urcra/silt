@@ -26,12 +26,7 @@ impl Repo {
     /// through alternates, kept safe from `git gc` by `refs/silt/threads/<id>`
     /// in the source. A finished checkout of `id` is returned as it is; what
     /// an interrupted attempt left is cleared and made again.
-    pub fn create_managed_checkout(
-        &self,
-        id: &str,
-        base: GitOid,
-        path: Option<PathBuf>,
-    ) -> Result<ManagedCheckout, GitError> {
+    pub fn create_managed_checkout(&self, id: &str, base: GitOid, path: Option<PathBuf>) -> Result<ManagedCheckout, GitError> {
         let common_dir = self.common_dir();
         let path = path.unwrap_or_else(|| self.managed_checkout_path(id));
         let git_dir = self.managed_git_dir(id);
@@ -55,11 +50,7 @@ impl Repo {
 
         fs::create_dir_all(git_dir.parent().expect("clone dir has a parent"))?;
         fs::create_dir_all(&path)?;
-        run_git(
-            &path,
-            &["init", "-q", &format!("--separate-git-dir={}", git_dir.display())],
-            None,
-        )?;
+        run_git(&path, &["init", "-q", &format!("--separate-git-dir={}", git_dir.display())], None)?;
         fs::write(
             git_dir.join("objects").join("info").join("alternates"),
             format!("{}\n", common_dir.join("objects").display()),
@@ -74,10 +65,7 @@ impl Repo {
             run_git(&git_dir, &["remote", "add", "origin", &origin], None)?;
         }
         run_git(&git_dir, &["remote", "add", "local", &common_dir.to_string_lossy()], None)?;
-        config(
-            "remote.local.receivepack",
-            "git -c receive.denyCurrentBranch=updateInstead receive-pack",
-        )?;
+        config("remote.local.receivepack", "git -c receive.denyCurrentBranch=updateInstead receive-pack")?;
         let base = base.to_string();
         run_git(&path, &["update-ref", "--no-deref", "HEAD", &base], None)?;
         run_git(&path, &["-c", "checkout.workers=8", "reset", "-q", "--hard", &base], None)?;

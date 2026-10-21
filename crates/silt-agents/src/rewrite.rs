@@ -38,7 +38,9 @@ impl RecordedSession {
     /// Refuses a session whose id, subagent names or side files would lead
     /// outside its agent's session store.
     pub fn check(&self) -> std::io::Result<()> {
-        let refuse = |what: &str| Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("the recorded session has an unsafe {what}")));
+        let refuse = |what: &str| {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("the recorded session has an unsafe {what}")))
+        };
         if !is_safe_id(&self.id) {
             return refuse("id");
         }
@@ -57,9 +59,7 @@ impl RecordedSession {
 pub fn is_side_file_name(name: &str) -> bool {
     !name.is_empty()
         && !name.ends_with('/')
-        && std::path::Path::new(name)
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        && std::path::Path::new(name).components().all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// Replaces the paths and ids a session was recorded under with new ones.
@@ -90,10 +90,7 @@ impl Rewrites {
         add(&session.former_cwds, new_cwd);
         add(&session.former_roots, new_root);
         add(&session.former_ids, &session.id);
-        Self {
-            pairs,
-            matcher: OnceLock::new(),
-        }
+        Self { pairs, matcher: OnceLock::new() }
     }
 
     pub fn with(mut self, old: &str, new: &str) -> Self {
@@ -158,10 +155,7 @@ impl Matcher {
             .match_kind(MatchKind::Standard)
             .build(pairs.iter().map(|(old, _)| json_escaped(old)))
             .expect("rewrites are few and short enough for an automaton");
-        Self {
-            automaton,
-            replacements: pairs.into_iter().map(|(_, new)| json_escaped(new)).collect(),
-        }
+        Self { automaton, replacements: pairs.into_iter().map(|(_, new)| json_escaped(new)).collect() }
     }
 }
 

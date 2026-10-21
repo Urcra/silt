@@ -55,15 +55,31 @@ pub fn default_hidden() -> Vec<PathBuf> {
 /// themselves, nothing that could carry a credential or a socket's address.
 pub fn safe_environment() -> Vec<(OsString, OsString)> {
     const KEPT: [&str; 22] = [
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TERM", "TZ", "COLORTERM", "CARGO_HOME",
-        "RUSTUP_HOME", "GOPATH", "GOROOT", "JAVA_HOME", "VIRTUAL_ENV", "CONDA_PREFIX", "NVM_DIR", "PNPM_HOME",
-        "NODE_PATH", "PYTHONPATH", "DENO_DIR",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "TERM",
+        "TZ",
+        "COLORTERM",
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "GOPATH",
+        "GOROOT",
+        "JAVA_HOME",
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "NVM_DIR",
+        "PNPM_HOME",
+        "NODE_PATH",
+        "PYTHONPATH",
+        "DENO_DIR",
     ];
     std::env::vars_os()
-        .filter(|(name, _)| {
-            name.to_str()
-                .is_some_and(|name| KEPT.contains(&name) || name.starts_with("LC_"))
-        })
+        .filter(|(name, _)| name.to_str().is_some_and(|name| KEPT.contains(&name) || name.starts_with("LC_")))
         .collect()
 }
 
@@ -126,8 +142,7 @@ mod linux {
 
     use rustix::fs::CWD;
     use rustix::mount::{
-        MountFlags, MountPropagationFlags, MoveMountFlags, OpenTreeFlags, mount, mount_bind, mount_change, move_mount,
-        open_tree,
+        MountFlags, MountPropagationFlags, MoveMountFlags, OpenTreeFlags, mount, mount_bind, mount_change, move_mount, open_tree,
     };
     use rustix::thread::UnshareFlags;
 
@@ -140,10 +155,7 @@ mod linux {
 
     fn mount_error(what: impl Into<String>) -> impl FnOnce(rustix::io::Errno) -> SandboxError {
         let what = what.into();
-        move |error| SandboxError::Setup {
-            what,
-            source: error.into(),
-        }
+        move |error| SandboxError::Setup { what, source: error.into() }
     }
 
     pub(super) fn run(sandbox: &Sandbox, init: &[OsString], command: &[String]) -> Result<i32, SandboxError> {
@@ -215,15 +227,14 @@ mod linux {
             .or_else(|_| std::env::set_current_dir(fallback))
             .map_err(setup("cannot enter the working directory"))?;
 
-        let (program, args) = init.split_first().ok_or_else(|| setup("no init command")(std::io::ErrorKind::InvalidInput.into()))?;
+        let (program, args) =
+            init.split_first().ok_or_else(|| setup("no init command")(std::io::ErrorKind::InvalidInput.into()))?;
         let mut child = std::process::Command::new(program);
         child.args(args).arg("--").args(command);
         if let Some(environment) = environment {
             child.env_clear().envs(environment);
         }
-        let status = child
-            .status()
-            .map_err(setup(format!("cannot start {}", program.to_string_lossy())))?;
+        let status = child.status().map_err(setup(format!("cannot start {}", program.to_string_lossy())))?;
         Ok(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
     }
 
@@ -234,13 +245,7 @@ mod linux {
         // Its own /proc shows only the sandbox's processes. Some kernels
         // refuse a new one while parts of the old are covered; the process
         // namespace still keeps signals inside then.
-        let _ = mount(
-            "proc",
-            "/proc",
-            "proc",
-            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
-            c"",
-        );
+        let _ = mount("proc", "/proc", "proc", MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC, c"");
         if let Err(error) = rustix::thread::set_no_new_privs(true) {
             return mount_error("cannot forbid gaining privileges")(error);
         }
@@ -288,12 +293,7 @@ mod linux {
     /// Makes the mount at `path`, and every mount under it, read-only.
     fn read_only(path: &Path) -> Result<(), SandboxError> {
         let target = CString::new(path.as_os_str().as_bytes()).map_err(|error| setup("bad path")(error.into()))?;
-        let attr = MountAttr {
-            attr_set: MOUNT_ATTR_RDONLY,
-            attr_clr: 0,
-            propagation: 0,
-            userns_fd: 0,
-        };
+        let attr = MountAttr { attr_set: MOUNT_ATTR_RDONLY, attr_clr: 0, propagation: 0, userns_fd: 0 };
         #[expect(unsafe_code, reason = "mount_setattr has no safe wrapper")]
         // SAFETY: the path is NUL-terminated and `attr` is a valid
         // `mount_attr` whose size is passed along.
@@ -334,10 +334,7 @@ mod tests {
 
     #[test]
     fn the_environment_keeps_tools_and_drops_credentials() {
-        let names: Vec<String> = safe_environment()
-            .into_iter()
-            .filter_map(|(name, _)| name.into_string().ok())
-            .collect();
+        let names: Vec<String> = safe_environment().into_iter().filter_map(|(name, _)| name.into_string().ok()).collect();
         assert!(names.iter().all(|name| !name.contains("KEY") && !name.contains("TOKEN") && name != "SSH_AUTH_SOCK"));
     }
 }

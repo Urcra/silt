@@ -24,13 +24,7 @@ pub struct Filters<'repo> {
 impl<'repo> Filters<'repo> {
     pub(crate) fn new(repo: &'repo gix::Repository, root: &Path, use_git_cli: bool) -> Result<Self, GitError> {
         let (pipeline, index) = repo.filter_pipeline(None).map_err(GitError::gix)?;
-        Ok(Self {
-            pipeline,
-            index,
-            root: root.to_owned(),
-            objects: repo.common_dir().join("objects"),
-            use_git_cli,
-        })
+        Ok(Self { pipeline, index, root: root.to_owned(), objects: repo.common_dir().join("objects"), use_git_cli })
     }
 
     /// Runs git with the objects it writes going to a throwaway directory:
@@ -52,10 +46,7 @@ impl<'repo> Filters<'repo> {
             let oid = String::from_utf8_lossy(&oid).trim().to_owned();
             return self.git_scratch(scratch.path(), &["cat-file", "blob", &oid], None);
         }
-        let mut outcome = self
-            .pipeline
-            .convert_to_git(worktree, Path::new(path), &self.index)
-            .map_err(GitError::gix)?;
+        let mut outcome = self.pipeline.convert_to_git(worktree, Path::new(path), &self.index).map_err(GitError::gix)?;
         let mut clean = Vec::with_capacity(worktree.len());
         outcome.read_to_end(&mut clean)?;
         Ok(clean)
@@ -69,14 +60,8 @@ impl<'repo> Filters<'repo> {
             let oid = String::from_utf8_lossy(&oid).trim().to_owned();
             return self.git_scratch(scratch.path(), &["cat-file", "--filters", &format!("--path={path}"), &oid], None);
         }
-        let options = to_worktree::Options {
-            can_delay: Delay::Forbid,
-            unknown_encoding: to_worktree::UnknownEncoding::Fail,
-        };
-        let mut outcome = self
-            .pipeline
-            .convert_to_worktree(clean, path.as_bytes().as_bstr(), options)
-            .map_err(GitError::gix)?;
+        let options = to_worktree::Options { can_delay: Delay::Forbid, unknown_encoding: to_worktree::UnknownEncoding::Fail };
+        let mut outcome = self.pipeline.convert_to_worktree(clean, path.as_bytes().as_bstr(), options).map_err(GitError::gix)?;
         let mut smudged = Vec::with_capacity(clean.len());
         outcome.read_to_end(&mut smudged)?;
         Ok(smudged)
@@ -88,21 +73,16 @@ impl<'repo> Filters<'repo> {
 /// leaves out ignored directories such as `node_modules`.
 pub(crate) fn uses_attributes_gix_gets_wrong(root: &Path, git_dir: &Path) -> bool {
     let mut candidates = vec![git_dir.join("info").join("attributes")];
-    let listed = run_git(
-        root,
-        &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ":(glob)**/.gitattributes"],
-        None,
-    )
-    .unwrap_or_default();
+    let listed =
+        run_git(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ":(glob)**/.gitattributes"], None)
+            .unwrap_or_default();
     candidates.extend(
         listed
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
             .map(|path| root.join(String::from_utf8_lossy(path).as_ref())),
     );
-    candidates
-        .into_iter()
-        .any(|path| fs::read_to_string(path).is_ok_and(|text| sets_attributes_gix_gets_wrong(&text)))
+    candidates.into_iter().any(|path| fs::read_to_string(path).is_ok_and(|text| sets_attributes_gix_gets_wrong(&text)))
 }
 
 /// Whether a rule of an attributes file sets `ident` or a

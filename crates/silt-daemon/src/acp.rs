@@ -80,26 +80,20 @@ impl Core {
         AgentChoices {
             agents: registry::all(&self.data_dir, &silt_exe())
                 .into_iter()
-                .map(|agent| AgentChoice {
-                    id: agent.id,
-                    name: agent.name,
-                    description: agent.description,
-                })
+                .map(|agent| AgentChoice { id: agent.id, name: agent.name, description: agent.description })
                 .collect(),
-            clones: self
-                .clones
-                .iter()
-                .map(|(repo, path)| CloneInfo {
-                    repo: repo.clone(),
-                    path: path.clone(),
-                })
-                .collect(),
+            clones: self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect(),
         }
     }
 
     /// Starts `agent` in the thread's checkout, making one from a known
     /// clone if this machine has none, or in a new thread of `clone`.
-    pub(crate) async fn acp_start(&mut self, thread: Option<&str>, clone: Option<&Path>, agent: &str) -> Result<String, CoreError> {
+    pub(crate) async fn acp_start(
+        &mut self,
+        thread: Option<&str>,
+        clone: Option<&Path>,
+        agent: &str,
+    ) -> Result<String, CoreError> {
         let info = registry::all(&self.data_dir, &silt_exe())
             .into_iter()
             .find(|candidate| candidate.id == agent)
@@ -176,10 +170,7 @@ impl Core {
             .cloned()
             .or_else(|| (!record.repo_root.as_os_str().is_empty()).then(|| record.repo_root.clone()))
             .ok_or_else(|| {
-                CoreError::Invalid(format!(
-                    "this machine knows no clone of {}; run `silt open` in one first",
-                    record.repo
-                ))
+                CoreError::Invalid(format!("this machine knows no clone of {}; run `silt open` in one first", record.repo))
             })?;
         self.check_out_managed(thread, &clone).await
     }
@@ -190,9 +181,7 @@ impl Core {
         let family = self.threads.get(&thread)?.family;
         self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
             Op::Conv(ConvOp::Native { session, line, .. }) if delta.thread == thread && session.agent == acp::AGENT => {
-                acp::session_of(line)
-                    .filter(|(id, _)| id == agent)
-                    .map(|(_, native)| (session.id.clone(), native))
+                acp::session_of(line).filter(|(id, _)| id == agent).map(|(_, native)| (session.id.clone(), native))
             }
             _ => None,
         })
@@ -268,11 +257,7 @@ impl Core {
             permissions: run
                 .asking
                 .iter()
-                .map(|asked| PermissionAsked {
-                    id: asked.id,
-                    title: asked.title.clone(),
-                    options: asked.options.clone(),
-                })
+                .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
             error: run.error.clone(),
         })
@@ -307,7 +292,9 @@ impl Core {
                 run.error = Some(error);
                 run.state = RunState::Exited;
             }
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => self.acp_ready(thread, &session, loaded, &agent).await?,
+            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent }) => {
+                self.acp_ready(thread, &session, loaded, &agent).await?
+            }
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => run.asking.push(permission),
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
@@ -447,16 +434,19 @@ fn send(run: &mut AcpRun, command: Command) {
 
 /// Finds the agent's command, downloading it if needed, then runs it and
 /// forwards what it does to the daemon's event loop.
-fn spawn_agent(events: mpsc::UnboundedSender<Event>, thread: ThreadId, run: u64, info: AgentInfo, data_dir: PathBuf, mut start: Start) {
+fn spawn_agent(
+    events: mpsc::UnboundedSender<Event>,
+    thread: ThreadId,
+    run: u64,
+    info: AgentInfo,
+    data_dir: PathBuf,
+    mut start: Start,
+) {
     tokio::spawn(async move {
         let registry::AgentCommand { program, args, env } = match registry::command(&info, &data_dir).await {
             Ok(command) => command,
             Err(error) => {
-                let _ = events.send(Event::Acp {
-                    thread,
-                    run,
-                    event: AcpEvent::Started(Err(error.to_string())),
-                });
+                let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Err(error.to_string())) });
                 return;
             }
         };
@@ -465,22 +455,10 @@ fn spawn_agent(events: mpsc::UnboundedSender<Event>, thread: ThreadId, run: u64,
         start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).collect();
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let handle = silt_acp::start(start, sender);
-        let _ = events.send(Event::Acp {
-            thread,
-            run,
-            event: AcpEvent::Started(Ok(handle)),
-        });
+        let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });
         while let Some(event) = receiver.recv().await {
             let exited = event == silt_acp::Event::Exited;
-            if events
-                .send(Event::Acp {
-                    thread,
-                    run,
-                    event: AcpEvent::Agent(event),
-                })
-                .is_err()
-                || exited
-            {
+            if events.send(Event::Acp { thread, run, event: AcpEvent::Agent(event) }).is_err() || exited {
                 break;
             }
         }

@@ -40,11 +40,7 @@ async fn messages(State(model): State<Arc<Model>>, Json(request): Json<Value>) -
         }
         3 => tool("t3", "read_file", json!({"path": "src/main.rs"})),
         4 => tool("t4", "edit_file", edit),
-        5 => tool(
-            "t5",
-            "run",
-            json!({"command": format!("cat src/main.rs; touch {}/escaped", model.outside.display())}),
-        ),
+        5 => tool("t5", "run", json!({"command": format!("cat src/main.rs; touch {}/escaped", model.outside.display())})),
         _ => json!({"content": [{"type": "text", "text": "All done."}], "stop_reason": "end_turn"}),
     })
 }
@@ -66,11 +62,8 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
     std::fs::create_dir_all(checkout.path().join("src")).expect("dir");
     std::fs::write(checkout.path().join("src/main.rs"), "fn main() {}\n").expect("file");
     let outside = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
-    let model = Arc::new(Model {
-        checkout: checkout.path().to_owned(),
-        outside: outside.path().to_owned(),
-        requests: Mutex::default(),
-    });
+    let model =
+        Arc::new(Model { checkout: checkout.path().to_owned(), outside: outside.path().to_owned(), requests: Mutex::default() });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let address = listener.local_addr().expect("address");
     let app = axum::Router::new().route("/v1/messages", post(messages)).with_state(model.clone());
@@ -112,10 +105,7 @@ async fn the_harness_edits_on_top_of_a_teammate_and_runs_sandboxed() {
         match next(&mut received).await {
             Event::Permission(permission) => {
                 assert!(permission.title.contains("cat src/main.rs"), "{permission:?}");
-                agent.send(Command::Answer {
-                    id: permission.id,
-                    option: Some("allow".into()),
-                });
+                agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) });
             }
             Event::Update(Update::AgentText(text)) => said.push_str(&text),
             Event::Update(Update::ToolUpdate { output: Some(output), .. }) => outputs.push(output),
@@ -158,7 +148,13 @@ async fn copying(State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(request): 
         2 => tool("t2", "write_file", json!({"path": "copy.txt", "content": format!("copied {hidden}\n")})),
         _ => {
             let earlier = requests.lock().expect("lock")[1].clone();
-            let hidden = last_tool_result(&earlier)["content"].as_str().unwrap_or_default().split_whitespace().last().unwrap_or_default().to_owned();
+            let hidden = last_tool_result(&earlier)["content"]
+                .as_str()
+                .unwrap_or_default()
+                .split_whitespace()
+                .last()
+                .unwrap_or_default()
+                .to_owned();
             json!({"content": [{"type": "text", "text": format!("Copied {hidden}.")}], "stop_reason": "end_turn"})
         }
     })
@@ -207,10 +203,7 @@ async fn secrets_never_reach_the_model_but_its_edits_keep_them() {
     let sent = serde_json::to_string(&*requests.lock().expect("lock")).expect("json");
     assert!(!sent.contains(token), "the model saw the token: {sent}");
     assert!(sent.contains(&silt_redact::placeholder(token)));
-    assert_eq!(
-        std::fs::read_to_string(checkout.path().join("copy.txt")).expect("written"),
-        format!("copied {token}\n")
-    );
+    assert_eq!(std::fs::read_to_string(checkout.path().join("copy.txt")).expect("written"), format!("copied {token}\n"));
     assert_eq!(said, format!("Copied {token}."));
     agent.send(Command::Stop);
 }

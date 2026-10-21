@@ -23,11 +23,18 @@ pub enum Request {
         existing: bool,
     },
     /// An agent hook fired; the input is what the agent passed to the hook.
-    Hook { event: String, input: serde_json::Value },
+    Hook {
+        event: String,
+        input: serde_json::Value,
+    },
     /// The agent running in `thread` exited: record the rest of its session.
-    EndSession { thread: String },
+    EndSession {
+        thread: String,
+    },
     Threads,
-    Show { thread: String },
+    Show {
+        thread: String,
+    },
     /// What the thread changed: one `turn`, or everything since `base`
     /// (`merge-base`, `last-commit`, `last-turn`, `commit:<sha>`), by
     /// default since it started.
@@ -70,23 +77,45 @@ pub enum Request {
     },
     /// Merges a fork's source into it; `thread` defaults to the one checked
     /// out at `cwd`.
-    Pull { thread: Option<String>, cwd: PathBuf },
+    Pull {
+        thread: Option<String>,
+        cwd: PathBuf,
+    },
     MrCreate {
         thread: Option<String>,
         cwd: PathBuf,
         title: Option<String>,
         summary: Option<String>,
     },
-    MrList { thread: Option<String> },
-    MrShow { mr: String },
-    MrApprove { mr: String },
-    MrDecline { mr: String, reason: Option<String> },
+    MrList {
+        thread: Option<String>,
+    },
+    MrShow {
+        mr: String,
+    },
+    MrApprove {
+        mr: String,
+    },
+    MrDecline {
+        mr: String,
+        reason: Option<String>,
+    },
     /// A page of a thread's full history, across compactions and forks.
-    HistoryRead { thread: String, offset: usize, limit: usize },
+    HistoryRead {
+        thread: String,
+        offset: usize,
+        limit: usize,
+    },
     /// Search within a thread's history and the threads it came from.
-    HistorySearch { thread: String, query: String, limit: u32 },
+    HistorySearch {
+        thread: String,
+        query: String,
+        limit: u32,
+    },
     /// The thread's turns, for showing each turn's diff next to its prompt.
-    Turns { thread: String },
+    Turns {
+        thread: String,
+    },
     /// Starts the web UI if needed; answers with its URL.
     OpenWeb {
         /// The clone `silt open` ran in; its repository's threads can then
@@ -99,9 +128,15 @@ pub enum Request {
         once: bool,
     },
     /// The turns that changed a file of the thread.
-    FileHistory { thread: String, path: String },
+    FileHistory {
+        thread: String,
+        path: String,
+    },
     /// Other threads of the repository at `cwd` that changed `path`.
-    InFlight { cwd: PathBuf, path: String },
+    InFlight {
+        cwd: PathBuf,
+        path: String,
+    },
     /// Comments on a history entry or on lines of a file (ADR 0011).
     /// `cwd` is a clone to read the thread's files from if needed.
     Comment {
@@ -110,8 +145,15 @@ pub enum Request {
         text: String,
         cwd: PathBuf,
     },
-    Comments { thread: String, cwd: PathBuf },
-    ResolveComment { thread: String, comment: String, cwd: PathBuf },
+    Comments {
+        thread: String,
+        cwd: PathBuf,
+    },
+    ResolveComment {
+        thread: String,
+        comment: String,
+        cwd: PathBuf,
+    },
     /// Sets the visibility of the project at `cwd`, or of `thread`'s family.
     SetVisibility {
         cwd: PathBuf,
@@ -123,12 +165,20 @@ pub enum Request {
         #[serde(default)]
         all: bool,
     },
-    InboxRead { read: silt_proto::InboxRead },
+    InboxRead {
+        read: silt_proto::InboxRead,
+    },
     /// Moves a thread to the trash, everywhere (ADR 0013).
-    ThreadDelete { thread: String },
-    ThreadRestore { thread: String },
+    ThreadDelete {
+        thread: String,
+    },
+    ThreadRestore {
+        thread: String,
+    },
     /// Removes a thread in the trash for good, everywhere.
-    ThreadPurge { thread: String },
+    ThreadPurge {
+        thread: String,
+    },
     /// The threads in the trash.
     Trash,
     /// This machine's viewer of a thread: what file is open and the draft
@@ -146,15 +196,30 @@ pub enum Request {
     },
     /// The family's deltas after the first `after`, for the browser's
     /// replica (ADR 0014).
-    Replica { thread: String, after: usize },
+    Replica {
+        thread: String,
+        after: usize,
+    },
     /// A git blob's text, for the browser's replica.
-    GitText { thread: String, oid: String },
+    GitText {
+        thread: String,
+        oid: String,
+    },
     /// Edits made in the browser's replica, postcard and base64 encoded.
-    BrowserDeltas { thread: String, deltas: String },
+    BrowserDeltas {
+        thread: String,
+        deltas: String,
+    },
     /// A fingerprint of the thread's live state.
-    Live { thread: String },
+    Live {
+        thread: String,
+    },
     /// Lets `user` write into the thread, or stops it (ADR 0014).
-    ThreadShare { thread: String, user: String, remove: bool },
+    ThreadShare {
+        thread: String,
+        user: String,
+        remove: bool,
+    },
     /// The agents the web UI can start, and the clones to start new threads
     /// in.
     AcpAgents,
@@ -168,8 +233,13 @@ pub enum Request {
         agent: String,
     },
     /// Sends the person's draft, with teammates' drafts, as the next prompt.
-    AcpPrompt { thread: String, text: String },
-    AcpCancel { thread: String },
+    AcpPrompt {
+        thread: String,
+        text: String,
+    },
+    AcpCancel {
+        thread: String,
+    },
     /// Answers a permission request with an option, or refuses it.
     AcpAnswer {
         thread: String,
@@ -177,7 +247,9 @@ pub enum Request {
         #[serde(default)]
         option: Option<String>,
     },
-    AcpStop { thread: String },
+    AcpStop {
+        thread: String,
+    },
     Shutdown,
 }
 
@@ -197,9 +269,7 @@ impl Response {
     }
 
     pub fn error(message: impl std::fmt::Display) -> Self {
-        Self::Error {
-            message: message.to_string(),
-        }
+        Self::Error { message: message.to_string() }
     }
 
     /// `error` and what caused it, on one line.
@@ -267,15 +337,33 @@ pub struct ThreadSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "line", rename_all = "snake_case")]
 pub enum ShowLine {
-    Entry { kind: String, text: String },
-    ToolCall { id: String, name: String, input: String },
-    Edits { tool_use_id: Option<String>, files: Vec<FileEdit> },
-    Compaction { summary: Option<String> },
-    Turn { mark: String },
+    Entry {
+        kind: String,
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: String,
+    },
+    Edits {
+        tool_use_id: Option<String>,
+        files: Vec<FileEdit>,
+    },
+    Compaction {
+        summary: Option<String>,
+    },
+    Turn {
+        mark: String,
+    },
     /// Where the history moves to another thread's part, or back.
-    Segment { label: String },
+    Segment {
+        label: String,
+    },
     /// A pull or a merge.
-    Event { text: String },
+    Event {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -456,9 +544,17 @@ pub enum CommentOn {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "at", rename_all = "snake_case")]
 pub enum CommentLocation {
-    Entry { index: usize, excerpt: String },
+    Entry {
+        index: usize,
+        excerpt: String,
+    },
     /// Where the commented lines are now; `outdated` once they're deleted.
-    Lines { path: String, start: usize, end: usize, outdated: bool },
+    Lines {
+        path: String,
+        start: usize,
+        end: usize,
+        outdated: bool,
+    },
     Unknown,
 }
 

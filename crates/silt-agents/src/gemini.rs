@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, translated_text};
+use crate::{
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start,
+    translated_text,
+};
 
 pub const AGENT: &str = "gemini-cli";
 
@@ -52,16 +55,12 @@ fn registry(gemini: &Path) -> Map<String, Value> {
 /// itself looks it up.
 fn chats_dir(gemini: &Path, cwd: &Path) -> Option<PathBuf> {
     let path = cwd.to_string_lossy();
-    let slug = registry(gemini)
-        .get(&*path)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            fs::read_dir(gemini.join("tmp")).ok()?.flatten().find_map(|entry| {
-                let owner = fs::read_to_string(entry.path().join(".project_root")).ok()?;
-                (owner.trim() == path).then(|| entry.file_name().to_string_lossy().into_owned())
-            })
-        })?;
+    let slug = registry(gemini).get(&*path).and_then(Value::as_str).map(str::to_owned).or_else(|| {
+        fs::read_dir(gemini.join("tmp")).ok()?.flatten().find_map(|entry| {
+            let owner = fs::read_to_string(entry.path().join(".project_root")).ok()?;
+            (owner.trim() == path).then(|| entry.file_name().to_string_lossy().into_owned())
+        })
+    })?;
     Some(gemini.join("tmp").join(slug).join("chats"))
 }
 
@@ -69,10 +68,7 @@ fn chats_dir(gemini: &Path, cwd: &Path) -> Option<PathBuf> {
 /// project directory, in hex.
 pub fn project_hash(cwd: &Path) -> String {
     use sha2::Digest;
-    sha2::Sha256::digest(cwd.to_string_lossy().as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sha2::Sha256::digest(cwd.to_string_lossy().as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Registers `cwd` the way Gemini CLI does, so a restored session is found
@@ -191,11 +187,7 @@ impl GeminiReader {
     fn result(&mut self, read: &mut Read, id: &str, text: String, is_error: bool) {
         if self.results.insert(id.to_owned()) {
             read.marks.push(Mark::ToolFinished { tool_use_id: id.to_owned() });
-            read.entries.push(Entry::ToolResult {
-                tool_use_id: id.to_owned(),
-                text,
-                is_error,
-            });
+            read.entries.push(Entry::ToolResult { tool_use_id: id.to_owned(), text, is_error });
         }
     }
 }
@@ -210,15 +202,14 @@ impl Reader for GeminiReader {
             self.message(&value, &mut read);
             return read;
         }
-        let kind = ["$set", "$patch", "$rewindTo", "sessionId"]
-            .into_iter()
-            .find(|key| value.get(key).is_some())
-            .unwrap_or("unknown");
+        let kind =
+            ["$set", "$patch", "$rewindTo", "sessionId"].into_iter().find(|key| value.get(key).is_some()).unwrap_or("unknown");
         read.entries.push(Entry::Other { kind: kind.trim_start_matches('$').to_owned() });
         // An update carries what a message gained, like a copy of it.
         let updates = value.pointer("/$patch/updates").and_then(Value::as_array).cloned().unwrap_or_default();
         for mut update in updates {
-            let known = update.get("id").and_then(Value::as_str).and_then(|id| self.messages.get(id)).map(|seen| seen.kind.clone());
+            let known =
+                update.get("id").and_then(Value::as_str).and_then(|id| self.messages.get(id)).map(|seen| seen.kind.clone());
             if let (Some(kind), Some(fields)) = (known, update.as_object_mut()) {
                 fields.entry("type").or_insert(Value::String(kind));
                 self.message(&update, &mut read);
@@ -277,9 +268,8 @@ impl GeminiReader {
                 for thought in thoughts.iter().skip(seen.thoughts) {
                     let subject = thought.get("subject").and_then(Value::as_str).unwrap_or_default();
                     let description = thought.get("description").and_then(Value::as_str).unwrap_or_default();
-                    read.entries.push(Entry::Thinking {
-                        text: format!("{subject}: {description}").trim_matches([' ', ':']).to_owned(),
-                    });
+                    read.entries
+                        .push(Entry::Thinking { text: format!("{subject}: {description}").trim_matches([' ', ':']).to_owned() });
                 }
                 seen.thoughts = seen.thoughts.max(thoughts.len());
                 let calls = value.get("toolCalls").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -301,10 +291,7 @@ impl GeminiReader {
                     let call_id = call.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
                     if seen.calls.insert(call_id.clone()) {
                         let name = call.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
-                        read.marks.push(Mark::ToolStarted {
-                            tool_use_id: call_id.clone(),
-                            tool: name.clone(),
-                        });
+                        read.marks.push(Mark::ToolStarted { tool_use_id: call_id.clone(), tool: name.clone() });
                         read.entries.push(Entry::ToolCall {
                             id: call_id.clone(),
                             name,
@@ -381,8 +368,12 @@ pub fn session_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
     ];
     for (index, (role, text)) in messages.iter().enumerate() {
         let message = match role {
-            Role::User => json!({"id": format!("silt-{index}"), "timestamp": timestamp, "type": "user", "content": [{"text": text}]}),
-            Role::Assistant => json!({"id": format!("silt-{index}"), "timestamp": timestamp, "type": "gemini", "content": text, "thoughts": []}),
+            Role::User => {
+                json!({"id": format!("silt-{index}"), "timestamp": timestamp, "type": "user", "content": [{"text": text}]})
+            }
+            Role::Assistant => {
+                json!({"id": format!("silt-{index}"), "timestamp": timestamp, "type": "gemini", "content": text, "thoughts": []})
+            }
         };
         lines.push(message.to_string());
     }
@@ -443,9 +434,7 @@ impl Agent for Gemini {
 
     fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
         let dir = chats_dir(&gemini_dir()?, cwd)?;
-        session_files(&dir)
-            .into_iter()
-            .find(|path| file_session_id(path).as_deref() == Some(id))
+        session_files(&dir).into_iter().find(|path| file_session_id(path).as_deref() == Some(id))
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
@@ -532,11 +521,7 @@ fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
         .and_then(|text| serde_json::from_str(&text).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    let servers = settings
-        .as_object_mut()
-        .expect("checked above")
-        .entry("mcpServers")
-        .or_insert_with(|| json!({}));
+    let servers = settings.as_object_mut().expect("checked above").entry("mcpServers").or_insert_with(|| json!({}));
     if let Some(servers) = servers.as_object_mut() {
         servers.insert("silt".into(), json!({"command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args}));
     }
@@ -580,25 +565,14 @@ mod tests {
             r#"{"id":"a","timestamp":"t","type":"gemini","content":"There is one file.","thoughts":[{"subject":"Looking","description":"at src"}],"tokens":{"total":1}}"#,
         ];
         let reads: Vec<Read> = lines.iter().map(|line| reader.push(line)).collect();
-        let entries: Vec<Entry> = reads
-            .iter()
-            .flat_map(|read| read.entries.clone())
-            .filter(|entry| !matches!(entry, Entry::Other { .. }))
-            .collect();
+        let entries: Vec<Entry> =
+            reads.iter().flat_map(|read| read.entries.clone()).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
         assert_eq!(
             entries,
             vec![
                 Entry::User { text: "list files in src".into() },
-                Entry::ToolCall {
-                    id: "ls_1".into(),
-                    name: "list_directory".into(),
-                    input: json!({"dir_path": "src"})
-                },
-                Entry::ToolResult {
-                    tool_use_id: "ls_1".into(),
-                    text: "main.rs".into(),
-                    is_error: false
-                },
+                Entry::ToolCall { id: "ls_1".into(), name: "list_directory".into(), input: json!({"dir_path": "src"}) },
+                Entry::ToolResult { tool_use_id: "ls_1".into(), text: "main.rs".into(), is_error: false },
                 Entry::Thinking { text: "Looking: at src".into() },
                 Entry::Assistant { text: "There is one file.".into() },
             ]
@@ -621,10 +595,7 @@ mod tests {
         assert_eq!(
             marks(&mut reader, ran),
             vec![
-                Mark::ToolStarted {
-                    tool_use_id: "e1".into(),
-                    tool: "replace".into()
-                },
+                Mark::ToolStarted { tool_use_id: "e1".into(), tool: "replace".into() },
                 Mark::ToolFinished { tool_use_id: "e1".into() }
             ],
             "a patch is read like a copy of the message"

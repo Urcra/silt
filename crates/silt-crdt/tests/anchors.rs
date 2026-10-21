@@ -41,17 +41,8 @@ fn deleted_target_is_outdated_but_still_placed() {
     let on_d = replica.doc().anchor(3, Bias::Right).expect("anchor");
     replica.delete(2, 3).expect("delete cde");
     assert_eq!(replica.text(), "abf");
-    assert_eq!(
-        replica.doc().resolve(&on_d),
-        Ok(ResolvedAnchor {
-            pos: 2,
-            outdated: true
-        })
-    );
-    assert_eq!(
-        replica.doc().resolve_at(replica.graph(), &version, &on_d),
-        Ok(resolved(3))
-    );
+    assert_eq!(replica.doc().resolve(&on_d), Ok(ResolvedAnchor { pos: 2, outdated: true }));
+    assert_eq!(replica.doc().resolve_at(replica.graph(), &version, &on_d), Ok(resolved(3)));
 }
 
 #[test]
@@ -61,10 +52,7 @@ fn a_character_typed_after_a_version_sits_after_what_was_there_then() {
     let version = replica.frontier().clone();
     replica.insert(2, "cd").expect("typing on");
     let on_d = replica.doc().anchor(3, Bias::Right).expect("anchor");
-    assert_eq!(
-        replica.doc().resolve_at(replica.graph(), &version, &on_d),
-        Ok(ResolvedAnchor { pos: 2, outdated: true })
-    );
+    assert_eq!(replica.doc().resolve_at(replica.graph(), &version, &on_d), Ok(ResolvedAnchor { pos: 2, outdated: true }));
 }
 
 #[test]
@@ -79,10 +67,7 @@ fn document_edges() {
     replica.insert(4, ">").expect("insert");
     assert_eq!(replica.doc().resolve(&start), Ok(resolved(0)));
     assert_eq!(replica.doc().resolve(&end), Ok(resolved(5)));
-    assert!(matches!(
-        replica.doc().anchor(9, Bias::Left),
-        Err(TextError::AnchorOutOfBounds { pos: 9, len: 5 })
-    ));
+    assert!(matches!(replica.doc().anchor(9, Bias::Left), Err(TextError::AnchorOutOfBounds { pos: 9, len: 5 })));
 }
 
 #[test]
@@ -111,10 +96,8 @@ enum Edit {
 
 fn edit() -> impl Strategy<Value = Edit> {
     prop_oneof![
-        (any::<bool>(), any::<u16>(), "[a-z]{1,3}")
-            .prop_map(|(replica, pos, text)| Edit::Insert { replica, pos, text }),
-        (any::<bool>(), any::<u16>(), 1u8..3)
-            .prop_map(|(replica, pos, len)| Edit::Delete { replica, pos, len }),
+        (any::<bool>(), any::<u16>(), "[a-z]{1,3}").prop_map(|(replica, pos, text)| Edit::Insert { replica, pos, text }),
+        (any::<bool>(), any::<u16>(), 1u8..3).prop_map(|(replica, pos, len)| Edit::Delete { replica, pos, len }),
     ]
 }
 
@@ -189,14 +172,8 @@ fn anchors_made_at_an_old_version_follow_their_character() {
     replica.insert(0, "line one\nline two\n").expect("insert");
     let old = replica.frontier().clone();
     replica.insert(0, "new first\n").expect("insert");
-    let at_old = replica
-        .doc()
-        .anchor_at(replica.graph(), &old, 9, Bias::Right)
-        .expect("anchor at the old version");
+    let at_old = replica.doc().anchor_at(replica.graph(), &old, 9, Bias::Right).expect("anchor at the old version");
     assert_eq!(at_old, replica.doc().anchor(19, Bias::Right).expect("same character now"));
     assert_eq!(replica.doc().resolve(&at_old), Ok(resolved(19)));
-    assert!(matches!(
-        replica.doc().anchor_at(replica.graph(), &old, 99, Bias::Left),
-        Err(TextError::AnchorOutOfBounds { .. })
-    ));
+    assert!(matches!(replica.doc().anchor_at(replica.graph(), &old, 99, Bias::Left), Err(TextError::AnchorOutOfBounds { .. })));
 }

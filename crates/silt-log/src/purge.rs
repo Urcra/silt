@@ -12,10 +12,7 @@ use crate::Delta;
 pub fn kept_after_purge(log: &[Delta], purged: &HashSet<ThreadId>) -> Vec<bool> {
     let mut spans: HashMap<ActorId, Vec<(u64, u64, usize)>> = HashMap::new();
     for (index, delta) in log.iter().enumerate() {
-        spans
-            .entry(delta.span.actor)
-            .or_default()
-            .push((delta.span.first().lamport.0, delta.span.last().lamport.0, index));
+        spans.entry(delta.span.actor).or_default().push((delta.span.first().lamport.0, delta.span.last().lamport.0, index));
     }
     for runs in spans.values_mut() {
         runs.sort_unstable();
@@ -87,11 +84,7 @@ mod tests {
         let only_fork: HashSet<ThreadId> = [fork_thread].into();
         assert_eq!(kept_after_purge(&log, &only_fork), vec![true, true, false, false, true, true, true]);
         let main_gone: HashSet<ThreadId> = [main].into();
-        assert_eq!(
-            kept_after_purge(&log, &main_gone),
-            vec![true; 7],
-            "the forks build on all of main"
-        );
+        assert_eq!(kept_after_purge(&log, &main_gone), vec![true; 7], "the forks build on all of main");
         let both: HashSet<ThreadId> = [main, fork_thread].into();
         assert_eq!(kept_after_purge(&log, &both), vec![true, true, false, false, true, true, true]);
         let all: HashSet<ThreadId> = [main, fork_thread, other].into();

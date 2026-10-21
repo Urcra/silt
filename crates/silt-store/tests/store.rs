@@ -45,9 +45,7 @@ async fn deltas_round_trip_in_order_across_reopen() {
                 executable: false,
             },
         );
-        family
-            .apply(delta.clone(), &mut std::collections::HashMap::new())
-            .expect("applies");
+        family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
         store.append_deltas(FAMILY, std::slice::from_ref(&delta)).await.expect("appends");
         appended.push(delta);
     }
@@ -62,10 +60,7 @@ async fn deltas_round_trip_in_order_across_reopen() {
 #[tokio::test]
 async fn checkouts_and_disk_state() {
     let (_dir, store) = store_with_thread().await;
-    let checkout = store
-        .add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1)
-        .await
-        .expect("checkout");
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
     let file = DiskFile {
         inode: DeltaId::new(ActorId(1), Lamport(1)),
         hash: [1; 32],
@@ -85,28 +80,15 @@ async fn checkouts_and_disk_state() {
 #[tokio::test]
 async fn session_offsets_persist() {
     let (_dir, store) = store_with_thread().await;
-    let checkout = store
-        .add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1)
-        .await
-        .expect("checkout");
-    let session = SessionRecord {
-        agent: "claude-code".into(),
-        session_id: "abc".into(),
-        thread: THREAD,
-        checkout_id: checkout.id,
-    };
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    let session =
+        SessionRecord { agent: "claude-code".into(), session_id: "abc".into(), thread: THREAD, checkout_id: checkout.id };
     store.add_session(&session, 1).await.expect("session");
     store.add_session(&session, 2).await.expect("adding again is a no-op");
-    let offset = SessionFileOffset {
-        file: "main".into(),
-        path: PathBuf::from("/home/u/.claude/projects/x/abc.jsonl"),
-        offset: 1234,
-    };
+    let offset =
+        SessionFileOffset { file: "main".into(), path: PathBuf::from("/home/u/.claude/projects/x/abc.jsonl"), offset: 1234 };
     store.set_session_offset("claude-code", "abc", &offset).await.expect("offset");
-    store
-        .set_session_offset("claude-code", "abc", &SessionFileOffset { offset: 2000, ..offset.clone() })
-        .await
-        .expect("advance");
+    store.set_session_offset("claude-code", "abc", &SessionFileOffset { offset: 2000, ..offset.clone() }).await.expect("advance");
     assert_eq!(store.sessions().await.expect("sessions"), vec![session]);
     assert_eq!(
         store.session_offsets("claude-code", "abc").await.expect("offsets"),
@@ -117,16 +99,9 @@ async fn session_offsets_persist() {
 #[tokio::test]
 async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
     let (_dir, store) = store_with_thread().await;
-    let checkout = store
-        .add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1)
-        .await
-        .expect("checkout");
-    let session = SessionRecord {
-        agent: "claude-code".into(),
-        session_id: "abc".into(),
-        thread: THREAD,
-        checkout_id: checkout.id,
-    };
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    let session =
+        SessionRecord { agent: "claude-code".into(), session_id: "abc".into(), thread: THREAD, checkout_id: checkout.id };
     store.add_session(&session, 1).await.expect("session");
     const RECOVERY: ThreadId = ThreadId(12);
     store
@@ -151,12 +126,7 @@ async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
 async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
     let (_dir, store) = store_with_thread().await;
     let delta = DeltaId::new(ActorId(1), Lamport(4));
-    let row = |delta, kind: &str, body: &str| SearchRow {
-        thread: THREAD,
-        delta,
-        kind: kind.into(),
-        body: body.into(),
-    };
+    let row = |delta, kind: &str, body: &str| SearchRow { thread: THREAD, delta, kind: kind.into(), body: body.into() };
     let rows = [
         row(delta, "assistant", "Refactored the tokenizer to handle unicode escapes"),
         row(DeltaId::new(ActorId(1), Lamport(9)), "user", "fix the parser"),

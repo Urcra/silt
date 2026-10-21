@@ -48,10 +48,7 @@ pub enum CharId {
 impl CharId {
     fn offset(self, by: u32) -> Self {
         match self {
-            Self::Base { source, offset } => Self::Base {
-                source,
-                offset: offset + by,
-            },
+            Self::Base { source, offset } => Self::Base { source, offset: offset + by },
             Self::Delta(id) => Self::Delta(DeltaId::new(id.actor, id.lamport.offset(u64::from(by)))),
         }
     }
@@ -59,9 +56,7 @@ impl CharId {
     /// How far `self` is past `start` when both belong to the same run of ids.
     fn distance_from(self, start: Self) -> Option<u32> {
         match (start, self) {
-            (Self::Base { source: a, offset: from }, Self::Base { source: b, offset: to }) if a == b => {
-                to.checked_sub(from)
-            }
+            (Self::Base { source: a, offset: from }, Self::Base { source: b, offset: to }) if a == b => to.checked_sub(from),
             (Self::Delta(from), Self::Delta(to)) if from.actor == to.actor => {
                 u32::try_from(to.lamport.0.checked_sub(from.lamport.0)?).ok()
             }
@@ -107,7 +102,6 @@ pub enum TextError {
     #[error("anchor refers to character {0:?} that is not in this document")]
     UnknownAnchor(CharId),
 }
-
 
 const NOT_INSERTED: u32 = 0;
 const VISIBLE: u32 = 1;
@@ -360,21 +354,10 @@ impl TextDoc {
                 (),
             );
         }
-        doc.insertions.insert(
-            key,
-            Insertion {
-                chars,
-                origin_left: None,
-                origin_right: None,
-                splits,
-            },
-        );
+        doc.insertions.insert(key, Insertion { chars, origin_left: None, origin_right: None, splits });
         let len = run_len(content.chars().count());
         if len > 0 {
-            doc.record_applied(Applied {
-                id: source,
-                kind: AppliedKind::Insert { start: key, len },
-            });
+            doc.record_applied(Applied { id: source, kind: AppliedKind::Insert { start: key, len } });
             doc.heads = Some(vec![source]);
         }
         doc.prepare = Frontier::single(source);
@@ -450,10 +433,7 @@ impl TextDoc {
             // The characters visible at a version are a prefix of a fragment.
             let visible = fragment.visible_len_at(&vv);
             if index < seen + visible {
-                return Ok(Anchor {
-                    char_id: Some(fragment.first_char().offset(run_len(index - seen))),
-                    bias,
-                });
+                return Ok(Anchor { char_id: Some(fragment.first_char().offset(run_len(index - seen))), bias });
             }
             seen += visible;
         }
@@ -468,8 +448,7 @@ impl TextDoc {
             };
             return Ok(ResolvedAnchor { pos, outdated: false });
         };
-        let (locator, offset) =
-            locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
+        let (locator, offset) = locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
         let mut cursor = self.fragments.cursor::<Dimensions<Locator, VisibleLen>>(());
         cursor.seek(&locator, SeekBias::Left);
         let fragment = cursor.item().expect("located fragment is in the tree");
@@ -478,12 +457,7 @@ impl TextDoc {
     }
 
     /// Where `anchor` is in the text as of `version`.
-    pub fn resolve_at(
-        &self,
-        graph: &CausalGraph,
-        version: &Frontier,
-        anchor: &Anchor,
-    ) -> Result<ResolvedAnchor, TextError> {
+    pub fn resolve_at(&self, graph: &CausalGraph, version: &Frontier, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
         let vv = graph.version_vector(version);
         let Some(char_id) = anchor.char_id else {
             let pos = match anchor.bias {
@@ -492,8 +466,7 @@ impl TextDoc {
             };
             return Ok(ResolvedAnchor { pos, outdated: false });
         };
-        let (locator, offset) =
-            locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
+        let (locator, offset) = locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
         let mut before = 0;
         for fragment in self.fragments.iter() {
             let visible = fragment.visible_len_at(&vv);
@@ -517,12 +490,7 @@ impl TextDoc {
         let mut attribution = Vec::with_capacity(self.len());
         for fragment in self.fragments.iter().filter(|fragment| !fragment.is_deleted()) {
             let first = fragment.first_char();
-            attribution.extend(
-                self.chars_of(fragment)
-                    .iter()
-                    .zip(0..)
-                    .map(|(ch, offset)| (*ch, first.offset(offset))),
-            );
+            attribution.extend(self.chars_of(fragment).iter().zip(0..).map(|(ch, offset)| (*ch, first.offset(offset))));
         }
         attribution
     }
@@ -535,10 +503,7 @@ impl TextDoc {
             return Err(TextError::Empty);
         }
         if event.span.len != units as u64 {
-            return Err(TextError::SpanLengthMismatch {
-                span_len: event.span.len,
-                units,
-            });
+            return Err(TextError::SpanLengthMismatch { span_len: event.span.len, units });
         }
         self.move_prepare_to(graph, &event.parents);
         let len = self.fragments.summary().prepare_visible;
@@ -547,10 +512,7 @@ impl TextDoc {
             TextOp::Delete { pos, len: count } => pos.checked_add(count).is_some_and(|end| end <= len),
         };
         if !fits {
-            return Err(TextError::OutOfBounds {
-                op: event.op.clone(),
-                len,
-            });
+            return Err(TextError::OutOfBounds { op: event.op.clone(), len });
         }
         Ok(())
     }
@@ -565,20 +527,14 @@ impl TextDoc {
         let kind = match &event.op {
             TextOp::Insert { pos, content } => {
                 self.insert(event, *pos, content);
-                AppliedKind::Insert {
-                    start: CharId::Delta(event.span.first()),
-                    len: run_len(event.op.units()),
-                }
+                AppliedKind::Insert { start: CharId::Delta(event.span.first()), len: run_len(event.op.units()) }
             }
             TextOp::Delete { pos, len } => {
                 self.delete(event, *pos, *len);
                 AppliedKind::Delete
             }
         };
-        self.record_applied(Applied {
-            id: event.span.first(),
-            kind,
-        });
+        self.record_applied(Applied { id: event.span.first(), kind });
         if let Some(heads) = &mut self.heads {
             heads.retain(|head| !graph.is_ancestor(*head, &event.parents));
             heads.push(event.span.last());
@@ -614,9 +570,7 @@ impl TextDoc {
             return;
         }
         let descends_from_all = |heads: &Option<Vec<DeltaId>>| {
-            heads
-                .as_ref()
-                .is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)))
+            heads.as_ref().is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)))
         };
         if self.complete && descends_from_all(&self.heads) {
             self.prepare = target.clone();
@@ -630,19 +584,14 @@ impl TextDoc {
             self.shift_prepare(self.applied[index], 1);
         }
         self.prepare = target.clone();
-        self.complete = self
-            .heads
-            .as_ref()
-            .is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)));
+        self.complete = self.heads.as_ref().is_some_and(|heads| heads.iter().all(|head| graph.is_ancestor(*head, target)));
     }
 
     /// Positions in `applied` of this document's events that start inside
     /// `spans`, in the order they were applied.
     fn applied_within(&self, spans: &[DeltaSpan]) -> Vec<usize> {
-        let mut found: Vec<usize> = spans
-            .iter()
-            .flat_map(|span| self.applied_index.range(span.first()..=span.last()).map(|(_, index)| *index))
-            .collect();
+        let mut found: Vec<usize> =
+            spans.iter().flat_map(|span| self.applied_index.range(span.first()..=span.last()).map(|(_, index)| *index)).collect();
         found.sort_unstable();
         found.dedup();
         found
@@ -660,10 +609,8 @@ impl TextDoc {
         };
         for (start, len) in ranges {
             self.update_range(start, len, |fragment| {
-                fragment.prepare = fragment
-                    .prepare
-                    .checked_add_signed(step)
-                    .expect("prepare state never goes below not-inserted");
+                fragment.prepare =
+                    fragment.prepare.checked_add_signed(step).expect("prepare state never goes below not-inserted");
             });
         }
     }
@@ -708,13 +655,8 @@ impl TextDoc {
         let my_id = CharId::Delta(event.span.first());
         if let Some((locator, key)) = self.typing_target(pos, my_id) {
             let added = run_len(event.op.units());
-            self.fragments
-                .update_item(|summary| summary.max_locator >= locator, |fragment| fragment.len += added, ());
-            self.insertions
-                .get_mut(&key)
-                .expect("fragment's insertion exists")
-                .chars
-                .extend(content.chars());
+            self.fragments.update_item(|summary| summary.max_locator >= locator, |fragment| fragment.len += added, ());
+            self.insertions.get_mut(&key).expect("fragment's insertion exists").chars.extend(content.chars());
             return;
         }
         if self.insert_in_place(event, pos, content) {
@@ -765,11 +707,7 @@ impl TextDoc {
             && self.continues_insertion(fragment, my_id, origin_right)
         {
             fragment.len += run_len(chars.len());
-            self.insertions
-                .get_mut(&fragment.insertion)
-                .expect("fragment's insertion exists")
-                .chars
-                .extend(chars);
+            self.insertions.get_mut(&fragment.insertion).expect("fragment's insertion exists").chars.extend(chars);
             fragments.extend(left, ());
             fragments.extend(right_fragment, ());
             fragments.append(cursor.suffix(), ());
@@ -810,15 +748,7 @@ impl TextDoc {
         fragments.append(cursor.suffix(), ());
         drop(cursor);
         self.fragments = fragments;
-        self.insertions.insert(
-            my_id,
-            Insertion {
-                chars,
-                origin_left,
-                origin_right,
-                splits: BTreeMap::from([(0, locator)]),
-            },
-        );
+        self.insertions.insert(my_id, Insertion { chars, origin_left, origin_right, splits: BTreeMap::from([(0, locator)]) });
     }
 
     /// The fragment that an insertion of `id` at `pos` simply continues, if
@@ -840,8 +770,7 @@ impl TextDoc {
             Some(next) => Some(next.first_char()),
             None => None,
         };
-        self.continues_insertion(fragment, id, origin_right)
-            .then(|| (fragment.locator.clone(), fragment.insertion))
+        self.continues_insertion(fragment, id, origin_right).then(|| (fragment.locator.clone(), fragment.insertion))
     }
 
     /// Whether a new insertion `id` right after `fragment` is just more typing
@@ -918,12 +847,7 @@ impl TextDoc {
         };
         self.insertions.insert(
             my_id,
-            Insertion {
-                chars,
-                origin_left: Some(origin_left),
-                origin_right,
-                splits: BTreeMap::from([(0, locator)]),
-            },
+            Insertion { chars, origin_left: Some(origin_left), origin_right, splits: BTreeMap::from([(0, locator)]) },
         );
         true
     }
@@ -1018,9 +942,7 @@ impl TextDoc {
                 pending = Some(split(&mut self.insertions, &mut fragment, remaining, &next));
             }
             fragment.prepare += 1;
-            fragment
-                .deleted_by
-                .push(DeltaId::new(event.span.actor, event.span.start.offset(u64::from(deleted))));
+            fragment.deleted_by.push(DeltaId::new(event.span.actor, event.span.start.offset(u64::from(deleted))));
             targets.push((fragment.first_char(), fragment.len));
             deleted += fragment.len;
             remaining -= fragment.len;
@@ -1046,20 +968,12 @@ fn place(before: usize, offset: usize, target_visible: bool, bias: Bias) -> Reso
         Bias::Left => before + offset + 1,
         Bias::Right => before + offset,
     };
-    ResolvedAnchor {
-        pos,
-        outdated: !target_visible,
-    }
+    ResolvedAnchor { pos, outdated: !target_visible }
 }
 
 /// Splits `fragment` so it keeps its first `keep` chars, returning the rest
 /// with a locator between the fragment's and `next`.
-fn split(
-    insertions: &mut BTreeMap<CharId, Insertion>,
-    fragment: &mut Fragment,
-    keep: u32,
-    next: &Locator,
-) -> Fragment {
+fn split(insertions: &mut BTreeMap<CharId, Insertion>, fragment: &mut Fragment, keep: u32, next: &Locator) -> Fragment {
     debug_assert!(keep > 0 && keep < fragment.len);
     let locator = Locator::between(&fragment.locator, next);
     let right = Fragment {
@@ -1068,18 +982,10 @@ fn split(
         offset: fragment.offset + keep,
         len: fragment.len - keep,
         prepare: fragment.prepare,
-        deleted_by: fragment
-            .deleted_by
-            .iter()
-            .map(|id| DeltaId::new(id.actor, id.lamport.offset(u64::from(keep))))
-            .collect(),
+        deleted_by: fragment.deleted_by.iter().map(|id| DeltaId::new(id.actor, id.lamport.offset(u64::from(keep)))).collect(),
     };
     fragment.len = keep;
-    insertions
-        .get_mut(&fragment.insertion)
-        .expect("fragment's insertion exists")
-        .splits
-        .insert(right.offset, locator);
+    insertions.get_mut(&fragment.insertion).expect("fragment's insertion exists").splits.insert(right.offset, locator);
     right
 }
 
@@ -1136,11 +1042,7 @@ fn integration_point(
     while index < region.len() {
         let other = &region[index];
         let insertion = &insertions[&other.insertion];
-        let other_left = if other.offset == 0 {
-            insertion.origin_left
-        } else {
-            Some(other.insertion.offset(other.offset - 1))
-        };
+        let other_left = if other.offset == 0 { insertion.origin_left } else { Some(other.insertion.offset(other.offset - 1)) };
         match left_order(other_left) {
             Ordering::Less => break,
             Ordering::Greater => {}

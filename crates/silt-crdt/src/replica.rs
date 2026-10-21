@@ -23,12 +23,7 @@ pub struct TextReplica {
 
 impl TextReplica {
     pub fn new(actor: ActorId) -> Self {
-        Self {
-            actor,
-            graph: CausalGraph::new(),
-            doc: TextDoc::new(),
-            events: Vec::new(),
-        }
+        Self { actor, graph: CausalGraph::new(), doc: TextDoc::new(), events: Vec::new() }
     }
 
     /// A replica whose document starts as the git blob `content`, introduced
@@ -38,12 +33,7 @@ impl TextReplica {
     pub fn from_base(actor: ActorId, source: DeltaId, content: &str) -> Result<Self, ReplicaError> {
         let mut graph = CausalGraph::new();
         graph.add(DeltaSpan::new(source.actor, source.lamport, 1), &Frontier::root())?;
-        Ok(Self {
-            actor,
-            graph,
-            doc: TextDoc::from_base(source, content),
-            events: Vec::new(),
-        })
+        Ok(Self { actor, graph, doc: TextDoc::from_base(source, content), events: Vec::new() })
     }
 
     pub fn actor(&self) -> ActorId {
@@ -72,10 +62,7 @@ impl TextReplica {
     }
 
     pub fn insert(&mut self, pos: usize, content: &str) -> Result<TextEvent, ReplicaError> {
-        self.local(TextOp::Insert {
-            pos,
-            content: content.to_owned(),
-        })
+        self.local(TextOp::Insert { pos, content: content.to_owned() })
     }
 
     pub fn delete(&mut self, pos: usize, len: usize) -> Result<TextEvent, ReplicaError> {
@@ -104,11 +91,7 @@ impl TextReplica {
 
     fn local(&mut self, op: TextOp) -> Result<TextEvent, ReplicaError> {
         let span = DeltaSpan::new(self.actor, self.graph.next_lamport(), op.units() as u64);
-        let event = TextEvent {
-            span,
-            parents: self.graph.frontier().clone(),
-            op,
-        };
+        let event = TextEvent { span, parents: self.graph.frontier().clone(), op };
         self.receive(&event)?;
         Ok(event)
     }

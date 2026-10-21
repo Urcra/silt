@@ -8,8 +8,8 @@ use silt_types::{FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
-use crate::transcripts::native_entries;
 use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
+use crate::transcripts::native_entries;
 
 impl Core {
     /// Every thread here but those in the trash.
@@ -32,11 +32,7 @@ impl Core {
             .into_iter()
             .map(|record| {
                 let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
-                let conversation: Vec<&Delta> = deltas
-                    .iter()
-                    .copied()
-                    .filter(|delta| matches!(delta.op, Op::Conv(_)))
-                    .collect();
+                let conversation: Vec<&Delta> = deltas.iter().copied().filter(|delta| matches!(delta.op, Op::Conv(_))).collect();
                 let lease = deltas.iter().rev().find_map(|delta| match delta.op {
                     Op::Lease { device, .. } => Some(device),
                     _ => None,
@@ -55,11 +51,7 @@ impl Core {
                 };
                 ThreadSummary {
                     id: record.id.to_string(),
-                    repo: if record.repo.is_empty() {
-                        record.repo_root.display().to_string()
-                    } else {
-                        record.repo.clone()
-                    },
+                    repo: if record.repo.is_empty() { record.repo_root.display().to_string() } else { record.repo.clone() },
                     title: named_title(&conversation).or(first_prompt).or_else(|| {
                         let family = self.families.get(&record.family)?;
                         let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
@@ -67,9 +59,10 @@ impl Core {
                     }),
                     created_ms: record.created_ms,
                     agent: conversation.iter().rev().find_map(|delta| match &delta.op {
-                        Op::Conv(ConvOp::Native { session, .. }) => {
-                            Some(silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()))
-                        }
+                        Op::Conv(ConvOp::Native { session, .. }) => Some(
+                            silt_agents::agent(&session.agent)
+                                .map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()),
+                        ),
                         _ => None,
                     }),
                     messages,
@@ -100,10 +93,7 @@ impl Core {
             .local_log(family_id)
             .iter()
             .filter(|delta| delta.thread == thread && matches!(delta.op, Op::Conv(_)))
-            .map(|delta| HistoryItem {
-                delta,
-                source: HistorySource::Own,
-            })
+            .map(|delta| HistoryItem { delta, source: HistorySource::Own })
             .collect();
         self.show_lines(None, thread, conversation)
     }
@@ -131,9 +121,9 @@ impl Core {
             }
             segment = (item.source, delta.thread);
             match &delta.op {
-                Op::Merge { from, mr: None } => lines.push(ShowLine::Event {
-                    text: format!("pulled newer work from thread {}", from.short()),
-                }),
+                Op::Merge { from, mr: None } => {
+                    lines.push(ShowLine::Event { text: format!("pulled newer work from thread {}", from.short()) })
+                }
                 Op::Conv(ConvOp::Merged { from, title, summary, .. }) => lines.push(ShowLine::Event {
                     text: format!(
                         "merged \"{title}\" from fork {} (read it with `silt show {}`): {summary}",
@@ -143,29 +133,19 @@ impl Core {
                 }),
                 Op::Conv(ConvOp::Turn { mark, .. }) => {
                     if let TurnMark::PromptSubmitted | TurnMark::Stopped = mark {
-                        lines.push(ShowLine::Turn {
-                            mark: format!("{mark:?}"),
-                        });
+                        lines.push(ShowLine::Turn { mark: format!("{mark:?}") });
                     }
                 }
                 Op::Conv(ConvOp::Native { .. }) => {
                     for entry in native_entries(&mut transcripts, delta) {
                         match entry {
-                            Entry::ToolCall { id, name, input } => lines.push(ShowLine::ToolCall {
-                                id,
-                                name,
-                                input: input.to_string(),
-                            }),
+                            Entry::ToolCall { id, name, input } => {
+                                lines.push(ShowLine::ToolCall { id, name, input: input.to_string() })
+                            }
                             Entry::ToolResult { tool_use_id, text, .. } => {
-                                lines.push(ShowLine::Entry {
-                                    kind: "tool_result".into(),
-                                    text,
-                                });
+                                lines.push(ShowLine::Entry { kind: "tool_result".into(), text });
                                 if let Some(files) = edits.get(&Some(tool_use_id.clone())) {
-                                    lines.push(ShowLine::Edits {
-                                        tool_use_id: Some(tool_use_id),
-                                        files: files.clone(),
-                                    });
+                                    lines.push(ShowLine::Edits { tool_use_id: Some(tool_use_id), files: files.clone() });
                                 }
                             }
                             Entry::Compaction { summary } => lines.push(ShowLine::Compaction { summary }),
@@ -181,10 +161,7 @@ impl Core {
             }
         }
         if let Some(files) = edits.get(&None) {
-            lines.push(ShowLine::Edits {
-                tool_use_id: None,
-                files: files.clone(),
-            });
+            lines.push(ShowLine::Edits { tool_use_id: None, files: files.clone() });
         }
         lines
     }
@@ -346,9 +323,7 @@ fn named_title(conversation: &[&Delta]) -> Option<String> {
         // listing's main cost.
         Op::Conv(ConvOp::Native { line, .. }) if line.contains("ai-title") => {
             let value: serde_json::Value = serde_json::from_str(line).ok()?;
-            (value.get("type")?.as_str()? == "ai-title")
-                .then(|| value.get("aiTitle")?.as_str().map(str::to_owned))
-                .flatten()
+            (value.get("type")?.as_str()? == "ai-title").then(|| value.get("aiTitle")?.as_str().map(str::to_owned)).flatten()
         }
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
@@ -357,11 +332,7 @@ fn named_title(conversation: &[&Delta]) -> Option<String> {
 
 fn clip_title(text: &str) -> String {
     const TITLE_CHARS: usize = 60;
-    if text.chars().count() <= TITLE_CHARS {
-        text.to_owned()
-    } else {
-        text.chars().take(TITLE_CHARS).collect::<String>() + "…"
-    }
+    if text.chars().count() <= TITLE_CHARS { text.to_owned() } else { text.chars().take(TITLE_CHARS).collect::<String>() + "…" }
 }
 
 /// Files each tool call changed (`None`: changes made outside tool calls).
@@ -426,10 +397,7 @@ pub(crate) fn render_diff(changes: &[FileChange]) -> String {
     let mut out = String::new();
     for change in changes {
         let shown = change.path();
-        let (old, new) = (
-            change.old_path.as_deref().unwrap_or(shown),
-            change.new_path.as_deref().unwrap_or(shown),
-        );
+        let (old, new) = (change.old_path.as_deref().unwrap_or(shown), change.new_path.as_deref().unwrap_or(shown));
         out.push_str(&format!("diff --git a/{old} b/{new}\n"));
         if let (Some(old), Some(new)) = (&change.old_path, &change.new_path)
             && old != new
@@ -471,14 +439,12 @@ fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<Ve
             .next_back()
             .map(|(version, _)| version)
             .ok_or_else(|| CoreError::Invalid("the thread has no commits".into()))?,
-        Some("last-turn") => prompt_marks(family, thread)
-            .pop()
-            .ok_or_else(|| CoreError::Invalid("the thread has no turns".into()))?,
+        Some("last-turn") => {
+            prompt_marks(family, thread).pop().ok_or_else(|| CoreError::Invalid("the thread has no turns".into()))?
+        }
         Some(other) => {
             let sha = other.strip_prefix("commit:").ok_or_else(|| {
-                CoreError::Invalid(format!(
-                    "unknown diff base {other:?}; use merge-base, last-commit, last-turn or commit:<sha>"
-                ))
+                CoreError::Invalid(format!("unknown diff base {other:?}; use merge-base, last-commit, last-turn or commit:<sha>"))
             })?;
             commits()
                 .rfind(|(_, commit)| commit.to_string().starts_with(sha))
@@ -492,10 +458,7 @@ fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<Ve
 /// Where the thread's own work starts: its fork point, or the import of
 /// its files.
 fn start_version(family: &Family, thread: ThreadId) -> Frontier {
-    family
-        .thread(thread)
-        .and_then(|state| state.fork_point.clone())
-        .unwrap_or_else(|| imported_version(family, thread))
+    family.thread(thread).and_then(|state| state.fork_point.clone()).unwrap_or_else(|| imported_version(family, thread))
 }
 
 /// The version right after the thread's files were imported.
@@ -519,19 +482,10 @@ fn imported_version(family: &Family, thread: ThreadId) -> Frontier {
 fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
     family
         .conversation(thread)
-        .filter(|delta| {
-            matches!(
-                &delta.op,
-                Op::Conv(ConvOp::Turn {
-                    mark: TurnMark::PromptSubmitted,
-                    ..
-                })
-            )
-        })
+        .filter(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })))
         .map(|delta| Frontier::single(delta.span.first()))
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -547,9 +501,6 @@ mod tests {
             new_text: String::new(),
             binary: true,
         };
-        assert_eq!(
-            render_diff(&[change]),
-            "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n"
-        );
+        assert_eq!(render_diff(&[change]), "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n");
     }
 }

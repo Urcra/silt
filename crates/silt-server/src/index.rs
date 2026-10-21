@@ -52,25 +52,13 @@ impl Index {
         }
         let thread = delta.thread;
         let time_ms = delta.time_ms;
-        let mut rows = vec![Row::Activity {
-            thread,
-            time_ms,
-            branch: None,
-        }];
+        let mut rows = vec![Row::Activity { thread, time_ms, branch: None }];
         let stamp = (delta.span.first().lamport, delta.span.actor);
         let placements = self.placements.entry(family).or_default();
         let touched = match &delta.op {
             Op::Create { kind, parent, name, .. } => {
                 let inode = InodeId(delta.span.first());
-                placements.insert(
-                    inode,
-                    Placement {
-                        parent: *parent,
-                        name: name.clone(),
-                        stamp,
-                        dir: *kind == InodeKind::Dir,
-                    },
-                );
+                placements.insert(inode, Placement { parent: *parent, name: name.clone(), stamp, dir: *kind == InodeKind::Dir });
                 Some(inode)
             }
             Op::Move { inode, parent, name } => {
@@ -91,23 +79,13 @@ impl Index {
                 };
                 for entry in self.transcripts.entries(&session.agent, &session.id, &file, line) {
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
-                        rows.push(Row::Text {
-                            thread,
-                            kind: entry.kind().to_owned(),
-                            body,
-                            time_ms,
-                        });
+                        rows.push(Row::Text { thread, kind: entry.kind().to_owned(), body, time_ms });
                     }
                 }
                 None
             }
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
-                rows.push(Row::Text {
-                    thread,
-                    kind: "merge".into(),
-                    body: format!("{title}\n{summary}"),
-                    time_ms,
-                });
+                rows.push(Row::Text { thread, kind: "merge".into(), body: format!("{title}\n{summary}"), time_ms });
                 if let Op::Mr(_) = delta.op {
                     self.requests.insert(delta.span.first(), thread);
                 }
@@ -126,20 +104,13 @@ impl Index {
                 None
             }
             Op::Git(GitOp::Genesis { branch, .. } | GitOp::Committed { branch, .. }) => {
-                rows[0] = Row::Activity {
-                    thread,
-                    time_ms,
-                    branch: branch.clone(),
-                };
+                rows[0] = Row::Activity { thread, time_ms, branch: branch.clone() };
                 None
             }
             _ => None,
         };
         let file = touched.filter(|inode| {
-            self.placements
-                .get(&family)
-                .and_then(|placements| placements.get(inode))
-                .is_some_and(|placement| !placement.dir)
+            self.placements.get(&family).and_then(|placements| placements.get(inode)).is_some_and(|placement| !placement.dir)
         });
         if let Some(path) = file.and_then(|inode| self.path(family, inode)) {
             rows.push(Row::Touch { thread, path, time_ms });
@@ -186,12 +157,7 @@ impl Index {
 pub(crate) async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[Row]) -> Result<(), sqlx::Error> {
     for row in rows {
         match row {
-            Row::Text {
-                thread,
-                kind,
-                body,
-                time_ms,
-            } => {
+            Row::Text { thread, kind, body, time_ms } => {
                 sqlx::query("INSERT INTO search (body, thread_id, kind, time_ms) VALUES (?, ?, ?, ?)")
                     .bind(body)
                     .bind(crate::id_bytes(thread.0))
@@ -281,23 +247,8 @@ mod tests {
                 executable: false,
             },
         );
-        assert!(rows.contains(&Row::Touch {
-            thread: ThreadId(1),
-            path: "src/lexer.rs".into(),
-            time_ms: 5
-        }));
-        let (_, rows) = add(
-            &mut family,
-            Op::Move {
-                inode: InodeId(file),
-                parent: Parent::Root,
-                name: "lexer.rs".into(),
-            },
-        );
-        assert!(rows.contains(&Row::Touch {
-            thread: ThreadId(1),
-            path: "lexer.rs".into(),
-            time_ms: 5
-        }));
+        assert!(rows.contains(&Row::Touch { thread: ThreadId(1), path: "src/lexer.rs".into(), time_ms: 5 }));
+        let (_, rows) = add(&mut family, Op::Move { inode: InodeId(file), parent: Parent::Root, name: "lexer.rs".into() });
+        assert!(rows.contains(&Row::Touch { thread: ThreadId(1), path: "lexer.rs".into(), time_ms: 5 }));
     }
 }

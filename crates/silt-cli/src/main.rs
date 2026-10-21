@@ -1,6 +1,5 @@
 mod admin;
 mod commands;
-mod dev_status;
 mod mcp;
 mod render;
 
@@ -245,11 +244,6 @@ enum Command {
         /// The checkout whose skills to offer; defaults to the current directory
         #[arg(long)]
         checkout: Option<PathBuf>,
-    },
-    /// Commands for working on Silt itself
-    Dev {
-        #[command(subcommand)]
-        command: DevCommand,
     },
 }
 
@@ -500,16 +494,8 @@ enum UserCommand {
         enable: bool,
     },
     /// Sign a user out of every device and browser, such as after a lost laptop
-    SignOut { name: String },
-}
-
-#[derive(Debug, Subcommand)]
-enum DevCommand {
-    /// Show milestone and task progress from ROADMAP.md and TASKS.md
-    Status {
-        /// Repository root; defaults to the nearest ancestor containing ROADMAP.md
-        #[arg(long)]
-        root: Option<PathBuf>,
+    SignOut {
+        name: String,
     },
 }
 
@@ -597,21 +583,9 @@ fn run() -> Result<(), Exn<CliError>> {
         },
         Command::Visibility { visibility, thread } => commands::visibility(visibility, thread),
         Command::Auth { command } => match command {
-            AuthCommand::Login {
-                server,
-                code,
-                user,
-                password_stdin,
-                name,
-                no_browser,
-            } => admin::auth_login(admin::LoginOptions {
-                server,
-                code,
-                user,
-                password_stdin,
-                name,
-                no_browser,
-            }),
+            AuthCommand::Login { server, code, user, password_stdin, name, no_browser } => {
+                admin::auth_login(admin::LoginOptions { server, code, user, password_stdin, name, no_browser })
+            }
             AuthCommand::Logout => admin::auth_logout(),
             AuthCommand::Status => commands::auth_status(),
         },
@@ -620,7 +594,9 @@ fn run() -> Result<(), Exn<CliError>> {
             ThreadCommand::Restore { thread } => commands::thread_change(Request::ThreadRestore { thread }),
             ThreadCommand::Purge { thread } => commands::thread_change(Request::ThreadPurge { thread }),
             ThreadCommand::Trash => commands::trash(),
-            ThreadCommand::Share { thread, user, remove } => commands::thread_change(Request::ThreadShare { thread, user, remove }),
+            ThreadCommand::Share { thread, user, remove } => {
+                commands::thread_change(Request::ThreadShare { thread, user, remove })
+            }
         },
         Command::Inbox { all, command } => match command {
             None => commands::inbox(all),
@@ -639,68 +615,39 @@ fn run() -> Result<(), Exn<CliError>> {
             TeamCommand::Add { org, team, user } => OrgChange::AddToTeam { org, team, user },
             TeamCommand::Remove { org, team, user } => OrgChange::RemoveFromTeam { org, team, user },
         }),
-        Command::Project {
-            command: ProjectCommand::Move { org },
-        } => admin::project_here().and_then(|repo| admin::org_change(OrgChange::MoveProject { repo, org })),
+        Command::Project { command: ProjectCommand::Move { org } } => {
+            admin::project_here().and_then(|repo| admin::org_change(OrgChange::MoveProject { repo, org }))
+        }
         Command::Log => commands::log(),
         Command::Show { thread } => commands::show(&thread),
         Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
-        Command::Search {
-            query,
-            repo,
-            author,
-            status,
-            branch,
-            file,
-            since,
-            until,
-        } => commands::search(
-            &query.join(" "),
-            SearchFilters {
-                repo,
-                author,
-                status,
-                branch,
-                file,
-                since,
-                until,
-            },
-        ),
+        Command::Search { query, repo, author, status, branch, file, since, until } => {
+            commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
+        }
         Command::InFlight { path } => commands::in_flight(&path),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment {
-            thread,
-            file,
-            lines,
-            entry,
-            text,
-        } => commands::comment(&thread, file, lines, entry, &text.join(" ")),
+        Command::Comment { thread, file, lines, entry, text } => commands::comment(&thread, file, lines, entry, &text.join(" ")),
         Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
         Command::Server { command } => match command {
-            ServerCommand::Init {
-                data,
-                listen,
-                public_url,
-                admin,
-                password_stdin,
-                systemd,
-                service_user,
-                force,
-            } => admin::server_init(admin::InitOptions {
-                data,
-                listen,
-                public_url,
-                admin,
-                password_stdin,
-                systemd,
-                service_user,
-                force,
-            }),
+            ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {
+                admin::server_init(admin::InitOptions {
+                    data,
+                    listen,
+                    public_url,
+                    admin,
+                    password_stdin,
+                    systemd,
+                    service_user,
+                    force,
+                })
+            }
             ServerCommand::Run { listen, data } => admin::server_run(listen, data),
             ServerCommand::Pair { data, user } => admin::server_pair(data, &user),
             ServerCommand::User { data, command } => match command {
-                UserCommand::Add { name, admin: is_admin, password_stdin } => admin::user_add(data, &name, is_admin, password_stdin),
+                UserCommand::Add { name, admin: is_admin, password_stdin } => {
+                    admin::user_add(data, &name, is_admin, password_stdin)
+                }
                 UserCommand::List => admin::user_list(data),
                 UserCommand::Passwd { name, password_stdin } => admin::user_passwd(data, &name, password_stdin),
                 UserCommand::Admin { name, revoke } => admin::user_admin(data, &name, revoke),
@@ -718,29 +665,14 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
-        Command::Sandbox {
-            writable,
-            hidden,
-            net,
-            keep_env,
-            command,
-        } => commands::sandbox(
-            silt_sandbox::Sandbox {
-                writable,
-                hidden,
-                network: net,
-                keep_env,
-            },
-            &command,
-        ),
+        Command::Sandbox { writable, hidden, net, keep_env, command } => {
+            commands::sandbox(silt_sandbox::Sandbox { writable, hidden, network: net, keep_env }, &command)
+        }
         Command::SandboxInit { command } => Err(Exn::new(CliError(silt_sandbox::init(&command).to_string()))),
         Command::Harness => commands::harness(),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())
         }
-        Command::Dev {
-            command: DevCommand::Status { root },
-        } => dev_status::print(root),
     }
 }

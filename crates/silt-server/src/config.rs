@@ -84,11 +84,7 @@ pub struct Auth {
 
 impl Default for Auth {
     fn default() -> Self {
-        Self {
-            passwords: true,
-            github: None,
-            oidc: None,
-        }
+        Self { passwords: true, github: None, oidc: None }
     }
 }
 
@@ -169,11 +165,7 @@ impl Config {
     }
 
     pub fn public_url(&self) -> String {
-        self.public_url
-            .clone()
-            .unwrap_or_else(|| format!("http://{}", self.listen))
-            .trim_end_matches('/')
-            .to_owned()
+        self.public_url.clone().unwrap_or_else(|| format!("http://{}", self.listen)).trim_end_matches('/').to_owned()
     }
 }
 

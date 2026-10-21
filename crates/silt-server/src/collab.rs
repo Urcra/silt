@@ -42,10 +42,7 @@ pub(crate) async fn share(
             .await?;
     } else {
         if !server.viewer(user).await?.sees_thread(thread) {
-            return Err(bad_request(format!(
-                "{} can't see this thread; change its visibility first",
-                request.user
-            )));
+            return Err(bad_request(format!("{} can't see this thread; change its visibility first", request.user)));
         }
         sqlx::query("INSERT OR IGNORE INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)")
             .bind(id_bytes(thread.0))
@@ -59,11 +56,10 @@ pub(crate) async fn share(
 /// Each thread's collaborators by name.
 pub(crate) async fn collaborators(db: &SqlitePool) -> Result<HashMap<ThreadId, Vec<String>>, sqlx::Error> {
     let mut found: HashMap<ThreadId, Vec<String>> = HashMap::new();
-    for row in sqlx::query(
-        "SELECT c.thread_id, u.name FROM thread_collaborators c JOIN users u ON u.id = c.user_id ORDER BY u.name",
-    )
-    .fetch_all(db)
-    .await?
+    for row in
+        sqlx::query("SELECT c.thread_id, u.name FROM thread_collaborators c JOIN users u ON u.id = c.user_id ORDER BY u.name")
+            .fetch_all(db)
+            .await?
     {
         found.entry(ThreadId(id_from(row.get("thread_id")))).or_default().push(row.get("name"));
     }
@@ -94,15 +90,11 @@ pub(crate) async fn admit(
             .map(|row| row.get::<i64, _>("user_id"));
         owners.insert(actor, owner);
     }
-    let admitted: Vec<&Delta> = deltas
-        .into_iter()
-        .filter(|delta| owners[&delta.span.actor].is_none_or(|owner| owner == user))
-        .collect();
+    let admitted: Vec<&Delta> =
+        deltas.into_iter().filter(|delta| owners[&delta.span.actor].is_none_or(|owner| owner == user)).collect();
     for thread in admitted.iter().map(|delta| delta.thread).collect::<HashSet<_>>() {
-        let registered = sqlx::query("SELECT family_id FROM threads WHERE id = ?")
-            .bind(id_bytes(thread.0))
-            .fetch_optional(db)
-            .await?;
+        let registered =
+            sqlx::query("SELECT family_id FROM threads WHERE id = ?").bind(id_bytes(thread.0)).fetch_optional(db).await?;
         if registered.is_some_and(|row| id_from(row.get("family_id")) != family.0) {
             return Err(forbidden(format!("thread {thread} is not part of family {family}")));
         }
@@ -135,11 +127,8 @@ pub(crate) async fn claim_actors(tx: &mut sqlx::SqliteConnection, user: i64, act
 /// Fails unless `user` may write every one of `deltas`, which are new to
 /// the server. Threads nobody registered yet belong to whoever writes them.
 pub(crate) async fn check_writes(db: &SqlitePool, viewer: &Viewer, user: i64, deltas: &[&Delta]) -> Result<(), ApiError> {
-    let threads: HashSet<ThreadId> = deltas
-        .iter()
-        .filter(|delta| !matches!(delta.op, Op::Comment(_)))
-        .map(|delta| delta.thread)
-        .collect();
+    let threads: HashSet<ThreadId> =
+        deltas.iter().filter(|delta| !matches!(delta.op, Op::Comment(_))).map(|delta| delta.thread).collect();
     for thread in threads {
         let row = sqlx::query(
             "SELECT t.owner_id, EXISTS (SELECT 1 FROM thread_collaborators c WHERE c.thread_id = t.id AND c.user_id = ?) AS shared

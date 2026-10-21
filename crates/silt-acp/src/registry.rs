@@ -20,9 +20,7 @@ pub enum RegistryError {
     Download(String, String),
     #[error("the download of {0} did not match its checksum")]
     Checksum(String),
-    #[error(
-        "{0} has no checksum to verify its download against; set SILT_ALLOW_UNVERIFIED_AGENTS=1 to install it anyway"
-    )]
+    #[error("{0} has no checksum to verify its download against; set SILT_ALLOW_UNVERIFIED_AGENTS=1 to install it anyway")]
     Unverified(String),
     #[error("the registry entry for {0} names paths outside its own directory")]
     UnsafeEntry(String),
@@ -133,9 +131,7 @@ pub fn harness(silt: &Path) -> AgentInfo {
 
 /// The registry as cached in `data_dir`, or the bundled snapshot.
 pub fn cached(data_dir: &Path) -> Vec<AgentInfo> {
-    let from_cache = std::fs::read_to_string(data_dir.join("acp-registry.json"))
-        .map(|text| parse(&text))
-        .unwrap_or_default();
+    let from_cache = std::fs::read_to_string(data_dir.join("acp-registry.json")).map(|text| parse(&text)).unwrap_or_default();
     if from_cache.is_empty() { parse(SNAPSHOT) } else { from_cache }
 }
 
@@ -145,7 +141,8 @@ pub async fn refresh(data_dir: PathBuf) {
     let fresh = std::fs::metadata(&cache)
         .and_then(|metadata| metadata.modified())
         .is_ok_and(|modified| SystemTime::now().duration_since(modified).is_ok_and(|age| age < CACHE_AGE));
-    if !fresh && let Ok(text) = download_text(REGISTRY_URL).await
+    if !fresh
+        && let Ok(text) = download_text(REGISTRY_URL).await
         && !parse(&text).is_empty()
     {
         let _ = std::fs::write(&cache, &text);
@@ -157,7 +154,16 @@ pub async fn refresh(data_dir: PathBuf) {
 /// in `<data>/agent-env`, one per line. Other credentials in the daemon's
 /// environment stay with the daemon.
 pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String)> {
-    const SHARED: [&str; 8] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"];
+    const SHARED: [&str; 8] = [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
     let vendor: &[&str] = match agent_id {
         id if id.contains("claude") => &["ANTHROPIC_", "CLAUDE_"],
         id if id.contains("codex") || id.contains("openai") => &["OPENAI_", "CODEX_"],
@@ -168,11 +174,7 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
     };
     let listed: Vec<String> = std::fs::read_to_string(data_dir.join("agent-env"))
         .map(|text| {
-            text.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_owned)
-                .collect()
+            text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
         })
         .unwrap_or_default();
     let mut environment: Vec<(String, String)> = silt_sandbox::safe_environment()
@@ -256,18 +258,12 @@ pub struct AgentCommand {
 /// distribution into `data_dir` first when needed.
 pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
     match &agent.distribution {
-        Distribution::Command { program, args, env } => Ok(AgentCommand {
-            program: program.clone(),
-            args: args.clone(),
-            env: env.clone(),
-        }),
+        Distribution::Command { program, args, env } => {
+            Ok(AgentCommand { program: program.clone(), args: args.clone(), env: env.clone() })
+        }
         Distribution::Binary { archive, cmd, args, sha256 } => {
             let program = installed(agent, archive, cmd, sha256.as_deref(), data_dir).await?;
-            Ok(AgentCommand {
-                program: program.to_string_lossy().into_owned(),
-                args: args.clone(),
-                env: Vec::new(),
-            })
+            Ok(AgentCommand { program: program.to_string_lossy().into_owned(), args: args.clone(), env: Vec::new() })
         }
         Distribution::Unavailable => Err(RegistryError::NoBuild(agent.id.clone())),
     }
@@ -279,17 +275,20 @@ fn digest(bytes: &[u8]) -> String {
 
 /// Whether `path` is relative and made only of plain names.
 fn is_plain_relative(path: &str) -> bool {
-    !path.is_empty()
-        && Path::new(path)
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    !path.is_empty() && Path::new(path).components().all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// The agent's program, installed and verified (ADR 0005, ADR 0016).
 /// Registry entries come from the network, so the id and command must stay
 /// inside the agent's directory, the download must match its checksum,
 /// and the installed program is checked again before every start.
-async fn installed(agent: &AgentInfo, archive: &str, cmd: &str, sha256: Option<&str>, data_dir: &Path) -> Result<PathBuf, RegistryError> {
+async fn installed(
+    agent: &AgentInfo,
+    archive: &str,
+    cmd: &str,
+    sha256: Option<&str>,
+    data_dir: &Path,
+) -> Result<PathBuf, RegistryError> {
     if !is_plain_relative(&agent.id) || agent.id.contains(std::path::MAIN_SEPARATOR) || !is_plain_relative(cmd) {
         return Err(RegistryError::UnsafeEntry(agent.id.clone()));
     }

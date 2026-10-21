@@ -11,9 +11,8 @@ use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionNotification, TextContent,
+    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, TextContent,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 
@@ -43,9 +42,7 @@ async fn main() -> agent_client_protocol::Result<()> {
             async move |request: RequestPermissionRequest, responder, _cx| {
                 eprintln!("auto-approving {:?}", request.tool_call);
                 let outcome = match request.options.first() {
-                    Some(option) => RequestPermissionOutcome::Selected(
-                        SelectedPermissionOutcome::new(option.option_id.clone()),
-                    ),
+                    Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone())),
                     None => RequestPermissionOutcome::Cancelled,
                 };
                 responder.respond(RequestPermissionResponse::new(outcome))
@@ -53,23 +50,14 @@ async fn main() -> agent_client_protocol::Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
-            let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
+            let init = connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
             eprintln!("agent: {:?}", init.agent_info);
             eprintln!("capabilities: {:?}", init.agent_capabilities);
 
-            let session = connection
-                .send_request(NewSessionRequest::new(workdir))
-                .block_task()
-                .await?;
+            let session = connection.send_request(NewSessionRequest::new(workdir)).block_task().await?;
 
             let response = connection
-                .send_request(PromptRequest::new(
-                    session.session_id,
-                    vec![ContentBlock::Text(TextContent::new(prompt))],
-                ))
+                .send_request(PromptRequest::new(session.session_id, vec![ContentBlock::Text(TextContent::new(prompt))]))
                 .block_task()
                 .await?;
             eprintln!("stop reason: {:?}", response.stop_reason);

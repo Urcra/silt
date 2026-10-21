@@ -12,7 +12,10 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
-use crate::{Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
+use crate::{
+    Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless,
+    translated_text,
+};
 
 pub const AGENT: &str = "claude-code";
 
@@ -26,10 +29,7 @@ pub fn config_dir() -> Option<PathBuf> {
 
 /// The directory name Claude Code uses for sessions started in `cwd`.
 pub fn project_slug(cwd: &Path) -> String {
-    cwd.to_string_lossy()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
+    cwd.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,12 +57,8 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
 /// session id to the new ones (docs/research/probes.md).
 pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
     let paths = session_paths(config_dir, cwd, &session.id);
-    let rewrites = Rewrites::new(
-        session,
-        Some(&paths.session_dir.to_string_lossy()),
-        &cwd.to_string_lossy(),
-        &root.to_string_lossy(),
-    );
+    let rewrites =
+        Rewrites::new(session, Some(&paths.session_dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
     fs::create_dir_all(paths.transcript.parent().expect("transcripts live in a project dir"))?;
     crate::replace_transcript(&paths.transcript, &rewrites.lines(&session.main))?;
     if !session.subagents.is_empty() {
@@ -149,10 +145,7 @@ impl Agent for ClaudeCode {
     }
 
     fn reader(&self) -> Box<dyn Reader> {
-        Box::new(Stateless(|line| Read {
-            entries: normalize(line),
-            marks: Vec::new(),
-        }))
+        Box::new(Stateless(|line| Read { entries: normalize(line), marks: Vec::new() }))
     }
 
     fn capture(&self) -> Capture {
@@ -216,9 +209,7 @@ impl Agent for ClaudeCode {
             .filter_map(|path| Some((crate::modified_ms(&path)?, path)))
             .filter(|(modified, path)| {
                 *modified >= since_ms
-                    && path
-                        .file_stem()
-                        .is_some_and(|stem| !known.iter().any(|known| known.as_str() == stem.to_string_lossy()))
+                    && path.file_stem().is_some_and(|stem| !known.iter().any(|known| known.as_str() == stem.to_string_lossy()))
             })
             .max_by_key(|(modified, _)| *modified)
             .map(|(_, path)| Found {
@@ -298,9 +289,7 @@ pub fn normalize(line: &str) -> Vec<Entry> {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
     match kind {
         "user" if value.get("isCompactSummary").and_then(Value::as_bool) == Some(true) => {
-            vec![Entry::Compaction {
-                summary: Some(message_text(&value)),
-            }]
+            vec![Entry::Compaction { summary: Some(message_text(&value)) }]
         }
         "system" if value.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
             vec![Entry::Compaction { summary: None }]
@@ -326,10 +315,8 @@ fn message_entries(role: &str, value: &Value) -> Vec<Entry> {
         .iter()
         .filter_map(|block| match block.get("type").and_then(Value::as_str)? {
             "text" => Some(text_entry(role, string_field(block, "text"))),
-            "thinking" => Some(Entry::Thinking {
-                text: string_field(block, "thinking"),
-            })
-            .filter(|entry| entry.searchable_text().is_some_and(|text| !text.is_empty())),
+            "thinking" => Some(Entry::Thinking { text: string_field(block, "thinking") })
+                .filter(|entry| entry.searchable_text().is_some_and(|text| !text.is_empty())),
             "tool_use" => Some(Entry::ToolCall {
                 id: string_field(block, "id"),
                 name: string_field(block, "name"),
@@ -340,19 +327,13 @@ fn message_entries(role: &str, value: &Value) -> Vec<Entry> {
                 text: block_text(block.get("content")),
                 is_error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
             }),
-            other => Some(Entry::Other {
-                kind: format!("{role}_{other}"),
-            }),
+            other => Some(Entry::Other { kind: format!("{role}_{other}") }),
         })
         .collect()
 }
 
 fn text_entry(role: &str, text: String) -> Entry {
-    if role == "user" {
-        Entry::User { text }
-    } else {
-        Entry::Assistant { text }
-    }
+    if role == "user" { Entry::User { text } } else { Entry::Assistant { text } }
 }
 
 fn message_text(value: &Value) -> String {
@@ -362,11 +343,9 @@ fn message_text(value: &Value) -> String {
 fn block_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Some(Value::Array(blocks)) => {
+            blocks.iter().filter_map(|block| block.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+        }
         _ => String::new(),
     }
 }
@@ -418,10 +397,7 @@ mod tests {
 
     #[test]
     fn slug_replaces_everything_but_ascii_alphanumerics() {
-        assert_eq!(
-            project_slug(Path::new("/home/u/my_repo.v2/src")),
-            "-home-u-my-repo-v2-src"
-        );
+        assert_eq!(project_slug(Path::new("/home/u/my_repo.v2/src")), "-home-u-my-repo-v2-src");
     }
 
     #[test]
@@ -449,11 +425,7 @@ mod tests {
             vec![
                 Entry::Thinking { text: "look at lexer.rs".into() },
                 Entry::Assistant { text: "On it.".into() },
-                Entry::ToolCall {
-                    id: "toolu_1".into(),
-                    name: "Edit".into(),
-                    input: json!({"file_path": "src/lexer.rs"})
-                },
+                Entry::ToolCall { id: "toolu_1".into(), name: "Edit".into(), input: json!({"file_path": "src/lexer.rs"}) },
             ]
         );
 
@@ -461,28 +433,15 @@ mod tests {
             {"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"ok"}],"is_error":false}]}}"#;
         assert_eq!(
             normalize(result),
-            vec![Entry::ToolResult {
-                tool_use_id: "toolu_1".into(),
-                text: "ok".into(),
-                is_error: false
-            }]
+            vec![Entry::ToolResult { tool_use_id: "toolu_1".into(), text: "ok".into(), is_error: false }]
         );
 
         let boundary = r#"{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}"#;
         assert_eq!(normalize(boundary), vec![Entry::Compaction { summary: None }]);
-        let summary = r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"We were fixing the lexer."}}"#;
-        assert_eq!(
-            normalize(summary),
-            vec![Entry::Compaction {
-                summary: Some("We were fixing the lexer.".into())
-            }]
-        );
-        assert_eq!(
-            normalize(r#"{"type":"file-history-snapshot"}"#),
-            vec![Entry::Other {
-                kind: "file-history-snapshot".into()
-            }]
-        );
+        let summary =
+            r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"We were fixing the lexer."}}"#;
+        assert_eq!(normalize(summary), vec![Entry::Compaction { summary: Some("We were fixing the lexer.".into()) }]);
+        assert_eq!(normalize(r#"{"type":"file-history-snapshot"}"#), vec![Entry::Other { kind: "file-history-snapshot".into() }]);
     }
 
     #[test]
@@ -505,7 +464,8 @@ mod tests {
                 ("../escape.txt".to_owned(), b"no".to_vec()),
             ],
         };
-        let paths = restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
+        let paths =
+            restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
@@ -524,18 +484,14 @@ mod tests {
 
     #[test]
     fn translated_lines_chain_and_name_the_session() {
-        let lines = transcript_lines(
-            &[(Role::User, "hi".into()), (Role::Assistant, "hello".into())],
-            Path::new("/repo"),
-            "s1",
-        );
+        let lines = transcript_lines(&[(Role::User, "hi".into()), (Role::Assistant, "hello".into())], Path::new("/repo"), "s1");
         let first: Value = serde_json::from_str(&lines[0]).expect("json");
         let second: Value = serde_json::from_str(&lines[1]).expect("json");
         assert_eq!(first["parentUuid"], Value::Null);
         assert_eq!(second["parentUuid"], first["uuid"]);
         assert_eq!(second["sessionId"], "s1");
         assert_eq!(normalize(&lines[1]), vec![Entry::Assistant { text: "hello".into() }]);
-            }
+    }
 
     #[test]
     fn hook_input_parses_tool_events() {
@@ -546,9 +502,6 @@ mod tests {
         .expect("parses");
         assert_eq!(input.tool_use_id.as_deref(), Some("toolu_9"));
         let settings: Value = serde_json::from_str(&hook_settings("silt hook")).expect("valid json");
-        assert_eq!(
-            settings.pointer("/hooks/PostToolUse/0/hooks/0/command"),
-            Some(&json!("silt hook PostToolUse"))
-        );
+        assert_eq!(settings.pointer("/hooks/PostToolUse/0/hooks/0/command"), Some(&json!("silt hook PostToolUse")));
     }
 }

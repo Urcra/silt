@@ -61,21 +61,10 @@ fn snapshots_resume_where_they_left_off() {
 fn tree_events_and_snapshots_round_trip() {
     let id = |lamport| DeltaId::new(ActorId(1), Lamport(lamport));
     let events = [
-        TreeEvent {
-            id: id(0),
-            op: TreeOp::Create {
-                kind: InodeKind::Dir,
-                parent: Parent::Root,
-                name: "src".into(),
-            },
-        },
+        TreeEvent { id: id(0), op: TreeOp::Create { kind: InodeKind::Dir, parent: Parent::Root, name: "src".into() } },
         TreeEvent {
             id: id(1),
-            op: TreeOp::Create {
-                kind: InodeKind::File,
-                parent: Parent::Dir(silt_crdt::InodeId(id(0))),
-                name: "lib.rs".into(),
-            },
+            op: TreeOp::Create { kind: InodeKind::File, parent: Parent::Dir(silt_crdt::InodeId(id(0))), name: "lib.rs".into() },
         },
     ];
     let mut tree = FileTree::new();

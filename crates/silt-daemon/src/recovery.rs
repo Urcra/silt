@@ -26,17 +26,10 @@ impl Core {
             .values()
             .filter(|checkout| checkout.family == family_id)
             .map(|checkout| checkout.record.thread)
-            .chain(
-                self.sessions
-                    .iter()
-                    .filter(|session| session.family == family_id)
-                    .map(|session| session.record.thread),
-            )
+            .chain(self.sessions.iter().filter(|session| session.family == family_id).map(|session| session.record.thread))
             .collect();
-        let conversations: BTreeMap<ThreadId, Vec<Delta>> = threads
-            .iter()
-            .map(|thread| (*thread, family.conversation(*thread).cloned().collect()))
-            .collect();
+        let conversations: BTreeMap<ThreadId, Vec<Delta>> =
+            threads.iter().map(|thread| (*thread, family.conversation(*thread).cloned().collect())).collect();
 
         // The server's version is fetched and projected before anything
         // here changes, so a failure leaves this machine's history intact.
@@ -87,12 +80,8 @@ impl Core {
     /// Moves `from`'s checkouts and sessions here to `to`, with fresh actors,
     /// and records what is on disk as `to`'s changes.
     async fn move_work(&mut self, from: ThreadId, to: ThreadId) -> Result<(), CoreError> {
-        let ids: Vec<i64> = self
-            .checkouts
-            .iter()
-            .filter(|(_, checkout)| checkout.record.thread == from)
-            .map(|(id, _)| *id)
-            .collect();
+        let ids: Vec<i64> =
+            self.checkouts.iter().filter(|(_, checkout)| checkout.record.thread == from).map(|(id, _)| *id).collect();
         for id in ids {
             let actor = ActorId(uuid::Uuid::new_v4().as_u128());
             self.store.move_checkout(id, to).await?;

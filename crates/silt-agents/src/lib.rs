@@ -47,10 +47,7 @@ pub struct Read {
 
 impl Read {
     pub fn unparseable() -> Self {
-        Self {
-            entries: vec![Entry::unparseable()],
-            marks: Vec::new(),
-        }
+        Self { entries: vec![Entry::unparseable()], marks: Vec::new() }
     }
 }
 
@@ -92,10 +89,17 @@ pub enum SessionIds {
 /// How a session is started or continued.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Start {
-    New { id: Option<String> },
-    Resume { id: String },
+    New {
+        id: Option<String>,
+    },
+    Resume {
+        id: String,
+    },
     /// A new session whose first prompt carries the earlier conversation.
-    Primed { id: Option<String>, prompt: String },
+    Primed {
+        id: Option<String>,
+        prompt: String,
+    },
 }
 
 /// Silt's MCP server for the session.
@@ -135,11 +139,7 @@ impl Launch {
     /// `SILT_<AGENT>_BIN` overrides the program, as tests and wrappers do.
     pub fn new(command: &str) -> Self {
         let variable = format!("SILT_{}_BIN", command.to_ascii_uppercase());
-        Self {
-            program: std::env::var_os(variable).unwrap_or_else(|| command.into()),
-            args: Vec::new(),
-            envs: Vec::new(),
-        }
+        Self { program: std::env::var_os(variable).unwrap_or_else(|| command.into()), args: Vec::new(), envs: Vec::new() }
     }
 
     pub fn arg(&mut self, arg: impl Into<OsString>) -> &mut Self {
@@ -217,13 +217,7 @@ pub trait Agent: Send + Sync {
 /// The environment variables that say where agents keep their sessions.
 pub const HOME_VARIABLES: [&str; 5] = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
 
-pub const AGENTS: [&dyn Agent; 5] = [
-    &claude::ClaudeCode,
-    &codex::Codex,
-    &gemini::Gemini,
-    &opencode::OpenCode,
-    &copilot::Copilot,
-];
+pub const AGENTS: [&dyn Agent; 5] = [&claude::ClaudeCode, &codex::Codex, &gemini::Gemini, &opencode::OpenCode, &copilot::Copilot];
 
 /// The agent recorded as `name`, or run as the command `name`, including
 /// the sessions Silt records itself for agents the web UI starts.
@@ -277,10 +271,7 @@ impl Transcripts {
         if self.readers.len() >= READERS_KEPT && !self.readers.contains_key(&key) {
             self.forget_least_recent();
         }
-        let kept = self.readers.entry(key).or_insert_with(|| KeptReader {
-            reader: reader(agent),
-            last_read: 0,
-        });
+        let kept = self.readers.entry(key).or_insert_with(|| KeptReader { reader: reader(agent), last_read: 0 });
         kept.last_read = self.reads;
         kept.reader.push(line)
     }

@@ -10,7 +10,9 @@ use crate::sessions::file_key;
 /// earlier deltas, in order.
 pub(crate) fn native_entries(transcripts: &mut Transcripts, delta: &Delta) -> Vec<Entry> {
     match &delta.op {
-        Op::Conv(ConvOp::Native { session, file, line }) => transcripts.entries(&session.agent, &session.id, &file_key(file), line),
+        Op::Conv(ConvOp::Native { session, file, line }) => {
+            transcripts.entries(&session.agent, &session.id, &file_key(file), line)
+        }
         _ => Vec::new(),
     }
 }

@@ -20,20 +20,10 @@ impl Core {
         if self.families.contains_key(&family_id) {
             return Ok(());
         }
-        let records: Vec<ThreadRecord> = self
-            .threads
-            .values()
-            .filter(|record| record.family == family_id)
-            .cloned()
-            .collect();
-        let first = records
-            .first()
-            .ok_or_else(|| CoreError::Invalid(format!("family {family_id} has no threads here")))?;
+        let records: Vec<ThreadRecord> = self.threads.values().filter(|record| record.family == family_id).cloned().collect();
+        let first = records.first().ok_or_else(|| CoreError::Invalid(format!("family {family_id} has no threads here")))?;
         let here = Repo::discover(cwd).ok().filter(|repo| {
-            repo.remote_url("origin")
-                .ok()
-                .flatten()
-                .is_some_and(|url| silt_git::normalize_remote(&url) == first.repo)
+            repo.remote_url("origin").ok().flatten().is_some_and(|url| silt_git::normalize_remote(&url) == first.repo)
         });
         let clone = here
             .or_else(|| {
@@ -54,10 +44,7 @@ impl Core {
         }
         self.project_family(family_id, &clone)?;
         for record in records {
-            let updated = ThreadRecord {
-                repo_root: clone.root().to_owned(),
-                ..record
-            };
+            let updated = ThreadRecord { repo_root: clone.root().to_owned(), ..record };
             self.store.create_thread(&updated).await?;
             self.threads.insert(updated.id, updated);
         }
@@ -89,9 +76,7 @@ impl Core {
             user => user,
         };
         let head = self.families[&family_id].thread_head(thread);
-        let delta = self
-            .append_op(family_id, thread, head, Op::Comment(CommentOp::Added { target, text, by }))
-            .await?;
+        let delta = self.append_op(family_id, thread, head, Op::Comment(CommentOp::Added { target, text, by })).await?;
         self.comments(selector)?
             .into_iter()
             .find(|comment| comment.id == short_mr(delta.span.first()))
@@ -100,7 +85,14 @@ impl Core {
 
     /// Anchors for lines `start..=end` (1-based) of `path` as the thread
     /// sees it now.
-    fn code_target(&mut self, family_id: FamilyId, thread: ThreadId, path: &str, start: usize, end: usize) -> Result<CommentTarget, CoreError> {
+    fn code_target(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        path: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<CommentTarget, CoreError> {
         let repo = self.family_repo(family_id)?;
         let family = self.families.get_mut(&family_id).expect("projected above");
         let inode = family
@@ -115,14 +107,8 @@ impl Core {
         let text = doc.text_at(family.graph(), &head);
         let (from, to) = line_span(&text, start, end)
             .ok_or_else(|| CoreError::Invalid(format!("{path} has {} lines", text.lines().count())))?;
-        let anchor = |pos, bias| -> Result<Anchor, CoreError> {
-            Ok(doc.anchor_at(family.graph(), &head, pos, bias)?)
-        };
-        Ok(CommentTarget::Code {
-            inode,
-            start: anchor(from, Bias::Right)?,
-            end: anchor(to, Bias::Left)?,
-        })
+        let anchor = |pos, bias| -> Result<Anchor, CoreError> { Ok(doc.anchor_at(family.graph(), &head, pos, bias)?) };
+        Ok(CommentTarget::Code { inode, start: anchor(from, Bias::Right)?, end: anchor(to, Bias::Left)? })
     }
 
     pub(crate) async fn resolve_comment(&mut self, selector: &str, comment: &str, cwd: &Path) -> Result<CommentView, CoreError> {
@@ -137,8 +123,7 @@ impl Core {
             .map(|found| found.id)
             .ok_or_else(|| CoreError::Invalid(format!("no comment {comment} on this thread")))?;
         let head = family.thread_head(thread);
-        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Resolved { comment: id }))
-            .await?;
+        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Resolved { comment: id })).await?;
         self.comments(selector)?
             .into_iter()
             .find(|found| found.id == short_mr(id))
@@ -169,22 +154,17 @@ impl Core {
             .into_iter()
             .map(|comment| {
                 let location = match comment.target {
-                    CommentTarget::Message { delta } => entries
-                        .iter()
-                        .find(|(id, _)| *id == delta)
-                        .map_or(CommentLocation::Unknown, |(_, entry)| CommentLocation::Entry {
-                            index: entry.index,
-                            excerpt: entry.text.chars().take(120).collect(),
-                        }),
+                    CommentTarget::Message { delta } => {
+                        entries.iter().find(|(id, _)| *id == delta).map_or(CommentLocation::Unknown, |(_, entry)| {
+                            CommentLocation::Entry { index: entry.index, excerpt: entry.text.chars().take(120).collect() }
+                        })
+                    }
                     CommentTarget::Code { inode, start, end } => {
                         let path = paths.iter().find(|(_, found)| **found == inode).map(|(path, _)| path.clone());
                         match (path, place(family, thread, inode, &start, &end)) {
-                            (Some(path), Some((start_line, end_line, outdated))) => CommentLocation::Lines {
-                                path,
-                                start: start_line,
-                                end: end_line,
-                                outdated,
-                            },
+                            (Some(path), Some((start_line, end_line, outdated))) => {
+                                CommentLocation::Lines { path, start: start_line, end: end_line, outdated }
+                            }
                             _ => CommentLocation::Unknown,
                         }
                     }
@@ -220,7 +200,13 @@ impl Core {
 
 /// Where anchored lines are at the thread's head: first and last line
 /// (1-based) and whether the commented text is gone.
-fn place(family: &Family, thread: ThreadId, inode: silt_crdt::InodeId, start: &Anchor, end: &Anchor) -> Option<(usize, usize, bool)> {
+fn place(
+    family: &Family,
+    thread: ThreadId,
+    inode: silt_crdt::InodeId,
+    start: &Anchor,
+    end: &Anchor,
+) -> Option<(usize, usize, bool)> {
     let doc = family.text_doc(inode)?;
     let head = family.thread_head(thread);
     let text = doc.text_at(family.graph(), &head);

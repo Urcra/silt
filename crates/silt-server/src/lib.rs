@@ -17,10 +17,10 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use silt_log::Delta;
 use silt_proto::{
-    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, FamilyInfo, GENERATION_HEADER, Lease,
-    Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
-    InFlightQuery, InFlightReply, InFlightThread, PullReply, PushReply, PushRequest, SearchHit, SearchQuery, SearchReply,
-    RegisterThread, ThreadInfo, VisibilityRequest,
+    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, FamilyInfo, GENERATION_HEADER,
+    InFlightQuery, InFlightReply, InFlightThread, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER,
+    PasswordLoginRequest, PullReply, PushReply, PushRequest, RegisterThread, SearchHit, SearchQuery, SearchReply, ThreadInfo,
+    VisibilityRequest,
 };
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
@@ -111,11 +111,7 @@ const VIEWS_KEPT: usize = 64;
 
 impl RoomSlot {
     fn new(room: Room) -> Self {
-        Self {
-            room,
-            retired: false,
-            views: HashMap::new(),
-        }
+        Self { room, retired: false, views: HashMap::new() }
     }
 
     fn view(&mut self, family: FamilyId, viewer: &Viewer) -> u64 {
@@ -178,9 +174,7 @@ impl Server {
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let purged = lifecycle::load_purged(&db).await?;
         let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
-        let rows = sqlx::query("SELECT family_id, format, data FROM deltas ORDER BY family_id, seq")
-            .fetch_all(&db)
-            .await?;
+        let rows = sqlx::query("SELECT family_id, format, data FROM deltas ORDER BY family_id, seq").fetch_all(&db).await?;
         for row in rows {
             let family = FamilyId(id_from(row.get("family_id")));
             let delta = silt_log::decode_stored(row.get("format"), row.get::<&[u8], _>("data"))?;
@@ -215,10 +209,7 @@ impl Server {
                 blobs: BlobStore::new(data_dir.join("blobs")),
                 generation,
                 rooms: RwLock::new(
-                    rooms
-                        .into_iter()
-                        .map(|(family, room)| (family, Arc::new(Mutex::new(RoomSlot::new(room)))))
-                        .collect(),
+                    rooms.into_iter().map(|(family, room)| (family, Arc::new(Mutex::new(RoomSlot::new(room))))).collect(),
                 ),
                 waiters: Waiters::default(),
                 index: Mutex::new(index),
@@ -251,14 +242,8 @@ impl Server {
             .route("/v1/listing", get(listing))
             .route("/v1/threads", post(register_thread))
             .route("/v1/threads/{id}/lease", post(take_lease))
-            .route(
-                "/v1/families/{id}/deltas",
-                post(push).get(pull).layer(DefaultBodyLimit::max(DELTAS_BODY)),
-            )
-            .route(
-                "/v1/blobs/{hash}",
-                put(put_blob).get(get_blob).layer(DefaultBodyLimit::max(LARGE_BODY)),
-            )
+            .route("/v1/families/{id}/deltas", post(push).get(pull).layer(DefaultBodyLimit::max(DELTAS_BODY)))
+            .route("/v1/blobs/{hash}", put(put_blob).get(get_blob).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/in-flight", get(in_flight))
@@ -273,10 +258,7 @@ impl Server {
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/orgs/change", post(orgs::change))
-            .route(
-                "/git/{repo}/{*rest}",
-                get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)),
-            )
+            .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -320,25 +302,17 @@ pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, 
     if accounts::user_by_name(&db, user).await?.is_none() {
         accounts::create_user(
             &db,
-            &accounts::NewUser {
-                name: user,
-                display_name: None,
-                email: None,
-                password: None,
-                admin: false,
-            },
+            &accounts::NewUser { name: user, display_name: None, email: None, password: None, admin: false },
         )
         .await?;
     }
     let code: String = uuid::Uuid::new_v4().simple().to_string()[..10].to_owned();
-    sqlx::query(
-        "INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?",
-    )
-    .bind(hash(&code).to_vec())
-    .bind(now_ms() + PAIRING_TTL_MS)
-    .bind(user)
-    .execute(&db)
-    .await?;
+    sqlx::query("INSERT INTO pairing_codes (code_hash, expires_ms, user_id) SELECT ?, ?, id FROM users WHERE name = ?")
+        .bind(hash(&code).to_vec())
+        .bind(now_ms() + PAIRING_TTL_MS)
+        .bind(user)
+        .execute(&db)
+        .await?;
     Ok(code)
 }
 
@@ -364,12 +338,7 @@ impl IntoResponse for ApiError {
 impl From<ServerError> for ApiError {
     fn from(error: ServerError) -> Self {
         tracing::error!(%error, "request failed");
-        Self(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ErrorReply::Invalid {
-                message: "internal error".into(),
-            },
-        )
+        Self(StatusCode::INTERNAL_SERVER_ERROR, ErrorReply::Invalid { message: "internal error".into() })
     }
 }
 
@@ -413,11 +382,7 @@ pub(crate) async fn family_access(server: &Server, family: FamilyId, user: i64) 
     if row.is_none() {
         return Ok(FamilyAccess::Unknown);
     }
-    Ok(if server.viewer(user).await?.sees_family(family.0) {
-        FamilyAccess::Visible
-    } else {
-        FamilyAccess::Hidden
-    })
+    Ok(if server.viewer(user).await?.sees_family(family.0) { FamilyAccess::Visible } else { FamilyAccess::Hidden })
 }
 
 /// Lets `caller` read or write the family, claiming it when it's new.
@@ -439,21 +404,12 @@ pub(crate) async fn claim_family(server: &Server, family: FamilyId, caller: Call
 /// Rejects other protocol versions and stamps every response with the
 /// server's generation.
 async fn protocol(State(server): State<Server>, request: Request, next: Next) -> Response {
-    let version = request
-        .headers()
-        .get(PROTOCOL_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u32>().ok());
+    let version =
+        request.headers().get(PROTOCOL_HEADER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u32>().ok());
     let mut response = if version == Some(PROTOCOL) {
         next.run(request).await
     } else {
-        ApiError(
-            StatusCode::UPGRADE_REQUIRED,
-            ErrorReply::ProtocolMismatch {
-                supported: vec![PROTOCOL],
-            },
-        )
-        .into_response()
+        ApiError(StatusCode::UPGRADE_REQUIRED, ErrorReply::ProtocolMismatch { supported: vec![PROTOCOL] }).into_response()
     };
     response.headers_mut().insert(
         GENERATION_HEADER,
@@ -515,7 +471,10 @@ async fn password_login(
     Ok(Json(accounts::issue_device(server.db(), user.id, &body.name).await?))
 }
 
-async fn device_start(State(server): State<Server>, Json(body): Json<DeviceStartRequest>) -> Result<Json<DeviceStartReply>, ApiError> {
+async fn device_start(
+    State(server): State<Server>,
+    Json(body): Json<DeviceStartRequest>,
+) -> Result<Json<DeviceStartReply>, ApiError> {
     let (device_code, user_code) = accounts::start_device(server.db(), &body.name).await?;
     Ok(Json(DeviceStartReply {
         verification_url: format!("{}/device?code={user_code}", server.config().public_url()),
@@ -526,7 +485,10 @@ async fn device_start(State(server): State<Server>, Json(body): Json<DeviceStart
     }))
 }
 
-async fn device_poll(State(server): State<Server>, Json(body): Json<DevicePollRequest>) -> Result<Json<DevicePollReply>, ApiError> {
+async fn device_poll(
+    State(server): State<Server>,
+    Json(body): Json<DevicePollRequest>,
+) -> Result<Json<DevicePollReply>, ApiError> {
     Ok(Json(accounts::poll_device(server.db(), &body.device_code).await?))
 }
 
@@ -546,11 +508,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         }
         let mut slot = shared.lock().await;
         if !slot.retired {
-            families.push(FamilyInfo {
-                id,
-                seq: slot.room.seq(),
-                view: slot.view(id, &viewer),
-            });
+            families.push(FamilyInfo { id, seq: slot.room.seq(), view: slot.view(id, &viewer) });
         }
     }
     let rows = sqlx::query(
@@ -580,12 +538,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         })
         .collect();
     let (deleted, purged) = server.lifecycle(&viewer).await?;
-    Ok(Json(Listing {
-        families,
-        threads,
-        deleted,
-        purged,
-    }))
+    Ok(Json(Listing { families, threads, deleted, purged }))
 }
 
 async fn register_thread(
@@ -601,15 +554,17 @@ async fn register_thread(
         .bind(id_bytes(thread.family.0))
         .execute(db)
         .await?;
-    sqlx::query("INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(id_bytes(thread.id.0))
-        .bind(id_bytes(thread.family.0))
-        .bind(&thread.repo)
-        .bind(thread.created_ms)
-        .bind(caller.user)
-        .bind(visibility.map(|visibility| visibility.to_string()))
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id_bytes(thread.id.0))
+    .bind(id_bytes(thread.family.0))
+    .bind(&thread.repo)
+    .bind(thread.created_ms)
+    .bind(caller.user)
+    .bind(visibility.map(|visibility| visibility.to_string()))
+    .execute(db)
+    .await?;
     orgs::place_project(db, &thread.repo, caller.user).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -642,10 +597,7 @@ async fn take_lease(
     .bind(id_bytes(caller.device.0))
     .fetch_one(&server.shared.db)
     .await?;
-    Ok(Json(Lease {
-        device: caller.device,
-        epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default(),
-    }))
+    Ok(Json(Lease { device: caller.device, epoch: u64::try_from(row.get::<i64, _>("epoch")).unwrap_or_default() }))
 }
 
 async fn push(
@@ -667,9 +619,10 @@ async fn push(
     // their own thread; such parents count as missing, so the answer tells
     // hidden history and none apart no better (ADR 0016).
     let readable = server.viewer(caller.user).await?.readable_history(family.0, room);
-    if let Some(delta) = new.iter().find(|delta| {
-        delta.parents.ids().iter().any(|parent| room.graph().contains(*parent) && !readable.contains(*parent))
-    }) {
+    if let Some(delta) = new
+        .iter()
+        .find(|delta| delta.parents.ids().iter().any(|parent| room.graph().contains(*parent) && !readable.contains(*parent)))
+    {
         return Err(ApiError(StatusCode::CONFLICT, ErrorReply::MissingParents { delta: delta.span.first() }));
     }
     let pushed: Vec<Delta> = known.into_iter().cloned().chain(new).collect();
@@ -704,10 +657,7 @@ async fn push(
             tracing::warn!(%error, "could not write notifications");
         }
     }
-    Ok(Json(PushReply {
-        accepted: u64::try_from(outcome.accepted).unwrap_or(u64::MAX),
-        seq: outcome.seq,
-    }))
+    Ok(Json(PushReply { accepted: u64::try_from(outcome.accepted).unwrap_or(u64::MAX), seq: outcome.seq }))
 }
 
 #[derive(Deserialize)]
@@ -799,11 +749,7 @@ async fn set_visibility(
             if !orgs::may_set_project(db, &repo, caller.user).await? {
                 return Err(forbidden("only the project's org owners and server admins can change its visibility"));
             }
-            sqlx::query("UPDATE projects SET visibility = ? WHERE repo = ?")
-                .bind(&visibility)
-                .bind(repo)
-                .execute(db)
-                .await?;
+            sqlx::query("UPDATE projects SET visibility = ? WHERE repo = ?").bind(&visibility).bind(repo).execute(db).await?;
         }
         (None, Some(thread)) => {
             if !server.viewer(caller.user).await?.sees_thread(thread) {
@@ -839,10 +785,7 @@ async fn search(
     // Only the caller's threads are matched at all, and only a page of them,
     // so a common word doesn't fetch the whole index.
     let viewer = server.viewer(caller.user).await?;
-    let visible: Vec<String> = viewer
-        .visible_threads()
-        .map(|thread| hex_upper(&id_bytes(thread.0)))
-        .collect();
+    let visible: Vec<String> = viewer.visible_threads().map(|thread| hex_upper(&id_bytes(thread.0))).collect();
     let visible = serde_json::to_string(&visible).map_err(|error| ServerError::Io(std::io::Error::other(error)))?;
     let limit = i64::from(query.limit.unwrap_or(SEARCH_LIMIT).min(500));
     let rows = sqlx::query(
@@ -956,11 +899,7 @@ fn fts_query(text: &str) -> String {
         .join(" ")
 }
 
-async fn put_blob(
-    State(server): State<Server>,
-    UrlPath(hash_hex): UrlPath<String>,
-    body: Bytes,
-) -> Result<StatusCode, ApiError> {
+async fn put_blob(State(server): State<Server>, UrlPath(hash_hex): UrlPath<String>, body: Bytes) -> Result<StatusCode, ApiError> {
     if BlobStore::hash(&body).to_string() != hash_hex {
         return Err(bad_request("blob content does not match its hash"));
     }
@@ -991,12 +930,7 @@ async fn get_blob(
     if !readable {
         return Err(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound));
     }
-    server
-        .shared
-        .blobs
-        .get(hash)
-        .await
-        .map_err(|_| ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound))
+    server.shared.blobs.get(hash).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound))
 }
 
 impl Server {
@@ -1041,11 +975,9 @@ impl Server {
     /// worked out from last changed, else a new one.
     async fn viewer(&self, user: i64) -> Result<Arc<Viewer>, sqlx::Error> {
         let epoch: i64 = sqlx::query_scalar("SELECT value FROM visibility_epoch").fetch_one(&self.shared.db).await?;
-        let key = VisibilityAt {
-            epoch,
-            forks: self.shared.index.lock().await.forks_version,
-        };
-        let cached = self.shared.viewers.lock().await.get(&user).filter(|(at, _)| *at == key).map(|(_, viewer)| Arc::clone(viewer));
+        let key = VisibilityAt { epoch, forks: self.shared.index.lock().await.forks_version };
+        let cached =
+            self.shared.viewers.lock().await.get(&user).filter(|(at, _)| *at == key).map(|(_, viewer)| Arc::clone(viewer));
         if let Some(viewer) = cached {
             return Ok(viewer);
         }
@@ -1094,11 +1026,7 @@ struct Waiters(std::sync::Mutex<HashMap<FamilyId, Arc<Notify>>>);
 impl Waiters {
     fn subscribe(&self, family: FamilyId) -> Waiter<'_> {
         let notify = self.0.lock().expect("lock").entry(family).or_insert_with(|| Arc::new(Notify::new())).clone();
-        Waiter {
-            waiters: &self.0,
-            family,
-            notify,
-        }
+        Waiter { waiters: &self.0, family, notify }
     }
 
     fn wake(&self, family: FamilyId) {
@@ -1173,9 +1101,7 @@ pub(crate) fn id_from(bytes: &[u8]) -> u128 {
 }
 
 pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
 }
 
 #[cfg(test)]

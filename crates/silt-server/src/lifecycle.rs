@@ -18,7 +18,9 @@ use tokio::sync::OwnedMutexGuard;
 
 use crate::index::{self, Index};
 use crate::visibility::Viewer;
-use crate::{ApiError, Caller, RoomSlot, Server, ServerError, SharedRoom, bad_request, forbidden, id_bytes, id_from, not_found, now_ms};
+use crate::{
+    ApiError, Caller, RoomSlot, Server, ServerError, SharedRoom, bad_request, forbidden, id_bytes, id_from, not_found, now_ms,
+};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Blobs this new may belong to a push still on its way, so they stay.
@@ -50,10 +52,7 @@ pub(crate) async fn delete(
         .bind(id_bytes(thread.0))
         .execute(server.db())
         .await?;
-    sqlx::query("DELETE FROM leases WHERE thread_id = ?")
-        .bind(id_bytes(thread.0))
-        .execute(server.db())
-        .await?;
+    sqlx::query("DELETE FROM leases WHERE thread_id = ?").bind(id_bytes(thread.0)).execute(server.db()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -63,10 +62,7 @@ pub(crate) async fn restore(
     UrlPath(thread): UrlPath<String>,
 ) -> Result<StatusCode, ApiError> {
     let (thread, _, _) = owned(&server, &thread, caller).await?;
-    sqlx::query("UPDATE threads SET deleted_ms = NULL WHERE id = ?")
-        .bind(id_bytes(thread.0))
-        .execute(server.db())
-        .await?;
+    sqlx::query("UPDATE threads SET deleted_ms = NULL WHERE id = ?").bind(id_bytes(thread.0)).execute(server.db()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -84,7 +80,10 @@ pub(crate) async fn purge(
 }
 
 /// The caller's deleted threads.
-pub(crate) async fn trash(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<Vec<ThreadInfo>>, ApiError> {
+pub(crate) async fn trash(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<ThreadInfo>>, ApiError> {
     let rows = sqlx::query(
         "SELECT t.id, t.family_id, t.repo, t.created_ms, u.name AS owner FROM threads t JOIN users u ON u.id = t.owner_id
          WHERE t.owner_id = ? AND t.deleted_ms IS NOT NULL ORDER BY t.deleted_ms",
@@ -110,14 +109,8 @@ pub(crate) async fn trash(State(server): State<Server>, Extension(caller): Exten
 /// The blobs a delta needs.
 fn blob_of(delta: &Delta) -> Option<BlobHash> {
     match &delta.op {
-        Op::Create {
-            content: Content::Blob(hash),
-            ..
-        }
-        | Op::SetContent {
-            content: Content::Blob(hash),
-            ..
-        }
+        Op::Create { content: Content::Blob(hash), .. }
+        | Op::SetContent { content: Content::Blob(hash), .. }
         | Op::Conv(ConvOp::Attachment { blob: hash, .. } | ConvOp::SessionTranslated { lines: hash, .. })
         | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
         _ => None,
@@ -188,10 +181,7 @@ impl Server {
             ] {
                 sqlx::query(statement).bind(id_bytes(thread.0)).execute(&mut *tx).await?;
             }
-            sqlx::query("DELETE FROM threads WHERE id = ?")
-                .bind(id_bytes(thread.0))
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query("DELETE FROM threads WHERE id = ?").bind(id_bytes(thread.0)).execute(&mut *tx).await?;
         }
         let families: HashSet<FamilyId> = threads.iter().map(|(_, family)| *family).collect();
         let mut gone = Vec::new();
@@ -215,15 +205,9 @@ impl Server {
                         .collect()
                 })
                 .unwrap_or_default();
-            sqlx::query("DELETE FROM deltas WHERE family_id = ?")
-                .bind(id_bytes(family.0))
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query("DELETE FROM deltas WHERE family_id = ?").bind(id_bytes(family.0)).execute(&mut *tx).await?;
             if remaining == 0 && kept.is_empty() {
-                sqlx::query("DELETE FROM families WHERE id = ?")
-                    .bind(id_bytes(family.0))
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query("DELETE FROM families WHERE id = ?").bind(id_bytes(family.0)).execute(&mut *tx).await?;
                 rebuilt.push((family, None));
                 gone.push(family);
                 continue;
@@ -310,10 +294,8 @@ impl Server {
             .bind(cutoff)
             .fetch_all(self.db())
             .await?;
-        let expired: Vec<(ThreadId, FamilyId)> = rows
-            .iter()
-            .map(|row| (ThreadId(id_from(row.get("id"))), FamilyId(id_from(row.get("family_id")))))
-            .collect();
+        let expired: Vec<(ThreadId, FamilyId)> =
+            rows.iter().map(|row| (ThreadId(id_from(row.get("id"))), FamilyId(id_from(row.get("family_id"))))).collect();
         if !expired.is_empty() {
             tracing::info!(threads = expired.len(), "purging threads whose time in the trash is up");
         }

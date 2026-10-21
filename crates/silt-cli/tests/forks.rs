@@ -25,12 +25,7 @@ fn team() -> Team {
     let server = Server::start(&root.path().join("server"));
     let alice = Machine::new_for(root.path(), "alice-laptop", "alice", &origin, &server);
     let bob = Machine::new_for(root.path(), "bob-desktop", "bob", &origin, &server);
-    Team {
-        alice,
-        bob,
-        server,
-        _root: root,
-    }
+    Team { alice, bob, server, _root: root }
 }
 
 fn read(path: &Path) -> String {
@@ -95,11 +90,7 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
 
     let forked = bob.silt_with(
         &["fork", &thread],
-        &[
-            ("FAKE_EXPECT", "Please-add-a-farewell"),
-            ("FAKE_SAY", "Bob here: adding bob"),
-            ("FAKE_LINE", "fn bob() {}"),
-        ],
+        &[("FAKE_EXPECT", "Please-add-a-farewell"), ("FAKE_SAY", "Bob here: adding bob"), ("FAKE_LINE", "fn bob() {}")],
     );
     let fork_checkout = checkout_from(&forked.stderr);
     assert_eq!(read(&fork_checkout.join("src/main.rs")), "fn main() {}\nfn farewell() {}\nfn bob() {}\n");
@@ -134,8 +125,9 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
     let pulled_text = String::from_utf8_lossy(&pulled.stdout);
     assert!(pulled.status.success(), "{}", String::from_utf8_lossy(&pulled.stderr));
     assert!(pulled_text.contains("pulled 1 messages and 1 changed files"), "{pulled_text}");
-    assert!(eventually(|| read(&fork_checkout.join("src/main.rs"))
-        == "// alice was here\nfn main() {}\nfn farewell() {}\nfn bob() {}\n"));
+    assert!(eventually(
+        || read(&fork_checkout.join("src/main.rs")) == "// alice was here\nfn main() {}\nfn farewell() {}\nfn bob() {}\n"
+    ));
     let show = bob.stdout(&["show", &fork]);
     assert!(show.contains("upstream progress") && show.contains("alice: continuing upstream"), "{show}");
     let own = bob.stdout(&["diff", &fork, "--base", "merge-base"]);
@@ -471,7 +463,10 @@ fn the_git_mirror_shows_and_takes_only_what_each_person_may() {
     let thread_ref = |listing: &str| listing.lines().any(|line| line.contains("refs/silt/threads/"));
     assert!(eventually(|| mirrored_family(server).is_some()), "the commit reaches the mirror");
     assert!(eventually(|| thread_ref(&String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout))));
-    assert!(eventually(|| thread_ref(&String::from_utf8_lossy(&mirror_git(bob, server, &["ls-remote", "URL"]).stdout))), "bob sees alice's thread");
+    assert!(
+        eventually(|| thread_ref(&String::from_utf8_lossy(&mirror_git(bob, server, &["ls-remote", "URL"]).stdout))),
+        "bob sees alice's thread"
+    );
     let listing = String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout).into_owned();
     let alice_ref = listing
         .lines()
@@ -491,4 +486,3 @@ fn the_git_mirror_shows_and_takes_only_what_each_person_may() {
     );
     assert!(thread_ref(&String::from_utf8_lossy(&mirror_git(alice, server, &["ls-remote", "URL"]).stdout)));
 }
-

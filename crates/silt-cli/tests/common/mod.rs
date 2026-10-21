@@ -127,18 +127,9 @@ impl Server {
     /// started again on another.
     pub fn start(data: &Path) -> Self {
         for _ in 0..5 {
-            let port = TcpListener::bind("127.0.0.1:0")
-                .expect("free port")
-                .local_addr()
-                .expect("address")
-                .port();
+            let port = TcpListener::bind("127.0.0.1:0").expect("free port").local_addr().expect("address").port();
             let listen = format!("127.0.0.1:{port}");
-            let mut server = Self {
-                data: data.to_owned(),
-                url: format!("http://{listen}"),
-                listen,
-                child: None,
-            };
+            let mut server = Self { data: data.to_owned(), url: format!("http://{listen}"), listen, child: None };
             if server.try_run() {
                 return server;
             }
@@ -157,11 +148,7 @@ impl Server {
 
     /// Whether the server listens, rather than exiting first.
     fn try_run(&mut self) -> bool {
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(Self::log_path(&self.data))
-            .expect("server log");
+        let log = fs::OpenOptions::new().create(true).append(true).open(Self::log_path(&self.data)).expect("server log");
         let mut child = silt_command()
             .args(["server", "run", "--listen", &self.listen, "--data"])
             .arg(&self.data)
@@ -190,24 +177,15 @@ impl Server {
     }
 
     pub fn pairing_code_for(&self, user: &str) -> String {
-        let output = silt_command()
-            .args(["server", "pair", "--user", user, "--data"])
-            .arg(&self.data)
-            .output()
-            .expect("pair runs");
+        let output =
+            silt_command().args(["server", "pair", "--user", user, "--data"]).arg(&self.data).output().expect("pair runs");
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
     /// Runs `silt server <args> --data <this server's data>` on the host.
     pub fn admin(&self, args: &[&str]) -> String {
-        let output = silt_command()
-            .arg("server")
-            .args(args)
-            .arg("--data")
-            .arg(&self.data)
-            .output()
-            .expect("silt server runs");
+        let output = silt_command().arg("server").args(args).arg("--data").arg(&self.data).output().expect("silt server runs");
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
@@ -256,13 +234,7 @@ impl Machine {
             fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         fs::create_dir_all(agents.join("logs")).expect("mkdir");
-        let machine = Self {
-            silt_home,
-            claude_dir,
-            repo: home.join("repo").canonicalize().expect("canonical"),
-            fake,
-            agents,
-        };
+        let machine = Self { silt_home, claude_dir, repo: home.join("repo").canonicalize().expect("canonical"), fake, agents };
         let code = server.pairing_code_for(user);
         machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
         machine
@@ -317,11 +289,7 @@ impl Machine {
     /// Output of a command that may fail for now, for polling.
     pub fn try_stdout(&self, args: &[&str]) -> String {
         let output = self.run(args);
-        if output.status.success() {
-            String::from_utf8_lossy(&output.stdout).into_owned()
-        } else {
-            String::new()
-        }
+        if output.status.success() { String::from_utf8_lossy(&output.stdout).into_owned() } else { String::new() }
     }
 
     pub fn stdout(&self, args: &[&str]) -> String {
@@ -335,13 +303,9 @@ impl Machine {
 
 impl Drop for Machine {
     fn drop(&mut self) {
-        let _ = silt_command()
-            .args(["daemon", "stop"])
-            .env("SILT_HOME", &self.silt_home)
-            .output();
+        let _ = silt_command().args(["daemon", "stop"]).env("SILT_HOME", &self.silt_home).output();
     }
 }
-
 
 /// An origin with one pushed commit, `main.rs` holding `fn main() {}`.
 pub fn origin(root: &Path) -> PathBuf {
@@ -357,12 +321,7 @@ pub fn origin(root: &Path) -> PathBuf {
 }
 
 pub fn thread_of(machine: &Machine) -> String {
-    machine
-        .stdout(&["log"])
-        .split_whitespace()
-        .next()
-        .expect("a thread is listed")
-        .to_owned()
+    machine.stdout(&["log"]).split_whitespace().next().expect("a thread is listed").to_owned()
 }
 
 /// The checkout path `silt resume` or `silt fork` reported.

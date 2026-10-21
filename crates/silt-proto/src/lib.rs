@@ -59,7 +59,9 @@ pub struct DevicePollRequest {
 #[serde(rename_all = "snake_case")]
 pub enum DevicePollReply {
     Pending,
-    Approved { login: LoginReply },
+    Approved {
+        login: LoginReply,
+    },
     /// Expired, denied or unknown; start again.
     Gone,
 }
@@ -216,11 +218,17 @@ pub enum ErrorReply {
         #[serde(with = "delta_id_text")]
         delta: DeltaId,
     },
-    Invalid { message: String },
+    Invalid {
+        message: String,
+    },
     Unauthorized,
-    Forbidden { message: String },
+    Forbidden {
+        message: String,
+    },
     NotFound,
-    ProtocolMismatch { supported: Vec<u32> },
+    ProtocolMismatch {
+        supported: Vec<u32>,
+    },
 }
 
 impl std::fmt::Display for ErrorReply {
@@ -320,9 +328,7 @@ mod tests {
 
     #[test]
     fn conflicts_round_trip_with_full_actor_ids() {
-        let reply = ErrorReply::Conflict {
-            delta: DeltaId::new(ActorId(u128::MAX - 5), Lamport(34)),
-        };
+        let reply = ErrorReply::Conflict { delta: DeltaId::new(ActorId(u128::MAX - 5), Lamport(34)) };
         let json = serde_json::to_string(&reply).expect("serializes");
         assert_eq!(serde_json::from_str::<ErrorReply>(&json).expect("deserializes"), reply);
     }
@@ -363,16 +369,45 @@ pub struct OrgsReply {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum OrgChange {
-    Create { org: String },
-    AddMember { org: String, user: String, owner: bool },
-    RemoveMember { org: String, user: String },
-    CreateTeam { org: String, team: String },
-    RemoveTeam { org: String, team: String },
-    AddToTeam { org: String, team: String, user: String },
-    RemoveFromTeam { org: String, team: String, user: String },
-    DefaultVisibility { org: String, visibility: Visibility },
+    Create {
+        org: String,
+    },
+    AddMember {
+        org: String,
+        user: String,
+        owner: bool,
+    },
+    RemoveMember {
+        org: String,
+        user: String,
+    },
+    CreateTeam {
+        org: String,
+        team: String,
+    },
+    RemoveTeam {
+        org: String,
+        team: String,
+    },
+    AddToTeam {
+        org: String,
+        team: String,
+        user: String,
+    },
+    RemoveFromTeam {
+        org: String,
+        team: String,
+        user: String,
+    },
+    DefaultVisibility {
+        org: String,
+        visibility: Visibility,
+    },
     /// Moves the project (a normalized remote) into `org`.
-    MoveProject { repo: String, org: String },
+    MoveProject {
+        repo: String,
+        org: String,
+    },
 }
 
 /// Something a user should hear about (ADR 0013).

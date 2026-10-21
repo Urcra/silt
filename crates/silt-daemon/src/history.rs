@@ -10,8 +10,8 @@ use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{Core, CoreError, touched_inode};
-use crate::transcripts::native_entries;
 use crate::protocol::{FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
+use crate::transcripts::native_entries;
 
 /// Longest text of one entry in a history page.
 const ENTRY_CHARS: usize = 4000;
@@ -22,11 +22,7 @@ impl Core {
     pub(crate) fn history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
         let family_id = self.threads[&thread].family;
         let items: Vec<(&Delta, HistorySource)> = match self.families.get(&family_id) {
-            Some(family) => family
-                .history(thread)
-                .into_iter()
-                .map(|item| (item.delta, item.source))
-                .collect(),
+            Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source)).collect(),
             None => self
                 .local_log(family_id)
                 .iter()
@@ -98,16 +94,8 @@ impl Core {
             let Some(indexes) = by_delta.get(&hit.delta) else {
                 continue;
             };
-            let index = indexes
-                .iter()
-                .copied()
-                .find(|index| entries[*index].1.kind == hit.kind)
-                .unwrap_or(indexes[0]);
-            hits.push(HistoryHit {
-                index,
-                kind: hit.kind,
-                snippet: hit.snippet,
-            });
+            let index = indexes.iter().copied().find(|index| entries[*index].1.kind == hit.kind).unwrap_or(indexes[0]);
+            hits.push(HistoryHit { index, kind: hit.kind, snippet: hit.snippet });
             if hits.len() >= limit as usize {
                 break;
             }
@@ -141,10 +129,7 @@ impl Core {
             return Ok(self.in_flight(&identity, &relative, here));
         };
         let reply = remote
-            .in_flight(&silt_proto::InFlightQuery {
-                repo: identity,
-                path: relative,
-            })
+            .in_flight(&silt_proto::InFlightQuery { repo: identity, path: relative })
             .await
             .map_err(|source| CoreError::Server { doing: "list the threads changing it", source })?;
         Ok(reply
@@ -165,10 +150,7 @@ impl Core {
     fn repo_path(&self, cwd: &std::path::Path, path: &str) -> Result<(String, String, Option<ThreadId>), CoreError> {
         let cwd = cwd.canonicalize()?;
         let repo = silt_git::Repo::discover(&cwd)?;
-        let identity = repo
-            .remote_url("origin")?
-            .map(|url| silt_git::normalize_remote(&url))
-            .unwrap_or_default();
+        let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
         let here = self.thread_at(None, &cwd).ok();
         let root = here
             .and_then(|_| {
@@ -243,17 +225,10 @@ impl Core {
                 entries += 1;
             }
             if item.source == HistorySource::Own
-                && let Op::Conv(ConvOp::Turn {
-                    mark: TurnMark::PromptSubmitted,
-                    ..
-                }) = item.delta.op
+                && let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = item.delta.op
             {
                 let (entry, prompt) = last_prompt.take().map_or((None, String::new()), |(index, text)| (Some(index), text));
-                turns.push(TurnInfo {
-                    number: turns.len() + 1,
-                    entry,
-                    prompt,
-                });
+                turns.push(TurnInfo { number: turns.len() + 1, entry, prompt });
             }
         }
         turns
@@ -299,10 +274,7 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
                     }
                 }
             }
-            Op::Conv(ConvOp::Turn {
-                mark: TurnMark::PromptSubmitted,
-                ..
-            }) => {
+            Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) => {
                 if let Some(prompt) = pending_prompt.remove(&delta.thread) {
                     prompts.insert(delta.thread, prompt);
                 }
@@ -318,14 +290,8 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
         };
         let prompt = prompts.get(&delta.thread).cloned();
         let (inserted, deleted) = match &delta.op {
-            Op::Text {
-                op: silt_crdt::TextOp::Insert { content, .. },
-                ..
-            } => (content.chars().count(), 0),
-            Op::Text {
-                op: silt_crdt::TextOp::Delete { len, .. },
-                ..
-            } => (0, *len),
+            Op::Text { op: silt_crdt::TextOp::Insert { content, .. }, .. } => (content.chars().count(), 0),
+            Op::Text { op: silt_crdt::TextOp::Delete { len, .. }, .. } => (0, *len),
             _ => (0, 0),
         };
         match touches.last_mut() {

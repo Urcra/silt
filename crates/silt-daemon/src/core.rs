@@ -6,19 +6,19 @@ use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::Repo;
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op};
-use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
-use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
 use silt_proto::{Listing, Visibility};
 use silt_redact::{Overlay, Redactor};
+use silt_store::{CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
+use silt_types::{ActorId, BlobHash, FamilyId, Frontier, GitOid, ThreadId};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::disk::{self, RawFile};
 use crate::lifecycle::Lifecycle;
 use crate::protocol::{Mount, Request, Response};
-use crate::sessions::{self, PendingSession, Session};
 use crate::remote::{self, Remote};
+use crate::sessions::{self, PendingSession, Session};
 use crate::watch::{self, Watcher};
 
 pub enum Event {
@@ -26,17 +26,47 @@ pub enum Event {
     /// Paths in a checkout may have changed, as the watcher noticed at
     /// `noticed`; `settled` once the agents' transcripts have had time to
     /// catch up.
-    Changed { checkout: i64, paths: Vec<PathBuf>, noticed: Instant, settled: bool },
+    Changed {
+        checkout: i64,
+        paths: Vec<PathBuf>,
+        noticed: Instant,
+        settled: bool,
+    },
     Tick,
-    CloseTool { session_id: String, reply: oneshot::Sender<Response> },
+    CloseTool {
+        session_id: String,
+        reply: oneshot::Sender<Response>,
+    },
     /// A push's answer, from sync epoch `epoch`.
-    Pushed { family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String> },
-    Pulled { family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String> },
+    Pushed {
+        family: FamilyId,
+        epoch: u64,
+        generation: Option<u64>,
+        outcome: Outcome,
+        error: Option<String>,
+    },
+    Pulled {
+        family: FamilyId,
+        epoch: u64,
+        generation: Option<u64>,
+        outcome: Outcome,
+        error: Option<String>,
+    },
     /// A listing, and when it was asked for.
     Listed(Result<Listing, String>, Instant),
-    Discovered { token: u64, found: Option<silt_agents::Found> },
-    Snapshotted { session_id: String, result: Result<Vec<String>, String> },
-    Acp { thread: ThreadId, run: u64, event: crate::acp::AcpEvent },
+    Discovered {
+        token: u64,
+        found: Option<silt_agents::Found>,
+    },
+    Snapshotted {
+        session_id: String,
+        result: Result<Vec<String>, String>,
+    },
+    Acp {
+        thread: ThreadId,
+        run: u64,
+        event: crate::acp::AcpEvent,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -210,13 +240,7 @@ impl Core {
         core.store.learn_secrets(core.redactor.secrets()).await?;
         core.redactor = core.redactor.clone().with(stored.iter().cloned());
         core.overlay = Overlay::new(stored.into_iter().chain(core.redactor.secrets().iter().cloned()));
-        core.clones = core
-            .store
-            .clones()
-            .await?
-            .into_iter()
-            .filter(|(_, path)| path.join(".git").exists())
-            .collect();
+        core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -240,10 +264,8 @@ impl Core {
                 }
             }
             let state = core.store.sync_state(family_id).await?;
-            core.syncs.insert(
-                family_id,
-                ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view),
-            );
+            core.syncs
+                .insert(family_id, ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
         }
         for record in core.store.checkouts().await? {
             if !record.path.exists() {
@@ -275,13 +297,9 @@ impl Core {
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
                 Response::ok(homes)
             }
-            Request::StartSession {
-                cwd,
-                agent,
-                session_id,
-                isolated,
-                existing,
-            } => to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await),
+            Request::StartSession { cwd, agent, session_id, isolated, existing } => {
+                to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await)
+            }
             Request::Hook { event, input } => match self.hook(&event, input, reply).await {
                 Some((response, reply)) => {
                     let _ = reply.send(response);
@@ -331,20 +349,13 @@ impl Core {
                 recovered: self.recoveries.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
-            Request::Fork {
-                thread,
-                cwd,
-                here,
-                agent,
-                private,
-            } => to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private).await),
+            Request::Fork { thread, cwd, here, agent, private } => {
+                to_response(self.fork(&thread, &cwd, here, agent.as_deref(), private).await)
+            }
             Request::Pull { thread, cwd } => to_response(self.pull(thread.as_deref(), &cwd).await),
-            Request::MrCreate {
-                thread,
-                cwd,
-                title,
-                summary,
-            } => to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await),
+            Request::MrCreate { thread, cwd, title, summary } => {
+                to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
+            }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
             Request::MrShow { mr } => to_response(self.mr_show(&mr)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
@@ -369,9 +380,7 @@ impl Core {
             Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),
-            Request::ResolveComment { thread, comment, cwd } => {
-                to_response(self.resolve_comment(&thread, &comment, &cwd).await)
-            }
+            Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
             Request::SetVisibility { cwd, thread, visibility } => {
                 to_response(self.set_visibility(&cwd, thread.as_deref(), visibility).await)
             }
@@ -386,13 +395,9 @@ impl Core {
             Request::GitText { thread, oid } => to_response(self.git_text(&thread, &oid)),
             Request::BrowserDeltas { thread, deltas } => to_response(self.receive_from_browser(&thread, &deltas).await),
             Request::Live { thread } => to_response(self.live_state(&thread)),
-            Request::Presence {
-                thread,
-                file,
-                line,
-                draft,
-                leaving,
-            } => return answer_later(reply, self.presence(&thread, file, line, draft, leaving)),
+            Request::Presence { thread, file, line, draft, leaving } => {
+                return answer_later(reply, self.presence(&thread, file, line, draft, leaving));
+            }
             Request::AcpAgents => Response::ok(self.acp_agents()),
             Request::AcpStart { thread, clone, agent } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent).await)
@@ -440,7 +445,11 @@ impl Core {
         }
     }
 
-    pub(crate) fn start_checkout(&mut self, record: CheckoutRecord, entries: BTreeMap<String, DiskEntry>) -> Result<(), CoreError> {
+    pub(crate) fn start_checkout(
+        &mut self,
+        record: CheckoutRecord,
+        entries: BTreeMap<String, DiskEntry>,
+    ) -> Result<(), CoreError> {
         let family = self
             .threads
             .get(&record.thread)
@@ -450,24 +459,10 @@ impl Core {
         let events = self.events.clone();
         let id = record.id;
         let watcher = watch::watch(&record.path, move |paths| {
-            let _ = events.send(Event::Changed {
-                checkout: id,
-                paths,
-                noticed: Instant::now(),
-                settled: false,
-            });
+            let _ = events.send(Event::Changed { checkout: id, paths, noticed: Instant::now(), settled: false });
         })?;
         let bridge = Bridge::new(record.actor, record.thread, entries);
-        self.checkouts.insert(
-            record.id,
-            Checkout {
-                record,
-                family,
-                repo,
-                bridge,
-                _watcher: Some(watcher),
-            },
-        );
+        self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watcher: Some(watcher) });
         Ok(())
     }
 
@@ -554,9 +549,7 @@ impl Core {
             let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
             // A move that can't be recorded is recorded as a delete and a
             // new file instead, by `ingest_file`.
-            let renamed = checkout
-                .bridge
-                .rename(family, &mut RepoBases(&checkout.repo), from, to, &disk_file, &author, now_ms());
+            let renamed = checkout.bridge.rename(family, &mut RepoBases(&checkout.repo), from, to, &disk_file, &author, now_ms());
             let ingested = match renamed {
                 Ok(Some(ingested)) => ingested,
                 Ok(None) => continue,
@@ -620,11 +613,8 @@ impl Core {
         let entry_hash = entry.map(|entry| entry.hash);
         let family_id = self.checkout(checkout_id)?.family;
         let thread = self.checkout(checkout_id)?.record.thread;
-        let in_family = || {
-            self.families
-                .get(&family_id)
-                .is_some_and(|family| family.thread_view(thread).paths().contains_key(path))
-        };
+        let in_family =
+            || self.families.get(&family_id).is_some_and(|family| family.thread_view(thread).paths().contains_key(path));
         match (&raw, entry_hash) {
             (Some(raw), Some(hash)) if raw.hash == hash => return Ok(Vec::new()),
             (None, None) if !in_family() => return Ok(Vec::new()),
@@ -637,14 +627,7 @@ impl Core {
         let author = self.author_for(checkout_id);
         let checkout = self.checkouts.get_mut(&checkout_id).expect("checked above");
         let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
-        let ingested = checkout.bridge.ingest(
-            family,
-            &mut RepoBases(&checkout.repo),
-            path,
-            disk_file,
-            &author,
-            now_ms(),
-        )?;
+        let ingested = checkout.bridge.ingest(family, &mut RepoBases(&checkout.repo), path, disk_file, &author, now_ms())?;
         self.persist(family_id, &ingested.deltas).await?;
         self.persist_entry(checkout_id, path).await?;
         let mut again = self.perform(checkout_id, ingested.actions).await?;
@@ -679,13 +662,7 @@ impl Core {
                 view.paths().get(path).is_some_and(|inode| view.is_executable(*inode))
             })
         };
-        Ok(DiskFile {
-            content,
-            executable,
-            hash: raw.hash,
-            size: raw.size(),
-            mtime_ns: raw.mtime_ns,
-        })
+        Ok(DiskFile { content, executable, hash: raw.hash, size: raw.size(), mtime_ns: raw.mtime_ns })
     }
 
     /// Brings other checkouts of the family up to date with `deltas`.
@@ -699,11 +676,8 @@ impl Core {
             .collect();
         for other in others {
             let checkout = self.checkout(other)?;
-            let inodes: Vec<InodeId> = deltas
-                .iter()
-                .filter(|delta| !checkout.bridge.is_own(delta))
-                .filter_map(touched_inode)
-                .collect();
+            let inodes: Vec<InodeId> =
+                deltas.iter().filter(|delta| !checkout.bridge.is_own(delta)).filter_map(touched_inode).collect();
             let family = &self.families[&family_id];
             let actions = checkout.bridge.reconcile(family, &mut RepoBases(&checkout.repo), inodes);
             let again = self.perform(other, actions).await?;
@@ -737,7 +711,10 @@ impl Core {
             DiskAction::Write { path, .. } => {
                 let kept = first.get(&path.to_lowercase()).is_none_or(|winner| winner == path);
                 if !kept {
-                    warn!(path, "not writing a file whose name differs only in case from another's; this filesystem would merge them");
+                    warn!(
+                        path,
+                        "not writing a file whose name differs only in case from another's; this filesystem would merge them"
+                    );
                 }
                 kept
             }
@@ -773,14 +750,7 @@ impl Core {
     async fn perform_action(&mut self, checkout_id: i64, action: DiskAction, force: bool) -> Result<Option<String>, CoreError> {
         let root = self.checkout(checkout_id)?.record.path.clone();
         match action {
-            DiskAction::Write {
-                path,
-                inode,
-                content,
-                executable,
-                version,
-                moved_from,
-            } => {
+            DiskAction::Write { path, inode, content, executable, version, moved_from } => {
                 // The bytes come first: fetching them may wait, and the disk
                 // must be checked after any wait, right before writing.
                 let bytes = match content {
@@ -792,31 +762,27 @@ impl Core {
                     }
                 };
                 let recorded = self.checkout(checkout_id)?.bridge.entries().get(&path).map(|entry| entry.hash);
-                let unchanged = |current: Option<[u8; 32]>| current.is_none() || current == recorded || (force && recorded.is_none());
+                let unchanged =
+                    |current: Option<[u8; 32]>| current.is_none() || current == recorded || (force && recorded.is_none());
                 let current = disk::read(&root, &path)?;
                 if !unchanged(current.as_ref().map(|current| current.hash)) {
                     return Ok(Some(path));
                 }
                 let modes_count = self.checkout(checkout_id)?.repo.tracks_file_mode();
                 let written = match current {
-                    Some(current) if current.hash == *blake3::hash(&bytes).as_bytes() && (current.executable == executable || !modes_count) => current,
+                    Some(current)
+                        if current.hash == *blake3::hash(&bytes).as_bytes()
+                            && (current.executable == executable || !modes_count) =>
+                    {
+                        current
+                    }
                     _ => match disk::replace(&root, &path, &bytes, executable, unchanged)? {
                         Some(written) => written,
                         None => return Ok(Some(path)),
                     },
                 };
-                let entry = DiskEntry {
-                    inode,
-                    hash: written.hash,
-                    size: written.size(),
-                    mtime_ns: written.mtime_ns,
-                    version,
-                };
-                self.checkouts
-                    .get_mut(&checkout_id)
-                    .expect("checked above")
-                    .bridge
-                    .record_written(&path, entry);
+                let entry = DiskEntry { inode, hash: written.hash, size: written.size(), mtime_ns: written.mtime_ns, version };
+                self.checkouts.get_mut(&checkout_id).expect("checked above").bridge.record_written(&path, entry);
                 self.persist_entry(checkout_id, &path).await?;
                 if let Some(old) = moved_from {
                     return self.remove_from_disk(checkout_id, &root, old).await;
@@ -836,11 +802,7 @@ impl Core {
             return Ok(Some(path));
         }
         disk::remove(root, &path)?;
-        self.checkouts
-            .get_mut(&checkout_id)
-            .expect("checked above")
-            .bridge
-            .record_removed(&path);
+        self.checkouts.get_mut(&checkout_id).expect("checked above").bridge.record_removed(&path);
         self.store.remove_disk_file(checkout_id, &path).await?;
         Ok(None)
     }
@@ -894,7 +856,13 @@ impl Core {
         Ok(())
     }
 
-    pub(crate) async fn append_conv(&mut self, family_id: FamilyId, thread: ThreadId, author: Author, op: ConvOp) -> Result<Delta, CoreError> {
+    pub(crate) async fn append_conv(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        author: Author,
+        op: ConvOp,
+    ) -> Result<Delta, CoreError> {
         self.append_conv_with(family_id, thread, author, op, Vec::new(), None).await
     }
 
@@ -913,15 +881,8 @@ impl Core {
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
-        let rows: Vec<SearchRow> = texts
-            .into_iter()
-            .map(|(kind, body)| SearchRow {
-                thread,
-                delta: delta.span.first(),
-                kind,
-                body,
-            })
-            .collect();
+        let rows: Vec<SearchRow> =
+            texts.into_iter().map(|(kind, body)| SearchRow { thread, delta: delta.span.first(), kind, body }).collect();
         self.persist_with(family_id, std::slice::from_ref(&delta), &rows, read).await?;
         Ok(delta)
     }
@@ -965,12 +926,8 @@ impl Core {
         } else {
             self.raw.insert(family_id, deltas);
         }
-        let ids: Vec<i64> = self
-            .checkouts
-            .iter()
-            .filter(|(_, checkout)| checkout.family == family_id)
-            .map(|(id, _)| *id)
-            .collect();
+        let ids: Vec<i64> =
+            self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
             let entries = stored_entries(&self.store, id).await?;
             let checkout = self.checkouts.get_mut(&id).expect("listed above");
@@ -980,9 +937,7 @@ impl Core {
     }
 
     fn checkout(&self, id: i64) -> Result<&Checkout, CoreError> {
-        self.checkouts
-            .get(&id)
-            .ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
+        self.checkouts.get(&id).ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
     }
 
     pub(crate) fn families(&self) -> &HashMap<FamilyId, Family> {
@@ -1039,10 +994,7 @@ impl Core {
         let blob = self.store.blobs().put(&bytes).await?;
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("thread's family is loaded");
-        let op = Op::Git(GitOp::Bundle {
-            commits: vec![commit],
-            blob,
-        });
+        let op = Op::Git(GitOp::Bundle { commits: vec![commit], blob });
         let delta = family.delta(actor, thread, Author::Import, now_ms(), family.thread_head(thread), op);
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.persist(family_id, &[delta]).await?;
@@ -1097,7 +1049,9 @@ impl Core {
         let family = self.families.get(&family_id)?;
         let seen = family.graph().version_vector(&family.thread_head(thread));
         family.log().iter().rev().find_map(|delta| match &delta.op {
-            Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => Some(*commit),
+            Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => {
+                Some(*commit)
+            }
             _ => None,
         })
     }
@@ -1107,15 +1061,16 @@ impl Core {
     /// Threads whose lease moved to another device stop taking writes from
     /// this one. `before` holds the heads the moved threads had here before
     /// `deltas` arrived, which is where this device's work continues.
-    pub(crate) async fn lease_changes(&mut self, deltas: &[Delta], before: &HashMap<ThreadId, Frontier>) -> Result<(), CoreError> {
+    pub(crate) async fn lease_changes(
+        &mut self,
+        deltas: &[Delta],
+        before: &HashMap<ThreadId, Frontier>,
+    ) -> Result<(), CoreError> {
         let Some(device) = self.remote.as_ref().map(|remote| remote.config.device) else {
             return Ok(());
         };
-        let leased: HashSet<ThreadId> = deltas
-            .iter()
-            .filter(|delta| matches!(delta.op, Op::Lease { .. }))
-            .map(|delta| delta.thread)
-            .collect();
+        let leased: HashSet<ThreadId> =
+            deltas.iter().filter(|delta| matches!(delta.op, Op::Lease { .. })).map(|delta| delta.thread).collect();
         for thread in leased {
             // The lease with the highest epoch holds; an older one arriving
             // late moves nothing.
@@ -1137,12 +1092,8 @@ impl Core {
     /// a fork from `at` (by default the thread's head), so nothing written
     /// here lands in the moved thread and nothing from there lands here.
     pub(crate) async fn thread_moved(&mut self, thread: ThreadId, at: Option<Frontier>) -> Result<(), CoreError> {
-        let ids: Vec<i64> = self
-            .checkouts
-            .iter()
-            .filter(|(_, checkout)| checkout.record.thread == thread)
-            .map(|(id, _)| *id)
-            .collect();
+        let ids: Vec<i64> =
+            self.checkouts.iter().filter(|(_, checkout)| checkout.record.thread == thread).map(|(id, _)| *id).collect();
         if ids.is_empty() {
             return Ok(());
         }
@@ -1169,12 +1120,9 @@ impl Core {
         let (url, headers) = remote.git_mirror(family);
         let root = repo.root().to_owned();
         tokio::task::spawn_blocking(move || {
-            let pushed = Repo::discover(&root)
-                .map_err(|error| error.to_string())
-                .and_then(|repo| {
-                    repo.push_to_mirror(&url, &headers, commit, &thread.to_string())
-                        .map_err(|error| error.to_string())
-                });
+            let pushed = Repo::discover(&root).map_err(|error| error.to_string()).and_then(|repo| {
+                repo.push_to_mirror(&url, &headers, commit, &thread.to_string()).map_err(|error| error.to_string())
+            });
             if let Err(error) = pushed {
                 warn!(%error, "could not push to the server's git mirror");
             }
@@ -1192,12 +1140,13 @@ impl Core {
     }
 
     fn connected(&self) -> Result<Remote, CoreError> {
-        self.remote
-            .clone()
-            .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+        self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
     }
 
-    fn inbox(&self, all: bool) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
+    fn inbox(
+        &self,
+        all: bool,
+    ) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
         let remote = self.connected()?;
         Ok(async move {
             let reply = remote.inbox(all).await.map_err(|source| CoreError::Server { doing: "read the inbox", source })?;
@@ -1217,7 +1166,10 @@ impl Core {
         })
     }
 
-    fn inbox_read(&self, read: silt_proto::InboxRead) -> Result<impl Future<Output = Result<&'static str, CoreError>> + use<>, CoreError> {
+    fn inbox_read(
+        &self,
+        read: silt_proto::InboxRead,
+    ) -> Result<impl Future<Output = Result<&'static str, CoreError>> + use<>, CoreError> {
         let remote = self.connected()?;
         Ok(async move {
             remote.inbox_read(&read).await.map_err(|source| CoreError::Server { doing: "mark the inbox read", source })?;
@@ -1258,13 +1210,14 @@ impl Core {
     /// Teammates' current drafts for the thread's next prompt, for its
     /// agent (ADR 0014).
     pub(crate) async fn teammates_drafts(&self, thread: ThreadId) -> Option<String> {
-        let drafts: Vec<String> = self
-            .teammates_draft_list(thread)
-            .await
-            .into_iter()
-            .map(|(user, draft)| format!("- {user}: {draft}"))
-            .collect();
-        (!drafts.is_empty()).then(|| format!("Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}", drafts.join("\n")))
+        let drafts: Vec<String> =
+            self.teammates_draft_list(thread).await.into_iter().map(|(user, draft)| format!("- {user}: {draft}")).collect();
+        (!drafts.is_empty()).then(|| {
+            format!(
+                "Teammates watching this thread are drafting too; consider their drafts with this prompt:\n{}",
+                drafts.join("\n")
+            )
+        })
     }
 
     /// Whether this machine's secrets go back into `delta` (ADR 0015, 0016):
@@ -1338,13 +1291,16 @@ impl Core {
         let Some(record) = self.threads.get(&thread) else {
             return false;
         };
-        user.is_empty() || record.owner.is_empty() || record.owner == user
+        user.is_empty()
+            || record.owner.is_empty()
+            || record.owner == user
             || self.collaborators.get(&thread).is_some_and(|names| names.contains(&user))
     }
 
     async fn share(&mut self, selector: &str, user: &str, remove: bool) -> Result<String, CoreError> {
         let thread = self.find_thread(selector)?;
-        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid("sharing needs a server; use `silt auth login`".into()))?;
+        let remote =
+            self.remote.as_ref().ok_or_else(|| CoreError::Invalid("sharing needs a server; use `silt auth login`".into()))?;
         remote.share(thread, user, remove).await.map_err(|source| CoreError::Server { doing: "share the thread", source })?;
         let names = self.collaborators.entry(thread).or_default();
         names.retain(|name| name != user);
@@ -1364,14 +1320,8 @@ impl Core {
             Some(url) => silt_git::normalize_remote(&url),
             None => source.root().to_string_lossy().into_owned(),
         };
-        let project: String = project
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' { ch } else { '-' })
-            .collect();
-        Mount {
-            source: source.root().to_owned(),
-            shared: self.data_dir.join("linked").join(project.trim_matches('-')),
-        }
+        let project: String = project.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' { ch } else { '-' }).collect();
+        Mount { source: source.root().to_owned(), shared: self.data_dir.join("linked").join(project.trim_matches('-')) }
     }
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
@@ -1394,15 +1344,15 @@ impl Core {
     /// current head. A fork with its own `visibility` is registered with the
     /// server before it has a delta to push, so it is never visible to
     /// anyone else in between.
-    pub(crate) async fn fork_thread_at(&mut self, from: ThreadId, at: Option<Frontier>, visibility: Option<Visibility>) -> Result<ThreadId, CoreError> {
+    pub(crate) async fn fork_thread_at(
+        &mut self,
+        from: ThreadId,
+        at: Option<Frontier>,
+        visibility: Option<Visibility>,
+    ) -> Result<ThreadId, CoreError> {
         let source = self.threads[&from].clone();
         let fork = ThreadId(uuid::Uuid::now_v7().as_u128());
-        let record = ThreadRecord {
-            id: fork,
-            created_ms: now_ms(),
-            owner: self.own_user(),
-            ..source.clone()
-        };
+        let record = ThreadRecord { id: fork, created_ms: now_ms(), owner: self.own_user(), ..source.clone() };
         match (&visibility, &self.remote) {
             (Some(_), Some(remote)) => remote
                 .register_thread(&crate::sync::thread_info(&record), visibility)
@@ -1430,13 +1380,7 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_)
-        | Op::Git(_)
-        | Op::Lease { .. }
-        | Op::Fork { .. }
-        | Op::Merge { .. }
-        | Op::Mr(_)
-        | Op::Comment(_) => None,
+        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => None,
     }
 }
 
@@ -1499,7 +1443,5 @@ pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> 
 }
 
 pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
 }

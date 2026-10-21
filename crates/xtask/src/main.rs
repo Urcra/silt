@@ -1,30 +1,70 @@
+//! Tasks for working on Silt rather than using it, kept out of the `silt`
+//! binary: `cargo xtask status [--root <dir>]` shows milestone and task
+//! progress from ROADMAP.md and TASKS.md.
+
 use std::env;
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use exn::{Exn, ResultExt};
-
-use crate::CliError;
+use std::process::ExitCode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Milestone {
-    pub id: String,
-    pub title: String,
-    pub status: String,
-    pub done: usize,
-    pub total: usize,
+struct Milestone {
+    id: String,
+    title: String,
+    status: String,
+    done: usize,
+    total: usize,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct TaskCounts {
-    pub in_progress: usize,
-    pub todo: usize,
-    pub blocked: usize,
-    pub done: usize,
+struct TaskCounts {
+    in_progress: usize,
+    todo: usize,
+    blocked: usize,
+    done: usize,
 }
 
-pub fn parse_roadmap(text: &str) -> Vec<Milestone> {
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["status"] => status(None),
+        ["status", "--root", root] => status(Some(PathBuf::from(root))),
+        _ => Err("usage: cargo xtask status [--root <dir>]".to_owned()),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("xtask: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn status(root: Option<PathBuf>) -> Result<(), String> {
+    let root = match root {
+        Some(root) => root,
+        None => find_repo_root()?,
+    };
+    let roadmap = read(&root.join("ROADMAP.md"))?;
+    let tasks = read(&root.join("TASKS.md"))?;
+    print!("{}", render(&parse_roadmap(&roadmap), &parse_tasks(&tasks)));
+    Ok(())
+}
+
+fn find_repo_root() -> Result<PathBuf, String> {
+    let cwd = env::current_dir().map_err(|error| format!("cannot read the current directory: {error}"))?;
+    cwd.ancestors()
+        .find(|dir| dir.join("ROADMAP.md").is_file())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "no ROADMAP.md found in any parent directory".to_owned())
+}
+
+fn read(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
+}
+
+fn parse_roadmap(text: &str) -> Vec<Milestone> {
     let mut milestones: Vec<Milestone> = Vec::new();
     for line in text.lines() {
         if let Some(heading) = line.strip_prefix("## ") {
@@ -48,7 +88,7 @@ pub fn parse_roadmap(text: &str) -> Vec<Milestone> {
     milestones
 }
 
-pub fn parse_tasks(text: &str) -> TaskCounts {
+fn parse_tasks(text: &str) -> TaskCounts {
     let mut counts = TaskCounts::default();
     let mut section: Option<&str> = None;
     for line in text.lines() {
@@ -70,7 +110,7 @@ pub fn parse_tasks(text: &str) -> TaskCounts {
     counts
 }
 
-pub fn render(milestones: &[Milestone], tasks: &TaskCounts) -> String {
+fn render(milestones: &[Milestone], tasks: &TaskCounts) -> String {
     let mut out = String::new();
     let active = milestones.iter().find(|m| m.status == "active");
     match active {
@@ -115,36 +155,7 @@ fn parse_milestone_heading(heading: &str) -> Option<Milestone> {
         Some((title, status)) => (title, status.split('`').next().unwrap_or_default()),
         None => (rest, ""),
     };
-    Some(Milestone {
-        id: id.to_owned(),
-        title: title.trim().to_owned(),
-        status: status.to_owned(),
-        done: 0,
-        total: 0,
-    })
-}
-
-pub fn print(root: Option<PathBuf>) -> Result<(), Exn<CliError>> {
-    let root = match root {
-        Some(root) => root,
-        None => find_repo_root()?,
-    };
-    let roadmap = read(&root.join("ROADMAP.md"))?;
-    let tasks = read(&root.join("TASKS.md"))?;
-    print!("{}", render(&parse_roadmap(&roadmap), &parse_tasks(&tasks)));
-    Ok(())
-}
-
-fn find_repo_root() -> Result<PathBuf, Exn<CliError>> {
-    let cwd = env::current_dir().or_raise(|| CliError("cannot read current directory".into()))?;
-    cwd.ancestors()
-        .find(|dir| dir.join("ROADMAP.md").is_file())
-        .map(Path::to_path_buf)
-        .ok_or_else(|| Exn::new(CliError("no ROADMAP.md found in any parent directory".into())))
-}
-
-fn read(path: &Path) -> Result<String, Exn<CliError>> {
-    fs::read_to_string(path).or_raise(|| CliError(format!("cannot read {}", path.display())))
+    Some(Milestone { id: id.to_owned(), title: title.trim().to_owned(), status: status.to_owned(), done: 0, total: 0 })
 }
 
 #[cfg(test)]
@@ -191,35 +202,15 @@ Intro with a stray box:
         assert_eq!(
             milestones,
             vec![
-                Milestone {
-                    id: "M0".into(),
-                    title: "Spike and skeleton".into(),
-                    status: "active".into(),
-                    done: 1,
-                    total: 2,
-                },
-                Milestone {
-                    id: "M1".into(),
-                    title: "CRDT".into(),
-                    status: "planned".into(),
-                    done: 1,
-                    total: 2,
-                },
+                Milestone { id: "M0".into(), title: "Spike and skeleton".into(), status: "active".into(), done: 1, total: 2 },
+                Milestone { id: "M1".into(), title: "CRDT".into(), status: "planned".into(), done: 1, total: 2 },
             ]
         );
     }
 
     #[test]
     fn tasks_are_counted_by_section() {
-        assert_eq!(
-            parse_tasks(TASKS),
-            TaskCounts {
-                in_progress: 1,
-                todo: 2,
-                blocked: 0,
-                done: 1,
-            }
-        );
+        assert_eq!(parse_tasks(TASKS), TaskCounts { in_progress: 1, todo: 2, blocked: 0, done: 1 });
     }
 
     #[test]

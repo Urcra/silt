@@ -113,11 +113,8 @@ impl Reader for OpenCodeReader {
             return read;
         };
         let field = |key: &str| part.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
-        let role = part
-            .get("messageID")
-            .and_then(Value::as_str)
-            .and_then(|id| self.roles.get(id))
-            .map_or("assistant", String::as_str);
+        let role =
+            part.get("messageID").and_then(Value::as_str).and_then(|id| self.roles.get(id)).map_or("assistant", String::as_str);
         match field("type").as_str() {
             "text" if part.get("synthetic").and_then(Value::as_bool) == Some(true) => {
                 read.entries.push(Entry::Other { kind: "synthetic".into() });
@@ -134,10 +131,7 @@ impl Reader for OpenCodeReader {
                     .map(|value| value.as_str().map_or_else(|| value.to_string(), str::to_owned))
                     .unwrap_or_default();
                 let tool = field("tool");
-                read.marks.push(Mark::ToolStarted {
-                    tool_use_id: id.clone(),
-                    tool: tool.clone(),
-                });
+                read.marks.push(Mark::ToolStarted { tool_use_id: id.clone(), tool: tool.clone() });
                 read.marks.push(Mark::ToolFinished { tool_use_id: id.clone() });
                 read.entries.push(Entry::ToolCall {
                     id: id.clone(),
@@ -188,10 +182,8 @@ pub fn export_from_records(lines: &[String]) -> Value {
             }
         }
     }
-    let messages: Vec<Value> = order
-        .into_iter()
-        .map(|id| json!({"info": messages[&id], "parts": parts.remove(&id).unwrap_or_default()}))
-        .collect();
+    let messages: Vec<Value> =
+        order.into_iter().map(|id| json!({"info": messages[&id], "parts": parts.remove(&id).unwrap_or_default()})).collect();
     json!({"info": info, "messages": messages})
 }
 
@@ -284,10 +276,7 @@ impl Agent for OpenCode {
             .filter(|session| session.get("created").and_then(Value::as_i64).is_some_and(|created| created >= since_ms))
             .filter_map(|session| session.get("id").and_then(Value::as_str).map(str::to_owned))
             .find(|id| !known.contains(id))
-            .map(|id| Found {
-                transcript: PathBuf::from(format!("opencode:{id}")),
-                id,
-            })
+            .map(|id| Found { transcript: PathBuf::from(format!("opencode:{id}")), id })
     }
 
     fn capture(&self) -> Capture {
@@ -383,11 +372,8 @@ mod tests {
         assert_eq!(key(&records[2]).as_deref(), Some("part:prt_c4949c2fd0026rVbItfVNFab"));
         let mut reader = OpenCodeReader::default();
         let reads: Vec<Read> = records.iter().map(|line| reader.push(line)).collect();
-        let entries: Vec<Entry> = reads
-            .iter()
-            .flat_map(|read| read.entries.clone())
-            .filter(|entry| !matches!(entry, Entry::Other { .. }))
-            .collect();
+        let entries: Vec<Entry> =
+            reads.iter().flat_map(|read| read.entries.clone()).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
         assert_eq!(entries[0], Entry::User { text: "List files".into() });
         assert!(matches!(&entries[1], Entry::ToolCall { name, .. } if name == "glob"));
         assert_eq!(entries[3], Entry::Assistant { text: "One file.".into() });

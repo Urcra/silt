@@ -210,21 +210,12 @@ fn rejects_events_with_unknown_parents_or_bad_positions() {
     a.insert(0, "abc").expect("a");
     let second = a.insert(3, "d").expect("a");
     let mut b = TextReplica::new(B);
-    assert!(matches!(
-        b.receive(&second),
-        Err(ReplicaError::Causal(CausalError::UnknownParent(_)))
-    ));
+    assert!(matches!(b.receive(&second), Err(ReplicaError::Causal(CausalError::UnknownParent(_)))));
     assert_eq!(b.text(), "");
-    assert!(matches!(
-        a.insert(10, "x"),
-        Err(ReplicaError::Text(TextError::OutOfBounds { .. }))
-    ));
+    assert!(matches!(a.insert(10, "x"), Err(ReplicaError::Text(TextError::OutOfBounds { .. }))));
     assert!(matches!(
         a.delete(2, 5),
-        Err(ReplicaError::Text(TextError::OutOfBounds {
-            op: TextOp::Delete { pos: 2, len: 5 },
-            len: 4
-        }))
+        Err(ReplicaError::Text(TextError::OutOfBounds { op: TextOp::Delete { pos: 2, len: 5 }, len: 4 }))
     ));
     assert_eq!(a.text(), "abcd");
 }

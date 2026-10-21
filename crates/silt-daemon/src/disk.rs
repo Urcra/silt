@@ -73,11 +73,9 @@ pub fn stat(root: &Path, path: &str) -> io::Result<Option<(u64, i64, bool)>> {
         Err(error) => return Err(error),
     };
     match fs::symlink_metadata(&full) {
-        Ok(metadata) if metadata.is_file() => Ok(Some((
-            metadata.len(),
-            mtime_ns(&metadata),
-            metadata.permissions().mode() & 0o111 != 0,
-        ))),
+        Ok(metadata) if metadata.is_file() => {
+            Ok(Some((metadata.len(), mtime_ns(&metadata), metadata.permissions().mode() & 0o111 != 0)))
+        }
         Ok(_) => Ok(None),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -153,12 +151,7 @@ pub fn replace(
     fs::rename(&temporary, &full)?;
     fs::File::open(dir)?.sync_all()?;
     let metadata = fs::metadata(&full)?;
-    Ok(Some(RawFile {
-        hash: *blake3::hash(bytes).as_bytes(),
-        mtime_ns: mtime_ns(&metadata),
-        executable,
-        bytes: bytes.to_vec(),
-    }))
+    Ok(Some(RawFile { hash: *blake3::hash(bytes).as_bytes(), mtime_ns: mtime_ns(&metadata), executable, bytes: bytes.to_vec() }))
 }
 
 pub fn remove(root: &Path, path: &str) -> io::Result<()> {
@@ -206,7 +199,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let first = write(dir.path(), "a.txt", b"recorded\n", false).expect("writes");
         std::fs::write(dir.path().join("a.txt"), "edited meanwhile\n").expect("edits");
-        let replaced = replace(dir.path(), "a.txt", b"from the thread\n", false, |current| current == Some(first.hash)).expect("checks");
+        let replaced =
+            replace(dir.path(), "a.txt", b"from the thread\n", false, |current| current == Some(first.hash)).expect("checks");
         assert!(replaced.is_none());
         assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).expect("reads"), "edited meanwhile\n");
         assert!(!dir.path().join(".a.txt.silt-tmp").exists(), "the new content is thrown away");

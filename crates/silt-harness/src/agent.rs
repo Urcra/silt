@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Implementation, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall,
-    ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio};
 use serde::{Deserialize, Serialize};
@@ -119,7 +119,9 @@ fn reveal_json(overlay: &Overlay, value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(overlay.reveal(text)),
         Value::Array(items) => Value::Array(items.iter().map(|item| reveal_json(overlay, item)).collect()),
-        Value::Object(fields) => Value::Object(fields.iter().map(|(key, item)| (key.clone(), reveal_json(overlay, item))).collect()),
+        Value::Object(fields) => {
+            Value::Object(fields.iter().map(|(key, item)| (key.clone(), reveal_json(overlay, item))).collect())
+        }
         other => other.clone(),
     }
 }
@@ -194,11 +196,8 @@ impl Harness {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
         let _ = std::fs::create_dir_all(&self.config.state_dir);
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(self.config.state_dir.join(LEARNED_SECRETS));
+        let file =
+            std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(self.config.state_dir.join(LEARNED_SECRETS));
         if let Ok(mut file) = file {
             for secret in secrets {
                 let _ = writeln!(file, "{secret}");
@@ -218,10 +217,7 @@ impl Harness {
     }
 
     fn save(&self, id: &str, session: &Session) {
-        let saved = Saved {
-            cwd: session.cwd.clone(),
-            messages: session.messages.clone(),
-        };
+        let saved = Saved { cwd: session.cwd.clone(), messages: session.messages.clone() };
         if let (Ok(text), Some(path)) = (serde_json::to_string(&saved), self.saved_path(id)) {
             let _ = std::fs::create_dir_all(&self.config.state_dir);
             let _ = std::fs::write(path, text);
@@ -237,10 +233,7 @@ impl Harness {
             always_run: false,
             cancel: cancel.clone(),
         };
-        self.sessions
-            .lock()
-            .expect("lock")
-            .insert(id.to_owned(), (cancel, Arc::new(tokio::sync::Mutex::new(session))));
+        self.sessions.lock().expect("lock").insert(id.to_owned(), (cancel, Arc::new(tokio::sync::Mutex::new(session))));
         Ok(())
     }
 
@@ -253,7 +246,12 @@ impl Harness {
             .ok_or_else(|| failed(format!("no session {id}")))
     }
 
-    async fn prompt(&self, connection: &ConnectionTo<Client>, id: &SessionId, prompt: String) -> agent_client_protocol::Result<StopReason> {
+    async fn prompt(
+        &self,
+        connection: &ConnectionTo<Client>,
+        id: &SessionId,
+        prompt: String,
+    ) -> agent_client_protocol::Result<StopReason> {
         if prompt.trim().is_empty() {
             return Err(failed("the prompt has no text"));
         }
@@ -284,15 +282,10 @@ impl Harness {
             }
             // An empty answer would make every later request invalid.
             if !reply.parts.is_empty() {
-                session.messages.push(Message {
-                    role: Role::Assistant,
-                    parts: reply.parts.clone(),
-                });
+                session.messages.push(Message { role: Role::Assistant, parts: reply.parts.clone() });
             }
-            let uses: Vec<(String, String, Value)> = reply
-                .tool_uses()
-                .map(|(call, name, input)| (call.to_owned(), name.to_owned(), input.clone()))
-                .collect();
+            let uses: Vec<(String, String, Value)> =
+                reply.tool_uses().map(|(call, name, input)| (call.to_owned(), name.to_owned(), input.clone())).collect();
             if uses.is_empty() {
                 self.save(&id.to_string(), &session);
                 return Ok(match reply.stop {
@@ -307,21 +300,13 @@ impl Harness {
             let mut failure = None;
             for (call, name, input) in uses {
                 if failure.is_some() || cancel.is_requested() {
-                    results.push(Part::ToolResult {
-                        id: call,
-                        output: "not run".into(),
-                        is_error: true,
-                    });
+                    results.push(Part::ToolResult { id: call, output: "not run".into(), is_error: true });
                     continue;
                 }
                 match self.use_and_report(connection, id, &mut session, &cancel, call.clone(), &name, &input).await {
                     Ok(result) => results.push(result),
                     Err(error) => {
-                        results.push(Part::ToolResult {
-                            id: call,
-                            output: "not run".into(),
-                            is_error: true,
-                        });
+                        results.push(Part::ToolResult { id: call, output: "not run".into(), is_error: true });
                         failure = Some(error);
                     }
                 }
@@ -363,11 +348,7 @@ impl Harness {
         let shown = ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(output.clone()))));
         let finished = ToolCallUpdate::new(call.clone(), ToolCallUpdateFields::new().status(status).content(vec![shown]));
         notify(SessionUpdate::ToolCallUpdate(finished))?;
-        Ok(Part::ToolResult {
-            id: call,
-            output: self.redact(&output),
-            is_error,
-        })
+        Ok(Part::ToolResult { id: call, output: self.redact(&output), is_error })
     }
 
     #[expect(clippy::too_many_arguments, reason = "the turn's context, passed along rather than bundled for one call")]
@@ -411,7 +392,13 @@ impl Harness {
 
     /// Asks the person whether to run `command`; `Some(true)` allows it
     /// for the rest of the session.
-    async fn ask_to_run(&self, connection: &ConnectionTo<Client>, id: &SessionId, call: &str, command: &str) -> agent_client_protocol::Result<Option<bool>> {
+    async fn ask_to_run(
+        &self,
+        connection: &ConnectionTo<Client>,
+        id: &SessionId,
+        call: &str,
+        command: &str,
+    ) -> agent_client_protocol::Result<Option<bool>> {
         let options = vec![
             PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
             PermissionOption::new("always", "Allow all commands in this session", PermissionOptionKind::AllowAlways),
@@ -586,12 +573,8 @@ mod tests {
         push_user(&mut messages, vec![Part::Text { text: "a".into() }]);
         push_user(&mut messages, vec![Part::Text { text: "b".into() }]);
         assert_eq!(messages.len(), 1);
-        messages.push(Message {
-            role: Role::Assistant,
-            parts: vec![Part::Text { text: "ok".into() }],
-        });
+        messages.push(Message { role: Role::Assistant, parts: vec![Part::Text { text: "ok".into() }] });
         push_user(&mut messages, vec![Part::Text { text: "c".into() }]);
         assert_eq!(messages.len(), 3);
     }
 }
-

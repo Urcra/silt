@@ -25,13 +25,7 @@ fn write(family: &mut Family, actor: ActorId, thread: ThreadId, op: Op) -> Delta
 }
 
 fn create(parent: Parent, name: &str, kind: InodeKind) -> Op {
-    Op::Create {
-        kind,
-        parent,
-        name: name.into(),
-        content: Content::Empty,
-        executable: false,
-    }
+    Op::Create { kind, parent, name: name.into(), content: Content::Empty, executable: false }
 }
 
 /// A family with a `src` directory and a file in it, on the main thread.
@@ -70,7 +64,11 @@ fn a_refused_edit_leaves_a_file_from_git_as_it_was() {
     let past_the_end = from_mallory(&family, MAIN, Op::Text { inode: file, op: TextOp::Delete { pos: 100, len: 1 } });
     let mut bases = HashMap::from([(oid, "fn main() {}\n".to_owned())]);
     assert!(family.apply(past_the_end, &mut bases).is_err());
-    assert_eq!(family.file(file), Some(silt_log::FileView::GitText(oid)), "still read from git, as on replicas that never saw it");
+    assert_eq!(
+        family.file(file),
+        Some(silt_log::FileView::GitText(oid)),
+        "still read from git, as on replicas that never saw it"
+    );
 }
 
 #[test]
@@ -145,11 +143,7 @@ fn moves_into_directories_the_author_never_saw_are_refused() {
         Author::User,
         0,
         before_dir,
-        Op::Move {
-            inode: file,
-            parent: Parent::Dir(InodeId(dir.span.first())),
-            name: "a.txt".into(),
-        },
+        Op::Move { inode: file, parent: Parent::Dir(InodeId(dir.span.first())), name: "a.txt".into() },
     );
     assert_refused(&mut family, unseen);
 }

@@ -82,13 +82,7 @@ fn delta(family: &mut Family, thread: ThreadId, op: Op) -> Delta {
 }
 
 fn file(name: &str) -> Op {
-    Op::Create {
-        kind: InodeKind::File,
-        parent: Parent::Root,
-        name: name.into(),
-        content: Content::Empty,
-        executable: false,
-    }
+    Op::Create { kind: InodeKind::File, parent: Parent::Root, name: name.into(), content: Content::Empty, executable: false }
 }
 
 /// A server with Alice and Bob signed in.
@@ -117,11 +111,7 @@ async fn two_people() -> (tempfile::TempDir, Client, Client) {
                 .json()
                 .await
                 .expect("login");
-            Client {
-                http: reqwest::Client::new(),
-                base,
-                token: reply.token,
-            }
+            Client { http: reqwest::Client::new(), base, token: reply.token }
         }
     };
     let (alice, bob) = (login("alice").await, login("bob").await);
@@ -154,9 +144,19 @@ async fn only_the_owner_and_collaborators_write_a_thread() {
     assert_eq!(bob.try_push(std::slice::from_ref(&first)).await, StatusCode::OK, "known deltas sync back freely");
 
     let share = |remove: bool| silt_proto::ShareRequest { user: "bob".into(), remove };
-    let shared = bob.request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators")).json(&share(false)).send().await.expect("sends");
+    let shared = bob
+        .request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators"))
+        .json(&share(false))
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(shared.status(), StatusCode::FORBIDDEN, "only the owner shares");
-    let shared = alice.request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators")).json(&share(false)).send().await.expect("sends");
+    let shared = alice
+        .request(reqwest::Method::POST, &format!("/v1/threads/{MAIN}/collaborators"))
+        .json(&share(false))
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(shared.status(), StatusCode::NO_CONTENT);
     assert_eq!(bob.listing().await.threads[0].collaborators, vec!["bob".to_owned()]);
     assert_eq!(bob.try_push(&[edit]).await, StatusCode::OK, "a collaborator writes");
@@ -221,11 +221,7 @@ async fn nobody_builds_on_history_they_cannot_read() {
     alice.register(FORK).await;
     let open = delta(&mut family, MAIN, file("open"));
     alice.push(std::slice::from_ref(&open)).await;
-    let private = silt_proto::VisibilityRequest {
-        repo: None,
-        thread: Some(FORK),
-        visibility: silt_proto::Visibility::Private,
-    };
+    let private = silt_proto::VisibilityRequest { repo: None, thread: Some(FORK), visibility: silt_proto::Visibility::Private };
     let set = alice.request(reqwest::Method::PUT, "/v1/visibility").json(&private).send().await.expect("sends");
     assert_eq!(set.status(), StatusCode::NO_CONTENT);
     let secret = delta(&mut family, FORK, file("secret"));
@@ -245,11 +241,7 @@ async fn a_deleted_private_thread_stays_hidden() {
     alice.register(MAIN).await;
     alice.push(&[delta(&mut family, MAIN, file("shared"))]).await;
     bob.register(FORK).await;
-    let private = silt_proto::VisibilityRequest {
-        repo: None,
-        thread: Some(FORK),
-        visibility: silt_proto::Visibility::Private,
-    };
+    let private = silt_proto::VisibilityRequest { repo: None, thread: Some(FORK), visibility: silt_proto::Visibility::Private };
     let set = bob.request(reqwest::Method::PUT, "/v1/visibility").json(&private).send().await.expect("sends");
     assert_eq!(set.status(), StatusCode::NO_CONTENT);
     bob.push(&[delta(&mut family, FORK, file("bobs secret"))]).await;

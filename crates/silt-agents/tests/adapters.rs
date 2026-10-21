@@ -8,11 +8,7 @@ use silt_agents::{Agent, Entry, Found, RecordedSession};
 
 fn recorded(agent: &dyn Agent, cwd: &Path, id: &str) -> RecordedSession {
     let entries = [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }];
-    RecordedSession {
-        id: id.into(),
-        main: agent.translate(&entries, cwd, id).expect("translates"),
-        ..Default::default()
-    }
+    RecordedSession { id: id.into(), main: agent.translate(&entries, cwd, id).expect("translates"), ..Default::default() }
 }
 
 /// What the agent reads back from the file, as conversation.
@@ -50,7 +46,10 @@ fn codex_sessions_are_restored_found_and_read_back() {
     let transcript = silt_agents::codex::restore_into(home.path(), &cwd, &cwd, &recorded(agent, &cwd, id)).expect("restores");
     assert!(transcript.starts_with(home.path().join("sessions")));
     finds_as_a_new_run(|since, known| silt_agents::codex::discover_in(home.path(), &cwd, since, known), id, &transcript);
-    assert_eq!(read_back(agent, &transcript), [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }]);
+    assert_eq!(
+        read_back(agent, &transcript),
+        [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }]
+    );
 }
 
 #[test]
@@ -59,9 +58,14 @@ fn copilot_sessions_are_restored_found_and_read_back() {
     let (home, (_dir, cwd)) = (tempfile::tempdir().expect("temp dir"), cwd());
     let id = "6c1f0000-0000-4000-8000-000000000002";
     let transcript = silt_agents::copilot::restore_into(home.path(), &cwd, &cwd, &recorded(agent, &cwd, id)).expect("restores");
-    assert!(fs::read_to_string(transcript.with_file_name("workspace.yaml")).expect("workspace").contains(&*cwd.to_string_lossy()));
+    assert!(
+        fs::read_to_string(transcript.with_file_name("workspace.yaml")).expect("workspace").contains(&*cwd.to_string_lossy())
+    );
     finds_as_a_new_run(|since, known| silt_agents::copilot::discover_in(home.path(), &cwd, since, known), id, &transcript);
-    assert_eq!(read_back(agent, &transcript), [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }]);
+    assert_eq!(
+        read_back(agent, &transcript),
+        [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }]
+    );
 }
 
 #[test]

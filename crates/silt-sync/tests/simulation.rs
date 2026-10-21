@@ -22,12 +22,7 @@ struct Client {
 
 impl Client {
     fn new(index: usize) -> Self {
-        Self {
-            actor: ActorId(index as u128 + 1),
-            family: Family::new(),
-            log: Vec::new(),
-            sync: ClientSync::default(),
-        }
+        Self { actor: ActorId(index as u128 + 1), family: Family::new(), log: Vec::new(), sync: ClientSync::default() }
     }
 
     fn write(&mut self, op: Op) {
@@ -138,7 +133,14 @@ impl Network {
                     Err(_) => Outcome::UnknownCursor,
                 };
                 if std::env::var_os("SIM_TRACE").is_some() {
-                    eprintln!("pull by {index} after {} gen {generation:?} -> {:?}", pull.after, match &outcome { Outcome::Pulled(d) => format!("{} deltas", d.len()), other => format!("{other:?}") });
+                    eprintln!(
+                        "pull by {index} after {} gen {generation:?} -> {:?}",
+                        pull.after,
+                        match &outcome {
+                            Outcome::Pulled(d) => format!("{} deltas", d.len()),
+                            other => format!("{other:?}"),
+                        }
+                    );
                 }
                 let effects = self.clients[index].sync.on_pull(generation, outcome);
                 self.clients[index].apply(effects);
@@ -151,11 +153,7 @@ impl Network {
     /// marker, confirmed the server still has what it pushed.
     fn settle(&mut self) {
         let state = |network: &Self| -> Vec<(u64, u64, usize)> {
-            network
-                .clients
-                .iter()
-                .map(|client| (client.sync.pushed(), client.sync.pulled(), client.log.len()))
-                .collect()
+            network.clients.iter().map(|client| (client.sync.pushed(), client.sync.pulled(), client.log.len())).collect()
         };
         for _ in 0..10_000 {
             let before = state(self);
@@ -165,9 +163,10 @@ impl Network {
             while !self.queue.is_empty() {
                 self.deliver(0, false);
             }
-            let caught_up = self.clients.iter().all(|client| {
-                client.sync.pushed() >= client.log.len() as u64 && client.sync.pulled() >= self.room.seq()
-            });
+            let caught_up = self
+                .clients
+                .iter()
+                .all(|client| client.sync.pushed() >= client.log.len() as u64 && client.sync.pulled() >= self.room.seq());
             if caught_up && state(self) == before {
                 return;
             }
@@ -185,26 +184,14 @@ fn run(client_count: usize, actions: &[Action]) -> Result<(), TestCaseError> {
         content: Content::Empty,
         executable: false,
     });
-    let mut network = Network {
-        clients,
-        room: Room::new(0),
-        snapshot: Room::new(0),
-        generations: 0,
-        queue: Vec::new(),
-    };
+    let mut network = Network { clients, room: Room::new(0), snapshot: Room::new(0), generations: 0, queue: Vec::new() };
     for action in actions {
         match action {
             Action::Edit { client, pos, text } => {
                 let client = &mut network.clients[*client];
                 if let Some(inode) = client.file() {
                     let pos = usize::from(*pos) % (client.text().chars().count() + 1);
-                    client.write(Op::Text {
-                        inode,
-                        op: TextOp::Insert {
-                            pos,
-                            content: text.clone(),
-                        },
-                    });
+                    client.write(Op::Text { inode, op: TextOp::Insert { pos, content: text.clone() } });
                 }
             }
             Action::Send { client } => network.send(*client),
@@ -235,7 +222,15 @@ fn run(client_count: usize, actions: &[Action]) -> Result<(), TestCaseError> {
                         delta.span.first(),
                         network.room.position(delta.span.first()),
                         network.room.seq(),
-                        network.clients.iter().map(|c| (c.actor, c.log.iter().map(|d| d.span.first().lamport.0 * 10 + d.span.actor.0 as u64).collect::<Vec<_>>(), c.sync.clone())).collect::<Vec<_>>()
+                        network
+                            .clients
+                            .iter()
+                            .map(|c| (
+                                c.actor,
+                                c.log.iter().map(|d| d.span.first().lamport.0 * 10 + d.span.actor.0 as u64).collect::<Vec<_>>(),
+                                c.sync.clone()
+                            ))
+                            .collect::<Vec<_>>()
                     );
                 }
             }
@@ -270,12 +265,36 @@ fn regression_stale_push_after_restart() {
     let ins = |client| Action::Edit { client, pos: 0, text: "a".into() };
     let del = |pick| Action::Deliver { pick, lose_response: false };
     let actions = vec![
-        ins(0), ins(0), ins(0), ins(0), ins(0), ins(0),
-        Action::Send { client: 0 }, ins(0), Action::Send { client: 1 }, ins(0), ins(0),
-        del(45), del(0), ins(0), del(0), Action::Snapshot, ins(1),
-        Action::Send { client: 0 }, del(10657), Action::Rollback, del(0),
-        Action::Send { client: 1 }, del(13062), Action::Send { client: 1 }, del(14360), del(0),
-        Action::Rollback, Action::Send { client: 1 }, del(395), del(0),
+        ins(0),
+        ins(0),
+        ins(0),
+        ins(0),
+        ins(0),
+        ins(0),
+        Action::Send { client: 0 },
+        ins(0),
+        Action::Send { client: 1 },
+        ins(0),
+        ins(0),
+        del(45),
+        del(0),
+        ins(0),
+        del(0),
+        Action::Snapshot,
+        ins(1),
+        Action::Send { client: 0 },
+        del(10657),
+        Action::Rollback,
+        del(0),
+        Action::Send { client: 1 },
+        del(13062),
+        Action::Send { client: 1 },
+        del(14360),
+        del(0),
+        Action::Rollback,
+        Action::Send { client: 1 },
+        del(395),
+        del(0),
     ];
     run(2, &actions).expect("converges");
 }

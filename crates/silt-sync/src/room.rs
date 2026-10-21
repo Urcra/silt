@@ -43,10 +43,7 @@ impl Prepared<'_> {
             room.by_first.insert(delta.span.first(), room.deltas.len());
             room.deltas.push(delta);
         }
-        PushOutcome {
-            accepted,
-            seq: room.seq(),
-        }
+        PushOutcome { accepted, seq: room.seq() }
     }
 }
 
@@ -81,10 +78,7 @@ impl Room {
     /// syncs everything again, which covers the server having been restored
     /// from an older state.
     pub fn new(generation: u64) -> Self {
-        Self {
-            generation,
-            ..Self::default()
-        }
+        Self { generation, ..Self::default() }
     }
 
     pub fn generation(&self) -> u64 {
@@ -93,10 +87,7 @@ impl Room {
 
     /// The same room after a server restart.
     pub fn restarted(&self, generation: u64) -> Self {
-        Self {
-            generation,
-            ..self.clone()
-        }
+        Self { generation, ..self.clone() }
     }
 
     /// The `seq` of the last delta; deltas are numbered from 1.
@@ -122,10 +113,7 @@ impl Room {
     /// will number them. A rejected batch changes nothing.
     pub fn prepare(&mut self, batch: Vec<Delta>) -> Result<Prepared<'_>, PushError> {
         self.graph.begin();
-        let mut prepared = Prepared {
-            room: self,
-            fresh: Vec::new(),
-        };
+        let mut prepared = Prepared { room: self, fresh: Vec::new() };
         let mut fresh_ids = HashSet::new();
         for delta in batch {
             let id = delta.span.first();
@@ -140,17 +128,11 @@ impl Room {
             }
             // Every replica would refuse a malformed delta, so storing it
             // would only wedge their sync (ADR 0016).
-            delta.check_shape().map_err(|error| PushError::Invalid {
-                id,
-                reason: error.to_string(),
-            })?;
+            delta.check_shape().map_err(|error| PushError::Invalid { id, reason: error.to_string() })?;
             let added = prepared.room.graph.add(delta.span, &delta.parents).map_err(|error| match error {
                 CausalError::UnknownParent(_) => PushError::MissingParents(id),
                 CausalError::ConflictingSpan { .. } => PushError::Conflict(id),
-                other => PushError::Invalid {
-                    id,
-                    reason: other.to_string(),
-                },
+                other => PushError::Invalid { id, reason: other.to_string() },
             })?;
             // A delta that only partly covers ids stored under other deltas
             // would be dropped by clients, which index deltas by first id.

@@ -23,19 +23,9 @@ pub enum Parent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TreeOp {
-    Create {
-        kind: InodeKind,
-        parent: Parent,
-        name: String,
-    },
-    Move {
-        inode: InodeId,
-        parent: Parent,
-        name: String,
-    },
-    Delete {
-        inode: InodeId,
-    },
+    Create { kind: InodeKind, parent: Parent, name: String },
+    Move { inode: InodeId, parent: Parent, name: String },
+    Delete { inode: InodeId },
 }
 
 /// One tree operation. A `Create` makes the inode `InodeId(id)`.
@@ -164,11 +154,7 @@ impl FileTree {
             }
             TreeOp::Move { inode, parent, name } => (*inode, *parent, name.clone()),
             TreeOp::Delete { inode } => {
-                let name = self
-                    .placements
-                    .get(inode)
-                    .map(|placement| placement.name.clone())
-                    .unwrap_or_default();
+                let name = self.placements.get(inode).map(|placement| placement.name.clone()).unwrap_or_default();
                 (*inode, Parent::Trash, name)
             }
         };
@@ -178,11 +164,7 @@ impl FileTree {
         if parent != Parent::Trash && !is_valid_name(&name) {
             return Err(TreeError::InvalidName(name));
         }
-        let target = Placement {
-            parent,
-            name,
-            placed_by: stamp,
-        };
+        let target = Placement { parent, name, placed_by: stamp };
         self.apply_in_order(stamp, inode, target);
         Ok(())
     }
@@ -191,12 +173,7 @@ impl FileTree {
     /// `contains` holds: the move log replayed without later operations.
     pub fn at(&self, contains: impl Fn(DeltaId) -> bool) -> FileTree {
         let mut tree = FileTree {
-            kinds: self
-                .kinds
-                .iter()
-                .filter(|(inode, _)| contains(inode.0))
-                .map(|(inode, kind)| (*inode, *kind))
-                .collect(),
+            kinds: self.kinds.iter().filter(|(inode, _)| contains(inode.0)).map(|(inode, kind)| (*inode, *kind)).collect(),
             placements: HashMap::new(),
             log: Vec::new(),
         };
@@ -220,9 +197,7 @@ impl FileTree {
     }
 
     pub fn path_of(&self, inode: InodeId) -> Option<String> {
-        self.paths()
-            .into_iter()
-            .find_map(|(path, found)| (found == inode).then_some(path))
+        self.paths().into_iter().find_map(|(path, found)| (found == inode).then_some(path))
     }
 
     /// Whether every inode is placed and reaches the root or the trash without
@@ -260,12 +235,7 @@ impl FileTree {
         if self.allowed(inode, &target) {
             self.placements.insert(inode, target.clone());
         }
-        LogEntry {
-            stamp,
-            inode,
-            target,
-            previous,
-        }
+        LogEntry { stamp, inode, target, previous }
     }
 
     fn undo(&mut self, entry: &LogEntry) {
@@ -315,13 +285,7 @@ impl FileTree {
     /// Lists what is in `dirs`, which are one directory: directories created
     /// under one name in one place, concurrently, hold their creators' files
     /// together rather than one of them being renamed.
-    fn collect_under(
-        &self,
-        children: &mut Children<'_>,
-        dirs: &[Parent],
-        prefix: &str,
-        paths: &mut BTreeMap<String, InodeId>,
-    ) {
+    fn collect_under(&self, children: &mut Children<'_>, dirs: &[Parent], prefix: &str, paths: &mut BTreeMap<String, InodeId>) {
         let mut by_name: BTreeMap<&str, Vec<(Stamp, InodeId)>> = BTreeMap::new();
         for dir in dirs {
             for (name, claimants) in children.remove(dir).unwrap_or_default() {
@@ -407,25 +371,11 @@ mod tests {
     }
 
     fn create(id: DeltaId, kind: InodeKind, parent: Parent, name: &str) -> TreeEvent {
-        TreeEvent {
-            id,
-            op: TreeOp::Create {
-                kind,
-                parent,
-                name: name.into(),
-            },
-        }
+        TreeEvent { id, op: TreeOp::Create { kind, parent, name: name.into() } }
     }
 
     fn mv(id: DeltaId, inode: DeltaId, parent: Parent, name: &str) -> TreeEvent {
-        TreeEvent {
-            id,
-            op: TreeOp::Move {
-                inode: InodeId(inode),
-                parent,
-                name: name.into(),
-            },
-        }
+        TreeEvent { id, op: TreeOp::Move { inode: InodeId(inode), parent, name: name.into() } }
     }
 
     fn apply_all(events: &[TreeEvent]) -> FileTree {
@@ -452,10 +402,7 @@ mod tests {
 
     #[test]
     fn concurrent_moves_of_two_dirs_into_each_other_never_cycle() {
-        let base = [
-            create(id(1, 0), InodeKind::Dir, Parent::Root, "a"),
-            create(id(1, 1), InodeKind::Dir, Parent::Root, "b"),
-        ];
+        let base = [create(id(1, 0), InodeKind::Dir, Parent::Root, "a"), create(id(1, 1), InodeKind::Dir, Parent::Root, "b")];
         let a_into_b = mv(id(1, 2), id(1, 0), Parent::Dir(InodeId(id(1, 1))), "a");
         let b_into_a = mv(id(2, 2), id(1, 1), Parent::Dir(InodeId(id(1, 0))), "b");
 
@@ -476,12 +423,7 @@ mod tests {
         let tree = apply_all(&[
             create(id(1, 0), InodeKind::Dir, Parent::Root, "old"),
             create(id(1, 1), InodeKind::File, Parent::Dir(InodeId(id(1, 0))), "x"),
-            TreeEvent {
-                id: id(1, 2),
-                op: TreeOp::Delete {
-                    inode: InodeId(id(1, 0)),
-                },
-            },
+            TreeEvent { id: id(1, 2), op: TreeOp::Delete { inode: InodeId(id(1, 0)) } },
         ]);
         assert!(tree.paths().is_empty());
         assert!(tree.is_well_formed());
@@ -495,10 +437,7 @@ mod tests {
         ]);
         let paths = tree.paths();
         assert_eq!(paths["lib.rs"], InodeId(id(2, 5)));
-        assert_eq!(
-            paths["lib.rs (conflict 00000000000000000000000000000001.7)"],
-            InodeId(id(1, 7))
-        );
+        assert_eq!(paths["lib.rs (conflict 00000000000000000000000000000001.7)"], InodeId(id(1, 7)));
     }
 
     #[test]
@@ -548,10 +487,7 @@ mod tests {
     #[test]
     fn rejects_unknown_inodes_and_bad_names() {
         let mut tree = FileTree::new();
-        assert_eq!(
-            tree.apply(&mv(id(1, 1), id(9, 9), Parent::Root, "x")),
-            Err(TreeError::UnknownInode(InodeId(id(9, 9))))
-        );
+        assert_eq!(tree.apply(&mv(id(1, 1), id(9, 9), Parent::Root, "x")), Err(TreeError::UnknownInode(InodeId(id(9, 9)))));
         assert_eq!(
             tree.apply(&create(id(1, 0), InodeKind::File, Parent::Root, "a/b")),
             Err(TreeError::InvalidName("a/b".into()))

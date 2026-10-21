@@ -65,7 +65,8 @@ impl Core {
                     .collect();
                 self.learn_secrets(found);
                 let blobs = referenced_blobs(&batch);
-                let (events, remote, store, uploaded) = (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
+                let (events, remote, store, uploaded) =
+                    (self.events.clone(), remote.clone(), self.store.clone(), self.uploaded.clone());
                 let epoch = self.sync_epoch(family);
                 tokio::spawn(async move {
                     // Deltas go only after their blobs, or others would get
@@ -121,7 +122,14 @@ impl Core {
         self.sync_epochs.get(&family).copied().unwrap_or_default()
     }
 
-    pub(crate) async fn pushed(&mut self, family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+    pub(crate) async fn pushed(
+        &mut self,
+        family: FamilyId,
+        epoch: u64,
+        generation: Option<u64>,
+        outcome: Outcome,
+        error: Option<String>,
+    ) {
         if epoch != self.sync_epoch(family) {
             return;
         }
@@ -131,7 +139,14 @@ impl Core {
         self.save_sync(family).await;
     }
 
-    pub(crate) async fn pulled(&mut self, family: FamilyId, epoch: u64, generation: Option<u64>, outcome: Outcome, error: Option<String>) {
+    pub(crate) async fn pulled(
+        &mut self,
+        family: FamilyId,
+        epoch: u64,
+        generation: Option<u64>,
+        outcome: Outcome,
+        error: Option<String>,
+    ) {
         if epoch != self.sync_epoch(family) {
             return;
         }
@@ -166,9 +181,8 @@ impl Core {
                     // Coming back to the delta that couldn't apply, after a
                     // pause rather than in a loop.
                     if let Some(index) = stopped {
-                        let (seq, last) = index
-                            .checked_sub(1)
-                            .map_or(after, |previous| (positions[previous].0, Some(positions[previous].1)));
+                        let (seq, last) =
+                            index.checked_sub(1).map_or(after, |previous| (positions[previous].0, Some(positions[previous].1)));
                         self.syncs.entry(family).or_default().rewind_pull(seq, last);
                         self.pull_paused.insert(family, Instant::now() + PULL_RETRY);
                     }
@@ -216,10 +230,8 @@ impl Core {
     /// sync. A delta that needs a git blob this clone lacks stops the batch;
     /// its index is returned so the pull can come back to it.
     async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
-        let deltas: Vec<Delta> = deltas
-            .into_iter()
-            .map(|delta| if self.reveals(&delta) { self.overlay.reveal_delta(delta) } else { delta })
-            .collect();
+        let deltas: Vec<Delta> =
+            deltas.into_iter().map(|delta| if self.reveals(&delta) { self.overlay.reveal_delta(delta) } else { delta }).collect();
         let at = self.local_log(family_id).len() as u64;
         let mut fresh = Vec::new();
         let mut stopped = None;
@@ -278,10 +290,7 @@ impl Core {
             }
         }
         self.persist_with(family_id, &fresh, &rows, None).await?;
-        self.syncs
-            .entry(family_id)
-            .or_default()
-            .appended_from_server(at, fresh.len() as u64);
+        self.syncs.entry(family_id).or_default().appended_from_server(at, fresh.len() as u64);
         if self.families.contains_key(&family_id) {
             self.lease_changes(&fresh, &heads_before).await?;
             self.update_checkouts(family_id, &fresh).await?;
@@ -310,31 +319,21 @@ impl Core {
 
     /// Writes deltas made elsewhere into this family's checkouts.
     pub(crate) async fn update_checkouts(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
-        let ids: Vec<i64> = self
-            .checkouts
-            .iter()
-            .filter(|(_, checkout)| checkout.family == family_id)
-            .map(|(id, _)| *id)
-            .collect();
+        let ids: Vec<i64> =
+            self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
             let checkout = &self.checkouts[&id];
             // A merge into this checkout's thread brings in the other
             // thread's changes without touching any file itself.
-            let merged = deltas
-                .iter()
-                .any(|delta| delta.thread == checkout.record.thread && matches!(delta.op, Op::Merge { .. }) && !checkout.bridge.is_own(delta));
+            let merged = deltas.iter().any(|delta| {
+                delta.thread == checkout.record.thread && matches!(delta.op, Op::Merge { .. }) && !checkout.bridge.is_own(delta)
+            });
             let inodes: Vec<InodeId> = if merged {
                 self.families[&family_id].tree().inodes()
             } else {
-                deltas
-                    .iter()
-                    .filter(|delta| !checkout.bridge.is_own(delta))
-                    .filter_map(touched_inode)
-                    .collect()
+                deltas.iter().filter(|delta| !checkout.bridge.is_own(delta)).filter_map(touched_inode).collect()
             };
-            let actions = checkout
-                .bridge
-                .reconcile(&self.families[&family_id], &mut RepoBases(&checkout.repo), inodes);
+            let actions = checkout.bridge.reconcile(&self.families[&family_id], &mut RepoBases(&checkout.repo), inodes);
             let again = self.perform(id, actions).await?;
             self.ingest_changed_meanwhile(id, again).await?;
         }
@@ -381,10 +380,7 @@ impl Core {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {
                 if known.owner != info.owner && !info.owner.is_empty() {
-                    let updated = ThreadRecord {
-                        owner: info.owner.clone(),
-                        ..known.clone()
-                    };
+                    let updated = ThreadRecord { owner: info.owner.clone(), ..known.clone() };
                     if let Err(error) = self.store.create_thread(&updated).await {
                         warn!(%error, "could not record a thread's owner");
                     }
@@ -449,14 +445,8 @@ impl Core {
         if let Ok(bytes) = self.store.blobs().get(hash).await {
             return Ok(bytes);
         }
-        let remote = self
-            .remote
-            .as_ref()
-            .ok_or_else(|| CoreError::Invalid(format!("blob {hash} is missing")))?;
-        let bytes = remote
-            .get_blob(hash)
-            .await
-            .map_err(|source| CoreError::Server { doing: "fetch a file", source })?;
+        let remote = self.remote.as_ref().ok_or_else(|| CoreError::Invalid(format!("blob {hash} is missing")))?;
+        let bytes = remote.get_blob(hash).await.map_err(|source| CoreError::Server { doing: "fetch a file", source })?;
         self.store.blobs().put(&bytes).await?;
         Ok(bytes)
     }

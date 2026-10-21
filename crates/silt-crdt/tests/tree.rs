@@ -18,12 +18,7 @@ struct Replica {
 
 impl Replica {
     fn new(actor: ActorId) -> Self {
-        Self {
-            actor,
-            graph: CausalGraph::new(),
-            tree: FileTree::new(),
-            events: Vec::new(),
-        }
+        Self { actor, graph: CausalGraph::new(), tree: FileTree::new(), events: Vec::new() }
     }
 
     fn local(&mut self, op: TreeOp) {
@@ -37,9 +32,7 @@ impl Replica {
         if self.graph.contains(event.id) {
             return;
         }
-        self.graph
-            .add(DeltaSpan::new(event.id.actor, event.id.lamport, 1), parents)
-            .expect("causal delivery");
+        self.graph.add(DeltaSpan::new(event.id.actor, event.id.lamport, 1), parents).expect("causal delivery");
         self.tree.apply(event).expect("tree op applies");
         self.events.push((event.clone(), parents.clone()));
     }
@@ -68,11 +61,7 @@ fn action(replicas: usize) -> impl Strategy<Value = Action> {
 }
 
 fn pick_parent(tree: &FileTree, choice: u8) -> Parent {
-    let dirs: Vec<_> = tree
-        .inodes()
-        .into_iter()
-        .filter(|inode| tree.kind(*inode) == Some(InodeKind::Dir))
-        .collect();
+    let dirs: Vec<_> = tree.inodes().into_iter().filter(|inode| tree.kind(*inode) == Some(InodeKind::Dir)).collect();
     match usize::from(choice) % (dirs.len() + 1) {
         0 => Parent::Root,
         index => Parent::Dir(dirs[index - 1]),
@@ -86,8 +75,7 @@ fn deliver(from: &Replica, to: &mut Replica, count: usize) {
 }
 
 fn run(replica_count: usize, actions: &[Action]) -> Result<(), TestCaseError> {
-    let mut replicas: Vec<Replica> =
-        (0..replica_count).map(|index| Replica::new(ActorId(index as u128 + 1))).collect();
+    let mut replicas: Vec<Replica> = (0..replica_count).map(|index| Replica::new(ActorId(index as u128 + 1))).collect();
     let mut created = 0;
     for action in actions {
         match action {
@@ -147,7 +135,11 @@ fn run(replica_count: usize, actions: &[Action]) -> Result<(), TestCaseError> {
         let live: Vec<InodeId> = tree.inodes().into_iter().filter(|inode| tree.is_live(*inode)).collect();
         let is_dir = |inode: &InodeId| tree.kind(*inode) == Some(InodeKind::Dir);
         let live_files = live.iter().filter(|inode| !is_dir(inode)).count();
-        prop_assert_eq!(live_files, paths.values().filter(|inode| !is_dir(inode)).count(), "every live file has exactly one path");
+        prop_assert_eq!(
+            live_files,
+            paths.values().filter(|inode| !is_dir(inode)).count(),
+            "every live file has exactly one path"
+        );
         prop_assert!(paths.values().all(|inode| tree.is_live(*inode)), "every path names a live inode");
         // Directories made at once under one name are listed as one, so some
         // live directories have no path of their own; their files do.

@@ -10,16 +10,22 @@ use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, RepoBases, now_ms};
-use crate::remote::Remote;
-use crate::sessions::{NewSession, resolve_agent};
 use crate::disk;
 use crate::protocol::{AgentStart, Resumed};
+use crate::remote::Remote;
+use crate::sessions::{NewSession, resolve_agent};
 
 impl Core {
     /// Continues a thread on this machine (ADR 0009): takes the lease,
     /// materializes the thread's files in a checkout and restores its agent
     /// session there.
-    pub(crate) async fn resume(&mut self, selector: &str, cwd: &Path, here: bool, agent: Option<&str>) -> Result<Resumed, CoreError> {
+    pub(crate) async fn resume(
+        &mut self,
+        selector: &str,
+        cwd: &Path,
+        here: bool,
+        agent: Option<&str>,
+    ) -> Result<Resumed, CoreError> {
         let target = agent.map(resolve_agent).transpose()?;
         let thread = self.find_thread(selector)?;
         let (repo, base) = self.prepare_thread(thread, cwd, here).await?;
@@ -32,13 +38,18 @@ impl Core {
     /// Starts a fork of a thread on this machine (ADR 0010), with the
     /// source's code and conversation as of now and its agent session
     /// restored under a new id.
-    pub(crate) async fn fork(&mut self, selector: &str, cwd: &Path, here: bool, agent: Option<&str>, private: bool) -> Result<Resumed, CoreError> {
+    pub(crate) async fn fork(
+        &mut self,
+        selector: &str,
+        cwd: &Path,
+        here: bool,
+        agent: Option<&str>,
+        private: bool,
+    ) -> Result<Resumed, CoreError> {
         let target = agent.map(resolve_agent).transpose()?;
         let source = self.find_thread(selector)?;
         let (repo, base) = self.prepare_thread(source, cwd, here).await?;
-        let fork = self
-            .fork_thread_at(source, None, private.then_some(silt_proto::Visibility::Private))
-            .await?;
+        let fork = self.fork_thread_at(source, None, private.then_some(silt_proto::Visibility::Private)).await?;
         self.register_thread_now(fork).await?;
         self.take_lease(fork).await?;
         let resumed = self.check_out(fork, &repo, base, here, true, target).await?;
@@ -71,10 +82,7 @@ impl Core {
         let record = self.threads[&thread].clone();
         let cwd = cwd.canonicalize()?;
         let repo = Repo::discover(&cwd)?;
-        let identity = repo
-            .remote_url("origin")?
-            .map(|url| silt_git::normalize_remote(&url))
-            .unwrap_or_default();
+        let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
         if identity != record.repo {
             return Err(CoreError::Invalid(format!(
                 "this clone's origin is {identity:?} but the thread belongs to {:?}",
@@ -92,10 +100,7 @@ impl Core {
         }
         self.project_family(record.family, &repo)?;
         if record.repo_root.as_os_str().is_empty() {
-            let updated = ThreadRecord {
-                repo_root: repo.root().to_owned(),
-                ..record
-            };
+            let updated = ThreadRecord { repo_root: repo.root().to_owned(), ..record };
             self.store.create_thread(&updated).await?;
             self.threads.insert(thread, updated);
         }
@@ -216,7 +221,13 @@ impl Core {
 
     /// Makes sure `commit` is in `repo`: from origin, else from the server's
     /// git mirror, else from the family's bundles.
-    pub(crate) async fn ensure_commit(&self, repo: &Repo, family: FamilyId, thread: ThreadId, commit: GitOid) -> Result<(), CoreError> {
+    pub(crate) async fn ensure_commit(
+        &self,
+        repo: &Repo,
+        family: FamilyId,
+        thread: ThreadId,
+        commit: GitOid,
+    ) -> Result<(), CoreError> {
         if repo.has_commit(commit) {
             return Ok(());
         }
@@ -287,10 +298,8 @@ impl Core {
         let Some(remote) = self.remote.clone() else {
             return Ok(());
         };
-        let lease = remote
-            .take_lease(thread)
-            .await
-            .map_err(|source| CoreError::Server { doing: "take the thread's lease", source })?;
+        let lease =
+            remote.take_lease(thread).await.map_err(|source| CoreError::Server { doing: "take the thread's lease", source })?;
         let family_id = self.threads[&thread].family;
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("projected above");
@@ -300,10 +309,7 @@ impl Core {
             Author::User,
             now_ms(),
             family.thread_head(thread),
-            Op::Lease {
-                device: lease.device,
-                epoch: lease.epoch,
-            },
+            Op::Lease { device: lease.device, epoch: lease.epoch },
         );
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.persist(family_id, &[delta]).await?;
@@ -312,20 +318,13 @@ impl Core {
 
     async fn attach_checkout(&mut self, thread: ThreadId, path: &Path, managed: bool) -> Result<i64, CoreError> {
         let actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        let existing = self
-            .checkouts
-            .values()
-            .find(|checkout| checkout.record.path == path)
-            .map(|checkout| checkout.record.clone());
+        let existing =
+            self.checkouts.values().find(|checkout| checkout.record.path == path).map(|checkout| checkout.record.clone());
         let record = match existing {
             Some(previous) => {
                 self.checkouts.remove(&previous.id);
                 self.store.rebind_checkout(previous.id, thread, actor).await?;
-                silt_store::CheckoutRecord {
-                    thread,
-                    actor,
-                    ..previous
-                }
+                silt_store::CheckoutRecord { thread, actor, ..previous }
             }
             None => self.store.add_checkout(thread, path, actor, managed, now_ms()).await?,
         };
@@ -342,14 +341,8 @@ impl Core {
         let family = &self.families[&family_id];
         let view = family.thread_view(checkout.record.thread);
         let paths = view.paths();
-        let files: Vec<_> = paths
-            .values()
-            .copied()
-            .filter(|inode| view.tree().kind(*inode) != Some(InodeKind::Dir))
-            .collect();
-        let actions = checkout
-            .bridge
-            .reconcile(family, &mut RepoBases(&checkout.repo), files);
+        let files: Vec<_> = paths.values().copied().filter(|inode| view.tree().kind(*inode) != Some(InodeKind::Dir)).collect();
+        let actions = checkout.bridge.reconcile(family, &mut RepoBases(&checkout.repo), files);
         let root = checkout.record.path.clone();
         let stale: Vec<String> = checkout
             .repo
@@ -398,19 +391,13 @@ impl Core {
             .iter()
             .rev()
             .find_map(|delta| match &delta.op {
-                Op::Conv(ConvOp::SessionStarted {
-                    session: started,
-                    cwd,
-                    checkout_root,
-                }) if *started == session => Some(relative_cwd(cwd, checkout_root)),
+                Op::Conv(ConvOp::SessionStarted { session: started, cwd, checkout_root }) if *started == session => {
+                    Some(relative_cwd(cwd, checkout_root))
+                }
                 _ => None,
             })
             .unwrap_or_default();
-        let agent_cwd = if relative.as_os_str().is_empty() {
-            checkout.to_owned()
-        } else {
-            checkout.join(relative)
-        };
+        let agent_cwd = if relative.as_os_str().is_empty() { checkout.to_owned() } else { checkout.join(relative) };
         let checkout_id = self
             .checkouts
             .values()
@@ -437,29 +424,18 @@ impl Core {
             .await?;
             if as_fork {
                 let op = ConvOp::SessionContinued {
-                    session: SessionRef {
-                        agent: target.id().to_owned(),
-                        id: new_id.clone(),
-                    },
+                    session: SessionRef { agent: target.id().to_owned(), id: new_id.clone() },
                     from: session,
                 };
                 self.append_conv(family_id, thread, Author::User, op).await?;
             }
-            return Ok(Some(Restored {
-                agent: target,
-                agent_cwd,
-                start: AgentStart::Resume { id: new_id },
-            }));
+            return Ok(Some(Restored { agent: target, agent_cwd, start: AgentStart::Resume { id: new_id } }));
         }
         let entries = conversation(&history);
         let new_id = uuid::Uuid::now_v7().to_string();
         if let Some(lines) = target.translate(&entries, &agent_cwd, &new_id) {
             let lines = self.relocate_side_files(&history, &session, source, &new_id, lines).await?;
-            let recorded = RecordedSession {
-                id: new_id.clone(),
-                main: lines.clone(),
-                ..Default::default()
-            };
+            let recorded = RecordedSession { id: new_id.clone(), main: lines.clone(), ..Default::default() };
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             // Blobs reach the server as they are, so secrets go first.
             let (redacted, found) = self.redactor.replace_found(&lines.join("\n"));
@@ -479,18 +455,11 @@ impl Core {
             })
             .await?;
             let op = ConvOp::SessionTranslated {
-                session: SessionRef {
-                    agent: target.id().to_owned(),
-                    id: new_id.clone(),
-                },
+                session: SessionRef { agent: target.id().to_owned(), id: new_id.clone() },
                 lines: blob,
             };
             self.append_conv(family_id, thread, Author::User, op).await?;
-            return Ok(Some(Restored {
-                agent: target,
-                agent_cwd,
-                start: AgentStart::Resume { id: new_id },
-            }));
+            return Ok(Some(Restored { agent: target, agent_cwd, start: AgentStart::Resume { id: new_id } }));
         }
         let prompt = render_transcript(&entries, &thread.to_string(), source.display_name(), PRIMED_BUDGET);
         let id = match target.session_ids() {
@@ -515,11 +484,7 @@ impl Core {
                 None
             }
         };
-        Ok(Some(Restored {
-            agent: target,
-            agent_cwd,
-            start: AgentStart::Primed { id, prompt },
-        }))
+        Ok(Some(Restored { agent: target, agent_cwd, start: AgentStart::Primed { id, prompt } }))
     }
 
     /// Writes the side files of the session a translation came from, such
@@ -574,11 +539,7 @@ impl Core {
         for part in &lineage {
             for delta in history {
                 match &delta.op {
-                    Op::Conv(ConvOp::SessionStarted {
-                        session: started,
-                        cwd,
-                        checkout_root,
-                    }) if started == part => {
+                    Op::Conv(ConvOp::SessionStarted { session: started, cwd, checkout_root }) if started == part => {
                         recorded.former_cwds.push(cwd.clone());
                         recorded.former_roots.push(checkout_root.clone());
                     }
@@ -590,19 +551,11 @@ impl Core {
                         let text = if self.reveals(delta) { self.overlay.reveal_json(&text) } else { text };
                         recorded.main.extend(text.lines().map(str::to_owned));
                     }
-                    Op::Conv(ConvOp::Native {
-                        session: from,
-                        file,
-                        line,
-                    }) if from == part => match file {
+                    Op::Conv(ConvOp::Native { session: from, file, line }) if from == part => match file {
                         SessionFile::Main => recorded.main.push(line.clone()),
                         SessionFile::Subagent(name) => subagents.entry(name.clone()).or_default().push(line.clone()),
                     },
-                    Op::Conv(ConvOp::Attachment {
-                        session: from,
-                        name,
-                        blob,
-                    }) if from == part => {
+                    Op::Conv(ConvOp::Attachment { session: from, name, blob }) if from == part => {
                         attachments.insert(name.clone(), (*blob, self.reveals(delta)));
                     }
                     _ => {}
@@ -680,10 +633,7 @@ const PRIMED_BUDGET: usize = 24_000;
 /// The conversation recorded in `history`, by any agents.
 fn conversation(history: &[&Delta]) -> Vec<Entry> {
     let mut transcripts = Transcripts::default();
-    history
-        .iter()
-        .flat_map(|delta| crate::transcripts::native_entries(&mut transcripts, delta))
-        .collect()
+    history.iter().flat_map(|delta| crate::transcripts::native_entries(&mut transcripts, delta)).collect()
 }
 
 /// The sessions `session` continues, oldest first, ending with itself.
@@ -691,7 +641,9 @@ fn conversation(history: &[&Delta]) -> Vec<Entry> {
 fn session_lineage(history: &[&Delta], session: &SessionRef) -> Vec<SessionRef> {
     let mut lineage = vec![session.clone()];
     while let Some(from) = history.iter().find_map(|delta| match &delta.op {
-        Op::Conv(ConvOp::SessionContinued { session, from }) if *session == lineage[0] && from.agent == session.agent => Some(from.clone()),
+        Op::Conv(ConvOp::SessionContinued { session, from }) if *session == lineage[0] && from.agent == session.agent => {
+            Some(from.clone())
+        }
         _ => None,
     }) {
         if lineage.contains(&from) {

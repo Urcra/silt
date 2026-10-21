@@ -86,11 +86,7 @@ pub struct Bridge {
 
 impl Bridge {
     pub fn new(actor: ActorId, thread: ThreadId, entries: BTreeMap<String, DiskEntry>) -> Self {
-        Self {
-            actor,
-            thread,
-            entries,
-        }
+        Self { actor, thread, entries }
     }
 
     pub fn actor(&self) -> ActorId {
@@ -120,14 +116,7 @@ impl Bridge {
         author: &Author,
         time_ms: i64,
     ) -> Result<Ingested, BridgeError> {
-        let mut writer = Writer {
-            family,
-            bases,
-            thread: self.thread,
-            author,
-            time_ms,
-            deltas: Vec::new(),
-        };
+        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
         let view = writer.family.thread_view(self.thread);
         let paths = view.paths();
         // A file moved elsewhere since this checkout last saw it is still the
@@ -146,10 +135,7 @@ impl Bridge {
                 writer.tree_op(self.actor, Op::Delete { inode })?;
             }
             self.entries.remove(path);
-            return Ok(Ingested {
-                deltas: writer.deltas,
-                actions: Vec::new(),
-            });
+            return Ok(Ingested { deltas: writer.deltas, actions: Vec::new() });
         };
 
         let inode = match existing {
@@ -183,16 +169,8 @@ impl Bridge {
                 moved_from: None,
             });
         }
-        self.entries.insert(
-            path.to_owned(),
-            DiskEntry {
-                inode,
-                hash: disk.hash,
-                size: disk.size,
-                mtime_ns: disk.mtime_ns,
-                version,
-            },
-        );
+        self.entries
+            .insert(path.to_owned(), DiskEntry { inode, hash: disk.hash, size: disk.size, mtime_ns: disk.mtime_ns, version });
         Ok(Ingested { deltas, actions })
     }
 
@@ -208,16 +186,12 @@ impl Bridge {
         // Paths as listed, with conflict names, rather than built from each
         // file's own name.
         let listed: HashMap<InodeId, String> = view.paths().iter().map(|(path, inode)| (*inode, path.clone())).collect();
-        let by_inode: HashMap<InodeId, &String> =
-            self.entries.iter().map(|(path, entry)| (entry.inode, path)).collect();
+        let by_inode: HashMap<InodeId, &String> = self.entries.iter().map(|(path, entry)| (entry.inode, path)).collect();
         let version = view.version().clone();
         let mut actions = Vec::new();
         for inode in inodes {
             let live_path = listed.get(&inode).cloned();
-            let moved_from = by_inode
-                .get(&inode)
-                .filter(|old| Some(**old) != live_path.as_ref())
-                .map(|old| (*old).clone());
+            let moved_from = by_inode.get(&inode).filter(|old| Some(**old) != live_path.as_ref()).map(|old| (*old).clone());
             let Some(path) = live_path else {
                 actions.extend(moved_from.map(|path| DiskAction::Remove { path }));
                 continue;
@@ -270,31 +244,13 @@ impl Bridge {
         let Some(entry) = self.entries.get(from).cloned() else {
             return Ok(None);
         };
-        let mut writer = Writer {
-            family,
-            bases,
-            thread: self.thread,
-            author,
-            time_ms,
-            deltas: Vec::new(),
-        };
+        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
         let (parent, name) = writer.parent_for(self.actor, &paths, to)?;
         writer.tree_op(self.actor, Op::Move { inode, parent, name })?;
         self.entries.remove(from);
-        self.entries.insert(
-            to.to_owned(),
-            DiskEntry {
-                inode,
-                hash: disk.hash,
-                size: disk.size,
-                mtime_ns: disk.mtime_ns,
-                ..entry
-            },
-        );
-        Ok(Some(Ingested {
-            deltas: writer.deltas,
-            actions: Vec::new(),
-        }))
+        self.entries
+            .insert(to.to_owned(), DiskEntry { inode, hash: disk.hash, size: disk.size, mtime_ns: disk.mtime_ns, ..entry });
+        Ok(Some(Ingested { deltas: writer.deltas, actions: Vec::new() }))
     }
 
     pub fn record_written(&mut self, path: &str, entry: DiskEntry) {
@@ -330,9 +286,7 @@ struct Writer<'a> {
 
 impl Writer<'_> {
     fn apply(&mut self, actor: ActorId, parents: Frontier, op: Op) -> Result<Frontier, BridgeError> {
-        let delta = self
-            .family
-            .delta(actor, self.thread, self.author.clone(), self.time_ms, parents, op);
+        let delta = self.family.delta(actor, self.thread, self.author.clone(), self.time_ms, parents, op);
         let last = delta.span.last();
         self.family.apply(delta.clone(), self.bases)?;
         self.deltas.push(delta);
@@ -357,16 +311,8 @@ impl Writer<'_> {
             DiskContent::Blob(hash) => Content::Blob(*hash),
             DiskContent::GitBlob(oid) => Content::GitText(*oid),
         };
-        let created = self.tree_op(
-            actor,
-            Op::Create {
-                kind: InodeKind::File,
-                parent,
-                name,
-                content,
-                executable: disk.executable,
-            },
-        )?;
+        let created =
+            self.tree_op(actor, Op::Create { kind: InodeKind::File, parent, name, content, executable: disk.executable })?;
         let inode = InodeId(created.ids()[0]);
         if let DiskContent::Text(text) = &disk.content {
             self.edit_text(actor, inode, "", text, created)?;
@@ -430,44 +376,20 @@ impl Writer<'_> {
                 self.edit_text(actor, inode, &base, text, version)?;
             }
             DiskContent::Text(text) => {
-                let replaced = self.tree_op(
-                    actor,
-                    Op::SetContent {
-                        inode,
-                        content: Content::Empty,
-                    },
-                )?;
+                let replaced = self.tree_op(actor, Op::SetContent { inode, content: Content::Empty })?;
                 self.edit_text(actor, inode, "", text, replaced)?;
             }
             DiskContent::Blob(hash) if self.family.file(inode) == Some(FileView::Blob(*hash)) => {}
             DiskContent::Blob(hash) => {
-                self.tree_op(
-                    actor,
-                    Op::SetContent {
-                        inode,
-                        content: Content::Blob(*hash),
-                    },
-                )?;
+                self.tree_op(actor, Op::SetContent { inode, content: Content::Blob(*hash) })?;
             }
             DiskContent::GitBlob(oid) if self.family.file(inode) == Some(FileView::GitText(*oid)) => {}
             DiskContent::GitBlob(oid) => {
-                self.tree_op(
-                    actor,
-                    Op::SetContent {
-                        inode,
-                        content: Content::GitText(*oid),
-                    },
-                )?;
+                self.tree_op(actor, Op::SetContent { inode, content: Content::GitText(*oid) })?;
             }
         }
         if disk.executable != self.family.thread_view(self.thread).is_executable(inode) {
-            self.tree_op(
-                actor,
-                Op::SetExecutable {
-                    inode,
-                    executable: disk.executable,
-                },
-            )?;
+            self.tree_op(actor, Op::SetExecutable { inode, executable: disk.executable })?;
         }
         Ok(())
     }
@@ -475,11 +397,7 @@ impl Writer<'_> {
     fn text_at(&mut self, inode: InodeId, version: &Frontier) -> Result<String, BridgeError> {
         match self.family.file(inode) {
             Some(FileView::GitText(oid)) => Ok(self.bases.text(oid).ok_or(LogError::MissingBase(oid))?),
-            _ => Ok(self
-                .family
-                .text_doc(inode)
-                .map(|doc| doc.text_at(self.family.graph(), version))
-                .unwrap_or_default()),
+            _ => Ok(self.family.text_doc(inode).map(|doc| doc.text_at(self.family.graph(), version)).unwrap_or_default()),
         }
     }
 

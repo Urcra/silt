@@ -21,12 +21,7 @@ impl VersionVector {
 
     /// The common ancestors of two versions, such as a merge base.
     pub fn intersection(&self, other: &Self) -> Self {
-        Self(
-            self.0
-                .iter()
-                .filter_map(|(actor, max)| other.get(*actor).map(|other| (*actor, (*max).min(other))))
-                .collect(),
-        )
+        Self(self.0.iter().filter_map(|(actor, max)| other.get(*actor).map(|other| (*actor, (*max).min(other)))).collect())
     }
 
     fn include(&mut self, id: DeltaId) {
@@ -158,11 +153,7 @@ impl CausalGraph {
     pub fn parents_of(&self, id: DeltaId) -> Option<Frontier> {
         let (run_index, offset) = self.find(id)?;
         let run = &self.runs[run_index];
-        Some(if offset == 0 {
-            run.parents.clone()
-        } else {
-            Frontier::single(run.span.id_at(offset - 1))
-        })
+        Some(if offset == 0 { run.parents.clone() } else { Frontier::single(run.span.id_at(offset - 1)) })
     }
 
     /// Records a span of deltas whose first id has `parents`; each later id in
@@ -172,10 +163,7 @@ impl CausalGraph {
             return Err(CausalError::EmptySpan);
         }
         if span.len > MAX_SPAN_LEN {
-            return Err(CausalError::SpanTooLong {
-                id: span.first(),
-                len: span.len,
-            });
+            return Err(CausalError::SpanTooLong { id: span.first(), len: span.len });
         }
         if !span.is_in_range() || span.start.0 > self.next_lamport().0.saturating_add(MAX_CLOCK_SKEW) {
             return Err(CausalError::LamportOutOfRange { id: span.first() });
@@ -299,10 +287,7 @@ impl CausalGraph {
     pub fn minimize(&self, ids: impl IntoIterator<Item = DeltaId>) -> Frontier {
         let ids: Frontier = ids.into_iter().collect();
         let dominated = |id: &DeltaId| {
-            ids.ids()
-                .iter()
-                .filter(|other| *other != id)
-                .any(|other| self.is_ancestor(*id, &Frontier::single(*other)))
+            ids.ids().iter().filter(|other| *other != id).any(|other| self.is_ancestor(*id, &Frontier::single(*other)))
         };
         ids.ids().iter().filter(|id| !dominated(id)).copied().collect()
     }
@@ -322,19 +307,13 @@ impl CausalGraph {
             return false;
         };
         let before_end = runs.partition_point(|index| self.runs[*index].span.start < end);
-        before_end
-            .checked_sub(1)
-            .is_some_and(|position| self.runs[runs[position]].span.end() > start)
+        before_end.checked_sub(1).is_some_and(|position| self.runs[runs[position]].span.end() > start)
     }
 
     /// The part of `span` not in the graph yet, with its parents. A span
     /// that starts at a known id must repeat that id's parents: the same id
     /// with a different history is a conflict, not a duplicate.
-    fn unknown_suffix(
-        &self,
-        span: DeltaSpan,
-        parents: &Frontier,
-    ) -> Result<Option<(DeltaSpan, Frontier)>, CausalError> {
+    fn unknown_suffix(&self, span: DeltaSpan, parents: &Frontier) -> Result<Option<(DeltaSpan, Frontier)>, CausalError> {
         let Some((run_index, _)) = self.find(span.first()) else {
             if self.overlaps(span.actor, span.start, span.end()) {
                 return Err(CausalError::ConflictingSpan { id: span.first() });
@@ -368,10 +347,7 @@ impl CausalGraph {
         if let Some(previous) = self.last_of_actor(span.actor) {
             let descends = previous.lamport < span.start && self.is_ancestor(previous, parents);
             if !descends {
-                return Err(CausalError::BrokenActorChain {
-                    id: span.first(),
-                    previous,
-                });
+                return Err(CausalError::BrokenActorChain { id: span.first(), previous });
             }
         }
         Ok(())
@@ -387,29 +363,21 @@ impl CausalGraph {
             self.frontier.remove(parent);
         }
         self.frontier.insert(span.last());
-        self.max_lamport = Some(self.max_lamport.map_or(span.last().lamport, |max| {
-            max.max(span.last().lamport)
-        }));
+        self.max_lamport = Some(self.max_lamport.map_or(span.last().lamport, |max| max.max(span.last().lamport)));
 
-        let extends_previous = self.last_of_actor(span.actor).is_some_and(|previous| {
-            previous.lamport.next() == span.start && parents == Frontier::single(previous)
-        });
+        let extends_previous = self
+            .last_of_actor(span.actor)
+            .is_some_and(|previous| previous.lamport.next() == span.start && parents == Frontier::single(previous));
         if extends_previous {
-            let run_index = *self
-                .by_actor
-                .get(&span.actor)
-                .and_then(|runs| runs.last())
-                .expect("actor with a previous delta has a run");
+            let run_index =
+                *self.by_actor.get(&span.actor).and_then(|runs| runs.last()).expect("actor with a previous delta has a run");
             if let Some(journal) = self.journal.as_mut().filter(|journal| run_index < journal.runs) {
                 journal.extended.push((run_index, self.runs[run_index].span.len));
             }
             self.runs[run_index].span.len += span.len;
             return;
         }
-        self.by_actor
-            .entry(span.actor)
-            .or_default()
-            .push(self.runs.len());
+        self.by_actor.entry(span.actor).or_default().push(self.runs.len());
         self.runs.push(Run { span, parents });
     }
 }
@@ -436,9 +404,7 @@ mod tests {
         graph.add(span(1, 0, 6), &Frontier::root()).expect("base");
         graph.add(span(1, 6, 3), &frontier(&[id(1, 5)])).expect("a");
         graph.add(span(2, 6, 1), &frontier(&[id(1, 5)])).expect("b");
-        graph
-            .add(span(1, 9, 1), &frontier(&[id(1, 8), id(2, 6)]))
-            .expect("merge");
+        graph.add(span(1, 9, 1), &frontier(&[id(1, 8), id(2, 6)])).expect("merge");
         graph
     }
 
@@ -460,9 +426,7 @@ mod tests {
         graph.add(span(1, 6, 3), &frontier(&[id(1, 5)])).expect("a");
         graph.add(span(2, 6, 1), &frontier(&[id(1, 5)])).expect("b");
         assert_eq!(graph.frontier(), &frontier(&[id(1, 8), id(2, 6)]));
-        graph
-            .add(span(1, 9, 1), &frontier(&[id(1, 8), id(2, 6)]))
-            .expect("merge");
+        graph.add(span(1, 9, 1), &frontier(&[id(1, 8), id(2, 6)])).expect("merge");
         assert_eq!(graph.frontier(), &frontier(&[id(1, 9)]));
     }
 
@@ -481,9 +445,7 @@ mod tests {
         graph.add(span(1, 0, 3), &Frontier::root()).expect("base");
         graph.add(span(2, 3, 2), &frontier(&[id(1, 2)])).expect("one side");
         graph.add(span(3, 3, 4), &frontier(&[id(1, 1)])).expect("other side");
-        let common = graph
-            .version_vector(&frontier(&[id(2, 4)]))
-            .intersection(&graph.version_vector(&frontier(&[id(3, 6)])));
+        let common = graph.version_vector(&frontier(&[id(2, 4)])).intersection(&graph.version_vector(&frontier(&[id(3, 6)])));
         assert!(common.contains(id(1, 1)));
         assert!(!common.contains(id(1, 2)));
         assert!(!common.contains(id(2, 3)) && !common.contains(id(3, 3)));
@@ -507,9 +469,7 @@ mod tests {
         graph.add(span(1, 0, 2), &Frontier::root()).expect("a");
         graph.add(span(2, 2, 1), &frontier(&[id(1, 1)])).expect("b after a");
         graph.add(span(3, 0, 1), &Frontier::root()).expect("c");
-        graph
-            .add(span(2, 3, 1), &frontier(&[id(2, 2), id(3, 0)]))
-            .expect("b merges c");
+        graph.add(span(2, 3, 1), &frontier(&[id(2, 2), id(3, 0)])).expect("b merges c");
         let vv = graph.version_vector(&frontier(&[id(2, 3)]));
         assert!(vv.contains(id(1, 1)), "reached only through b's earlier run");
         assert!(vv.contains(id(3, 0)));
@@ -527,10 +487,7 @@ mod tests {
     }
 
     fn ids_of(spans: &[DeltaSpan]) -> HashSet<DeltaId> {
-        spans
-            .iter()
-            .flat_map(|span| (span.start.0..span.end().0).map(|lamport| id(span.actor.0, lamport)))
-            .collect()
+        spans.iter().flat_map(|span| (span.start.0..span.end().0).map(|lamport| id(span.actor.0, lamport))).collect()
     }
 
     #[test]
@@ -585,10 +542,7 @@ mod tests {
     #[test]
     fn readding_known_deltas_is_idempotent() {
         let mut graph = diamond();
-        assert_eq!(
-            graph.add(span(1, 6, 3), &frontier(&[id(1, 5)])),
-            Ok(Added::AlreadyKnown)
-        );
+        assert_eq!(graph.add(span(1, 6, 3), &frontier(&[id(1, 5)])), Ok(Added::AlreadyKnown));
         assert_eq!(graph.add(span(1, 2, 2), &frontier(&[id(1, 1)])), Ok(Added::AlreadyKnown));
     }
 
@@ -596,30 +550,18 @@ mod tests {
     fn partially_known_span_adds_only_the_new_suffix() {
         let mut graph = CausalGraph::new();
         graph.add(span(1, 0, 3), &Frontier::root()).expect("first");
-        assert_eq!(
-            graph.add(span(1, 0, 5), &Frontier::root()),
-            Ok(Added::New(span(1, 3, 2)))
-        );
+        assert_eq!(graph.add(span(1, 0, 5), &Frontier::root()), Ok(Added::New(span(1, 3, 2))));
         assert_eq!(graph.frontier(), &frontier(&[id(1, 4)]));
     }
 
     #[test]
     fn rejects_invalid_history() {
         let mut graph = diamond();
-        assert_eq!(
-            graph.add(span(3, 20, 1), &frontier(&[id(4, 1)])),
-            Err(CausalError::UnknownParent(id(4, 1)))
-        );
-        assert_eq!(
-            graph.add(span(3, 5, 1), &frontier(&[id(1, 5)])),
-            Err(CausalError::LamportNotAfterParents { id: id(3, 5) })
-        );
+        assert_eq!(graph.add(span(3, 20, 1), &frontier(&[id(4, 1)])), Err(CausalError::UnknownParent(id(4, 1))));
+        assert_eq!(graph.add(span(3, 5, 1), &frontier(&[id(1, 5)])), Err(CausalError::LamportNotAfterParents { id: id(3, 5) }));
         assert_eq!(
             graph.add(span(2, 20, 1), &frontier(&[id(1, 8)])),
-            Err(CausalError::BrokenActorChain {
-                id: id(2, 20),
-                previous: id(2, 6)
-            })
+            Err(CausalError::BrokenActorChain { id: id(2, 20), previous: id(2, 6) })
         );
         assert_eq!(graph.add(span(1, 0, 0), &Frontier::root()), Err(CausalError::EmptySpan));
     }
@@ -627,10 +569,7 @@ mod tests {
     #[test]
     fn minimize_drops_ancestors() {
         let graph = diamond();
-        assert_eq!(
-            graph.minimize([id(1, 3), id(1, 8), id(2, 6)]),
-            frontier(&[id(1, 8), id(2, 6)])
-        );
+        assert_eq!(graph.minimize([id(1, 3), id(1, 8), id(2, 6)]), frontier(&[id(1, 8), id(2, 6)]));
         assert_eq!(graph.minimize([id(1, 8), id(2, 6), id(1, 9)]), frontier(&[id(1, 9)]));
     }
 }

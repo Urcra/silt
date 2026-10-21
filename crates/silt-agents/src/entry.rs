@@ -3,15 +3,33 @@ use serde::{Deserialize, Serialize};
 /// One step of a conversation, independent of which agent recorded it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Entry {
-    User { text: String },
-    Assistant { text: String },
-    Thinking { text: String },
-    ToolCall { id: String, name: String, input: serde_json::Value },
-    ToolResult { tool_use_id: String, text: String, is_error: bool },
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        text: String,
+        is_error: bool,
+    },
     /// The agent compacted its context here; earlier entries stay available.
-    Compaction { summary: Option<String> },
+    Compaction {
+        summary: Option<String>,
+    },
     /// Anything else the agent records (hooks, settings, file snapshots).
-    Other { kind: String },
+    Other {
+        kind: String,
+    },
 }
 
 impl Entry {

@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult};
 use silt_agents::conventions::{self, Skill};
+use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult};
 use silt_daemon::{client, paths};
 
 use crate::CliError;
@@ -26,13 +26,8 @@ struct DaemonTools {
 
 pub fn serve(thread: &str, checkout: Option<PathBuf>) -> Result<(), Exn<CliError>> {
     let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
-    let mut tools = DaemonTools {
-        thread: thread.to_owned(),
-        checkout: checkout.unwrap_or_else(|| cwd.clone()),
-        cwd,
-    };
-    silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools)
-        .or_raise(|| CliError("the MCP connection failed".into()))
+    let mut tools = DaemonTools { thread: thread.to_owned(), checkout: checkout.unwrap_or_else(|| cwd.clone()), cwd };
+    silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools).or_raise(|| CliError("the MCP connection failed".into()))
 }
 
 fn ask<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
@@ -44,18 +39,11 @@ fn ask<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
 }
 
 fn text_arg(arguments: &Value, name: &str) -> Result<String, String> {
-    arguments
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| format!("missing argument {name}"))
+    arguments.get(name).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("missing argument {name}"))
 }
 
 fn number_arg(arguments: &Value, name: &str) -> Option<usize> {
-    arguments
-        .get(name)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
+    arguments.get(name).and_then(Value::as_u64).and_then(|value| usize::try_from(value).ok())
 }
 
 impl DaemonTools {
@@ -77,10 +65,7 @@ impl silt_mcp::Backend for DaemonTools {
         self.skills()
             .into_iter()
             .filter(|skill| skill.user_invocable)
-            .map(|skill| silt_mcp::Prompt {
-                name: skill.name,
-                description: skill.description,
-            })
+            .map(|skill| silt_mcp::Prompt { name: skill.name, description: skill.description })
             .collect()
     }
 
@@ -125,10 +110,7 @@ impl silt_mcp::Backend for DaemonTools {
             }
             _ => {}
         }
-        let thread = arguments
-            .get("thread")
-            .and_then(Value::as_str)
-            .map_or_else(|| self.thread.clone(), str::to_owned);
+        let thread = arguments.get("thread").and_then(Value::as_str).map_or_else(|| self.thread.clone(), str::to_owned);
         match tool {
             "silt_history_read" | "silt_fork_read" => {
                 let page: HistoryPage = ask(&Request::HistoryRead {
@@ -154,10 +136,7 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(out)
             }
             "silt_file_history" => {
-                let touches: Vec<FileTouch> = ask(&Request::FileHistory {
-                    thread,
-                    path: text_arg(arguments, "path")?,
-                })?;
+                let touches: Vec<FileTouch> = ask(&Request::FileHistory { thread, path: text_arg(arguments, "path")? })?;
                 if touches.is_empty() {
                     return Ok("No recorded changes to this file in this thread.".into());
                 }
@@ -195,10 +174,7 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(out)
             }
             "silt_in_flight" => {
-                let found: Vec<InFlight> = ask(&Request::InFlight {
-                    cwd: self.cwd.clone(),
-                    path: text_arg(arguments, "path")?,
-                })?;
+                let found: Vec<InFlight> = ask(&Request::InFlight { cwd: self.cwd.clone(), path: text_arg(arguments, "path")? })?;
                 if found.is_empty() {
                     return Ok("No other thread is changing this path.".into());
                 }
@@ -234,10 +210,5 @@ fn render_page(page: &HistoryPage) -> String {
 
 fn clip(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
-    if text.chars().count() > 160 {
-        text.chars().take(160).collect::<String>() + "…"
-    } else {
-        text
-    }
+    if text.chars().count() > 160 { text.chars().take(160).collect::<String>() + "…" } else { text }
 }
-

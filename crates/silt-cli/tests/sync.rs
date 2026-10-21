@@ -30,12 +30,7 @@ fn world() -> World {
     fs::write(laptop.repo.join("src/lib.rs"), "pub fn wip() {}\n").expect("write");
     git(&laptop.repo, &["add", "."]);
     git(&laptop.repo, &["commit", "-q", "-m", "wip, not pushed"]);
-    World {
-        root,
-        server,
-        laptop,
-        home,
-    }
+    World { root, server, laptop, home }
 }
 
 #[test]
@@ -122,7 +117,6 @@ fn a_thread_continues_on_another_machine() {
         eve.try_stdout(&["show", &thread])
     );
     assert!(!eve.stdout(&["show", &thread]).contains(token));
-
 }
 
 #[test]

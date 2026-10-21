@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, translated_text};
+use crate::{
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start,
+    translated_text,
+};
 
 pub const AGENT: &str = "copilot-cli";
 
@@ -101,10 +104,7 @@ pub fn read_line(line: &str) -> Read {
             }
         }
         "assistant.reasoning" => read.entries.push(Entry::Thinking { text: text("content") }),
-        "tool.execution_start" => read.marks.push(Mark::ToolStarted {
-            tool_use_id: text("toolCallId"),
-            tool: text("toolName"),
-        }),
+        "tool.execution_start" => read.marks.push(Mark::ToolStarted { tool_use_id: text("toolCallId"), tool: text("toolName") }),
         "tool.execution_complete" => {
             let success = data.get("success").and_then(Value::as_bool).unwrap_or(true);
             let result = data
@@ -113,17 +113,11 @@ pub fn read_line(line: &str) -> Read {
                 .map(|value| value.as_str().map_or_else(|| value.to_string(), str::to_owned))
                 .unwrap_or_default();
             read.marks.push(Mark::ToolFinished { tool_use_id: text("toolCallId") });
-            read.entries.push(Entry::ToolResult {
-                tool_use_id: text("toolCallId"),
-                text: result,
-                is_error: !success,
-            });
+            read.entries.push(Entry::ToolResult { tool_use_id: text("toolCallId"), text: result, is_error: !success });
         }
         "session.compaction_complete" => {
             let summary = text("summaryContent");
-            read.entries.push(Entry::Compaction {
-                summary: (!summary.is_empty()).then_some(summary),
-            });
+            read.entries.push(Entry::Compaction { summary: (!summary.is_empty()).then_some(summary) });
         }
         other => read.entries.push(Entry::Other { kind: other.to_owned() }),
     }
@@ -317,7 +311,8 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
     fs::create_dir_all(dir.join(".plugin"))?;
     fs::write(
         dir.join(".plugin/plugin.json"),
-        json!({"name": "silt", "description": "Silt's skills, instructions and notices", "version": env!("CARGO_PKG_VERSION")}).to_string(),
+        json!({"name": "silt", "description": "Silt's skills, instructions and notices", "version": env!("CARGO_PKG_VERSION")})
+            .to_string(),
     )?;
     crate::link_skills(&dir.join("skills"), &plan.skills)?;
     let command = |bash: String| json!([{"type": "command", "bash": bash, "timeoutSec": 30}]);
@@ -327,10 +322,7 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
         fs::write(&context, json!({ "additionalContext": instructions }).to_string())?;
         hooks.insert("sessionStart".into(), command(format!("cat {}", crate::shell_quote(&context.to_string_lossy()))));
     }
-    hooks.insert(
-        "userPromptSubmitted".into(),
-        command(format!("{} --agent copilot UserPromptSubmit", plan.hook_command)),
-    );
+    hooks.insert("userPromptSubmitted".into(), command(format!("{} --agent copilot UserPromptSubmit", plan.hook_command)));
     fs::create_dir_all(dir.join("hooks"))?;
     fs::write(dir.join("hooks/hooks.json"), json!({"version": 1, "hooks": hooks}).to_string())?;
     Ok(dir)
@@ -342,7 +334,8 @@ mod tests {
 
     #[test]
     fn a_model_call_without_tools_ends_the_turn_when_it_ends() {
-        let event = |kind: &str, data: &str| format!(r#"{{"type":"{kind}","data":{data},"id":"x","timestamp":"t","parentId":null}}"#);
+        let event =
+            |kind: &str, data: &str| format!(r#"{{"type":"{kind}","data":{data},"id":"x","timestamp":"t","parentId":null}}"#);
         let mut reader = CopilotReader::default();
         let mut marks = |line: String| reader.push(&line).marks;
         assert_eq!(marks(event("user.message", r#"{"content":"go"}"#)), vec![Mark::PromptSubmitted]);
@@ -371,22 +364,8 @@ mod tests {
         let reads: Vec<Read> = lines.iter().map(|line| read_line(line)).collect();
         let entries: Vec<Entry> = reads.iter().flat_map(|read| read.entries.clone()).collect();
         assert_eq!(entries[1], Entry::User { text: "List files".into() });
-        assert_eq!(
-            entries[2],
-            Entry::ToolCall {
-                id: "call_1".into(),
-                name: "bash".into(),
-                input: json!({"command": "ls"})
-            }
-        );
-        assert_eq!(
-            entries[3],
-            Entry::ToolResult {
-                tool_use_id: "call_1".into(),
-                text: "a.txt".into(),
-                is_error: false
-            }
-        );
+        assert_eq!(entries[2], Entry::ToolCall { id: "call_1".into(), name: "bash".into(), input: json!({"command": "ls"}) });
+        assert_eq!(entries[3], Entry::ToolResult { tool_use_id: "call_1".into(), text: "a.txt".into(), is_error: false });
         assert_eq!(entries[4], Entry::Assistant { text: "There is a.txt.".into() });
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(

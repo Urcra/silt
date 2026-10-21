@@ -9,10 +9,8 @@ use std::path::{Path, PathBuf};
 /// Skill roots, highest precedence first: Silt's own, the cross-agent
 /// convention, then the user's personal skills.
 pub fn skill_roots(checkout: &Path, home: Option<&Path>) -> Vec<(SkillScope, PathBuf)> {
-    let mut roots = vec![
-        (SkillScope::Silt, checkout.join(".silt/skills")),
-        (SkillScope::Project, checkout.join(".agents/skills")),
-    ];
+    let mut roots =
+        vec![(SkillScope::Silt, checkout.join(".silt/skills")), (SkillScope::Project, checkout.join(".agents/skills"))];
     if let Some(home) = home {
         roots.push((SkillScope::Personal, home.join(".agents/skills")));
     }
@@ -117,7 +115,8 @@ fn read_skill(file: &Path, scope: SkillScope) -> Option<Skill> {
 
 /// The frontmatter between leading `---` lines, and the rest.
 fn split_frontmatter(text: &str) -> (&str, &str) {
-    let Some(rest) = text.strip_prefix("---").and_then(|rest| rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n"))) else {
+    let Some(rest) = text.strip_prefix("---").and_then(|rest| rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n")))
+    else {
         return ("", text);
     };
     let mut offset = 0;
@@ -242,11 +241,7 @@ pub fn discover_rules(checkout: &Path, cwd: &Path, home: Option<&Path>) -> Vec<R
 fn read_rules(dir: &Path, name: &str) -> Option<RulesFile> {
     let path = dir.join(name);
     let text = fs::read_to_string(&path).ok()?;
-    (!text.trim().is_empty()).then(|| RulesFile {
-        path,
-        name: name.to_owned(),
-        text,
-    })
+    (!text.trim().is_empty()).then(|| RulesFile { path, name: name.to_owned(), text })
 }
 
 /// What an agent CLI reads by itself, so Silt only adds the rest.
@@ -266,18 +261,13 @@ pub struct NativeConventions {
 /// won't read itself, and the skills it can load through Silt.
 pub fn session_instructions(rules: &[RulesFile], skills: &[Skill], native: NativeConventions, checkout: &Path) -> Option<String> {
     let mut out = String::new();
-    let missing: Vec<&RulesFile> = rules
-        .iter()
-        .filter(|file| !native.rules.contains(&file.name.as_str()))
-        .collect();
+    let missing: Vec<&RulesFile> = rules.iter().filter(|file| !native.rules.contains(&file.name.as_str())).collect();
     for file in missing {
         let shown = file.path.strip_prefix(checkout).unwrap_or(&file.path);
         out.push_str(&format!("# Project rules from {}\n\n{}\n\n", shown.display(), file.text.trim()));
     }
-    let offered: Vec<&Skill> = skills
-        .iter()
-        .filter(|skill| skill.model_invocable && !natively_loaded(skill, native, checkout))
-        .collect();
+    let offered: Vec<&Skill> =
+        skills.iter().filter(|skill| skill.model_invocable && !natively_loaded(skill, native, checkout)).collect();
     if !offered.is_empty() {
         out.push_str("# Skills\n\nThese skills are available. When a task matches one, load it with the silt_use_skill tool and follow it.\n\n");
         for skill in offered {
@@ -331,7 +321,9 @@ mod tests {
     fn skills_are_found_by_precedence_and_in_nested_folders() {
         let checkout = tempfile::tempdir().expect("temp dir");
         let home = tempfile::tempdir().expect("temp dir");
-        let skill = |name: &str, description: &str| format!("---\nname: {name}\ndescription: {description}\n---\n\nDo the {name} thing.\n");
+        let skill = |name: &str, description: &str| {
+            format!("---\nname: {name}\ndescription: {description}\n---\n\nDo the {name} thing.\n")
+        };
         write(&checkout.path().join(".agents/skills/review/SKILL.md"), &skill("review", "project review"));
         write(&checkout.path().join(".silt/skills/review/SKILL.md"), &skill("review", "silt review"));
         write(&checkout.path().join(".agents/skills/release/land/SKILL.md"), &skill("land", "land it"));
@@ -364,10 +356,8 @@ mod tests {
         write(&root.join("crates/AGENTS.md"), "Crates rules.\n");
         write(&root.join("crates/core/src/x.rs"), "");
         let rules = discover_rules(root, &root.join("crates/core/src"), None);
-        let names: Vec<String> = rules
-            .iter()
-            .map(|file| file.path.strip_prefix(root).expect("inside").display().to_string())
-            .collect();
+        let names: Vec<String> =
+            rules.iter().map(|file| file.path.strip_prefix(root).expect("inside").display().to_string()).collect();
         assert_eq!(names, vec!["AGENTS.md", "crates/AGENTS.md"]);
 
         let claude = NativeConventions {

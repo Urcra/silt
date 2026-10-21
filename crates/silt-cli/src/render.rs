@@ -1,7 +1,8 @@
 use std::fmt::Write;
 
 use silt_daemon::protocol::{
-    CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
+    CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary,
+};
 
 /// Text that came from other people, fit for a terminal: control characters
 /// other than newline and tab could move the cursor, rewrite what was
@@ -31,11 +32,7 @@ pub fn threads(threads: &[ThreadSummary]) -> String {
         return out;
     }
     for thread in threads {
-        let fork = thread
-            .forked_from
-            .as_deref()
-            .map(|from| format!(" fork of {}", short(from)))
-            .unwrap_or_default();
+        let fork = thread.forked_from.as_deref().map(|from| format!(" fork of {}", short(from))).unwrap_or_default();
         let _ = writeln!(
             out,
             "{}  {:<6} {:>4} msgs {:>5} edits  {}  ({}){fork}",
@@ -64,10 +61,8 @@ pub fn show(lines: &[ShowLine]) -> String {
             ShowLine::ToolCall { name, input, .. } => writeln!(out, "  ⚙ {name} {}", clip(input, 140)),
             ShowLine::Edits { tool_use_id, files } => {
                 let who = if tool_use_id.is_some() { "    ✎" } else { "  ✎ outside tool calls:" };
-                let files: Vec<String> = files
-                    .iter()
-                    .map(|file| format!("{} +{} -{}", file.path, file.inserted, file.deleted))
-                    .collect();
+                let files: Vec<String> =
+                    files.iter().map(|file| format!("{} +{} -{}", file.path, file.inserted, file.deleted)).collect();
                 writeln!(out, "{who} {}", files.join(", "))
             }
             ShowLine::Compaction { summary } => match summary {
@@ -125,12 +120,7 @@ pub fn history(page: &HistoryPage) -> String {
 
 pub fn comment_location(location: &CommentLocation) -> String {
     match location {
-        CommentLocation::Lines {
-            path,
-            start,
-            end,
-            outdated,
-        } => {
+        CommentLocation::Lines { path, start, end, outdated } => {
             let lines = if start == end { format!("{start}") } else { format!("{start}-{end}") };
             let note = if *outdated { " (outdated: the lines were deleted)" } else { "" };
             format!("{path}:{lines}{note}")

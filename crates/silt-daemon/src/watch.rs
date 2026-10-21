@@ -54,13 +54,7 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
             let mut paths: Vec<PathBuf> = events
                 .iter()
                 .filter(|event| event.need_rescan() || may_change(&event.kind))
-                .flat_map(|event| {
-                    if event.need_rescan() {
-                        vec![rescan_root.clone()]
-                    } else {
-                        event.paths.clone()
-                    }
-                })
+                .flat_map(|event| if event.need_rescan() { vec![rescan_root.clone()] } else { event.paths.clone() })
                 .collect();
             paths.sort();
             paths.dedup();
@@ -120,4 +114,3 @@ mod tests {
         assert!(receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "writing is");
     }
 }
-

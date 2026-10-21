@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+description = "Tasks for working on Silt itself: `cargo xtask status`"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

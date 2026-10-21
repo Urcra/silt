@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless, translated_text};
+use crate::{
+    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, Role, SessionIds, Start, Stateless,
+    translated_text,
+};
 
 pub const AGENT: &str = "codex";
 
@@ -135,29 +138,21 @@ pub fn read_line(line: &str) -> Read {
         // response items also carry the context Codex injects.
         ("response_item", "message") => {
             let entry = match field("role").as_str() {
-                "assistant" => Entry::Assistant {
-                    text: content_text(payload.get("content")),
-                },
+                "assistant" => Entry::Assistant { text: content_text(payload.get("content")) },
                 other => Entry::Other { kind: format!("{other}_message") },
             };
             read.entries.push(entry);
         }
         ("event_msg", "user_message") => read.entries.push(Entry::User { text: field("message") }),
         ("event_msg", "item_completed") if payload.pointer("/item/type").and_then(Value::as_str) == Some("UserMessage") => {
-            read.entries.push(Entry::User {
-                text: content_text(payload.pointer("/item/content")),
-            });
+            read.entries.push(Entry::User { text: content_text(payload.pointer("/item/content")) });
         }
         ("response_item", "reasoning") => {
             let text = payload
                 .get("summary")
                 .and_then(Value::as_array)
                 .map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|part| part.get("text").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    parts.iter().filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
                 })
                 .unwrap_or_default();
             if !text.is_empty() {
@@ -174,10 +169,7 @@ pub fn read_line(line: &str) -> Read {
                 "custom_tool_call" => (field("name"), Value::String(field("input"))),
                 _ => ("local_shell".to_owned(), payload.get("action").cloned().unwrap_or(Value::Null)),
             };
-            read.marks.push(Mark::ToolStarted {
-                tool_use_id: id.clone(),
-                tool: name.clone(),
-            });
+            read.marks.push(Mark::ToolStarted { tool_use_id: id.clone(), tool: name.clone() });
             read.entries.push(Entry::ToolCall { id, name, input });
         }
         ("response_item", "function_call_output" | "custom_tool_call_output") => {
@@ -187,17 +179,11 @@ pub fn read_line(line: &str) -> Read {
                 other => content_text(other),
             };
             read.marks.push(Mark::ToolFinished { tool_use_id: id.clone() });
-            read.entries.push(Entry::ToolResult {
-                tool_use_id: id,
-                text,
-                is_error: false,
-            });
+            read.entries.push(Entry::ToolResult { tool_use_id: id, text, is_error: false });
         }
         ("compacted", _) => {
             let message = field("message");
-            read.entries.push(Entry::Compaction {
-                summary: (!message.is_empty()).then_some(message),
-            });
+            read.entries.push(Entry::Compaction { summary: (!message.is_empty()).then_some(message) });
         }
         ("event_msg", "task_started" | "turn_started") => read.marks.push(Mark::PromptSubmitted),
         ("event_msg", "task_complete" | "turn_complete" | "turn_aborted") => read.marks.push(Mark::Stopped),
@@ -210,11 +196,9 @@ pub fn read_line(line: &str) -> Read {
 fn content_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Some(Value::Array(parts)) => {
+            parts.iter().filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+        }
         _ => String::new(),
     }
 }
@@ -242,7 +226,10 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
         match role {
             Role::User => {
                 if open {
-                    lines.push(line("event_msg", json!({"type": "task_complete", "turn_id": format!("turn-{turn}"), "last_agent_message": null})));
+                    lines.push(line(
+                        "event_msg",
+                        json!({"type": "task_complete", "turn_id": format!("turn-{turn}"), "last_agent_message": null}),
+                    ));
                 }
                 turn += 1;
                 open = true;
@@ -257,7 +244,10 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
                         "summary": "auto"
                     }),
                 ));
-                lines.push(line("event_msg", json!({"type": "task_started", "turn_id": format!("turn-{turn}"), "model_context_window": null})));
+                lines.push(line(
+                    "event_msg",
+                    json!({"type": "task_started", "turn_id": format!("turn-{turn}"), "model_context_window": null}),
+                ));
                 lines.push(line(
                     "response_item",
                     json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}),
@@ -275,7 +265,10 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
     }
     if open {
         let last = messages.iter().rev().find(|(role, _)| *role == Role::Assistant).map(|(_, text)| text.clone());
-        lines.push(line("event_msg", json!({"type": "task_complete", "turn_id": format!("turn-{turn}"), "last_agent_message": last})));
+        lines.push(line(
+            "event_msg",
+            json!({"type": "task_complete", "turn_id": format!("turn-{turn}"), "last_agent_message": last}),
+        ));
     }
     lines
 }
@@ -342,9 +335,7 @@ impl Agent for Codex {
             Start::New { .. } => {}
         }
         let toml = |value: &Value| value.to_string();
-        launch
-            .arg("-c")
-            .arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command.to_string_lossy()))));
+        launch.arg("-c").arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command.to_string_lossy()))));
         launch.arg("-c").arg(format!("mcp_servers.silt.args={}", toml(&json!(plan.mcp.args))));
         if let Some(instructions) = &plan.instructions {
             launch.arg("-c").arg(format!("developer_instructions={}", toml(&json!(instructions))));
@@ -373,7 +364,8 @@ mod tests {
             fs::write(&path, "{}\n").expect("write");
             path
         };
-        let (old, month_before, yesterday, today) = (rollout("2025/12/31"), rollout("2026/09/30"), rollout("2026/10/20"), rollout("2026/10/21"));
+        let (old, month_before, yesterday, today) =
+            (rollout("2025/12/31"), rollout("2026/09/30"), rollout("2026/10/20"), rollout("2026/10/21"));
         let next_year = rollout("2027/01/01");
         let october_21_noon = 1_792_584_000_000;
         assert_eq!(rollouts_since(home.path(), october_21_noon), vec![next_year.clone(), today.clone(), yesterday.clone()]);
@@ -392,11 +384,7 @@ mod tests {
         let read = read_line(call);
         assert_eq!(
             read.entries,
-            vec![Entry::ToolCall {
-                id: "call_1".into(),
-                name: "shell".into(),
-                input: json!({"command": ["ls"]})
-            }]
+            vec![Entry::ToolCall { id: "call_1".into(), name: "shell".into(), input: json!({"command": ["ls"]}) }]
         );
         assert_eq!(read.marks, vec![Mark::ToolStarted { tool_use_id: "call_1".into(), tool: "shell".into() }]);
         let output = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\n"}}"#;
@@ -408,17 +396,16 @@ mod tests {
         let complete = r#"{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"1"}}"#;
         assert_eq!(read_line(complete).marks, vec![Mark::Stopped]);
         let compacted = r#"{"timestamp":"t","type":"compacted","payload":{"message":"We listed files."}}"#;
-        assert_eq!(
-            read_line(compacted).entries,
-            vec![Entry::Compaction { summary: Some("We listed files.".into()) }]
-        );
+        assert_eq!(read_line(compacted).entries, vec![Entry::Compaction { summary: Some("We listed files.".into()) }]);
     }
 
     #[test]
     fn rollout_names_carry_the_id() {
         let path = Path::new("/h/sessions/2026/10/20/rollout-2026-10-20T12-00-00-0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01.jsonl");
         assert_eq!(rollout_id(path).as_deref(), Some("0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01"));
-        let reverted = Path::new("/h/sessions/2026/10/20/rollout-2026-10-20T12-00-00-0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01_0199f3a1-0000-7b1a-9d3e-5a6b7c8d9e02.jsonl");
+        let reverted = Path::new(
+            "/h/sessions/2026/10/20/rollout-2026-10-20T12-00-00-0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01_0199f3a1-0000-7b1a-9d3e-5a6b7c8d9e02.jsonl",
+        );
         assert_eq!(rollout_id(reverted).as_deref(), Some("0199f3a1-7c2e-7b1a-9d3e-5a6b7c8d9e01"));
     }
 
@@ -432,7 +419,8 @@ mod tests {
         let meta: Value = serde_json::from_str(&lines[0]).expect("json");
         assert_eq!(meta["payload"]["cwd"], "/repo");
         assert!(meta["payload"].get("history_mode").is_none());
-        let entries: Vec<Entry> = lines.iter().flat_map(|line| read_line(line).entries).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
+        let entries: Vec<Entry> =
+            lines.iter().flat_map(|line| read_line(line).entries).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
         assert_eq!(entries, vec![Entry::User { text: "Fix it".into() }, Entry::Assistant { text: "Fixed.".into() }]);
         assert!(lines.last().expect("lines").contains("task_complete"));
     }

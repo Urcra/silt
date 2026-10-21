@@ -49,9 +49,7 @@ pub(crate) async fn serve(
     let mut access = access_config(&rights, &hooks);
     // `http-backend` only accepts pushes from an authenticated user.
     access.push(("REMOTE_USER".to_owned(), caller.user.to_string()));
-    run_backend(&root, &format!("/{repo}/{rest}"), &method, &uri, &headers, body, &access)
-        .await
-        .map_err(|error| internal(&error))
+    run_backend(&root, &format!("/{repo}/{rest}"), &method, &uri, &headers, body, &access).await.map_err(|error| internal(&error))
 }
 
 /// What a caller may do with one family's thread refs. The mirror is one
@@ -72,11 +70,7 @@ async fn thread_rights(server: &Server, family: FamilyId, user: i64) -> Result<T
     .bind(crate::id_bytes(family.0))
     .fetch_all(&server.shared.db)
     .await?;
-    let mut rights = ThreadRights {
-        visible: Vec::new(),
-        writable: Vec::new(),
-        known: Vec::new(),
-    };
+    let mut rights = ThreadRights { visible: Vec::new(), writable: Vec::new(), known: Vec::new() };
     for row in rows {
         let thread = ThreadId(crate::id_from(row.get("id")));
         rights.known.push(thread);
@@ -164,11 +158,7 @@ fn internal(error: &std::io::Error) -> ApiError {
 
 async fn init_bare(dir: &Path) -> std::io::Result<()> {
     let status = Command::new("git").args(["init", "-q", "--bare"]).arg(dir).status().await?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other("git init --bare failed"))
-    }
+    if status.success() { Ok(()) } else { Err(std::io::Error::other("git init --bare failed")) }
 }
 
 /// The most CGI header `http-backend` may send before its body.

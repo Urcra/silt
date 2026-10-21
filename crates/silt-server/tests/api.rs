@@ -6,8 +6,8 @@ use reqwest::StatusCode;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Delta, Family, Op};
 use silt_proto::{
-    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PullReply,
-    PushReply, PushRequest, ThreadInfo, Visibility, VisibilityRequest,
+    ErrorReply, GENERATION_HEADER, Lease, Listing, LoginReply, LoginRequest, PROTOCOL, PROTOCOL_HEADER, PullReply, PushReply,
+    PushRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_server::{Server, create_pairing_code};
 use silt_store::BlobStore;
@@ -41,10 +41,7 @@ impl Client {
         let reply: LoginReply = http
             .post(format!("{base}/v1/login"))
             .header(PROTOCOL_HEADER, PROTOCOL.to_string())
-            .json(&LoginRequest {
-                code,
-                name: "laptop".into(),
-            })
+            .json(&LoginRequest { code, name: "laptop".into() })
             .send()
             .await
             .expect("sends")
@@ -52,14 +49,7 @@ impl Client {
             .await
             .expect("login reply");
         assert_eq!(reply.user, user);
-        (
-            Self {
-                http,
-                base: base.to_owned(),
-                token: reply.token,
-            },
-            reply.device,
-        )
+        (Self { http, base: base.to_owned(), token: reply.token }, reply.device)
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -78,10 +68,7 @@ impl Client {
     }
 
     async fn pull(&self, query: &str) -> reqwest::Response {
-        self.request(reqwest::Method::GET, &format!("/v1/families/{FAMILY}/deltas?{query}"))
-            .send()
-            .await
-            .expect("sends")
+        self.request(reqwest::Method::GET, &format!("/v1/families/{FAMILY}/deltas?{query}")).send().await.expect("sends")
     }
 }
 
@@ -132,10 +119,7 @@ async fn rejects_other_protocol_versions_and_unknown_devices() {
     let response = http
         .post(format!("{base}/v1/login"))
         .header(PROTOCOL_HEADER, PROTOCOL.to_string())
-        .json(&LoginRequest {
-            code: "wrong".into(),
-            name: "x".into(),
-        })
+        .json(&LoginRequest { code: "wrong".into(), name: "x".into() })
         .send()
         .await
         .expect("sends");
@@ -161,11 +145,7 @@ async fn pushes_dedupe_and_pulls_follow_and_wait() {
     assert_eq!(response.status(), StatusCode::CONFLICT, "a wrong fingerprint is refused");
 
     let waiting = {
-        let client = Client {
-            http: client.http.clone(),
-            base: client.base.clone(),
-            token: client.token.clone(),
-        };
+        let client = Client { http: client.http.clone(), base: client.base.clone(), token: client.token.clone() };
         tokio::spawn(async move {
             let started = Instant::now();
             let reply: PullReply = client.pull(&format!("after=3&last={last}&wait=10")).await.json().await.expect("pull");
@@ -183,9 +163,7 @@ async fn pushes_dedupe_and_pulls_follow_and_wait() {
         Author::User,
         0,
         more.thread_head(THREAD),
-        Op::Delete {
-            inode: silt_crdt::InodeId(all[0].span.first()),
-        },
+        Op::Delete { inode: silt_crdt::InodeId(all[0].span.first()) },
     );
     client.push(vec![next]).await;
     let (elapsed, count) = waiting.await.expect("joins");
@@ -232,7 +210,8 @@ async fn a_stored_delta_that_no_longer_applies_does_not_block_pushes() {
             executable: false,
         },
     );
-    let db = sqlx::SqlitePool::connect(&format!("sqlite://{}", data.path().join("server.sqlite").display())).await.expect("opens");
+    let db =
+        sqlx::SqlitePool::connect(&format!("sqlite://{}", data.path().join("server.sqlite").display())).await.expect("opens");
     sqlx::query("INSERT INTO deltas (family_id, seq, data) VALUES (?, 2, ?)")
         .bind(FAMILY.0.to_be_bytes().to_vec())
         .bind(postcard::to_allocvec(&orphan).expect("encodes"))
@@ -286,11 +265,7 @@ async fn blobs_threads_and_leases() {
         .expect("sends");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let fetch = || client.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).send();
-    assert_eq!(
-        fetch().await.expect("sends").status(),
-        StatusCode::NOT_FOUND,
-        "a blob no delta refers to is no one's to fetch"
-    );
+    assert_eq!(fetch().await.expect("sends").status(), StatusCode::NOT_FOUND, "a blob no delta refers to is no one's to fetch");
     let family = Family::new();
     let bundle = family.delta(
         ActorId(9),
@@ -313,12 +288,7 @@ async fn blobs_threads_and_leases() {
         owner: String::new(),
         collaborators: Vec::new(),
     };
-    client
-        .request(reqwest::Method::POST, "/v1/threads")
-        .json(&thread)
-        .send()
-        .await
-        .expect("sends");
+    client.request(reqwest::Method::POST, "/v1/threads").json(&thread).send().await.expect("sends");
     for epoch in 1..=2 {
         let lease: Lease = client
             .request(reqwest::Method::POST, &format!("/v1/threads/{THREAD}/lease"))
@@ -330,14 +300,8 @@ async fn blobs_threads_and_leases() {
             .expect("lease");
         assert_eq!(lease, Lease { device, epoch });
     }
-    let listing: Listing = client
-        .request(reqwest::Method::GET, "/v1/listing")
-        .send()
-        .await
-        .expect("sends")
-        .json()
-        .await
-        .expect("listing");
+    let listing: Listing =
+        client.request(reqwest::Method::GET, "/v1/listing").send().await.expect("sends").json().await.expect("listing");
     assert_eq!(listing.threads[0].lease, Some(Lease { device, epoch: 2 }));
     assert_eq!(listing.threads[0].repo, "github.com/u/r");
     assert_eq!(listing.threads[0].owner, "owner");
@@ -345,13 +309,7 @@ async fn blobs_threads_and_leases() {
 
 impl Client {
     async fn listing(&self) -> Listing {
-        self.request(reqwest::Method::GET, "/v1/listing")
-            .send()
-            .await
-            .expect("sends")
-            .json()
-            .await
-            .expect("listing")
+        self.request(reqwest::Method::GET, "/v1/listing").send().await.expect("sends").json().await.expect("listing")
     }
 
     async fn register(&self, repo: &str) -> StatusCode {
@@ -364,21 +322,11 @@ impl Client {
             owner: String::new(),
             collaborators: Vec::new(),
         };
-        self.request(reqwest::Method::POST, "/v1/threads")
-            .json(&thread)
-            .send()
-            .await
-            .expect("sends")
-            .status()
+        self.request(reqwest::Method::POST, "/v1/threads").json(&thread).send().await.expect("sends").status()
     }
 
     async fn set_visibility(&self, request: &VisibilityRequest) -> StatusCode {
-        self.request(reqwest::Method::PUT, "/v1/visibility")
-            .json(request)
-            .send()
-            .await
-            .expect("sends")
-            .status()
+        self.request(reqwest::Method::PUT, "/v1/visibility").json(request).send().await.expect("sends").status()
     }
 }
 
@@ -394,21 +342,13 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
     let listing = bob.listing().await;
     assert_eq!(listing.threads.len(), 1, "projects are team-visible by default");
     assert_eq!(listing.threads[0].owner, "alice");
-    let response = bob
-        .request(reqwest::Method::POST, &format!("/v1/threads/{THREAD}/lease"))
-        .send()
-        .await
-        .expect("sends");
+    let response = bob.request(reqwest::Method::POST, &format!("/v1/threads/{THREAD}/lease")).send().await.expect("sends");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(matches!(response.json::<ErrorReply>().await.expect("body"), ErrorReply::Forbidden { .. }));
     let pulled: PullReply = bob.pull("after=0").await.json().await.expect("pull");
     assert_eq!(pulled.deltas.len(), 2, "teammates can read, and so fork, the family");
 
-    let private_family = VisibilityRequest {
-        repo: None,
-        thread: Some(THREAD),
-        visibility: Visibility::Private,
-    };
+    let private_family = VisibilityRequest { repo: None, thread: Some(THREAD), visibility: Visibility::Private };
     assert_eq!(bob.set_visibility(&private_family).await, StatusCode::FORBIDDEN);
     assert_eq!(alice.set_visibility(&private_family).await, StatusCode::NO_CONTENT);
     assert!(bob.listing().await.threads.is_empty());
@@ -417,16 +357,10 @@ async fn only_the_owner_moves_a_lease_and_private_families_stay_hidden() {
     assert_eq!(bob.push(deltas(3)).await.status(), StatusCode::NOT_FOUND);
     assert_eq!(alice.listing().await.threads.len(), 1);
 
-    let team_family = VisibilityRequest {
-        visibility: Visibility::Org,
-        ..private_family
-    };
+    let team_family = VisibilityRequest { visibility: Visibility::Org, ..private_family };
     assert_eq!(alice.set_visibility(&team_family).await, StatusCode::NO_CONTENT);
-    let private_project = VisibilityRequest {
-        repo: Some("github.com/u/r".into()),
-        thread: None,
-        visibility: Visibility::Private,
-    };
+    let private_project =
+        VisibilityRequest { repo: Some("github.com/u/r".into()), thread: None, visibility: Visibility::Private };
     assert_eq!(
         bob.set_visibility(&private_project).await,
         StatusCode::FORBIDDEN,
@@ -449,22 +383,10 @@ fn lexer_work() -> Vec<Delta> {
         deltas.push(delta.clone());
         delta.span.first()
     };
-    add(
-        &mut family,
-        Op::Git(GitOp::Genesis {
-            commit: silt_types::GitOid([1; 20]),
-            branch: Some("main".into()),
-        }),
-    );
+    add(&mut family, Op::Git(GitOp::Genesis { commit: silt_types::GitOid([1; 20]), branch: Some("main".into()) }));
     let src = add(
         &mut family,
-        Op::Create {
-            kind: InodeKind::Dir,
-            parent: Parent::Root,
-            name: "src".into(),
-            content: Content::Empty,
-            executable: false,
-        },
+        Op::Create { kind: InodeKind::Dir, parent: Parent::Root, name: "src".into(), content: Content::Empty, executable: false },
     );
     add(
         &mut family,
@@ -479,10 +401,7 @@ fn lexer_work() -> Vec<Delta> {
     add(
         &mut family,
         Op::Conv(ConvOp::Native {
-            session: SessionRef {
-                agent: "claude-code".into(),
-                id: "s".into(),
-            },
+            session: SessionRef { agent: "claude-code".into(), id: "s".into() },
             file: SessionFile::Main,
             line: r#"{"type":"user","message":{"role":"user","content":"Fix the tokenizer bug in the lexer"}}"#.into(),
         }),
@@ -498,13 +417,7 @@ fn now() -> i64 {
 
 impl Client {
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> T {
-        self.request(reqwest::Method::GET, path)
-            .send()
-            .await
-            .expect("sends")
-            .json()
-            .await
-            .expect("json")
+        self.request(reqwest::Method::GET, path).send().await.expect("sends").json().await.expect("json")
     }
 }
 
@@ -542,13 +455,7 @@ async fn search_filters_and_in_flight_respect_visibility() {
     let flight: InFlightReply = bob.get_json("/v1/in-flight?repo=github.com/u/r&path=docs").await;
     assert!(flight.threads.is_empty());
 
-    alice
-        .set_visibility(&VisibilityRequest {
-            repo: None,
-            thread: Some(THREAD),
-            visibility: Visibility::Private,
-        })
-        .await;
+    alice.set_visibility(&VisibilityRequest { repo: None, thread: Some(THREAD), visibility: Visibility::Private }).await;
     let found: SearchReply = bob.get_json("/v1/search?q=lexer").await;
     assert!(found.hits.is_empty());
     let flight: InFlightReply = bob.get_json("/v1/in-flight?repo=github.com/u/r").await;
@@ -595,11 +502,7 @@ async fn a_private_fork_stays_hidden_until_offered_back() {
     };
     let status = bob.request(reqwest::Method::POST, "/v1/threads").json(&fork_info).send().await.expect("sends").status();
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let private_fork = VisibilityRequest {
-        repo: None,
-        thread: Some(FORK),
-        visibility: Visibility::Private,
-    };
+    let private_fork = VisibilityRequest { repo: None, thread: Some(FORK), visibility: Visibility::Private };
     assert_eq!(bob.set_visibility(&private_fork).await, StatusCode::NO_CONTENT);
     assert_eq!(bob.push(vec![forked.clone(), secret.clone()]).await.status(), StatusCode::OK);
 
@@ -616,11 +519,7 @@ async fn a_private_fork_stays_hidden_until_offered_back() {
         2,
         FORK,
         silt_types::Frontier::single(secret.span.last()),
-        Op::Mr(MrOp::Opened {
-            target: THREAD,
-            title: "secret".into(),
-            summary: String::new(),
-        }),
+        Op::Mr(MrOp::Opened { target: THREAD, title: "secret".into(), summary: String::new() }),
     );
     assert_eq!(bob.push(vec![opened]).await.status(), StatusCode::OK);
     let pulled: PullReply = alice.pull("after=0").await.json().await.expect("pull");
@@ -664,11 +563,7 @@ async fn merge_requests_notify_only_about_threads_the_asker_sees() {
     const PRIVATE: ThreadId = ThreadId(76);
     let status = alice.request(reqwest::Method::POST, "/v1/threads").json(&info(PRIVATE)).send().await.expect("sends").status();
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let private = VisibilityRequest {
-        repo: None,
-        thread: Some(PRIVATE),
-        visibility: Visibility::Private,
-    };
+    let private = VisibilityRequest { repo: None, thread: Some(PRIVATE), visibility: Visibility::Private };
     assert_eq!(alice.set_visibility(&private).await, StatusCode::NO_CONTENT);
     let hidden = write(1, PRIVATE, silt_types::Frontier::single(source.span.last()), Op::Fork { from: THREAD });
     assert_eq!(alice.push(vec![hidden]).await.status(), StatusCode::OK);
@@ -677,18 +572,13 @@ async fn merge_requests_notify_only_about_threads_the_asker_sees() {
     let status = bob.request(reqwest::Method::POST, "/v1/threads").json(&info(FORK)).send().await.expect("sends").status();
     assert_eq!(status, StatusCode::NO_CONTENT);
     let forked = write(2, FORK, silt_types::Frontier::single(source.span.last()), Op::Fork { from: THREAD });
-    let mr = |target| {
-        Op::Mr(MrOp::Opened {
-            target,
-            title: "click here".into(),
-            summary: String::new(),
-        })
-    };
+    let mr = |target| Op::Mr(MrOp::Opened { target, title: "click here".into(), summary: String::new() });
     let into_private = write(2, FORK, silt_types::Frontier::single(forked.span.last()), mr(PRIVATE));
     let into_main = write(2, FORK, silt_types::Frontier::single(into_private.span.last()), mr(THREAD));
     assert_eq!(bob.push(vec![forked, into_private]).await.status(), StatusCode::OK);
     let inbox = || async {
-        let reply: silt_proto::InboxReply = alice.request(reqwest::Method::GET, "/v1/inbox").send().await.expect("sends").json().await.expect("inbox");
+        let reply: silt_proto::InboxReply =
+            alice.request(reqwest::Method::GET, "/v1/inbox").send().await.expect("sends").json().await.expect("inbox");
         reply.notifications
     };
     assert!(inbox().await.is_empty(), "bob can't see the private thread, so he can't ping its owner about it");

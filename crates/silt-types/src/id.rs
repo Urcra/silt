@@ -44,16 +44,12 @@ impl FromStr for ActorId {
         if s.len() != 32 {
             return Err(ParseActorIdError(s.to_owned()));
         }
-        u128::from_str_radix(s, 16)
-            .map(Self)
-            .map_err(|_| ParseActorIdError(s.to_owned()))
+        u128::from_str_radix(s, 16).map(Self).map_err(|_| ParseActorIdError(s.to_owned()))
     }
 }
 
 /// Position on a history's Lamport clock.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct Lamport(pub u64);
 
 /// The highest lamport a delta may reach. Stores keep lamports as signed

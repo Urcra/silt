@@ -60,15 +60,7 @@ impl Viewer {
             .fetch_all(db)
             .await?
             .into_iter()
-            .map(|row| {
-                (
-                    row.get("repo"),
-                    Project {
-                        org: row.get("org_id"),
-                        setting: level(row.get("visibility")),
-                    },
-                )
-            })
+            .map(|row| (row.get("repo"), Project { org: row.get("org_id"), setting: level(row.get("visibility")) }))
             .collect();
         let defaults: HashMap<i64, Visibility> = sqlx::query("SELECT id, default_visibility FROM orgs")
             .fetch_all(db)
@@ -83,15 +75,14 @@ impl Viewer {
             .into_iter()
             .map(|row| row.get("org_id"))
             .collect();
-        let teams: HashSet<(i64, String)> = sqlx::query(
-            "SELECT t.org_id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ?",
-        )
-        .bind(user)
-        .fetch_all(db)
-        .await?
-        .into_iter()
-        .map(|row| (row.get("org_id"), row.get("name")))
-        .collect();
+        let teams: HashSet<(i64, String)> =
+            sqlx::query("SELECT t.org_id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ?")
+                .bind(user)
+                .fetch_all(db)
+                .await?
+                .into_iter()
+                .map(|row| (row.get("org_id"), row.get("name")))
+                .collect();
         let threads: HashMap<ThreadId, ThreadRow> =
             sqlx::query("SELECT id, family_id, owner_id, visibility, repo FROM threads WHERE deleted_ms IS NULL")
                 .fetch_all(db)
@@ -227,13 +218,8 @@ impl Viewer {
     /// those build on.
     pub(crate) fn readable_history(&self, family: u128, room: &Room) -> VersionVector {
         let readable = self.readable(family, room);
-        let tips: Frontier = room
-            .deltas()
-            .iter()
-            .zip(readable)
-            .filter(|(_, readable)| *readable)
-            .map(|(delta, _)| delta.span.last())
-            .collect();
+        let tips: Frontier =
+            room.deltas().iter().zip(readable).filter(|(_, readable)| *readable).map(|(delta, _)| delta.span.last()).collect();
         room.graph().version_vector(&tips)
     }
 
@@ -254,9 +240,6 @@ impl Viewer {
         shared.sort();
         shared.dedup();
         let reachable = room.graph().version_vector(&shared.into_iter().collect::<Frontier>());
-        deltas
-            .iter()
-            .map(|delta| self.sees_thread_in(family, delta.thread) || reachable.contains(delta.span.first()))
-            .collect()
+        deltas.iter().map(|delta| self.sees_thread_in(family, delta.thread) || reachable.contains(delta.span.first())).collect()
     }
 }

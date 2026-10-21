@@ -68,10 +68,7 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) fn reference(&self) -> SessionRef {
-        SessionRef {
-            agent: self.record.agent.clone(),
-            id: self.record.session_id.clone(),
-        }
+        SessionRef { agent: self.record.agent.clone(), id: self.record.session_id.clone() }
     }
 }
 
@@ -142,11 +139,7 @@ fn source_of(key: &str) -> SessionFile {
 }
 
 pub(crate) fn agent_author(session: &SessionRef) -> Author {
-    Author::Agent {
-        agent: session.agent.clone(),
-        session: session.id.clone(),
-        tool_use_id: None,
-    }
+    Author::Agent { agent: session.agent.clone(), session: session.id.clone(), tool_use_id: None }
 }
 
 pub(crate) fn resolve_agent(name: &str) -> Result<&'static dyn Agent, CoreError> {
@@ -183,7 +176,14 @@ impl Core {
                 };
                 self.register_session(new).await?;
             }
-            None => self.await_session(agent, created.thread, created.family, created.checkout_id, &created.agent_cwd, &created.checkout),
+            None => self.await_session(
+                agent,
+                created.thread,
+                created.family,
+                created.checkout_id,
+                &created.agent_cwd,
+                &created.checkout,
+            ),
         }
         if let Some(commit) = created.head {
             self.record_bundle(created.family, created.thread, &created.repo, commit, &[]).await?;
@@ -199,7 +199,12 @@ impl Core {
 
     /// A new thread for the clone at `cwd`: its family imported from the
     /// clone's HEAD and a checkout, managed when `isolated`, being watched.
-    pub(crate) async fn create_thread(&mut self, cwd: &Path, isolated: bool, already_ran: bool) -> Result<CreatedThread, CoreError> {
+    pub(crate) async fn create_thread(
+        &mut self,
+        cwd: &Path,
+        isolated: bool,
+        already_ran: bool,
+    ) -> Result<CreatedThread, CoreError> {
         let cwd = cwd.canonicalize()?;
         let repo = Repo::discover(&cwd)?;
         self.remember_clone(&cwd).await;
@@ -213,11 +218,7 @@ impl Core {
                 .files_at(commit)?
                 .into_iter()
                 .filter(|file| file.mode != FileMode::Symlink)
-                .map(|file| ImportFile {
-                    path: file.path,
-                    oid: file.oid,
-                    executable: file.mode == FileMode::Executable,
-                })
+                .map(|file| ImportFile { path: file.path, oid: file.oid, executable: file.mode == FileMode::Executable })
                 .collect(),
             None => Vec::new(),
         };
@@ -227,10 +228,7 @@ impl Core {
             id: thread,
             family: family_id,
             repo_root: repo.root().to_owned(),
-            repo: repo
-                .remote_url("origin")?
-                .map(|url| silt_git::normalize_remote(&url))
-                .unwrap_or_default(),
+            repo: repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
             created_ms: now_ms(),
             owner: self.own_user(),
         };
@@ -240,7 +238,8 @@ impl Core {
 
         let mut family = Family::new();
         let branch = repo.head_branch()?;
-        let deltas = import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
+        let deltas =
+            import(&mut family, self.thread_actor(thread), thread, head.map(|commit| (commit, branch)), &files, now_ms())?;
         self.store.append_deltas(family_id, &deltas).await?;
         self.families.insert(family_id, family);
 
@@ -258,17 +257,9 @@ impl Core {
             Some(previous) => {
                 self.checkouts.remove(&previous.id);
                 self.store.rebind_checkout(previous.id, thread, checkout_actor).await?;
-                silt_store::CheckoutRecord {
-                    thread,
-                    actor: checkout_actor,
-                    ..previous
-                }
+                silt_store::CheckoutRecord { thread, actor: checkout_actor, ..previous }
             }
-            None => {
-                self.store
-                    .add_checkout(thread, &checkout_path, checkout_actor, isolated, now_ms())
-                    .await?
-            }
+            None => self.store.add_checkout(thread, &checkout_path, checkout_actor, isolated, now_ms()).await?,
         };
         let checkout_id = checkout.id;
         self.start_checkout(checkout, BTreeMap::new())?;
@@ -278,20 +269,8 @@ impl Core {
         scanned?;
 
         // `join("")` would add a trailing slash, which changes Claude's slug.
-        let agent_cwd = if relative.as_os_str().is_empty() {
-            checkout_path.clone()
-        } else {
-            checkout_path.join(&relative)
-        };
-        Ok(CreatedThread {
-            thread,
-            family: family_id,
-            checkout_id,
-            checkout: checkout_path,
-            agent_cwd,
-            repo,
-            head,
-        })
+        let agent_cwd = if relative.as_os_str().is_empty() { checkout_path.clone() } else { checkout_path.join(&relative) };
+        Ok(CreatedThread { thread, family: family_id, checkout_id, checkout: checkout_path, agent_cwd, repo, head })
     }
 
     /// Waits for the agent to write a session it named itself.
@@ -352,11 +331,7 @@ impl Core {
             for (key, path) in files {
                 let offset = SessionFileOffset {
                     file: key.clone(),
-                    offset: if new.restored.is_empty() {
-                        0
-                    } else {
-                        fs::metadata(&path).map_or(0, |metadata| metadata.len())
-                    },
+                    offset: if new.restored.is_empty() { 0 } else { fs::metadata(&path).map_or(0, |metadata| metadata.len()) },
                     path,
                 };
                 self.store.set_session_offset(&record.agent, &new.id, &offset).await?;
@@ -365,10 +340,7 @@ impl Core {
         }
         let recorded = new.restored.iter().filter_map(|line| new.agent.record_key(line)).collect();
         self.sessions.retain(|existing| existing.record.session_id != new.id);
-        let reference = SessionRef {
-            agent: record.agent.clone(),
-            id: new.id.clone(),
-        };
+        let reference = SessionRef { agent: record.agent.clone(), id: new.id.clone() };
         self.sessions.push(Session {
             record,
             family: new.family,
@@ -387,8 +359,7 @@ impl Core {
             snapshot_running: false,
             last_snapshot: None,
         });
-        self.append_session_started(new.family, new.thread, reference, &new.agent_cwd, &new.checkout_root)
-            .await?;
+        self.append_session_started(new.family, new.thread, reference, &new.agent_cwd, &new.checkout_root).await?;
         if new.restored.is_empty() {
             self.tail_session(&new.id).await?;
         }
@@ -404,9 +375,7 @@ impl Core {
         checkout_root: &Path,
     ) -> Result<(), CoreError> {
         let author = agent_author(&session);
-        let dir = self
-            .session(&session.id)
-            .and_then(|found| found.agent.session_dir(found.transcript.as_ref()?));
+        let dir = self.session(&session.id).and_then(|found| found.agent.session_dir(found.transcript.as_ref()?));
         let op = ConvOp::SessionStarted {
             session: session.clone(),
             cwd: cwd.to_string_lossy().into_owned(),
@@ -414,10 +383,7 @@ impl Core {
         };
         self.append_conv(family, thread, author.clone(), op).await?;
         if let Some(dir) = dir {
-            let op = ConvOp::SessionDir {
-                session,
-                dir: dir.to_string_lossy().into_owned(),
-            };
+            let op = ConvOp::SessionDir { session, dir: dir.to_string_lossy().into_owned() };
             self.append_conv(family, thread, author, op).await?;
         }
         Ok(())
@@ -506,7 +472,8 @@ impl Core {
             }
             pending.searching = true;
             pending.last_search = Some(Instant::now());
-            let (agent, cwd, since, known, token) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms, known.clone(), pending.token);
+            let (agent, cwd, since, known, token) =
+                (pending.agent, pending.agent_cwd.clone(), pending.since_ms, known.clone(), pending.token);
             let events = self.events.clone();
             tokio::task::spawn_blocking(move || {
                 let found = agent.discover(&cwd, since, &known);
@@ -521,10 +488,7 @@ impl Core {
             if !session.live || session.snapshot_running || !due {
                 continue;
             }
-            let found = Found {
-                id: session.record.session_id.clone(),
-                transcript: transcript.clone(),
-            };
+            let found = Found { id: session.record.session_id.clone(), transcript: transcript.clone() };
             let agent = session.agent;
             if agent.capture() != Capture::Snapshot {
                 continue;
@@ -533,10 +497,7 @@ impl Core {
             let events = self.events.clone();
             tokio::task::spawn_blocking(move || {
                 let result = agent.snapshot(&found).map_err(|error| error.to_string());
-                let _ = events.send(Event::Snapshotted {
-                    session_id: found.id,
-                    result,
-                });
+                let _ = events.send(Event::Snapshotted { session_id: found.id, result });
             });
         }
     }
@@ -549,16 +510,16 @@ impl Core {
         let tokens: Vec<u64> = self
             .pending
             .iter()
-            .filter(|pending| pending.checkout_id == checkout && !pending.searching && pending.agent.capture() != Capture::Snapshot)
+            .filter(|pending| {
+                pending.checkout_id == checkout && !pending.searching && pending.agent.capture() != Capture::Snapshot
+            })
             .map(|pending| pending.token)
             .collect();
         for token in tokens {
             let pending = self.pending.iter().find(|pending| pending.token == token).expect("listed above");
             let (agent, cwd, since, known) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms, known.clone());
             // Discovery reads the agent's session files; off the event loop.
-            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known))
-                .await
-                .unwrap_or_default();
+            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known)).await.unwrap_or_default();
             if found.is_some() {
                 self.discovered(token, found).await;
             }
@@ -663,10 +624,7 @@ impl Core {
         for id in &ids {
             let id = id.clone();
             let snapshot = self.session(&id).and_then(|session| {
-                let found = Found {
-                    id: id.clone(),
-                    transcript: session.transcript.clone()?,
-                };
+                let found = Found { id: id.clone(), transcript: session.transcript.clone()? };
                 let agent = session.agent;
                 (agent.capture() == Capture::Snapshot).then_some((agent, found))
             });
@@ -714,21 +672,14 @@ impl Core {
                 let Some(found) = agent.transcript(&session.agent_cwd, session_id) else {
                     return Ok(());
                 };
-                let offset = SessionFileOffset {
-                    file: "main".to_owned(),
-                    path: found.clone(),
-                    offset: 0,
-                };
+                let offset = SessionFileOffset { file: "main".to_owned(), path: found.clone(), offset: 0 };
                 self.store.set_session_offset(agent.id(), session_id, &offset).await?;
                 let session = self.session_mut(session_id).expect("found above");
                 session.offsets.insert("main".to_owned(), offset);
                 session.transcript = Some(found.clone());
                 let (family, thread, reference) = (session.family, session.record.thread, session.reference());
                 if let Some(dir) = agent.session_dir(&found) {
-                    let op = ConvOp::SessionDir {
-                        session: reference.clone(),
-                        dir: dir.to_string_lossy().into_owned(),
-                    };
+                    let op = ConvOp::SessionDir { session: reference.clone(), dir: dir.to_string_lossy().into_owned() };
                     self.append_conv(family, thread, agent_author(&reference), op).await?;
                 }
                 found
@@ -738,12 +689,7 @@ impl Core {
             return Ok(());
         }
         let mut files = vec![("main".to_owned(), transcript.clone())];
-        files.extend(
-            agent
-                .side_transcripts(&transcript)
-                .into_iter()
-                .map(|(name, path)| (format!("subagent:{name}"), path)),
-        );
+        files.extend(agent.side_transcripts(&transcript).into_iter().map(|(name, path)| (format!("subagent:{name}"), path)));
         for (key, path) in files {
             self.tail_file(session_id, &key, &path, limit).await?;
         }
@@ -778,11 +724,7 @@ impl Core {
         if consumed == 0 {
             return Ok(());
         }
-        let read_to = |end: usize| SessionFileOffset {
-            file: key.to_owned(),
-            path: path.to_owned(),
-            offset: offset + end as u64,
-        };
+        let read_to = |end: usize| SessionFileOffset { file: key.to_owned(), path: path.to_owned(), offset: offset + end as u64 };
         for (line, end) in lines {
             self.record_line(session_id, key, line, Some(read_to(end))).await?;
         }
@@ -802,7 +744,13 @@ impl Core {
     /// marks it carries for agents without Silt's hooks. `read` is how far
     /// its file has been read with this line; it is saved with the record,
     /// so nothing that fails afterwards records the line again.
-    pub(crate) async fn record_line(&mut self, session_id: &str, key: &str, line: String, read: Option<SessionFileOffset>) -> Result<(), CoreError> {
+    pub(crate) async fn record_line(
+        &mut self,
+        session_id: &str,
+        key: &str,
+        line: String,
+        read: Option<SessionFileOffset>,
+    ) -> Result<(), CoreError> {
         // An agent still running may send a line after its thread was
         // purged here.
         let session = self
@@ -810,12 +758,9 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("session {session_id} is no longer recorded here")))?;
         let agent = session.agent;
         let parsed = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);
-        let (family, thread, reference, agent_name) = (session.family, session.record.thread, session.reference(), session.record.agent.clone());
-        let op = ConvOp::Native {
-            session: reference.clone(),
-            file: source_of(key),
-            line,
-        };
+        let (family, thread, reference, agent_name) =
+            (session.family, session.record.thread, session.reference(), session.record.agent.clone());
+        let op = ConvOp::Native { session: reference.clone(), file: source_of(key), line };
         let texts: Vec<(String, String)> = parsed
             .entries
             .iter()
@@ -824,11 +769,7 @@ impl Core {
                 Some((entry.kind().to_owned(), text))
             })
             .collect();
-        let read_to = read.as_ref().map(|offset| SessionRead {
-            agent: &agent_name,
-            session_id,
-            offset,
-        });
+        let read_to = read.as_ref().map(|offset| SessionRead { agent: &agent_name, session_id, offset });
         self.append_conv_with(family, thread, agent_author(&reference), op, texts, read_to).await?;
         if let (Some(read), Some(session)) = (read, self.session_mut(session_id)) {
             session.offsets.insert(key.to_owned(), read);
@@ -906,19 +847,13 @@ impl Core {
             };
             let blob = self.store.blobs().put(&bytes).await?;
             let known = self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
-                Op::Conv(ConvOp::Attachment {
-                    session,
-                    name: attached,
-                    blob,
-                }) if *session == reference && *attached == name => Some(*blob),
+                Op::Conv(ConvOp::Attachment { session, name: attached, blob }) if *session == reference && *attached == name => {
+                    Some(*blob)
+                }
                 _ => None,
             });
             if known != Some(blob) {
-                let op = ConvOp::Attachment {
-                    session: reference.clone(),
-                    name: name.clone(),
-                    blob,
-                };
+                let op = ConvOp::Attachment { session: reference.clone(), name: name.clone(), blob };
                 self.append_conv(family, thread, agent_author(&reference), op).await?;
             }
             if let Some(session) = self.session_mut(session_id) {
@@ -949,10 +884,9 @@ impl Core {
     /// transcript.
     pub(crate) fn marks_from_transcripts(&self, checkout: i64) -> bool {
         self.pending.iter().any(|pending| pending.checkout_id == checkout)
-            || self
-                .sessions
-                .iter()
-                .any(|session| session.record.checkout_id == checkout && session.live && session.agent.capture() != Capture::Hooks)
+            || self.sessions.iter().any(|session| {
+                session.record.checkout_id == checkout && session.live && session.agent.capture() != Capture::Hooks
+            })
     }
 
     /// Takes the changes in again once the transcripts have caught up.
@@ -960,12 +894,7 @@ impl Core {
         let events = self.events.clone();
         tokio::spawn(async move {
             tokio::time::sleep(TRANSCRIPT_LAG).await;
-            let _ = events.send(Event::Changed {
-                checkout,
-                paths,
-                noticed,
-                settled: true,
-            });
+            let _ = events.send(Event::Changed { checkout, paths, noticed, settled: true });
         });
     }
 
@@ -1003,18 +932,15 @@ impl Core {
             Err(error) => return Some((Response::error(error), reply)),
         };
         let session_id = input.session_id.clone();
-        let Some((thread, hooked)) = self
-            .session(&session_id)
-            .map(|session| (session.record.thread, session.agent.capture() == Capture::Hooks))
+        let Some((thread, hooked)) =
+            self.session(&session_id).map(|session| (session.record.thread, session.agent.capture() == Capture::Hooks))
         else {
             return Some((Response::ok(HookReply::default()), reply));
         };
         if !hooked {
             let tailed = self.tail_session(&session_id).await;
             let context = if event == "UserPromptSubmit" { self.prompt_context(thread).await } else { None };
-            let reply_data = HookReply {
-                additional_context: context,
-            };
+            let reply_data = HookReply { additional_context: context };
             return Some((to_response(tailed.map(|()| reply_data)), reply));
         }
         let result = match event {
@@ -1024,9 +950,7 @@ impl Core {
                     Ok(()) => self.record_turn(&session_id, TurnMark::PromptSubmitted).await,
                     Err(error) => Err(error),
                 };
-                let reply_data = HookReply {
-                    additional_context: self.prompt_context(thread).await,
-                };
+                let reply_data = HookReply { additional_context: self.prompt_context(thread).await };
                 return Some((to_response(recorded.map(|()| reply_data)), reply));
             }
             "PreToolUse" => {
@@ -1034,10 +958,7 @@ impl Core {
                 if let Some(session) = self.session_mut(&session_id) {
                     session.open_tool = Some(tool_use_id.clone());
                 }
-                let mark = TurnMark::ToolStarted {
-                    tool_use_id,
-                    tool: input.tool_name.clone().unwrap_or_default(),
-                };
+                let mark = TurnMark::ToolStarted { tool_use_id, tool: input.tool_name.clone().unwrap_or_default() };
                 self.record_turn(&session_id, mark).await
             }
             "PostToolUse" => {
@@ -1051,10 +972,7 @@ impl Core {
             "SessionStart" if input.source.as_deref() == Some("compact") => {
                 let tailed = self.tail_session(&session_id).await;
                 let reply_data = HookReply {
-                    additional_context: Some(format!(
-                        "{} This session's thread is {thread}.",
-                        silt_mcp::INSTRUCTIONS
-                    )),
+                    additional_context: Some(format!("{} This session's thread is {thread}.", silt_mcp::INSTRUCTIONS)),
                 };
                 return Some((to_response(tailed.map(|()| reply_data)), reply));
             }
@@ -1080,9 +998,7 @@ impl Core {
     pub(crate) async fn close_tool(&mut self, session_id: &str, reply: oneshot::Sender<Response>) {
         let tool = self.session_mut(session_id).and_then(|session| session.open_tool.take());
         if let Some(tool_use_id) = tool {
-            let _ = self
-                .record_turn(session_id, TurnMark::ToolFinished { tool_use_id })
-                .await;
+            let _ = self.record_turn(session_id, TurnMark::ToolFinished { tool_use_id }).await;
         }
         let _ = reply.send(Response::ok("ok"));
     }

@@ -6,10 +6,7 @@ use silt_acp::{Command, Event, Start, Update, start};
 use tokio::sync::mpsc;
 
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
-    tokio::time::timeout(Duration::from_secs(10), events.recv())
-        .await
-        .expect("the agent answers")
-        .expect("events keep coming")
+    tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("the agent answers").expect("events keep coming")
 }
 
 #[tokio::test]
@@ -50,7 +47,11 @@ async fn a_session_streams_asks_permission_and_loads_again() {
         }
     }
     assert!(seen.contains(&Update::Thought("Thinking about the prompt.".into())));
-    assert!(seen.iter().any(|update| matches!(update, Update::ToolCall { title, kind, .. } if title == "Edit src/main.rs" && kind == "edit")));
+    assert!(
+        seen.iter().any(
+            |update| matches!(update, Update::ToolCall { title, kind, .. } if title == "Edit src/main.rs" && kind == "edit")
+        )
+    );
     assert!(seen.iter().any(|update| matches!(update, Update::ToolUpdate { status: Some(status), .. } if status == "completed")));
     assert!(seen.contains(&Update::AgentText("Done: add acp".into())));
     assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\nfn acp() {}\n");

@@ -100,8 +100,7 @@ impl Core {
     /// The file's current text, now shown in the editor.
     pub fn show(&mut self, path: &str) -> Option<String> {
         let text = self.text(path)?;
-        self.shown
-            .insert(path.to_owned(), (self.family.thread_head(self.thread), text.clone()));
+        self.shown.insert(path.to_owned(), (self.family.thread_head(self.thread), text.clone()));
         Some(text)
     }
 
@@ -119,17 +118,12 @@ impl Core {
             Some(shown) => shown.clone(),
             None => (self.family.thread_head(self.thread), self.text(path).ok_or_else(|| format!("{path} has no text to edit"))?),
         };
-        self.family
-            .text_doc_or_base(inode, &mut self.bases)
-            .map_err(|error| error.to_string())?;
+        self.family.text_doc_or_base(inode, &mut self.bases).map_err(|error| error.to_string())?;
         let mut made = Vec::new();
         for op in text_edits(&old, text) {
-            let delta = self
-                .family
-                .delta(self.actor, self.thread, Author::User, time_ms, parents.clone(), Op::Text { inode, op });
-            self.family
-                .apply(delta.clone(), &mut self.bases)
-                .map_err(|error| error.to_string())?;
+            let delta =
+                self.family.delta(self.actor, self.thread, Author::User, time_ms, parents.clone(), Op::Text { inode, op });
+            self.family.apply(delta.clone(), &mut self.bases).map_err(|error| error.to_string())?;
             parents = Frontier::single(delta.span.last());
             made.push(delta);
         }

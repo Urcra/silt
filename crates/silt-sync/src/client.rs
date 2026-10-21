@@ -63,14 +63,7 @@ pub struct ClientSync {
 
 impl ClientSync {
     pub fn new(generation: Option<u64>, pushed: u64, pulled: u64, last_pulled: Option<DeltaId>, view: u64) -> Self {
-        Self {
-            generation,
-            pushed,
-            pulled,
-            last_pulled,
-            view,
-            ..Self::default()
-        }
+        Self { generation, pushed, pulled, last_pulled, view, ..Self::default() }
     }
 
     pub fn generation(&self) -> Option<u64> {
@@ -119,10 +112,7 @@ impl ClientSync {
         if self.push_in_flight.is_some() || self.diverged.is_some() || self.pushed >= local_len {
             return None;
         }
-        let push = Push {
-            from: self.pushed,
-            to: local_len.min(self.pushed + PUSH_BATCH),
-        };
+        let push = Push { from: self.pushed, to: local_len.min(self.pushed + PUSH_BATCH) };
         self.push_in_flight = Some(push);
         Some(push)
     }
@@ -131,10 +121,7 @@ impl ClientSync {
         if self.pull_in_flight.is_some() {
             return None;
         }
-        let pull = Pull {
-            after: self.pulled,
-            last: self.last_pulled,
-        };
+        let pull = Pull { after: self.pulled, last: self.last_pulled };
         self.pull_in_flight = Some(pull);
         Some(pull)
     }
@@ -184,11 +171,7 @@ impl ClientSync {
                     self.pulled = *seq;
                     self.last_pulled = Some(delta.span.first());
                 }
-                if deltas.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![Effect::Apply { after, deltas }]
-                }
+                if deltas.is_empty() { Vec::new() } else { vec![Effect::Apply { after, deltas }] }
             }
             Outcome::UnknownCursor => {
                 self.reset();

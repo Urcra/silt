@@ -32,10 +32,7 @@ pub fn server_data(data: Option<PathBuf>) -> PathBuf {
 fn read_password(prompt: &str, from_stdin: bool) -> Result<String, Exn<CliError>> {
     let password = if from_stdin || !io::stdin().is_terminal() {
         let mut line = String::new();
-        io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .or_raise(|| CliError("cannot read the password".into()))?;
+        io::stdin().lock().read_line(&mut line).or_raise(|| CliError("cannot read the password".into()))?;
         line.trim_end_matches(['\r', '\n']).to_owned()
     } else {
         rpassword::prompt_password(prompt).or_raise(|| CliError("cannot read the password".into()))?
@@ -104,11 +101,7 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     if config.listen.parse::<std::net::SocketAddr>().is_err() {
         return Err(fail(format!("{} is not an address to listen on, such as 127.0.0.1:8090", config.listen)));
     }
-    let password = if options.password_stdin {
-        read_password("", true)?
-    } else {
-        generated_password()
-    };
+    let password = if options.password_stdin { read_password("", true)? } else { generated_password() };
     // The admin is made first, which also checks the name and password, so
     // a refused one leaves no config behind.
     runtime()?
@@ -130,7 +123,11 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
             .replace("@DATA@", &data.to_string_lossy())
             .replace("@USER@", &options.service_user);
         fs::write(&unit, text).or_raise(|| CliError(format!("cannot write {}", unit.display())))?;
-        println!("wrote {}; start it with: systemctl daemon-reload && systemctl enable --now {}", unit.display(), unit.file_stem().map_or_else(String::new, |stem| stem.to_string_lossy().into_owned()));
+        println!(
+            "wrote {}; start it with: systemctl daemon-reload && systemctl enable --now {}",
+            unit.display(),
+            unit.file_stem().map_or_else(String::new, |stem| stem.to_string_lossy().into_owned())
+        );
     } else {
         println!("start it with: silt server run --data {}", data.display());
     }
@@ -166,9 +163,8 @@ pub fn server_run(listen: Option<String>, data: Option<PathBuf>) -> Result<(), E
         let server = silt_server::Server::open_with(&data, config)
             .await
             .or_raise(|| CliError(format!("cannot open server data in {}", data.display())))?;
-        let listener = tokio::net::TcpListener::bind(&listen)
-            .await
-            .or_raise(|| CliError(format!("cannot listen on {listen}")))?;
+        let listener =
+            tokio::net::TcpListener::bind(&listen).await.or_raise(|| CliError(format!("cannot listen on {listen}")))?;
         eprintln!("silt server listening on {listen}, data in {}", data.display());
         server.serve(listener).await.or_raise(|| CliError("the server stopped".into()))
     })
@@ -187,18 +183,15 @@ pub fn server_pair(data: Option<PathBuf>, user: &str) -> Result<(), Exn<CliError
 fn admin(data: Option<PathBuf>) -> Result<(tokio::runtime::Runtime, Admin), Exn<CliError>> {
     let data = server_data(data);
     let runtime = runtime()?;
-    let admin = runtime
-        .block_on(Admin::open(&data))
-        .or_raise(|| CliError(format!("cannot open server data in {}", data.display())))?;
+    let admin =
+        runtime.block_on(Admin::open(&data)).or_raise(|| CliError(format!("cannot open server data in {}", data.display())))?;
     Ok((runtime, admin))
 }
 
 pub fn user_add(data: Option<PathBuf>, name: &str, is_admin: bool, password_stdin: bool) -> Result<(), Exn<CliError>> {
     let password = if password_stdin { read_password("", true)? } else { generated_password() };
     let (runtime, admin) = admin(data)?;
-    runtime
-        .block_on(admin.add_user(name, Some(&password), is_admin))
-        .or_raise(|| CliError(format!("cannot add {name}")))?;
+    runtime.block_on(admin.add_user(name, Some(&password), is_admin)).or_raise(|| CliError(format!("cannot add {name}")))?;
     println!("added {name}{}", if is_admin { " (admin)" } else { "" });
     if !password_stdin {
         println!("  password: {password}   (shown once)");
@@ -220,12 +213,7 @@ pub fn user_list(data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
         if user.disabled {
             notes.push("disabled");
         }
-        println!(
-            "{:<20} {:<28} {}",
-            user.name,
-            user.email.unwrap_or_default(),
-            notes.join(", ")
-        );
+        println!("{:<20} {:<28} {}", user.name, user.email.unwrap_or_default(), notes.join(", "));
     }
     Ok(())
 }
@@ -233,27 +221,21 @@ pub fn user_list(data: Option<PathBuf>) -> Result<(), Exn<CliError>> {
 pub fn user_passwd(data: Option<PathBuf>, name: &str, password_stdin: bool) -> Result<(), Exn<CliError>> {
     let password = read_password(&format!("new password for {name}: "), password_stdin)?;
     let (runtime, admin) = admin(data)?;
-    runtime
-        .block_on(admin.set_password(name, &password))
-        .or_raise(|| CliError(format!("cannot set {name}'s password")))?;
+    runtime.block_on(admin.set_password(name, &password)).or_raise(|| CliError(format!("cannot set {name}'s password")))?;
     println!("password changed");
     Ok(())
 }
 
 pub fn user_admin(data: Option<PathBuf>, name: &str, revoke: bool) -> Result<(), Exn<CliError>> {
     let (runtime, admin) = admin(data)?;
-    runtime
-        .block_on(admin.set_admin(name, !revoke))
-        .or_raise(|| CliError(format!("cannot change {name}")))?;
+    runtime.block_on(admin.set_admin(name, !revoke)).or_raise(|| CliError(format!("cannot change {name}")))?;
     println!("{name} {} an admin", if revoke { "is no longer" } else { "is now" });
     Ok(())
 }
 
 pub fn user_disable(data: Option<PathBuf>, name: &str, disabled: bool) -> Result<(), Exn<CliError>> {
     let (runtime, admin) = admin(data)?;
-    runtime
-        .block_on(admin.set_disabled(name, disabled))
-        .or_raise(|| CliError(format!("cannot change {name}")))?;
+    runtime.block_on(admin.set_disabled(name, disabled)).or_raise(|| CliError(format!("cannot change {name}")))?;
     if disabled {
         println!("{name} is disabled and signed out everywhere");
     } else {
@@ -264,9 +246,7 @@ pub fn user_disable(data: Option<PathBuf>, name: &str, disabled: bool) -> Result
 
 pub fn user_sign_out(data: Option<PathBuf>, name: &str) -> Result<(), Exn<CliError>> {
     let (runtime, admin) = admin(data)?;
-    runtime
-        .block_on(admin.sign_out(name))
-        .or_raise(|| CliError(format!("cannot sign {name} out")))?;
+    runtime.block_on(admin.sign_out(name)).or_raise(|| CliError(format!("cannot sign {name} out")))?;
     println!("{name} is signed out of every device and browser");
     Ok(())
 }
@@ -275,9 +255,7 @@ pub fn invite(data: Option<PathBuf>, org: Option<String>, days: u32) -> Result<(
     let data = server_data(data);
     let config = Config::load(&data).or_raise(|| CliError("cannot read the server's config".into()))?;
     let (runtime, admin) = admin(Some(data))?;
-    let token = runtime
-        .block_on(admin.invite(org.as_deref(), days))
-        .or_raise(|| CliError("cannot create an invite".into()))?;
+    let token = runtime.block_on(admin.invite(org.as_deref(), days)).or_raise(|| CliError("cannot create an invite".into()))?;
     println!("{}/signup?invite={token}", config.public_url());
     eprintln!("valid for {days} days, for one person");
     Ok(())
@@ -294,7 +272,8 @@ pub fn backup(data: Option<PathBuf>, dest: &std::path::Path) -> Result<(), Exn<C
 
 pub fn restore(backup: &std::path::Path, data: Option<PathBuf>, replace: bool) -> Result<(), Exn<CliError>> {
     let data = server_data(data);
-    silt_server::backup::restore(backup, &data, replace).or_raise(|| CliError(format!("could not restore into {}", data.display())))?;
+    silt_server::backup::restore(backup, &data, replace)
+        .or_raise(|| CliError(format!("could not restore into {}", data.display())))?;
     println!("restored {} into {}; start the server, and devices push back anything newer", backup.display(), data.display());
     Ok(())
 }
@@ -329,18 +308,15 @@ pub fn auth_login(options: LoginOptions) -> Result<(), Exn<CliError>> {
     let server = options.server.trim_end_matches('/').to_owned();
     let runtime = runtime()?;
     let config = if let Some(code) = options.code {
-        runtime
-            .block_on(remote::login(&server, &code, &name))
-            .or_raise(|| CliError(format!("could not sign in to {server}")))?
+        runtime.block_on(remote::login(&server, &code, &name)).or_raise(|| CliError(format!("could not sign in to {server}")))?
     } else if let Some(user) = options.user {
         let password = read_password(&format!("password for {user}: "), options.password_stdin)?;
         runtime
             .block_on(remote::login_password(&server, &user, &password, &name))
             .or_raise(|| CliError(format!("could not sign in to {server}")))?
     } else {
-        let started = runtime
-            .block_on(remote::device_start(&server, &name))
-            .or_raise(|| CliError(format!("could not reach {server}")))?;
+        let started =
+            runtime.block_on(remote::device_start(&server, &name)).or_raise(|| CliError(format!("could not reach {server}")))?;
         eprintln!("Open {} and approve this device.", started.verification_url);
         eprintln!("Check that the page shows the code {}.", started.user_code);
         if !options.no_browser {
@@ -380,9 +356,7 @@ pub fn auth_logout() -> Result<(), Exn<CliError>> {
 
 pub fn orgs() -> Result<(), Exn<CliError>> {
     let remote = remote_client()?;
-    let reply = runtime()?
-        .block_on(remote.orgs())
-        .map_err(|error| fail(error.to_string()))?;
+    let reply = runtime()?.block_on(remote.orgs()).map_err(|error| fail(error.to_string()))?;
     for org in reply.orgs {
         println!("{} ({}; new projects default to {})", org.name, org.role, org.default_visibility);
         let members: Vec<String> = org
@@ -403,9 +377,7 @@ pub fn orgs() -> Result<(), Exn<CliError>> {
 
 pub fn org_change(change: OrgChange) -> Result<(), Exn<CliError>> {
     let remote = remote_client()?;
-    runtime()?
-        .block_on(remote.org_change(&change))
-        .map_err(|error| fail(error.to_string()))?;
+    runtime()?.block_on(remote.org_change(&change)).map_err(|error| fail(error.to_string()))?;
     println!("done");
     Ok(())
 }

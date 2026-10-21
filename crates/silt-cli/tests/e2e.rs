@@ -80,11 +80,7 @@ impl Env {
 
     fn silt(&self, args: &[&str]) -> Output {
         let output = self.run(args);
-        assert!(
-            output.status.success(),
-            "silt {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success(), "silt {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
         output
     }
 
@@ -122,10 +118,7 @@ impl Env {
 
 impl Drop for Env {
     fn drop(&mut self) {
-        let _ = Command::new(env!("CARGO_BIN_EXE_silt"))
-            .args(["daemon", "stop"])
-            .env("SILT_HOME", &self.silt_home)
-            .output();
+        let _ = Command::new(env!("CARGO_BIN_EXE_silt")).args(["daemon", "stop"]).env("SILT_HOME", &self.silt_home).output();
     }
 }
 
@@ -160,7 +153,12 @@ fn records_a_session_with_attributed_edits_and_survives_a_restart() {
 
     let thread = env.thread();
     let log = env.stdout(&["log"]);
-    assert!(log.contains("Add a greeting"), "{log}\n{}\n{}", env.stdout(&["show", &thread]), fs::read_to_string(env.silt_home.join("daemon.log")).unwrap_or_default());
+    assert!(
+        log.contains("Add a greeting"),
+        "{log}\n{}\n{}",
+        env.stdout(&["show", &thread]),
+        fs::read_to_string(env.silt_home.join("daemon.log")).unwrap_or_default()
+    );
     assert!(
         eventually(|| env.stdout(&["show", &thread]).contains("src/main.rs +17 -0")),
         "the tool call's edit is attributed to it:\n{}",
@@ -197,12 +195,7 @@ fn isolated_sessions_work_in_a_managed_checkout() {
     env.silt(&["claude", "--isolated"]);
     let thread = env.thread();
     let checkout = env.repo.join(".silt/checkouts").join(
-        fs::read_dir(env.repo.join(".silt/checkouts"))
-            .expect("checkouts")
-            .flatten()
-            .next()
-            .expect("one checkout")
-            .file_name(),
+        fs::read_dir(env.repo.join(".silt/checkouts")).expect("checkouts").flatten().next().expect("one checkout").file_name(),
     );
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").contains("fn farewell"));
     assert_eq!(fs::read_to_string(env.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
@@ -263,15 +256,10 @@ struct McpClient {
 impl McpClient {
     fn start(env: &Env) -> Self {
         let config: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(env.claude_dir.join("mcp-config.json")).expect("mcp config"))
-                .expect("json");
+            serde_json::from_str(&fs::read_to_string(env.claude_dir.join("mcp-config.json")).expect("mcp config")).expect("json");
         let server = &config["mcpServers"]["silt"];
-        let args: Vec<String> = server["args"]
-            .as_array()
-            .expect("args")
-            .iter()
-            .map(|arg| arg.as_str().expect("string").to_owned())
-            .collect();
+        let args: Vec<String> =
+            server["args"].as_array().expect("args").iter().map(|arg| arg.as_str().expect("string").to_owned()).collect();
         let mut child = Command::new(server["command"].as_str().expect("command"))
             .args(args)
             .current_dir(&env.repo)
@@ -282,12 +270,7 @@ impl McpClient {
             .expect("mcp server starts");
         let stdin = child.stdin.take().expect("stdin");
         let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
-        let mut client = Self {
-            child,
-            stdin,
-            stdout,
-            next_id: 0,
-        };
+        let mut client = Self { child, stdin, stdout, next_id: 0 };
         client.request("initialize", serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {}}));
         client
     }
@@ -349,11 +332,7 @@ fn an_agent_reads_what_was_decided_before_compaction() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("hook runs");
-    let session = env
-        .transcript()
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .expect("session id");
+    let session = env.transcript().file_stem().map(|stem| stem.to_string_lossy().into_owned()).expect("session id");
     std::io::Write::write_all(
         &mut hook.stdin.take().expect("stdin"),
         format!(r#"{{"session_id":"{session}","hook_event_name":"SessionStart","source":"compact"}}"#).as_bytes(),
@@ -367,12 +346,7 @@ fn an_agent_reads_what_was_decided_before_compaction() {
 fn diffs_start_from_the_base_asked_for() {
     let env = Env::new();
     let first = String::from_utf8_lossy(
-        &Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&env.repo)
-            .output()
-            .expect("git runs")
-            .stdout,
+        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&env.repo).output().expect("git runs").stdout,
     )
     .trim()
     .to_owned();

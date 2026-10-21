@@ -9,13 +9,13 @@ use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use silt_agents::conventions as agent_conventions;
 use silt_agents::{Agent, LaunchPlan, McpServer, SessionIds, Start};
-use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, SearchFilters,
-    SearchResult, SessionStarted, ShowLine, ThreadSummary,
+    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled,
+    Request, Response, Resumed, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
+use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 
 use crate::CliError;
 use crate::render::{self, short};
@@ -28,13 +28,10 @@ pub(crate) fn fail(message: impl Into<String>) -> Exn<CliError> {
 
 /// Sends a request to the running daemon and decodes its answer.
 pub(crate) fn call<T: DeserializeOwned>(request: &Request) -> Result<T, Exn<CliError>> {
-    let response = client::send(&paths::socket_path(), request, None).or_raise(|| {
-        CliError("could not get an answer from the Silt daemon; check `silt daemon status`".into())
-    })?;
+    let response = client::send(&paths::socket_path(), request, None)
+        .or_raise(|| CliError("could not get an answer from the Silt daemon; check `silt daemon status`".into()))?;
     match response {
-        Response::Ok { data } => {
-            serde_json::from_value(data).or_raise(|| CliError("unexpected answer from the daemon".into()))
-        }
+        Response::Ok { data } => serde_json::from_value(data).or_raise(|| CliError("unexpected answer from the daemon".into())),
         Response::Error { message } => Err(fail(message)),
     }
 }
@@ -82,10 +79,7 @@ pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    Err(fail(format!(
-        "the Silt daemon did not start; see {}",
-        paths::log_path().display()
-    )))
+    Err(fail(format!("the Silt daemon did not start; see {}", paths::log_path().display())))
 }
 
 /// The daemon finds agents' sessions where its own environment says, which
@@ -131,10 +125,7 @@ fn wait_for_busy_daemon() -> Result<Waited, Exn<CliError>> {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    Err(fail(format!(
-        "the Silt daemon runs but does not answer; see {}",
-        paths::log_path().display()
-    )))
+    Err(fail(format!("the Silt daemon runs but does not answer; see {}", paths::log_path().display())))
 }
 
 pub fn daemon_run() -> Result<(), Exn<CliError>> {
@@ -197,12 +188,7 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
     if let Some(mount) = &started.mount {
         mount_checkout(mount, &started.checkout, &started.thread);
     }
-    let run = Run {
-        agent,
-        thread: &started.thread,
-        checkout: &started.checkout,
-        cwd: &started.agent_cwd,
-    };
+    let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd };
     let session = SessionEnd::new(&started.thread);
     let status = run.launch(Start::New { id: session_id }, args)?;
     session.end()?;
@@ -233,17 +219,12 @@ struct SessionEnd {
 
 impl SessionEnd {
     fn new(thread: &str) -> Self {
-        Self {
-            thread: thread.to_owned(),
-            ended: false,
-        }
+        Self { thread: thread.to_owned(), ended: false }
     }
 
     fn end(mut self) -> Result<(), Exn<CliError>> {
         self.ended = true;
-        call::<String>(&Request::EndSession {
-            thread: self.thread.clone(),
-        })?;
+        call::<String>(&Request::EndSession { thread: self.thread.clone() })?;
         Ok(())
     }
 }
@@ -251,9 +232,7 @@ impl SessionEnd {
 impl Drop for SessionEnd {
     fn drop(&mut self) {
         if !self.ended {
-            let _ = call::<String>(&Request::EndSession {
-                thread: self.thread.clone(),
-            });
+            let _ = call::<String>(&Request::EndSession { thread: self.thread.clone() });
         }
     }
 }
@@ -308,9 +287,7 @@ impl Run<'_> {
     /// rules and skills it doesn't read by itself.
     fn launch(&self, start: Start, args: &[String]) -> Result<std::process::ExitStatus, Exn<CliError>> {
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
-        let scratch = paths::data_dir()
-            .join("runs")
-            .join(format!("{}-{}", short(self.thread), std::process::id()));
+        let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
         let _scratch = Scratch(scratch.clone());
         let home = env::var_os("HOME").map(PathBuf::from);
@@ -339,15 +316,9 @@ impl Run<'_> {
             scratch: scratch.clone(),
             args: args.to_vec(),
         };
-        let launch = self
-            .agent
-            .launch(&plan)
-            .or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
+        let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = Command::new(&launch.program);
-        command
-            .args(&launch.args)
-            .envs(launch.envs.iter().map(|(key, value)| (key, value)))
-            .current_dir(self.cwd);
+        command.args(&launch.args).envs(launch.envs.iter().map(|(key, value)| (key, value))).current_dir(self.cwd);
         run_until_exit(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
     }
 }
@@ -373,12 +344,7 @@ pub fn fork(thread: &str, private: bool, here: bool, agent: Option<&str>, args: 
         agent: agent.map(|name| find_agent(name).map(|agent| agent.id().to_owned())).transpose()?,
         private,
     })?;
-    eprintln!(
-        "silt: forked {} as thread {}, in {}",
-        short(thread),
-        short(&forked.thread),
-        forked.checkout.display()
-    );
+    eprintln!("silt: forked {} as thread {}, in {}", short(thread), short(&forked.thread), forked.checkout.display());
     continue_session(forked, args)
 }
 
@@ -427,11 +393,7 @@ fn prepare_trusted(script: &Path, checkout: &Path, source: &Path) -> bool {
     if io::stdin().lock().read_line(&mut answer).is_err() || !answer.trim().eq_ignore_ascii_case("y") {
         return false;
     }
-    let remembered = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&trusted)
-        .and_then(|mut file| writeln!(file, "{digest}"));
+    let remembered = OpenOptions::new().create(true).append(true).open(&trusted).and_then(|mut file| writeln!(file, "{digest}"));
     if let Err(error) = remembered {
         eprintln!("silt: could not remember that: {error}");
     }
@@ -439,9 +401,7 @@ fn prepare_trusted(script: &Path, checkout: &Path, source: &Path) -> bool {
 }
 
 fn mount_checkout(mount: &Mount, checkout: &Path, thread: &str) {
-    match silt_git::Repo::discover(checkout)
-        .and_then(|repo| project::link_shared_paths(&repo, &mount.source, &mount.shared))
-    {
+    match silt_git::Repo::discover(checkout).and_then(|repo| project::link_shared_paths(&repo, &mount.source, &mount.shared)) {
         Ok(outcomes) => {
             for outcome in outcomes {
                 match outcome {
@@ -499,18 +459,12 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
             Start::Primed { id, prompt }
         }
     };
-    let run = Run {
-        agent,
-        thread: &resumed.thread,
-        checkout: &resumed.checkout,
-        cwd: &resumed.agent_cwd,
-    };
+    let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd };
     let session = SessionEnd::new(&resumed.thread);
     let status = run.launch(start, args)?;
     session.end()?;
     exit_like(status)
 }
-
 
 pub fn auth_status() -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
@@ -572,17 +526,11 @@ pub fn hook(agent: Option<&str>, event: &str) {
         let session = input.get("sessionId").cloned().unwrap_or_default();
         input = serde_json::json!({ "session_id": session, "hook_event_name": event });
     }
-    let request = Request::Hook {
-        event: event.to_owned(),
-        input,
-    };
+    let request = Request::Hook { event: event.to_owned(), input };
     let Ok(Response::Ok { data }) = client::send(&paths::socket_path(), &request, Some(HOOK_TIMEOUT)) else {
         return;
     };
-    if let Ok(HookReply {
-        additional_context: Some(context),
-    }) = serde_json::from_value(data)
-    {
+    if let Ok(HookReply { additional_context: Some(context) }) = serde_json::from_value(data) {
         let output = if copilot {
             serde_json::json!({ "additionalContext": context })
         } else {
@@ -596,10 +544,7 @@ pub fn hook(agent: Option<&str>, event: &str) {
 
 pub fn pull(thread: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let pulled: Pulled = call(&Request::Pull {
-        thread,
-        cwd: current_dir()?,
-    })?;
+    let pulled: Pulled = call(&Request::Pull { thread, cwd: current_dir()? })?;
     if pulled.messages == 0 && pulled.files.is_empty() {
         println!("thread {} is up to date with {}", short(&pulled.thread), short(&pulled.from));
     } else {
@@ -619,12 +564,7 @@ pub fn pull(thread: Option<String>) -> Result<(), Exn<CliError>> {
 
 pub fn mr_create(thread: Option<String>, title: Option<String>, summary: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let mr: MrSummary = call(&Request::MrCreate {
-        thread,
-        cwd: current_dir()?,
-        title,
-        summary,
-    })?;
+    let mr: MrSummary = call(&Request::MrCreate { thread, cwd: current_dir()?, title, summary })?;
     println!("opened merge request {}: {} → {}", mr.id, short(&mr.fork), short(&mr.target));
     Ok(())
 }
@@ -659,11 +599,7 @@ pub fn mr_decline(mr: &str, reason: Option<String>) -> Result<(), Exn<CliError>>
 
 pub fn visibility(visibility: silt_proto::Visibility, thread: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let message: String = call(&Request::SetVisibility {
-        cwd: current_dir()?,
-        thread,
-        visibility,
-    })?;
+    let message: String = call(&Request::SetVisibility { cwd: current_dir()?, thread, visibility })?;
     println!("{message}");
     Ok(())
 }
@@ -698,9 +634,7 @@ pub fn inbox_read(ids: Vec<i64>, all: bool) -> Result<(), Exn<CliError>> {
         return Err(fail("name the notifications to mark read, or pass --all"));
     }
     ensure_daemon()?;
-    call::<String>(&Request::InboxRead {
-        read: silt_proto::InboxRead { ids, all },
-    })?;
+    call::<String>(&Request::InboxRead { read: silt_proto::InboxRead { ids, all } })?;
     println!("marked read");
     Ok(())
 }
@@ -721,32 +655,21 @@ pub fn show(thread: &str) -> Result<(), Exn<CliError>> {
 
 pub fn diff(thread: &str, turn: Option<usize>, base: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let diff: String = call(&Request::Diff {
-        thread: thread.into(),
-        turn,
-        base,
-    })?;
+    let diff: String = call(&Request::Diff { thread: thread.into(), turn, base })?;
     print!("{}", render::safe(&diff));
     Ok(())
 }
 
 pub fn search(query: &str, filters: SearchFilters) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let hits: Vec<SearchResult> = call(&Request::Search {
-        query: query.into(),
-        limit: 20,
-        filters,
-    })?;
+    let hits: Vec<SearchResult> = call(&Request::Search { query: query.into(), limit: 20, filters })?;
     print!("{}", render::safe(&render::search(&hits)));
     Ok(())
 }
 
 pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let found: Vec<InFlight> = call(&Request::InFlight {
-        cwd: current_dir()?,
-        path: path.into(),
-    })?;
+    let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into() })?;
     print!("{}", render::safe(&render::in_flight(&found)));
     Ok(())
 }
@@ -755,10 +678,7 @@ pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     // A browser's arguments are visible to other users, so it gets an
     // address that works once rather than one with the lasting token.
-    let url: String = call(&Request::OpenWeb {
-        cwd: env::current_dir().ok(),
-        once: !no_browser,
-    })?;
+    let url: String = call(&Request::OpenWeb { cwd: env::current_dir().ok(), once: !no_browser })?;
     println!("{url}");
     if !no_browser && !open_in_browser(&url) {
         eprintln!("silt: could not open a browser; open the address above within a minute");
@@ -784,11 +704,7 @@ pub fn open_in_browser(url: &str) -> bool {
 
 pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let page: HistoryPage = call(&Request::HistoryRead {
-        thread: thread.into(),
-        offset,
-        limit,
-    })?;
+    let page: HistoryPage = call(&Request::HistoryRead { thread: thread.into(), offset, limit })?;
     print!("{}", render::safe(&render::history(&page)));
     Ok(())
 }
@@ -806,12 +722,7 @@ pub fn comment(
         _ => return Err(fail("comment on either --file with --lines, or --entry")),
     };
     ensure_daemon()?;
-    let comment: CommentView = call(&Request::Comment {
-        thread: thread.into(),
-        on,
-        text: text.into(),
-        cwd: current_dir()?,
-    })?;
+    let comment: CommentView = call(&Request::Comment { thread: thread.into(), on, text: text.into(), cwd: current_dir()? })?;
     println!("added comment {} at {}", comment.id, render::comment_location(&comment.location));
     Ok(())
 }
@@ -819,18 +730,12 @@ pub fn comment(
 pub fn comments(thread: &str, resolve: Option<&str>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     if let Some(comment) = resolve {
-        let resolved: CommentView = call(&Request::ResolveComment {
-            thread: thread.into(),
-            comment: comment.into(),
-            cwd: current_dir()?,
-        })?;
+        let resolved: CommentView =
+            call(&Request::ResolveComment { thread: thread.into(), comment: comment.into(), cwd: current_dir()? })?;
         println!("resolved {}", resolved.id);
         return Ok(());
     }
-    let comments: Vec<CommentView> = call(&Request::Comments {
-        thread: thread.into(),
-        cwd: current_dir()?,
-    })?;
+    let comments: Vec<CommentView> = call(&Request::Comments { thread: thread.into(), cwd: current_dir()? })?;
     print!("{}", render::safe(&render::comments(&comments)));
     Ok(())
 }
@@ -846,10 +751,8 @@ pub fn parse_date(text: &str) -> Result<i64, String> {
             .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or_default());
         return Ok(now - i64::from(days) * DAY_MS);
     }
-    let parts: Option<Vec<i64>> = text
-        .split('-')
-        .map(|part| part.bytes().all(|byte| byte.is_ascii_digit()).then(|| part.parse().ok()).flatten())
-        .collect();
+    let parts: Option<Vec<i64>> =
+        text.split('-').map(|part| part.bytes().all(|byte| byte.is_ascii_digit()).then(|| part.parse().ok()).flatten()).collect();
     let Some([year, month, day]) = parts.as_deref().and_then(|parts| <[i64; 3]>::try_from(parts).ok()) else {
         return Err(format!("expected YYYY-MM-DD or a number of days like 7d, not {text:?}"));
     };
@@ -916,9 +819,7 @@ pub fn harness() -> Result<(), Exn<CliError>> {
         secrets_file: Some(paths::data_dir().join("secrets")),
     };
     let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the runtime".into()))?;
-    runtime
-        .block_on(silt_harness::serve(config))
-        .or_raise(|| CliError("the harness stopped".into()))
+    runtime.block_on(silt_harness::serve(config)).or_raise(|| CliError("the harness stopped".into()))
 }
 
 #[cfg(test)]
@@ -942,4 +843,3 @@ mod tests {
         assert!(parse_lines("0").is_err());
     }
 }
-

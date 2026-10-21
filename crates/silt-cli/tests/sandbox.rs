@@ -101,4 +101,3 @@ fn what_the_command_starts_ends_with_it() {
     let running = Command::new("ps").args(["-eo", "args"]).output().expect("ps");
     assert!(!String::from_utf8_lossy(&running.stdout).contains(&marker), "background work outlives the sandbox");
 }
-

@@ -36,10 +36,7 @@ fn reads_head_branch_remote_and_tree() {
     let repo = Repo::discover(&dir.path().join("src")).expect("discovers from a subdirectory");
     assert_eq!(repo.root(), dir.path().canonicalize().expect("canonical"));
     assert_eq!(repo.head_branch().expect("branch").as_deref(), Some("main"));
-    assert_eq!(
-        repo.remote_url("origin").expect("remote").as_deref(),
-        Some("git@github.com:Urcra/silt.git")
-    );
+    assert_eq!(repo.remote_url("origin").expect("remote").as_deref(), Some("git@github.com:Urcra/silt.git"));
     assert_eq!(repo.remote_url("upstream").expect("remote"), None);
 
     let head = repo.head_commit().expect("head").expect("has a commit");
@@ -48,11 +45,7 @@ fn reads_head_branch_remote_and_tree() {
     let summary: Vec<(&str, FileMode)> = files.iter().map(|f| (f.path.as_str(), f.mode)).collect();
     assert_eq!(
         summary,
-        vec![
-            (".gitignore", FileMode::Regular),
-            ("run.sh", FileMode::Executable),
-            ("src/main.rs", FileMode::Regular),
-        ]
+        vec![(".gitignore", FileMode::Regular), ("run.sh", FileMode::Executable), ("src/main.rs", FileMode::Regular),]
     );
     let main = files.iter().find(|f| f.path == "src/main.rs").expect("main.rs");
     assert_eq!(repo.blob(main.oid).expect("blob"), b"fn main() {}\n");
@@ -103,13 +96,9 @@ fn worktree_files_include_untracked_but_not_ignored_or_deleted() {
     fs::write(root.join("target/out"), "ignored\n").expect("write");
     fs::remove_file(root.join("run.sh")).expect("delete tracked file");
     let repo = Repo::discover(root).expect("discovers");
-    assert_eq!(
-        repo.worktree_files().expect("files"),
-        vec![".gitignore", "notes.txt", "src/main.rs"]
-    );
-    let ignored = repo
-        .ignored(&["debug.log".into(), "target/out".into(), "src/main.rs".into(), "new.rs".into()])
-        .expect("check-ignore");
+    assert_eq!(repo.worktree_files().expect("files"), vec![".gitignore", "notes.txt", "src/main.rs"]);
+    let ignored =
+        repo.ignored(&["debug.log".into(), "target/out".into(), "src/main.rs".into(), "new.rs".into()]).expect("check-ignore");
     assert_eq!(ignored, ["debug.log".to_owned(), "target/out".to_owned()].into());
     assert!(repo.ignored(&["src/main.rs".into()]).expect("check-ignore").is_empty());
 }

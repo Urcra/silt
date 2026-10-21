@@ -2,8 +2,8 @@
 //! cases gix doesn't cover, so behaviour matches the user's own git (ADR 0002).
 
 mod bundle;
-pub mod conventions;
 mod checkout;
+pub mod conventions;
 mod filters;
 mod remote;
 
@@ -106,9 +106,7 @@ impl Repo {
         let Ok(remote) = self.repo.find_remote(name) else {
             return Ok(None);
         };
-        Ok(remote
-            .url(gix::remote::Direction::Fetch)
-            .map(|url| url.to_bstring().to_str_lossy().into_owned()))
+        Ok(remote.url(gix::remote::Direction::Fetch).map(|url| url.to_bstring().to_str_lossy().into_owned()))
     }
 
     /// Every file in `commit`'s tree. Submodules are skipped.
@@ -130,11 +128,7 @@ impl Repo {
                 } else {
                     return None;
                 };
-                Some(TreeFile {
-                    path: utf8_path(&entry.filepath)?,
-                    oid: oid(entry.oid),
-                    mode,
-                })
+                Some(TreeFile { path: utf8_path(&entry.filepath)?, oid: oid(entry.oid), mode })
             })
             .collect())
     }
@@ -238,7 +232,12 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result
 /// named in its config; Silt's own git commands run neither (ADR 0016).
 const HARDENED: [&str; 4] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
 
-pub(crate) fn run_git_with(dir: &Path, args: &[&str], stdin: Option<&[u8]>, envs: &[(String, String)]) -> Result<Vec<u8>, GitError> {
+pub(crate) fn run_git_with(
+    dir: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    envs: &[(String, String)],
+) -> Result<Vec<u8>, GitError> {
     let mut command = Command::new("git");
     command
         .args(HARDENED)

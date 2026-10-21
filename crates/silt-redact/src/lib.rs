@@ -37,11 +37,7 @@ const TOKEN_PREFIXES: [&str; 9] = ["github_pat_", "ghp_", "gho_", "ghs_", "sk-an
 
 /// The secret's short hash, which names it in placeholders and masks.
 pub fn id(secret: &str) -> String {
-    Sha256::digest(secret.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()[..ID_LEN]
-        .to_owned()
+    Sha256::digest(secret.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..ID_LEN].to_owned()
 }
 
 /// What replaces the secret in conversation text.
@@ -65,12 +61,9 @@ pub fn mask(secret: &str) -> String {
 /// skipped. A missing file has none.
 pub fn read_secrets_file(path: &Path) -> std::io::Result<Vec<String>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(str::to_owned)
-            .collect()),
+        Ok(text) => {
+            Ok(text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
     }
@@ -82,10 +75,7 @@ fn is_secret_variable(name: &str, value: &str) -> bool {
     let name = name.to_ascii_uppercase();
     let parts: Vec<&str> = name.split('_').collect();
     let marked = parts.iter().any(|part| {
-        SECRET_NAME_PARTS
-            .iter()
-            .enumerate()
-            .any(|(index, marker)| *part == *marker || (index < 5 && part.ends_with(marker)))
+        SECRET_NAME_PARTS.iter().enumerate().any(|(index, marker)| *part == *marker || (index < 5 && part.ends_with(marker)))
     });
     let about = parts.last().is_some_and(|last| NOT_SECRET_PARTS.contains(last));
     let looks_like_path = value.starts_with(['/', '~', '.']);
@@ -162,10 +152,7 @@ impl SecretMatchers {
 
 impl Redactor {
     pub fn new(secrets: Vec<String>) -> Self {
-        let mut redactor = Self {
-            secrets,
-            matchers: OnceLock::new(),
-        };
+        let mut redactor = Self { secrets, matchers: OnceLock::new() };
         redactor.normalize();
         redactor
     }
@@ -211,10 +198,9 @@ impl Redactor {
         let mut found = Vec::new();
         let mut text = |text: &mut String| *text = self.cover(text, placeholder, &mut found);
         match &mut delta.op {
-            Op::Text {
-                op: TextOp::Insert { content, .. },
-                ..
-            } => *content = self.cover_partial(&self.cover(content, mask, &mut found)),
+            Op::Text { op: TextOp::Insert { content, .. }, .. } => {
+                *content = self.cover_partial(&self.cover(content, mask, &mut found))
+            }
             Op::Conv(ConvOp::Native { line, .. }) => *line = self.cover_json(line, &mut found),
             Op::Conv(ConvOp::Title(title)) => text(title),
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
@@ -274,11 +260,7 @@ impl Redactor {
         let tail = &content[split..];
         let started = STRONG_PREFIXES.iter().any(|prefix| tail.starts_with(prefix))
             || (tail.len() >= 4 && self.secrets.iter().any(|secret| secret.starts_with(tail) && secret != tail));
-        if started {
-            format!("{}{}", &content[..split], mask(tail))
-        } else {
-            content.to_owned()
-        }
+        if started { format!("{}{}", &content[..split], mask(tail)) } else { content.to_owned() }
     }
 
     fn cover(&self, text: &str, cover: impl Fn(&str) -> String, found: &mut Vec<String>) -> String {
@@ -374,11 +356,7 @@ impl Overlay {
             return false;
         }
         self.known.insert(secret.clone());
-        self.secrets.push(Known {
-            placeholder: placeholder(&secret),
-            mask: mask(&secret),
-            secret,
-        });
+        self.secrets.push(Known { placeholder: placeholder(&secret), mask: mask(&secret), secret });
         self.matcher = OnceLock::new();
         true
     }
@@ -421,10 +399,9 @@ impl Overlay {
         let reveal = |text: &mut String| *text = self.reveal(text);
         match &mut delta.op {
             // Only masks keep an insert's length, which its span counts.
-            Op::Text {
-                op: TextOp::Insert { content, .. },
-                ..
-            } => *content = self.reveal_as(content, Hidden::Masks, str::to_owned),
+            Op::Text { op: TextOp::Insert { content, .. }, .. } => {
+                *content = self.reveal_as(content, Hidden::Masks, str::to_owned)
+            }
             Op::Conv(ConvOp::Native { line, .. }) => *line = self.reveal_as(line, Hidden::Both, json_escaped),
             Op::Conv(ConvOp::Title(title)) => reveal(title),
             Op::Conv(ConvOp::Merged { title, summary, .. }) | Op::Mr(MrOp::Opened { title, summary, .. }) => {
@@ -490,11 +467,7 @@ mod tests {
         let (redacted, found) = redactor.replace_found(&line);
         assert_eq!(
             redacted,
-            format!(
-                r#"{{"text":"pw {} and {} and short and sk-ab"}}"#,
-                placeholder("hunter2hunter2"),
-                placeholder(TOKEN)
-            )
+            format!(r#"{{"text":"pw {} and {} and short and sk-ab"}}"#, placeholder("hunter2hunter2"), placeholder(TOKEN))
         );
         assert_eq!(found, vec![TOKEN.to_owned(), "hunter2hunter2".to_owned()]);
         assert!(placeholder(TOKEN).starts_with("[REDACTED:") && placeholder(TOKEN).len() == 23);
@@ -558,17 +531,17 @@ mod tests {
             thread: ThreadId(1),
             author: silt_log::Author::User,
             time_ms: 0,
-            op: Op::Text {
-                inode: InodeId(DeltaId::new(ActorId(1), Lamport(0))),
-                op: TextOp::Insert { pos: 0, content },
-            },
+            op: Op::Text { inode: InodeId(DeltaId::new(ActorId(1), Lamport(0))), op: TextOp::Insert { pos: 0, content } },
         };
         let overlay = Overlay::new([TOKEN.to_owned()]);
         let masked = overlay.reveal_delta(insert(format!("x {}", mask(TOKEN))));
         assert!(matches!(&masked.op, Op::Text { op: TextOp::Insert { content, .. }, .. } if *content == format!("x {TOKEN}")));
         let pasted = format!("x {}", placeholder(TOKEN));
         let kept = overlay.reveal_delta(insert(pasted.clone()));
-        assert!(matches!(&kept.op, Op::Text { op: TextOp::Insert { content, .. }, .. } if *content == pasted), "a placeholder in a file stays");
+        assert!(
+            matches!(&kept.op, Op::Text { op: TextOp::Insert { content, .. }, .. } if *content == pasted),
+            "a placeholder in a file stays"
+        );
     }
 
     #[test]

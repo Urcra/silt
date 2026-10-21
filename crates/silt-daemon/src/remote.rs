@@ -6,10 +6,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_proto::{
-    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, Lease, Listing,
-    InboxRead, InboxReply, LoginReply, PresenceReply, PresenceUpdate, ShareRequest, LoginRequest, OrgChange, OrgsReply, PROTOCOL, PROTOCOL_HEADER, PasswordLoginRequest,
-    InFlightQuery, InFlightReply, PullReply, PushRequest, RegisterThread, SearchQuery, SearchReply, ThreadInfo, Visibility,
-    VisibilityRequest,
+    DevicePollReply, DevicePollRequest, DeviceStartReply, DeviceStartRequest, ErrorReply, GENERATION_HEADER, InFlightQuery,
+    InFlightReply, InboxRead, InboxReply, Lease, Listing, LoginReply, LoginRequest, OrgChange, OrgsReply, PROTOCOL,
+    PROTOCOL_HEADER, PasswordLoginRequest, PresenceReply, PresenceUpdate, PullReply, PushRequest, RegisterThread, SearchQuery,
+    SearchReply, ShareRequest, ThreadInfo, Visibility, VisibilityRequest,
 };
 use silt_sync::Outcome;
 use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
@@ -46,9 +46,7 @@ pub fn config_path(data_dir: &Path) -> PathBuf {
 
 pub fn load_config(data_dir: &Path) -> Option<RemoteConfig> {
     let text = fs::read_to_string(config_path(data_dir)).ok()?;
-    serde_json::from_str(&text)
-        .ok()
-        .or_else(|| serde_json::from_str::<LegacyConfig>(&text).ok().map(RemoteConfig::from))
+    serde_json::from_str(&text).ok().or_else(|| serde_json::from_str::<LegacyConfig>(&text).ok().map(RemoteConfig::from))
 }
 
 /// Settings saved before ids were written as hex, with the device as a
@@ -65,13 +63,7 @@ struct LegacyConfig {
 
 impl From<LegacyConfig> for RemoteConfig {
     fn from(legacy: LegacyConfig) -> Self {
-        Self {
-            url: legacy.url,
-            token: legacy.token,
-            device: DeviceId(legacy.device),
-            name: legacy.name,
-            user: legacy.user,
-        }
+        Self { url: legacy.url, token: legacy.token, device: DeviceId(legacy.device), name: legacy.name, user: legacy.user }
     }
 }
 
@@ -88,9 +80,7 @@ pub fn save_config(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteE
 }
 
 fn post(url: &str, path: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
-        .post(format!("{}{path}", url.trim_end_matches('/')))
-        .header(PROTOCOL_HEADER, PROTOCOL.to_string())
+    reqwest::Client::new().post(format!("{}{path}", url.trim_end_matches('/'))).header(PROTOCOL_HEADER, PROTOCOL.to_string())
 }
 
 fn signed_in(url: &str, name: &str, reply: LoginReply) -> RemoteConfig {
@@ -105,21 +95,14 @@ fn signed_in(url: &str, name: &str, reply: LoginReply) -> RemoteConfig {
 
 /// Exchanges a pairing code for a device token.
 pub async fn login(url: &str, code: &str, name: &str) -> Result<RemoteConfig, RemoteError> {
-    let request = LoginRequest {
-        code: code.to_owned(),
-        name: name.to_owned(),
-    };
+    let request = LoginRequest { code: code.to_owned(), name: name.to_owned() };
     let reply: LoginReply = checked(post(url, "/v1/login").json(&request).send().await?).await?.json().await?;
     Ok(signed_in(url, name, reply))
 }
 
 /// Signs the device in with a local account's password.
 pub async fn login_password(url: &str, user: &str, password: &str, name: &str) -> Result<RemoteConfig, RemoteError> {
-    let request = PasswordLoginRequest {
-        user: user.to_owned(),
-        password: password.to_owned(),
-        name: name.to_owned(),
-    };
+    let request = PasswordLoginRequest { user: user.to_owned(), password: password.to_owned(), name: name.to_owned() };
     let reply: LoginReply = checked(post(url, "/v1/login/password").json(&request).send().await?).await?.json().await?;
     Ok(signed_in(url, name, reply))
 }
@@ -132,10 +115,13 @@ pub async fn device_start(url: &str, name: &str) -> Result<DeviceStartReply, Rem
 
 /// Waits until the person approves the device in the browser, polling
 /// every `interval`; `None` when the request expired or was denied.
-pub async fn device_wait(url: &str, name: &str, device_code: &str, interval: Duration) -> Result<Option<RemoteConfig>, RemoteError> {
-    let request = DevicePollRequest {
-        device_code: device_code.to_owned(),
-    };
+pub async fn device_wait(
+    url: &str,
+    name: &str,
+    device_code: &str,
+    interval: Duration,
+) -> Result<Option<RemoteConfig>, RemoteError> {
+    let request = DevicePollRequest { device_code: device_code.to_owned() };
     loop {
         let reply: DevicePollReply = checked(post(url, "/v1/device/poll").json(&request).send().await?).await?.json().await?;
         match reply {
@@ -183,10 +169,7 @@ impl Remote {
     pub fn git_mirror(&self, family: FamilyId) -> (String, Vec<String>) {
         (
             format!("{}/git/{family}.git", self.config.url),
-            vec![
-                format!("Authorization: Bearer {}", self.config.token),
-                format!("{PROTOCOL_HEADER}: {PROTOCOL}"),
-            ],
+            vec![format!("Authorization: Bearer {}", self.config.token), format!("{PROTOCOL_HEADER}: {PROTOCOL}")],
         )
     }
 
@@ -196,30 +179,21 @@ impl Remote {
     }
 
     pub async fn register_thread(&self, thread: &ThreadInfo, visibility: Option<Visibility>) -> Result<(), RemoteError> {
-        let body = RegisterThread {
-            thread: thread.clone(),
-            visibility,
-        };
+        let body = RegisterThread { thread: thread.clone(), visibility };
         let response = self.request(reqwest::Method::POST, "/v1/threads").json(&body).send().await?;
         checked(response).await?;
         Ok(())
     }
 
     pub async fn take_lease(&self, thread: ThreadId) -> Result<Lease, RemoteError> {
-        let response = self
-            .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/lease"))
-            .send()
-            .await?;
+        let response = self.request(reqwest::Method::POST, &format!("/v1/threads/{thread}/lease")).send().await?;
         Ok(checked(response).await?.json().await?)
     }
 
     /// Moves the thread to the trash, out of it, or purges it for good
     /// (`delete`, `restore` or `purge`).
     pub async fn thread_lifecycle(&self, thread: ThreadId, action: &str) -> Result<(), RemoteError> {
-        let response = self
-            .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/{action}"))
-            .send()
-            .await?;
+        let response = self.request(reqwest::Method::POST, &format!("/v1/threads/{thread}/{action}")).send().await?;
         checked(response).await?;
         Ok(())
     }
@@ -235,15 +209,9 @@ impl Remote {
     }
 
     pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {
-        let request = ShareRequest {
-            user: user.to_owned(),
-            remove,
-        };
-        let response = self
-            .request(reqwest::Method::POST, &format!("/v1/threads/{thread}/collaborators"))
-            .json(&request)
-            .send()
-            .await?;
+        let request = ShareRequest { user: user.to_owned(), remove };
+        let response =
+            self.request(reqwest::Method::POST, &format!("/v1/threads/{thread}/collaborators")).json(&request).send().await?;
         checked(response).await?;
         Ok(())
     }
@@ -281,11 +249,7 @@ impl Remote {
     ) -> Result<(), RemoteError> {
         let response = self
             .request(reqwest::Method::PUT, "/v1/visibility")
-            .json(&VisibilityRequest {
-                repo,
-                thread,
-                visibility,
-            })
+            .json(&VisibilityRequest { repo, thread, visibility })
             .send()
             .await?;
         checked(response).await?;
@@ -303,22 +267,14 @@ impl Remote {
     }
 
     pub async fn put_blob(&self, hash: BlobHash, bytes: Vec<u8>) -> Result<(), RemoteError> {
-        let response = self
-            .request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}"))
-            .timeout(BLOB_TIMEOUT)
-            .body(bytes)
-            .send()
-            .await?;
+        let response =
+            self.request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}")).timeout(BLOB_TIMEOUT).body(bytes).send().await?;
         checked(response).await?;
         Ok(())
     }
 
     pub async fn get_blob(&self, hash: BlobHash) -> Result<Vec<u8>, RemoteError> {
-        let response = self
-            .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}"))
-            .timeout(BLOB_TIMEOUT)
-            .send()
-            .await?;
+        let response = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).timeout(BLOB_TIMEOUT).send().await?;
         Ok(checked(response).await?.bytes().await?.to_vec())
     }
 
@@ -375,11 +331,7 @@ impl Remote {
 }
 
 fn generation(response: &reqwest::Response) -> Option<u64> {
-    response
-        .headers()
-        .get(GENERATION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse().ok())
+    response.headers().get(GENERATION_HEADER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse().ok())
 }
 
 fn outcome_of(error: &RemoteError) -> Outcome {
@@ -398,9 +350,8 @@ async fn checked(response: reqwest::Response) -> Result<reqwest::Response, Remot
     }
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let reply: ErrorReply = serde_json::from_str(&body).unwrap_or_else(|_| ErrorReply::Invalid {
-        message: format!("{status}: {}", body.trim()),
-    });
+    let reply: ErrorReply =
+        serde_json::from_str(&body).unwrap_or_else(|_| ErrorReply::Invalid { message: format!("{status}: {}", body.trim()) });
     Err(match reply {
         ErrorReply::ProtocolMismatch { supported } => RemoteError::ProtocolMismatch { supported },
         other => RemoteError::Refused(other),

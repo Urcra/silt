@@ -30,7 +30,9 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
         match entry {
             Entry::User { text } => push(Role::User, text.clone()),
             Entry::Assistant { text } => push(Role::Assistant, text.clone()),
-            Entry::ToolCall { name, input, .. } => push(Role::Assistant, format!("[Called tool {name}: {}]", clip(&input.to_string()))),
+            Entry::ToolCall { name, input, .. } => {
+                push(Role::Assistant, format!("[Called tool {name}: {}]", clip(&input.to_string())))
+            }
             Entry::ToolResult { text, is_error, .. } => {
                 let label = if *is_error { "Tool error" } else { "Tool result" };
                 push(Role::Assistant, format!("[{label}: {}]", clip(text)));
@@ -117,16 +119,8 @@ mod tests {
             Entry::Assistant { text: "Hello".into() },
             Entry::User { text: "Fix the lexer".into() },
             Entry::Assistant { text: "Looking.".into() },
-            Entry::ToolCall {
-                id: "t1".into(),
-                name: "Read".into(),
-                input: json!({"file_path": "lexer.rs"}),
-            },
-            Entry::ToolResult {
-                tool_use_id: "t1".into(),
-                text: "fn lex() {}".into(),
-                is_error: false,
-            },
+            Entry::ToolCall { id: "t1".into(), name: "Read".into(), input: json!({"file_path": "lexer.rs"}) },
+            Entry::ToolResult { tool_use_id: "t1".into(), text: "fn lex() {}".into(), is_error: false },
             Entry::Other { kind: "hook".into() },
             Entry::User { text: "Thanks".into() },
         ]
@@ -159,9 +153,7 @@ mod tests {
 
     #[test]
     fn a_last_message_longer_than_the_budget_keeps_its_end() {
-        let long = Entry::User {
-            text: format!("start {} end", "é".repeat(100_000)),
-        };
+        let long = Entry::User { text: format!("start {} end", "é".repeat(100_000)) };
         let budget = 1_000;
         let prompt = render_transcript(&[long], "abc", "Claude Code", budget);
         let (_, conversation) = prompt.split_once("# Conversation so far\n\n").expect("has the conversation");

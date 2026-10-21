@@ -30,22 +30,14 @@ impl Client {
         let reply: LoginReply = reqwest::Client::new()
             .post(format!("{base}/v1/login/password"))
             .header(PROTOCOL_HEADER, PROTOCOL.to_string())
-            .json(&PasswordLoginRequest {
-                user: user.into(),
-                password: PASSWORD.into(),
-                name: "laptop".into(),
-            })
+            .json(&PasswordLoginRequest { user: user.into(), password: PASSWORD.into(), name: "laptop".into() })
             .send()
             .await
             .expect("sends")
             .json()
             .await
             .expect("login");
-        Self {
-            http: reqwest::Client::new(),
-            base: base.to_owned(),
-            token: reply.token,
-        }
+        Self { http: reqwest::Client::new(), base: base.to_owned(), token: reply.token }
     }
 
     fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
@@ -60,8 +52,7 @@ impl Client {
     }
 
     async fn push(&self, deltas: Vec<Delta>) -> StatusCode {
-        self.send(self.request(Method::POST, &format!("/v1/families/{FAMILY}/deltas")).json(&PushRequest { deltas }))
-            .await
+        self.send(self.request(Method::POST, &format!("/v1/families/{FAMILY}/deltas")).json(&PushRequest { deltas })).await
     }
 
     async fn change(&self, change: OrgChange) -> StatusCode {
@@ -69,7 +60,8 @@ impl Client {
     }
 
     async fn lists_the_thread(&self) -> bool {
-        let listing: Listing = self.request(Method::GET, "/v1/listing").send().await.expect("sends").json().await.expect("listing");
+        let listing: Listing =
+            self.request(Method::GET, "/v1/listing").send().await.expect("sends").json().await.expect("listing");
         listing.threads.iter().any(|thread| thread.id == THREAD)
     }
 
@@ -93,13 +85,7 @@ struct World {
 }
 
 fn file(name: &str, content: Content) -> Op {
-    Op::Create {
-        kind: InodeKind::File,
-        parent: Parent::Root,
-        name: name.into(),
-        content,
-        executable: false,
-    }
+    Op::Create { kind: InodeKind::File, parent: Parent::Root, name: name.into(), content, executable: false }
 }
 
 /// Alice owns the thread and shares it with Bob. Bob and Carol are in
@@ -151,24 +137,14 @@ async fn world(visibility: Visibility) -> World {
     let share = ShareRequest { user: "bob".into(), remove: false };
     let shared = alice.request(Method::POST, &format!("/v1/threads/{THREAD}/collaborators")).json(&share);
     assert_eq!(alice.send(shared).await, StatusCode::NO_CONTENT);
-    let set = VisibilityRequest {
-        repo: None,
-        thread: Some(THREAD),
-        visibility,
-    };
+    let set = VisibilityRequest { repo: None, thread: Some(THREAD), visibility };
     assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set)).await, StatusCode::NO_CONTENT);
 
     let mut people = vec![("alice", Client::sign_in(&base, "alice").await)];
     for name in ["bob", "carol", "erin", "dave"] {
         people.push((name, Client::sign_in(&base, name).await));
     }
-    World {
-        _data: data,
-        alice,
-        people,
-        family,
-        blob: blob.to_string(),
-    }
+    World { _data: data, alice, people, family, blob: blob.to_string() }
 }
 
 fn sees(person: &str, visibility: &Visibility) -> bool {
@@ -200,19 +176,14 @@ async fn each_person_sees_and_writes_by_visibility() {
             assert!(found(blob), "blob: {case}: {blob}");
             let watching = client.send(client.request(Method::GET, &format!("/v1/presence?thread={THREAD}"))).await;
             assert!(found(watching), "presence list: {case}: {watching}");
-            let here = PresenceUpdate {
-                thread: THREAD,
-                file: None,
-                line: None,
-                draft: String::new(),
-                leaving: false,
-                agent: None,
-            };
+            let here =
+                PresenceUpdate { thread: THREAD, file: None, line: None, draft: String::new(), leaving: false, agent: None };
             let present = client.send(client.request(Method::POST, "/v1/presence").json(&here)).await;
             assert!(found(present), "presence update: {case}: {present}");
 
             let actor = ActorId(100 + n as u128);
-            let edit = world.family.delta(actor, THREAD, Author::User, 0, first.clone(), file(&format!("{person}.rs"), Content::Empty));
+            let edit =
+                world.family.delta(actor, THREAD, Author::User, 0, first.clone(), file(&format!("{person}.rs"), Content::Empty));
             let pushed = client.push(vec![edit]).await;
             assert_eq!(pushed == StatusCode::OK, writes, "edit: {case}: {pushed}");
             // Without parents nothing needs to be readable, so only the
@@ -244,13 +215,10 @@ async fn each_person_sees_and_writes_by_visibility() {
 
             let owner_only = person == &"alice";
             let unshare = ShareRequest { user: "dave".into(), remove: true };
-            let shared = client.send(client.request(Method::POST, &format!("/v1/threads/{THREAD}/collaborators")).json(&unshare)).await;
+            let shared =
+                client.send(client.request(Method::POST, &format!("/v1/threads/{THREAD}/collaborators")).json(&unshare)).await;
             assert_eq!(shared == StatusCode::NO_CONTENT, owner_only, "share: {case}: {shared}");
-            let set = VisibilityRequest {
-                repo: None,
-                thread: Some(THREAD),
-                visibility: visibility.clone(),
-            };
+            let set = VisibilityRequest { repo: None, thread: Some(THREAD), visibility: visibility.clone() };
             let changed = client.send(client.request(Method::PUT, "/v1/visibility").json(&set)).await;
             assert_eq!(changed == StatusCode::NO_CONTENT, owner_only, "visibility: {case}: {changed}");
             if !owner_only {
@@ -278,12 +246,14 @@ async fn a_collaborator_the_thread_was_hidden_from_stops_writing_it() {
     };
     let alice = &world.alice;
     assert_eq!(alice.send(alice.request(Method::POST, "/v1/threads").json(&info)).await, StatusCode::NO_CONTENT);
-    let open = world.family.delta(ActorId(2), SIBLING, Author::User, 0, silt_types::Frontier::root(), file("b.rs", Content::Empty));
+    let open =
+        world.family.delta(ActorId(2), SIBLING, Author::User, 0, silt_types::Frontier::root(), file("b.rs", Content::Empty));
     assert_eq!(alice.push(vec![open]).await, StatusCode::OK);
 
     let bob = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
     assert!(!bob.lists_the_thread().await);
-    let into_hidden = world.family.delta(ActorId(400), THREAD, Author::User, 0, silt_types::Frontier::root(), file("c.rs", Content::Empty));
+    let into_hidden =
+        world.family.delta(ActorId(400), THREAD, Author::User, 0, silt_types::Frontier::root(), file("c.rs", Content::Empty));
     assert_eq!(bob.push(vec![into_hidden]).await, StatusCode::FORBIDDEN, "bob still sees the family, but not this thread");
 }
 
@@ -293,16 +263,21 @@ async fn what_someone_sees_follows_each_change_at_once() {
     let person = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("known").1;
     let (alice, carol, erin) = (&world.alice, person("carol"), person("erin"));
     assert!(carol.lists_the_thread().await && !erin.lists_the_thread().await);
-    let set = |visibility| VisibilityRequest {
-        repo: None,
-        thread: Some(THREAD),
-        visibility,
-    };
-    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Org))).await, StatusCode::NO_CONTENT);
+    let set = |visibility| VisibilityRequest { repo: None, thread: Some(THREAD), visibility };
+    assert_eq!(
+        alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Org))).await,
+        StatusCode::NO_CONTENT
+    );
     assert!(erin.lists_the_thread().await, "a wider visibility shows at once");
-    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Private))).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Private))).await,
+        StatusCode::NO_CONTENT
+    );
     assert!(!carol.lists_the_thread().await && !erin.lists_the_thread().await, "and a narrower one hides at once");
-    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Team("core".into())))).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Team("core".into())))).await,
+        StatusCode::NO_CONTENT
+    );
     assert!(carol.lists_the_thread().await);
     let root = Client::sign_in(&alice.base, "root").await;
     let leave = OrgChange::RemoveFromTeam { org: "acme".into(), team: "core".into(), user: "carol".into() };
@@ -326,15 +301,15 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
         owner: String::new(),
         collaborators: Vec::new(),
     };
-    let register = silt_proto::RegisterThread {
-        thread: info,
-        visibility: Some(Visibility::Private),
-    };
+    let register = silt_proto::RegisterThread { thread: info, visibility: Some(Visibility::Private) };
     assert_eq!(bob.send(bob.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
     let family = &mut world.family;
     let head = family.thread_head(THREAD);
     let forked = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, head.clone(), Op::Fork { from: THREAD }));
-    let work = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, forked.span.last().into(), file("quiet.rs", Content::Empty)));
+    let work = applied(
+        family,
+        family.delta(ActorId(500), FORK, Author::User, 0, forked.span.last().into(), file("quiet.rs", Content::Empty)),
+    );
     let comment = Op::Comment(CommentOp::Added {
         target: CommentTarget::Message { delta: head.ids()[0] },
         text: "after the fork".into(),
@@ -346,11 +321,7 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
     let before = family_info(alice).await;
     assert!(!pulled(alice).await.iter().any(|(_, delta)| delta.thread == FORK), "the fork is private");
 
-    let opened = Op::Mr(silt_log::MrOp::Opened {
-        target: THREAD,
-        title: "Quiet work".into(),
-        summary: String::new(),
-    });
+    let opened = Op::Mr(silt_log::MrOp::Opened { target: THREAD, title: "Quiet work".into(), summary: String::new() });
     let opened = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, work.span.last().into(), opened));
     assert_eq!(bob.push(vec![opened]).await, StatusCode::OK);
     let after = family_info(alice).await;
@@ -383,11 +354,7 @@ async fn pulled(client: &Client) -> Vec<(u64, Delta)> {
 #[tokio::test]
 async fn nothing_is_open_without_signing_in() {
     let world = world(Visibility::Org).await;
-    let stranger = Client {
-        http: reqwest::Client::new(),
-        base: world.alice.base.clone(),
-        token: "0".repeat(64),
-    };
+    let stranger = Client { http: reqwest::Client::new(), base: world.alice.base.clone(), token: "0".repeat(64) };
     let routes = [
         (Method::GET, "/v1/listing".to_owned()),
         (Method::GET, format!("/v1/families/{FAMILY}/deltas?after=0")),

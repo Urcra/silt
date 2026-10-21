@@ -30,8 +30,7 @@ pub fn socket_path() -> PathBuf {
     if preferred.as_os_str().len() <= SOCKET_PATH_LIMIT {
         return preferred;
     }
-    let runtime = env::var_os("XDG_RUNTIME_DIR")
-        .map_or_else(|| env::temp_dir().join(format!("silt-{}", uid())), PathBuf::from);
+    let runtime = env::var_os("XDG_RUNTIME_DIR").map_or_else(|| env::temp_dir().join(format!("silt-{}", uid())), PathBuf::from);
     runtime.join(format!("silt-{:016x}.sock", fnv1a(data.as_os_str().as_encoded_bytes())))
 }
 

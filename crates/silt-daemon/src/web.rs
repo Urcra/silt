@@ -72,12 +72,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>) -> std::io::Resu
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let codes = OneTimeCodes::default();
-    let web = Web {
-        events,
-        token: token.clone(),
-        port,
-        codes: codes.clone(),
-    };
+    let web = Web { events, token: token.clone(), port, codes: codes.clone() };
     let api = Router::new()
         .route("/api/status", get(status))
         .route("/api/threads", get(threads))
@@ -125,16 +120,12 @@ struct Exchange {
 
 /// Trades a one-time code from `silt open` for the token.
 async fn exchange(State(web): State<Web>, Json(body): Json<Exchange>) -> HttpResponse {
-    let fresh = web
-        .codes
-        .lock()
-        .expect("lock")
-        .remove(&body.code)
-        .is_some_and(|made| made.elapsed() < CODE_TTL);
+    let fresh = web.codes.lock().expect("lock").remove(&body.code).is_some_and(|made| made.elapsed() < CODE_TTL);
     if fresh {
         Json(json!({ "token": web.token })).into_response()
     } else {
-        (StatusCode::UNAUTHORIZED, Json(json!({"error": "this link was used already or is too old; run `silt open` again"}))).into_response()
+        (StatusCode::UNAUTHORIZED, Json(json!({"error": "this link was used already or is too old; run `silt open` again"})))
+            .into_response()
     }
 }
 
@@ -158,10 +149,7 @@ async fn authenticate(State(web): State<Web>, request: HttpRequest, next: Next) 
         .and_then(|value| value.strip_prefix("Bearer "));
     // The browser's EventSource can't send headers, so event streams carry
     // the token in the query instead.
-    let query_token = request
-        .uri()
-        .query()
-        .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("token=")));
+    let query_token = request.uri().query().and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("token=")));
     if header_token.or(query_token).is_some_and(|given| same_token(given, &web.token)) {
         next.run(request).await
     } else {
@@ -172,10 +160,7 @@ async fn authenticate(State(web): State<Web>, request: HttpRequest, next: Next) 
 /// Compares without stopping at the first difference, so response timing
 /// doesn't reveal how much of a guess was right.
 fn same_token(given: &str, expected: &str) -> bool {
-    let difference = given
-        .bytes()
-        .zip(expected.bytes())
-        .fold(0u8, |difference, (a, b)| difference | (a ^ b));
+    let difference = given.bytes().zip(expected.bytes()).fold(0u8, |difference, (a, b)| difference | (a ^ b));
     given.len() == expected.len() && std::hint::black_box(difference) == 0
 }
 
@@ -186,10 +171,7 @@ async fn asset(request: HttpRequest) -> HttpResponse {
         _ => match Assets::get("index.html") {
             Some(file) => file,
             None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    "the web UI was not built; run `pnpm -C web build` and rebuild silt",
-                )
+                return (StatusCode::NOT_FOUND, "the web UI was not built; run `pnpm -C web build` and rebuild silt")
                     .into_response();
             }
         },
@@ -220,11 +202,7 @@ async fn threads(State(web): State<Web>) -> HttpResponse {
 }
 
 async fn history(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    let request = Request::HistoryRead {
-        thread,
-        offset: 0,
-        limit: usize::MAX,
-    };
+    let request = Request::HistoryRead { thread, offset: 0, limit: usize::MAX };
     ask(&web, request).await
 }
 
@@ -243,11 +221,7 @@ struct DiffQuery {
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let request = Request::Diff {
-        thread,
-        turn: query.turn,
-        base: query.base.filter(|base| !base.is_empty()),
-    };
+    let request = Request::Diff { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) };
     ask(&web, request).await
 }
 
@@ -267,21 +241,12 @@ struct NewComment {
 }
 
 async fn add_comment(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<NewComment>) -> HttpResponse {
-    let request = Request::Comment {
-        thread,
-        on: body.on,
-        text: body.text,
-        cwd: no_clone(),
-    };
+    let request = Request::Comment { thread, on: body.on, text: body.text, cwd: no_clone() };
     ask(&web, request).await
 }
 
 async fn resolve_comment(State(web): State<Web>, Path((thread, comment)): Path<(String, String)>) -> HttpResponse {
-    let request = Request::ResolveComment {
-        thread,
-        comment,
-        cwd: no_clone(),
-    };
+    let request = Request::ResolveComment { thread, comment, cwd: no_clone() };
     ask(&web, request).await
 }
 
@@ -340,13 +305,7 @@ struct PresenceBody {
 }
 
 async fn presence(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<PresenceBody>) -> HttpResponse {
-    let request = Request::Presence {
-        thread,
-        file: body.file,
-        line: body.line,
-        draft: body.draft,
-        leaving: body.leaving,
-    };
+    let request = Request::Presence { thread, file: body.file, line: body.line, draft: body.draft, leaving: body.leaving };
     ask(&web, request).await
 }
 
@@ -373,9 +332,7 @@ async fn live(State(web): State<Web>, Path(thread): Path<String>) -> HttpRespons
             tokio::time::sleep(LIVE_INTERVAL).await;
         }
     });
-    axum::response::sse::Sse::new(stream)
-        .keep_alive(axum::response::sse::KeepAlive::default())
-        .into_response()
+    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()).into_response()
 }
 
 async fn agents(State(web): State<Web>) -> HttpResponse {
@@ -392,11 +349,7 @@ struct AgentStart {
 }
 
 async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {
-    let request = Request::AcpStart {
-        thread: body.thread,
-        clone: body.clone,
-        agent: body.agent,
-    };
+    let request = Request::AcpStart { thread: body.thread, clone: body.clone, agent: body.agent };
     ask(&web, request).await
 }
 
@@ -421,11 +374,7 @@ struct AgentAnswer {
 }
 
 async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentAnswer>) -> HttpResponse {
-    let request = Request::AcpAnswer {
-        thread,
-        id: body.id,
-        option: body.option,
-    };
+    let request = Request::AcpAnswer { thread, id: body.id, option: body.option };
     ask(&web, request).await
 }
 

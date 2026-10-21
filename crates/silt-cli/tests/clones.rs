@@ -10,7 +10,9 @@ use silt_daemon::client;
 use silt_daemon::protocol::{AgentChoices, Request, Response};
 
 fn known_clones(machine: &Machine) -> Vec<std::path::PathBuf> {
-    match client::send(&machine.silt_home.join("daemon.sock"), &Request::AcpAgents, Some(Duration::from_secs(10))).expect("answers") {
+    match client::send(&machine.silt_home.join("daemon.sock"), &Request::AcpAgents, Some(Duration::from_secs(10)))
+        .expect("answers")
+    {
         Response::Ok { data } => serde_json::from_value::<AgentChoices>(data)
             .expect("agent choices")
             .clones

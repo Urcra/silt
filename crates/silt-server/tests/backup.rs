@@ -25,11 +25,7 @@ async fn sign_in(base: &str) -> String {
     let reply: LoginReply = reqwest::Client::new()
         .post(format!("{base}/v1/login/password"))
         .header(PROTOCOL_HEADER, PROTOCOL.to_string())
-        .json(&PasswordLoginRequest {
-            user: "alice".into(),
-            password: "correct horse battery".into(),
-            name: "laptop".into(),
-        })
+        .json(&PasswordLoginRequest { user: "alice".into(), password: "correct horse battery".into(), name: "laptop".into() })
         .send()
         .await
         .expect("sends")
@@ -51,7 +47,10 @@ async fn a_backup_taken_while_running_restores() {
     };
     let blob = b"attached bytes".to_vec();
     let hash = BlobStore::hash(&blob);
-    assert_eq!(request(reqwest::Method::PUT, format!("/v1/blobs/{hash}")).body(blob.clone()).send().await.expect("sends").status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        request(reqwest::Method::PUT, format!("/v1/blobs/{hash}")).body(blob.clone()).send().await.expect("sends").status(),
+        StatusCode::NO_CONTENT
+    );
     let info = ThreadInfo {
         id: THREAD,
         family: FAMILY,
@@ -78,7 +77,11 @@ async fn a_backup_taken_while_running_restores() {
         },
     );
     family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
-    let pushed = request(reqwest::Method::POST, format!("/v1/families/{FAMILY}/deltas")).json(&PushRequest { deltas: vec![delta] }).send().await.expect("sends");
+    let pushed = request(reqwest::Method::POST, format!("/v1/families/{FAMILY}/deltas"))
+        .json(&PushRequest { deltas: vec![delta] })
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(pushed.status(), StatusCode::OK);
 
     let saved = tempfile::tempdir().expect("temp dir");

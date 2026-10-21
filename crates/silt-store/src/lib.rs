@@ -140,10 +140,7 @@ impl Store {
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options).await?;
         MIGRATOR.run(&pool).await?;
-        Ok(Self {
-            pool,
-            blobs: BlobStore::new(dir.join("blobs")),
-        })
+        Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")) })
     }
 
     pub fn blobs(&self) -> &BlobStore {
@@ -195,9 +192,10 @@ impl Store {
 
     pub async fn sync_state(&self, family: FamilyId) -> Result<SyncState, StoreError> {
         let family = id_bytes(family.0);
-        let row = sqlx::query!("SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?", family)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query!("SELECT generation, pushed, pulled, last_pulled, view FROM sync_state WHERE family_id = ?", family)
+                .fetch_optional(&self.pool)
+                .await?;
         let Some(row) = row else {
             return Ok(SyncState::default());
         };
@@ -274,9 +272,7 @@ impl Store {
     /// Marks a thread as in the trash (`Some`) or back out of it (`None`).
     pub async fn set_thread_deleted(&self, thread: ThreadId, deleted_ms: Option<i64>) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);
-        sqlx::query!("UPDATE threads SET deleted_ms = ? WHERE id = ?", deleted_ms, thread)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!("UPDATE threads SET deleted_ms = ? WHERE id = ?", deleted_ms, thread).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -298,9 +294,13 @@ impl Store {
 
     pub async fn remember_clone(&self, repo: &str, path: &Path) -> Result<(), StoreError> {
         let path = path_text(path);
-        sqlx::query!("INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path", repo, path)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "INSERT INTO clones (repo, path) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET path = excluded.path",
+            repo,
+            path
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -337,9 +337,12 @@ impl Store {
         )
         .execute(&mut *tx)
         .await?;
-        sqlx::query!("DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM sessions WHERE thread_id = ?1 OR checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)",
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query!("DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
             .execute(&mut *tx)
             .await?;
@@ -359,9 +362,7 @@ impl Store {
         let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? ORDER BY seq", family)
             .fetch_all(&self.pool)
             .await?;
-        rows.into_iter()
-            .map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?))
-            .collect()
+        rows.into_iter().map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?)).collect()
     }
 
     pub async fn add_checkout(
@@ -384,13 +385,7 @@ impl Store {
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
-        Ok(CheckoutRecord {
-            id,
-            thread,
-            path: path.to_owned(),
-            actor,
-            managed,
-        })
+        Ok(CheckoutRecord { id, thread, path: path.to_owned(), actor, managed })
     }
 
     /// Hands an existing checkout to another thread, forgetting what it
@@ -411,20 +406,17 @@ impl Store {
     pub async fn move_checkout(&self, checkout: i64, thread: ThreadId) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         let thread = id_bytes(thread.0);
-        sqlx::query!("UPDATE checkouts SET thread_id = ? WHERE id = ?", thread, checkout)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!("UPDATE checkouts SET thread_id = ? WHERE id = ?", thread, checkout).execute(&mut *tx).await?;
+        sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
 
     pub async fn checkouts(&self) -> Result<Vec<CheckoutRecord>, StoreError> {
-        let rows = sqlx::query!(r#"SELECT id AS "id!", thread_id, path, actor, managed AS "managed: bool" FROM checkouts ORDER BY id"#)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query!(r#"SELECT id AS "id!", thread_id, path, actor, managed AS "managed: bool" FROM checkouts ORDER BY id"#)
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(CheckoutRecord {
@@ -439,9 +431,10 @@ impl Store {
     }
 
     pub async fn disk_files(&self, checkout: i64) -> Result<HashMap<String, DiskFile>, StoreError> {
-        let rows = sqlx::query!("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?", checkout)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query!("SELECT path, inode, hash, size, mtime_ns, version FROM disk_files WHERE checkout_id = ?", checkout)
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter()
             .map(|row| {
                 Ok((
@@ -459,7 +452,8 @@ impl Store {
     }
 
     pub async fn put_disk_file(&self, checkout: i64, path: &str, file: &DiskFile) -> Result<(), StoreError> {
-        let (inode, hash, version) = (postcard::to_allocvec(&file.inode)?, file.hash.as_slice(), postcard::to_allocvec(&file.version)?);
+        let (inode, hash, version) =
+            (postcard::to_allocvec(&file.inode)?, file.hash.as_slice(), postcard::to_allocvec(&file.version)?);
         let size = i64::try_from(file.size).unwrap_or(i64::MAX);
         sqlx::query!(
             "INSERT INTO disk_files (checkout_id, path, inode, hash, size, mtime_ns, version) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -479,9 +473,7 @@ impl Store {
     }
 
     pub async fn remove_disk_file(&self, checkout: i64, path: &str) -> Result<(), StoreError> {
-        sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?", checkout, path)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?", checkout, path).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -518,9 +510,10 @@ impl Store {
     }
 
     pub async fn session_offsets(&self, agent: &str, session_id: &str) -> Result<Vec<SessionFileOffset>, StoreError> {
-        let rows = sqlx::query!("SELECT file, path, offset FROM session_files WHERE agent = ? AND session_id = ?", agent, session_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query!("SELECT file, path, offset FROM session_files WHERE agent = ? AND session_id = ?", agent, session_id)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows
             .into_iter()
             .map(|row| SessionFileOffset {
@@ -531,12 +524,7 @@ impl Store {
             .collect())
     }
 
-    pub async fn set_session_offset(
-        &self,
-        agent: &str,
-        session_id: &str,
-        file: &SessionFileOffset,
-    ) -> Result<(), StoreError> {
+    pub async fn set_session_offset(&self, agent: &str, session_id: &str, file: &SessionFileOffset) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         set_session_offset_in(&mut tx, agent, session_id, file).await?;
         tx.commit().await?;
@@ -618,7 +606,8 @@ async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, del
         .fetch_one(&mut *tx)
         .await?;
     for (seq, delta) in (next..).zip(deltas) {
-        let (actor, lamport, len) = (id_bytes(delta.span.actor.0), lamport_i64(delta.span.start), i64::try_from(delta.span.len).unwrap_or(i64::MAX));
+        let (actor, lamport, len) =
+            (id_bytes(delta.span.actor.0), lamport_i64(delta.span.start), i64::try_from(delta.span.len).unwrap_or(i64::MAX));
         let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta)?);
         sqlx::query!(
             "INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -679,10 +668,7 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
 /// Turns free text into an FTS5 query of quoted prefix terms, so user input
 /// can't be misread as query syntax.
 fn fts_query(text: &str) -> String {
-    text.split_whitespace()
-        .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" ")
+    text.split_whitespace().map(|word| format!("\"{}\"*", word.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
 }
 
 fn id_bytes(id: u128) -> Vec<u8> {

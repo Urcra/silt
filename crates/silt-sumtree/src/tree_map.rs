@@ -45,12 +45,7 @@ where
 
 impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     pub fn from_ordered_entries(entries: impl IntoIterator<Item = (K, V)>) -> Self {
-        let tree = SumTree::from_iter(
-            entries
-                .into_iter()
-                .map(|(key, value)| MapEntry { key, value }),
-            (),
-        );
+        let tree = SumTree::from_iter(entries.into_iter().map(|(key, value)| MapEntry { key, value }), ());
         Self(tree)
     }
 
@@ -63,18 +58,8 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     }
 
     pub fn get(&self, key: &K) -> Option<&V> {
-        let (.., item) = self
-            .0
-            .find::<MapKeyRef<'_, K>, _>((), &MapKeyRef(Some(key)), Bias::Left);
-        if let Some(item) = item {
-            if Some(key) == item.key().0.as_ref() {
-                Some(&item.value)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let (.., item) = self.0.find::<MapKeyRef<'_, K>, _>((), &MapKeyRef(Some(key)), Bias::Left);
+        if let Some(item) = item { if Some(key) == item.key().0.as_ref() { Some(&item.value) } else { None } } else { None }
     }
 
     pub fn insert(&mut self, key: K, value: V) {
@@ -82,16 +67,11 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     }
 
     pub fn insert_or_replace(&mut self, key: K, value: V) -> Option<V> {
-        self.0
-            .insert_or_replace(MapEntry { key, value }, ())
-            .map(|it| it.value)
+        self.0.insert_or_replace(MapEntry { key, value }, ()).map(|it| it.value)
     }
 
     pub fn extend(&mut self, iter: impl IntoIterator<Item = (K, V)>) {
-        let edits: Vec<_> = iter
-            .into_iter()
-            .map(|(key, value)| Edit::Insert(MapEntry { key, value }))
-            .collect();
+        let edits: Vec<_> = iter.into_iter().map(|(key, value)| Edit::Insert(MapEntry { key, value })).collect();
         self.0.edit(edits, ());
     }
 
@@ -195,15 +175,8 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     }
 
     pub fn insert_tree(&mut self, other: TreeMap<K, V>) {
-        let edits = other
-            .iter()
-            .map(|(key, value)| {
-                Edit::Insert(MapEntry {
-                    key: key.to_owned(),
-                    value: value.to_owned(),
-                })
-            })
-            .collect();
+        let edits =
+            other.iter().map(|(key, value)| Edit::Insert(MapEntry { key: key.to_owned(), value: value.to_owned() })).collect();
 
         self.0.edit(edits, ());
     }
@@ -222,15 +195,9 @@ where
 #[derive(Debug)]
 struct MapSeekTargetAdaptor<'a, T>(&'a T);
 
-impl<'a, K: Clone + Ord, T: MapSeekTarget<K>> SeekTarget<'a, MapKey<K>, MapKeyRef<'a, K>>
-    for MapSeekTargetAdaptor<'_, T>
-{
+impl<'a, K: Clone + Ord, T: MapSeekTarget<K>> SeekTarget<'a, MapKey<K>, MapKeyRef<'a, K>> for MapSeekTargetAdaptor<'_, T> {
     fn cmp(&self, cursor_location: &MapKeyRef<K>, _: ()) -> Ordering {
-        if let Some(key) = &cursor_location.0 {
-            MapSeekTarget::cmp_cursor(self.0, key)
-        } else {
-            Ordering::Greater
-        }
+        if let Some(key) = &cursor_location.0 { MapSeekTarget::cmp_cursor(self.0, key) } else { Ordering::Greater }
     }
 }
 
@@ -327,9 +294,7 @@ where
     K: Clone + Ord,
 {
     pub fn from_ordered_entries(entries: impl IntoIterator<Item = K>) -> Self {
-        Self(TreeMap::from_ordered_entries(
-            entries.into_iter().map(|key| (key, ())),
-        ))
+        Self(TreeMap::from_ordered_entries(entries.into_iter().map(|key| (key, ()))))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -382,10 +347,7 @@ mod tests {
         assert_eq!(map.get(&2), Some(&"b"));
         assert_eq!(map.get(&1), Some(&"a"));
         assert_eq!(map.get(&3), Some(&"c"));
-        assert_eq!(
-            map.iter().collect::<Vec<_>>(),
-            vec![(&1, &"a"), (&2, &"b"), (&3, &"c")]
-        );
+        assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&1, &"a"), (&2, &"b"), (&3, &"c")]);
 
         assert_eq!(map.closest(&0), None);
         assert_eq!(map.closest(&1), Some((&1, &"a")));
@@ -422,19 +384,13 @@ mod tests {
         map.insert("baaab", 4);
         map.insert("c", 5);
 
-        let result = map
-            .iter_from(&"ba")
-            .take_while(|(key, _)| key.starts_with("ba"))
-            .collect::<Vec<_>>();
+        let result = map.iter_from(&"ba").take_while(|(key, _)| key.starts_with("ba")).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|(k, _)| k == &&"baa"));
         assert!(result.iter().any(|(k, _)| k == &&"baaab"));
 
-        let result = map
-            .iter_from(&"c")
-            .take_while(|(key, _)| key.starts_with("c"))
-            .collect::<Vec<_>>();
+        let result = map.iter_from(&"c").take_while(|(key, _)| key.starts_with("c")).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 1);
         assert!(result.iter().any(|(k, _)| k == &&"c"));
@@ -484,11 +440,7 @@ mod tests {
 
         impl MapSeekTarget<PathBuf> for PathDescendants<'_> {
             fn cmp_cursor(&self, key: &PathBuf) -> Ordering {
-                if key.starts_with(self.0) {
-                    Ordering::Greater
-                } else {
-                    self.0.cmp(key)
-                }
+                if key.starts_with(self.0) { Ordering::Greater } else { self.0.cmp(key) }
             }
         }
 
@@ -502,10 +454,7 @@ mod tests {
         map.insert(PathBuf::from("c"), 5);
         map.insert(PathBuf::from("c/a"), 6);
 
-        map.remove_range(
-            &PathBuf::from("b/a"),
-            &PathDescendants(&PathBuf::from("b/a")),
-        );
+        map.remove_range(&PathBuf::from("b/a"), &PathDescendants(&PathBuf::from("b/a")));
 
         assert_eq!(map.get(&PathBuf::from("a")), Some(&1));
         assert_eq!(map.get(&PathBuf::from("a/a")), Some(&1));

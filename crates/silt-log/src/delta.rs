@@ -59,14 +59,22 @@ pub enum Op {
     Conv(ConvOp),
     Git(GitOp),
     /// The device that may write to the thread from now on (ADR 0009).
-    Lease { device: DeviceId, epoch: u64 },
+    Lease {
+        device: DeviceId,
+        epoch: u64,
+    },
     /// The first delta of a thread forked from `from`; its parents are the
     /// point it forked at, so it shares all history up to there.
-    Fork { from: ThreadId },
+    Fork {
+        from: ThreadId,
+    },
     /// Brings `from`'s work into this thread (ADR 0010). The parents are
     /// this thread's head and the merged point. A pull when `mr` is `None`,
     /// otherwise the approval of that merge request.
-    Merge { from: ThreadId, mr: Option<DeltaId> },
+    Merge {
+        from: ThreadId,
+        mr: Option<DeltaId>,
+    },
     Mr(MrOp),
     Comment(CommentOp),
 }
@@ -75,8 +83,14 @@ pub enum Op {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommentOp {
     /// `by` is the commenting user's name; deltas don't carry users.
-    Added { target: CommentTarget, text: String, by: String },
-    Resolved { comment: DeltaId },
+    Added {
+        target: CommentTarget,
+        text: String,
+        by: String,
+    },
+    Resolved {
+        comment: DeltaId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,14 +144,8 @@ impl Delta {
     /// The blob the delta refers to, which has to travel with it.
     pub fn blob(&self) -> Option<BlobHash> {
         match &self.op {
-            Op::Create {
-                content: Content::Blob(hash),
-                ..
-            }
-            | Op::SetContent {
-                content: Content::Blob(hash),
-                ..
-            }
+            Op::Create { content: Content::Blob(hash), .. }
+            | Op::SetContent { content: Content::Blob(hash), .. }
             | Op::Conv(ConvOp::Attachment { blob: hash, .. })
             | Op::Conv(ConvOp::SessionTranslated { lines: hash, .. })
             | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
@@ -148,19 +156,13 @@ impl Delta {
     pub fn check_shape(&self) -> Result<(), ShapeError> {
         let units = self.op.units();
         if self.span.len != units as u64 {
-            return Err(ShapeError::SpanLengthMismatch {
-                span_len: self.span.len,
-                units,
-            });
+            return Err(ShapeError::SpanLengthMismatch { span_len: self.span.len, units });
         }
         if !self.span.is_in_range() {
             return Err(ShapeError::SpanOutOfRange);
         }
         match &self.op {
-            Op::Text {
-                op: TextOp::Delete { pos, len },
-                ..
-            } if pos.checked_add(*len).is_none() => Err(ShapeError::TextRange),
+            Op::Text { op: TextOp::Delete { pos, len }, .. } if pos.checked_add(*len).is_none() => Err(ShapeError::TextRange),
             Op::Create { name, .. } | Op::Move { name, parent: Parent::Root | Parent::Dir(_), .. } if !is_valid_name(name) => {
                 Err(ShapeError::InvalidName(name.clone()))
             }
@@ -221,7 +223,10 @@ pub enum ConvOp {
     /// Where the agent kept the session's side files (subagent transcripts,
     /// tool results) on the recording machine. Transcripts name them by
     /// absolute path, so a restore rewrites `dir` to the new location.
-    SessionDir { session: SessionRef, dir: String },
+    SessionDir {
+        session: SessionRef,
+        dir: String,
+    },
     /// A merge request from `from` was merged into this thread. The fork's
     /// own conversation stays in the fork; this is the link and summary.
     Merged {
@@ -232,11 +237,17 @@ pub enum ConvOp {
     },
     /// `session` continues `from` under a new id, as when a fork restores
     /// its source's session; restoring `session` again needs both.
-    SessionContinued { session: SessionRef, from: SessionRef },
+    SessionContinued {
+        session: SessionRef,
+        from: SessionRef,
+    },
     /// `session` was started from the thread's conversation translated into
     /// its agent's format; `lines` (a blob) is what came before its own
     /// lines when restoring it.
-    SessionTranslated { session: SessionRef, lines: BlobHash },
+    SessionTranslated {
+        session: SessionRef,
+        lines: BlobHash,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,9 +261,18 @@ pub enum TurnMark {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GitOp {
     /// The family's files start as this commit's tree.
-    Genesis { commit: GitOid, branch: Option<String> },
-    Committed { commit: GitOid, branch: Option<String> },
+    Genesis {
+        commit: GitOid,
+        branch: Option<String>,
+    },
+    Committed {
+        commit: GitOid,
+        branch: Option<String>,
+    },
     /// A git bundle in the blob store holding `commits` and their history
     /// that the origin remote doesn't have.
-    Bundle { commits: Vec<GitOid>, blob: BlobHash },
+    Bundle {
+        commits: Vec<GitOid>,
+        blob: BlobHash,
+    },
 }

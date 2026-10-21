@@ -33,10 +33,7 @@ async fn start(data: &Path, config: impl FnOnce(&str) -> Config) -> String {
 }
 
 fn browser() -> reqwest::Client {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("client")
+    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("client")
 }
 
 fn api(http: &reqwest::Client, method: reqwest::Method, url: String) -> reqwest::RequestBuilder {
@@ -55,11 +52,7 @@ fn session_cookie(response: &reqwest::Response) -> Option<String> {
 
 async fn password_login(base: &str, user: &str, password: &str) -> reqwest::Response {
     api(&browser(), reqwest::Method::POST, format!("{base}/v1/login/password"))
-        .json(&PasswordLoginRequest {
-            user: user.into(),
-            password: password.into(),
-            name: "laptop".into(),
-        })
+        .json(&PasswordLoginRequest { user: user.into(), password: password.into(), name: "laptop".into() })
         .send()
         .await
         .expect("sends")
@@ -84,11 +77,14 @@ async fn passwords_sign_devices_in_and_out() {
     let reply: LoginReply = password_login(&base, "alice", "correct horse battery").await.json().await.expect("login");
     assert_eq!(reply.user, "alice");
     let http = browser();
-    let listing = api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&reply.token).send().await.expect("sends");
+    let listing =
+        api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&reply.token).send().await.expect("sends");
     assert_eq!(listing.status(), StatusCode::OK);
-    let out = api(&http, reqwest::Method::DELETE, format!("{base}/v1/device")).bearer_auth(&reply.token).send().await.expect("sends");
+    let out =
+        api(&http, reqwest::Method::DELETE, format!("{base}/v1/device")).bearer_auth(&reply.token).send().await.expect("sends");
     assert_eq!(out.status(), StatusCode::NO_CONTENT);
-    let after = api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&reply.token).send().await.expect("sends");
+    let after =
+        api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&reply.token).send().await.expect("sends");
     assert_eq!(after.status(), StatusCode::UNAUTHORIZED, "a signed-out device's token stops working");
 
     let closed = tempfile::tempdir().expect("temp dir");
@@ -127,26 +123,49 @@ async fn people_sign_devices_out_and_admins_disable_people() {
     let http = browser();
     let status = |token: String| {
         let (http, base) = (http.clone(), base.clone());
-        async move { api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(token).send().await.expect("sends").status() }
+        async move {
+            api(&http, reqwest::Method::GET, format!("{base}/v1/listing"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .expect("sends")
+                .status()
+        }
     };
     let home = |cookie: String| {
         let (http, base) = (http.clone(), base.clone());
         async move { http.get(format!("{base}/")).header(COOKIE, cookie).send().await.expect("sends") }
     };
-    let (first, second) = (token(&base, "alice", "correct horse battery").await, token(&base, "alice", "correct horse battery").await);
-    let (here, elsewhere) = (sign_in_page(&base, "alice", "correct horse battery").await, sign_in_page(&base, "alice", "correct horse battery").await);
+    let (first, second) =
+        (token(&base, "alice", "correct horse battery").await, token(&base, "alice", "correct horse battery").await);
+    let (here, elsewhere) = (
+        sign_in_page(&base, "alice", "correct horse battery").await,
+        sign_in_page(&base, "alice", "correct horse battery").await,
+    );
 
     let html = home(here.clone()).await.text().await.expect("html");
     let (_, rest) = html.split_once(r#"name="device" value=""#).expect("a device is listed");
     let device = rest.split('"').next().expect("an id");
-    let revoked = http.post(format!("{base}/devices/revoke")).header(COOKIE, &here).form(&[("device", device)]).send().await.expect("sends");
+    let revoked = http
+        .post(format!("{base}/devices/revoke"))
+        .header(COOKIE, &here)
+        .form(&[("device", device)])
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(revoked.status(), StatusCode::SEE_OTHER);
     let mut statuses = [status(first.clone()).await, status(second.clone()).await];
     statuses.sort();
     assert_eq!(statuses, [StatusCode::OK, StatusCode::UNAUTHORIZED], "one device is signed out");
     let remaining = if status(first.clone()).await == StatusCode::OK { first } else { second };
 
-    let foreign = http.post(format!("{base}/logout")).header(COOKIE, &here).header("origin", "https://evil.example").send().await.expect("sends");
+    let foreign = http
+        .post(format!("{base}/logout"))
+        .header(COOKIE, &here)
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(foreign.status(), StatusCode::FORBIDDEN, "other sites can't sign people out");
     let ended = http.post(format!("{base}/sessions/end-others")).header(COOKIE, &here).send().await.expect("sends");
     assert_eq!(ended.status(), StatusCode::SEE_OTHER);
@@ -190,9 +209,7 @@ async fn devices_sign_in_through_the_browser() {
     assert!(started.verification_url.starts_with(&format!("{base}/device?code=")));
     let poll = || async {
         api(&http, reqwest::Method::POST, format!("{base}/v1/device/poll"))
-            .json(&DevicePollRequest {
-                device_code: started.device_code.clone(),
-            })
+            .json(&DevicePollRequest { device_code: started.device_code.clone() })
             .send()
             .await
             .expect("sends")
@@ -242,7 +259,8 @@ async fn devices_sign_in_through_the_browser() {
     };
     assert_eq!(login.user, "alice");
     assert_eq!(poll().await, DevicePollReply::Gone, "a device code works once");
-    let listing = api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&login.token).send().await.expect("sends");
+    let listing =
+        api(&http, reqwest::Method::GET, format!("{base}/v1/listing")).bearer_auth(&login.token).send().await.expect("sends");
     assert_eq!(listing.status(), StatusCode::OK);
 }
 
@@ -266,7 +284,12 @@ async fn invites_let_people_sign_up() {
     let signed_up = http.post(format!("{base}/signup")).form(&form).send().await.expect("sends");
     assert_eq!(signed_up.status(), StatusCode::SEE_OTHER);
     assert!(session_cookie(&signed_up).is_some());
-    let again = http.post(format!("{base}/signup")).form(&[("user", "eve"), ("password", "correct horse battery"), ("invite", invite.as_str())]).send().await.expect("sends");
+    let again = http
+        .post(format!("{base}/signup"))
+        .form(&[("user", "eve"), ("password", "correct horse battery"), ("invite", invite.as_str())])
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(again.status(), StatusCode::FORBIDDEN, "an invite works once");
     assert_eq!(token(&base, "dave", "correct horse battery").await.len(), 64);
 
@@ -284,9 +307,19 @@ async fn invites_let_people_sign_up() {
     assert_eq!(signed_up, 1, "one invite makes one account");
 
     let failing = admin.invite(None, 7).await.expect("invites");
-    let taken = http.post(format!("{base}/signup")).form(&[("user", "dave"), ("password", "correct horse battery"), ("invite", failing.as_str())]).send().await.expect("sends");
+    let taken = http
+        .post(format!("{base}/signup"))
+        .form(&[("user", "dave"), ("password", "correct horse battery"), ("invite", failing.as_str())])
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(taken.status(), StatusCode::SEE_OTHER, "back to the form with an error");
-    let retried = http.post(format!("{base}/signup")).form(&[("user", "frank"), ("password", "correct horse battery"), ("invite", failing.as_str())]).send().await.expect("sends");
+    let retried = http
+        .post(format!("{base}/signup"))
+        .form(&[("user", "frank"), ("password", "correct horse battery"), ("invite", failing.as_str())])
+        .send()
+        .await
+        .expect("sends");
     assert!(session_cookie(&retried).is_some(), "a failed sign-up gives the invite back");
 }
 
@@ -310,7 +343,10 @@ async fn discovery(State(base): State<(Shared, String)>) -> Json<Value> {
     }))
 }
 
-async fn token_endpoint(State((provider, _)): State<(Shared, String)>, Form(form): Form<HashMap<String, String>>) -> (axum::http::StatusCode, Json<Value>) {
+async fn token_endpoint(
+    State((provider, _)): State<(Shared, String)>,
+    Form(form): Form<HashMap<String, String>>,
+) -> (axum::http::StatusCode, Json<Value>) {
     let mut provider = provider.lock().expect("lock");
     let code = form.get("code").cloned().unwrap_or_default();
     let verifier = form.get("code_verifier").cloned().unwrap_or_default();
@@ -339,7 +375,10 @@ fn silt_challenge(verifier: &str) -> String {
     out
 }
 
-async fn userinfo(State((provider, _)): State<(Shared, String)>, headers: axum::http::HeaderMap) -> (axum::http::StatusCode, Json<Value>) {
+async fn userinfo(
+    State((provider, _)): State<(Shared, String)>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, Json<Value>) {
     let token = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -422,8 +461,9 @@ async fn oidc_and_github_sign_people_in_by_policy() {
     let login_page = browser().get(format!("{base}/login")).send().await.expect("sends").text().await.expect("html");
     assert!(login_page.contains("Continue with Example SSO") && login_page.contains("Continue with GitHub"));
 
-    provider.lock().expect("lock").next_user =
-        Some(json!({"sub": "u-1", "preferred_username": "Grace", "name": "Grace H", "email": "grace@example.com", "email_verified": true}));
+    provider.lock().expect("lock").next_user = Some(
+        json!({"sub": "u-1", "preferred_username": "Grace", "name": "Grace H", "email": "grace@example.com", "email_verified": true}),
+    );
     let signed_in = provider_sign_in(&base, &provider, "oidc", "next=%2Fdevice%3Fcode%3DX").await;
     assert_eq!(signed_in.status(), StatusCode::SEE_OTHER, "{:?}", signed_in.text().await);
     assert_eq!(signed_in.headers()[LOCATION], "/device?code=X");
@@ -437,10 +477,18 @@ async fn oidc_and_github_sign_people_in_by_policy() {
 
     provider.lock().expect("lock").next_user =
         Some(json!({"sub": "u-2", "preferred_username": "mallory", "email": "mallory@elsewhere.org", "email_verified": true}));
-    assert_eq!(provider_sign_in(&base, &provider, "oidc", "").await.status(), StatusCode::FORBIDDEN, "other domains need an invite");
+    assert_eq!(
+        provider_sign_in(&base, &provider, "oidc", "").await.status(),
+        StatusCode::FORBIDDEN,
+        "other domains need an invite"
+    );
     provider.lock().expect("lock").next_user =
         Some(json!({"sub": "u-3", "preferred_username": "ivan", "email": "ivan@example.com", "email_verified": false}));
-    assert_eq!(provider_sign_in(&base, &provider, "oidc", "").await.status(), StatusCode::FORBIDDEN, "unverified emails don't count");
+    assert_eq!(
+        provider_sign_in(&base, &provider, "oidc", "").await.status(),
+        StatusCode::FORBIDDEN,
+        "unverified emails don't count"
+    );
     let invited = provider_sign_in(&base, &provider, "oidc", &format!("invite={invite}")).await;
     assert_eq!(invited.status(), StatusCode::SEE_OTHER, "an invite lets anyone in");
 
@@ -517,7 +565,12 @@ async fn orgs_and_teams_decide_who_sees_a_project() {
         collaborators: Vec::new(),
     };
     let http = browser();
-    let registered = api(&http, reqwest::Method::POST, format!("{base}/v1/threads")).bearer_auth(&alice).json(&thread).send().await.expect("sends");
+    let registered = api(&http, reqwest::Method::POST, format!("{base}/v1/threads"))
+        .bearer_auth(&alice)
+        .json(&thread)
+        .send()
+        .await
+        .expect("sends");
     assert_eq!(registered.status(), StatusCode::NO_CONTENT);
     let family = Family::new();
     let delta = family.delta(
@@ -554,29 +607,38 @@ async fn orgs_and_teams_decide_who_sees_a_project() {
     assert_eq!(change(&base, &alice, team_only).await, StatusCode::NO_CONTENT);
     assert!(listing(&base, &bob).await.threads.is_empty(), "the org default now limits it to the team");
     assert_eq!(listing(&base, &alice).await.threads.len(), 1);
-    let open_project = VisibilityRequest {
-        repo: Some(thread.repo.clone()),
-        thread: None,
-        visibility: Visibility::Org,
+    let open_project = VisibilityRequest { repo: Some(thread.repo.clone()), thread: None, visibility: Visibility::Org };
+    let set = |token: &str| {
+        api(&http, reqwest::Method::PUT, format!("{base}/v1/visibility")).bearer_auth(token.to_owned()).json(&open_project)
     };
-    let set = |token: &str| api(&http, reqwest::Method::PUT, format!("{base}/v1/visibility")).bearer_auth(token.to_owned()).json(&open_project);
     assert_eq!(set(&bob).send().await.expect("sends").status(), StatusCode::FORBIDDEN);
     assert_eq!(set(&alice).send().await.expect("sends").status(), StatusCode::NO_CONTENT);
     assert_eq!(listing(&base, &bob).await.threads.len(), 1, "the project's setting wins over the org default");
 
-    let orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs")).bearer_auth(&bob).send().await.expect("sends").json().await.expect("orgs");
+    let orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs"))
+        .bearer_auth(&bob)
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("orgs");
     let acme_org = orgs.orgs.iter().find(|org| org.name == "acme").expect("bob sees acme");
     assert_eq!(acme_org.role, "member");
     assert_eq!(acme_org.projects, vec!["github.com/acme/app".to_owned()]);
     assert_eq!(acme_org.teams[0].members, vec!["alice".to_owned()]);
-    let carol_orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs")).bearer_auth(&carol).send().await.expect("sends").json().await.expect("orgs");
+    let carol_orgs: OrgsReply = api(&http, reqwest::Method::GET, format!("{base}/v1/orgs"))
+        .bearer_auth(&carol)
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("orgs");
     assert!(carol_orgs.orgs.iter().all(|org| org.name != "acme"));
 
-    let core_project = VisibilityRequest {
-        repo: Some(thread.repo.clone()),
-        thread: None,
-        visibility: Visibility::Team("core".into()),
-    };
+    let core_project =
+        VisibilityRequest { repo: Some(thread.repo.clone()), thread: None, visibility: Visibility::Team("core".into()) };
     let set = api(&http, reqwest::Method::PUT, format!("{base}/v1/visibility")).bearer_auth(&alice).json(&core_project);
     assert_eq!(set.send().await.expect("sends").status(), StatusCode::NO_CONTENT);
     assert_eq!(change(&base, &alice, OrgChange::RemoveTeam { org: acme(), team: "core".into() }).await, StatusCode::NO_CONTENT);

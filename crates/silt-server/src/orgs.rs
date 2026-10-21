@@ -114,7 +114,10 @@ async fn team_id(db: &SqlitePool, org: i64, name: &str) -> Result<i64, ApiError>
         .ok_or_else(|| bad_request(format!("no team named {name}")))
 }
 
-pub(crate) async fn list(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<OrgsReply>, ApiError> {
+pub(crate) async fn list(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<OrgsReply>, ApiError> {
     let db = server.db();
     let admin = is_admin(db, caller.user).await?;
     let rows = sqlx::query(
@@ -141,10 +144,7 @@ pub(crate) async fn list(State(server): State<Server>, Extension(caller): Extens
         .fetch_all(db)
         .await?
         .iter()
-        .map(|row| OrgMember {
-            user: row.get("name"),
-            role: row.get("role"),
-        })
+        .map(|row| OrgMember { user: row.get("name"), role: row.get("role") })
         .collect();
         let mut teams = Vec::new();
         for team in sqlx::query("SELECT id, name FROM teams WHERE org_id = ? ORDER BY name").bind(id).fetch_all(db).await? {
@@ -157,10 +157,7 @@ pub(crate) async fn list(State(server): State<Server>, Extension(caller): Extens
             .iter()
             .map(|row| row.get("name"))
             .collect();
-            teams.push(TeamInfo {
-                name: team.get("name"),
-                members,
-            });
+            teams.push(TeamInfo { name: team.get("name"), members });
         }
         let projects = sqlx::query("SELECT repo FROM projects WHERE org_id = ? ORDER BY repo")
             .bind(id)
@@ -197,11 +194,12 @@ pub(crate) async fn change(
                 return Err(bad_request("org names follow the rules for user names"));
             }
             let mut tx = db.begin().await?;
-            let created = sqlx::query("INSERT INTO orgs (name, created_ms) VALUES (?, ?) ON CONFLICT (name) DO NOTHING RETURNING id")
-                .bind(&org)
-                .bind(now_ms())
-                .fetch_optional(&mut *tx)
-                .await?;
+            let created =
+                sqlx::query("INSERT INTO orgs (name, created_ms) VALUES (?, ?) ON CONFLICT (name) DO NOTHING RETURNING id")
+                    .bind(&org)
+                    .bind(now_ms())
+                    .fetch_optional(&mut *tx)
+                    .await?;
             let id: i64 = created.ok_or_else(|| bad_request(format!("an org named {org} exists")))?.get("id");
             sqlx::query("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')")
                 .bind(id)
@@ -243,11 +241,7 @@ pub(crate) async fn change(
             if !valid_name(&team) {
                 return Err(bad_request("team names follow the rules for user names"));
             }
-            sqlx::query("INSERT OR IGNORE INTO teams (org_id, name) VALUES (?, ?)")
-                .bind(org_id)
-                .bind(&team)
-                .execute(db)
-                .await?;
+            sqlx::query("INSERT OR IGNORE INTO teams (org_id, name) VALUES (?, ?)").bind(org_id).bind(&team).execute(db).await?;
         }
         OrgChange::RemoveTeam { org, team } => {
             let org_id = org_id(db, &org).await?;
@@ -358,20 +352,18 @@ async fn forget_team_visibility(tx: &mut SqliteConnection, org: i64, team: &str)
         .bind(team)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("UPDATE threads SET visibility = 'private' WHERE visibility = ? AND repo IN (SELECT repo FROM projects WHERE org_id = ?)")
-        .bind(team)
-        .bind(org)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE threads SET visibility = 'private' WHERE visibility = ? AND repo IN (SELECT repo FROM projects WHERE org_id = ?)",
+    )
+    .bind(team)
+    .bind(org)
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 
 pub(crate) async fn is_placed(db: &SqlitePool, repo: &str) -> Result<bool, sqlx::Error> {
-    Ok(sqlx::query("SELECT 1 FROM projects WHERE repo = ? AND org_id IS NOT NULL")
-        .bind(repo)
-        .fetch_optional(db)
-        .await?
-        .is_some())
+    Ok(sqlx::query("SELECT 1 FROM projects WHERE repo = ? AND org_id IS NOT NULL").bind(repo).fetch_optional(db).await?.is_some())
 }
 
 /// Whether placing a project in `user`'s first org would let them decide

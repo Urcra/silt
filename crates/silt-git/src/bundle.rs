@@ -44,10 +44,8 @@ impl Repo {
     pub fn fetch_bundle(&self, bytes: &[u8], thread: &str) -> Result<(), GitError> {
         let file = self.git_dir().join(unique_name("silt-fetch"));
         fs::write(&file, bytes)?;
-        let result = self.git(
-            &["fetch", "-q", &file.to_string_lossy(), &format!("+{BUNDLE_REF}:refs/silt/threads/{thread}")],
-            None,
-        );
+        let result =
+            self.git(&["fetch", "-q", &file.to_string_lossy(), &format!("+{BUNDLE_REF}:refs/silt/threads/{thread}")], None);
         let _ = fs::remove_file(&file);
         result.map(|_| ())
     }
@@ -56,18 +54,14 @@ impl Repo {
     /// `refs/silt/threads/<thread>`, sending `headers` with every request.
     pub fn push_to_mirror(&self, url: &str, headers: &[String], commit: GitOid, thread: &str) -> Result<(), GitError> {
         let refspec = format!("+{commit}:refs/silt/threads/{thread}");
-        self.git_with_config(&["push", "-q", "--no-verify", url, &refspec], &mirror_config(headers))
-            .map(|_| ())
+        self.git_with_config(&["push", "-q", "--no-verify", url, &refspec], &mirror_config(headers)).map(|_| ())
     }
 
     /// Fetches every thread ref of a Silt server's git mirror into
     /// `refs/silt/mirror/`.
     pub fn fetch_from_mirror(&self, url: &str, headers: &[String]) -> Result<(), GitError> {
-        self.git_with_config(
-            &["fetch", "-q", url, "+refs/silt/threads/*:refs/silt/mirror/*"],
-            &mirror_config(headers),
-        )
-        .map(|_| ())
+        self.git_with_config(&["fetch", "-q", url, "+refs/silt/threads/*:refs/silt/mirror/*"], &mirror_config(headers))
+            .map(|_| ())
     }
 }
 

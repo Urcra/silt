@@ -106,7 +106,13 @@ impl Backend {
         }
     }
 
-    pub async fn complete(&self, client: &reqwest::Client, system: &str, messages: &[Message], tools: &[Tool]) -> Result<Reply, ModelError> {
+    pub async fn complete(
+        &self,
+        client: &reqwest::Client,
+        system: &str,
+        messages: &[Message],
+        tools: &[Tool],
+    ) -> Result<Reply, ModelError> {
         let base = self.base_url.trim_end_matches('/');
         let request = match self.api {
             Api::Anthropic => client
@@ -128,10 +134,7 @@ impl Backend {
         let response = request.send().await?;
         let status = response.status();
         if !status.is_success() {
-            return Err(ModelError::Status {
-                status: status.as_u16(),
-                body: response.text().await.unwrap_or_default(),
-            });
+            return Err(ModelError::Status { status: status.as_u16(), body: response.text().await.unwrap_or_default() });
         }
         let body: Value = response.json().await?;
         Ok(match self.api {
@@ -179,9 +182,7 @@ pub fn anthropic_reply(body: &Value) -> Reply {
         .into_iter()
         .flatten()
         .filter_map(|block| match block["type"].as_str()? {
-            "text" => Some(Part::Text {
-                text: block["text"].as_str()?.to_owned(),
-            }),
+            "text" => Some(Part::Text { text: block["text"].as_str()?.to_owned() }),
             "tool_use" => Some(Part::ToolUse {
                 id: block["id"].as_str()?.to_owned(),
                 name: block["name"].as_str()?.to_owned(),
@@ -279,28 +280,17 @@ mod tests {
 
     fn conversation() -> Vec<Message> {
         vec![
-            Message {
-                role: Role::User,
-                parts: vec![Part::Text { text: "fix it".into() }],
-            },
+            Message { role: Role::User, parts: vec![Part::Text { text: "fix it".into() }] },
             Message {
                 role: Role::Assistant,
                 parts: vec![
                     Part::Text { text: "Reading.".into() },
-                    Part::ToolUse {
-                        id: "t1".into(),
-                        name: "read_file".into(),
-                        input: json!({"path": "a"}),
-                    },
+                    Part::ToolUse { id: "t1".into(), name: "read_file".into(), input: json!({"path": "a"}) },
                 ],
             },
             Message {
                 role: Role::User,
-                parts: vec![Part::ToolResult {
-                    id: "t1".into(),
-                    output: "text".into(),
-                    is_error: false,
-                }],
+                parts: vec![Part::ToolResult { id: "t1".into(), output: "text".into(), is_error: false }],
             },
         ]
     }

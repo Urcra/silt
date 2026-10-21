@@ -3,8 +3,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use silt_crdt::{
-    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, Stamp, TextDoc, TextError, TextEvent,
-    TreeError, TreeEvent, TreeOp, VersionVector,
+    Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, Stamp, TextDoc, TextError, TextEvent, TreeError,
+    TreeEvent, TreeOp, VersionVector,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
@@ -209,11 +209,7 @@ impl ThreadView<'_> {
     pub fn is_executable(&self, inode: InodeId) -> bool {
         match &self.shape.seen {
             None => self.family.is_executable(inode),
-            Some(seen) => self
-                .family
-                .files
-                .get(&inode)
-                .is_some_and(|state| state.executable_at(|id| seen.contains(id))),
+            Some(seen) => self.family.files.get(&inode).is_some_and(|state| state.executable_at(|id| seen.contains(id))),
         }
     }
 }
@@ -336,22 +332,16 @@ impl Family {
             let before = self.graph.version_vector(point);
             let (inherited, inherited_whole) = self.history_within(source, expansion);
             whole &= inherited_whole;
-            items.extend(
-                inherited
-                    .iter()
-                    .filter(|item| before.contains(item.delta.span.first()))
-                    .map(|item| HistoryItem {
-                        // What the source pulled in stays upstream progress.
-                        source: match item.source {
-                            HistorySource::Upstream => HistorySource::Upstream,
-                            HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
-                        },
-                        ..*item
-                    }),
-            );
+            items.extend(inherited.iter().filter(|item| before.contains(item.delta.span.first())).map(|item| HistoryItem {
+                // What the source pulled in stays upstream progress.
+                source: match item.source {
+                    HistorySource::Upstream => HistorySource::Upstream,
+                    HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
+                },
+                ..*item
+            }));
         }
-        let mut seen: HashSet<DeltaId> =
-            items.iter().map(|item| item.delta.span.first()).collect();
+        let mut seen: HashSet<DeltaId> = items.iter().map(|item| item.delta.span.first()).collect();
         let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
         own.sort_unstable();
         for index in own {
@@ -363,18 +353,12 @@ impl Family {
                 for item in upstream.iter() {
                     let id = item.delta.span.first();
                     if merged.contains(id) && seen.insert(id) {
-                        items.push(HistoryItem {
-                            delta: item.delta,
-                            source: HistorySource::Upstream,
-                        });
+                        items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream });
                     }
                 }
             }
             seen.insert(delta.span.first());
-            items.push(HistoryItem {
-                delta,
-                source: HistorySource::Own,
-            });
+            items.push(HistoryItem { delta, source: HistorySource::Own });
         }
         expansion.open.remove(&thread);
         let items: Rc<[HistoryItem<'a>]> = items.into();
@@ -388,13 +372,10 @@ impl Family {
     /// replica lists them alike whatever order the deltas arrived in.
     pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
         let ops = || {
-            self.log
-                .iter()
-                .filter(move |delta| delta.thread == thread)
-                .filter_map(|delta| match &delta.op {
-                    Op::Comment(op) => Some((delta, op)),
-                    _ => None,
-                })
+            self.log.iter().filter(move |delta| delta.thread == thread).filter_map(|delta| match &delta.op {
+                Op::Comment(op) => Some((delta, op)),
+                _ => None,
+            })
         };
         let resolved: HashSet<DeltaId> = ops()
             .filter_map(|(_, op)| match op {
@@ -466,10 +447,7 @@ impl Family {
     }
 
     pub fn conversation(&self, thread: ThreadId) -> impl DoubleEndedIterator<Item = &Delta> {
-        self.threads
-            .get(&thread)
-            .into_iter()
-            .flat_map(|state| state.conversation.iter().map(|index| &self.log[*index]))
+        self.threads.get(&thread).into_iter().flat_map(|state| state.conversation.iter().map(|index| &self.log[*index]))
     }
 
     pub fn file(&self, inode: InodeId) -> Option<FileView> {
@@ -505,23 +483,8 @@ impl Family {
 
     /// A delta for `op` by `actor` on `thread`, based on `parents`, using the
     /// next lamports of the family clock.
-    pub fn delta(
-        &self,
-        actor: ActorId,
-        thread: ThreadId,
-        author: Author,
-        time_ms: i64,
-        parents: Frontier,
-        op: Op,
-    ) -> Delta {
-        Delta {
-            span: DeltaSpan::new(actor, self.graph.next_lamport(), op.units() as u64),
-            parents,
-            thread,
-            author,
-            time_ms,
-            op,
-        }
+    pub fn delta(&self, actor: ActorId, thread: ThreadId, author: Author, time_ms: i64, parents: Frontier, op: Op) -> Delta {
+        Delta { span: DeltaSpan::new(actor, self.graph.next_lamport(), op.units() as u64), parents, thread, author, time_ms, op }
     }
 
     /// What `thread` sees: everything up to its head. When the family has
@@ -529,30 +492,17 @@ impl Family {
     pub fn thread_view(&self, thread: ThreadId) -> ThreadView<'_> {
         let version = self.thread_head(thread);
         let whole = self.threads.len() <= 1 || version == *self.graph.frontier();
-        let key = ShapeKey {
-            whole,
-            version: if whole { self.graph.frontier().clone() } else { version.clone() },
-        };
+        let key = ShapeKey { whole, version: if whole { self.graph.frontier().clone() } else { version.clone() } };
         let shape = self.shapes.get_or_insert(key, || {
             let seen = (!whole).then(|| self.graph.version_vector(&version));
-            Shape {
-                tree: seen.as_ref().map(|seen| self.tree.at(|id| seen.contains(id))),
-                seen,
-                paths: OnceLock::new(),
-            }
+            Shape { tree: seen.as_ref().map(|seen| self.tree.at(|id| seen.contains(id))), seen, paths: OnceLock::new() }
         });
-        ThreadView {
-            family: self,
-            version,
-            shape,
-        }
+        ThreadView { family: self, version, shape }
     }
 
     /// The head a new delta on `thread` should use as its parents.
     pub fn thread_head(&self, thread: ThreadId) -> Frontier {
-        self.threads
-            .get(&thread)
-            .map_or_else(|| self.graph.frontier().clone(), |state| state.head.clone())
+        self.threads.get(&thread).map_or_else(|| self.graph.frontier().clone(), |state| state.head.clone())
     }
 
     /// Applies a delta. Known deltas are a no-op, and an invalid delta is
@@ -631,14 +581,8 @@ impl Family {
                     _ => None,
                 };
                 let doc = materialize(&mut self.files, *inode, bases)?;
-                let checked = doc.check(
-                    &self.graph,
-                    &TextEvent {
-                        span: delta.span,
-                        parents: delta.parents.clone(),
-                        op: op.clone(),
-                    },
-                );
+                let checked =
+                    doc.check(&self.graph, &TextEvent { span: delta.span, parents: delta.parents.clone(), op: op.clone() });
                 if let (Err(_), Some(oid)) = (&checked, from_git) {
                     // A refused delta leaves the file as it found it.
                     self.files.get_mut(inode).expect("materialized above").content = FileContent::GitText(oid);
@@ -651,19 +595,12 @@ impl Family {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Comment(CommentOp::Added {
-                target: CommentTarget::Code { inode, .. },
-                ..
-            }) => {
+            Op::Comment(CommentOp::Added { target: CommentTarget::Code { inode, .. }, .. }) => {
                 if self.tree.kind(*inode).is_none() {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Conv(_)
-            | Op::Git(_)
-            | Op::Lease { .. }
-            | Op::Mr(_)
-            | Op::Comment(_) => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Mr(_) | Op::Comment(_) => {}
         }
         Ok(false)
     }
@@ -687,12 +624,7 @@ impl Family {
     fn project(&mut self, delta: &Delta, applies_text: bool) -> Result<(), LogError> {
         let id = delta.span.first();
         match &delta.op {
-            Op::Create {
-                kind,
-                content,
-                executable,
-                ..
-            } => {
+            Op::Create { kind, content, executable, .. } => {
                 self.tree.apply(&tree_event(id, &delta.op))?;
                 if *kind != InodeKind::Dir {
                     self.files.insert(InodeId(id), FileState::new(file_content(*content, id), id, *executable));
@@ -703,15 +635,9 @@ impl Family {
             }
             Op::Text { inode, op } => {
                 if applies_text {
-                    let event = TextEvent {
-                        span: delta.span,
-                        parents: delta.parents.clone(),
-                        op: op.clone(),
-                    };
+                    let event = TextEvent { span: delta.span, parents: delta.parents.clone(), op: op.clone() };
                     let graph = &self.graph;
-                    if let Some(FileContent::Text(doc)) =
-                        self.files.get_mut(inode).map(|state| &mut state.content)
-                    {
+                    if let Some(FileContent::Text(doc)) = self.files.get_mut(inode).map(|state| &mut state.content) {
                         doc.apply(graph, &event)?;
                     }
                 }
@@ -735,13 +661,7 @@ impl Family {
                     state.executable_stamp = Stamp::from(id);
                 }
             }
-            Op::Conv(_)
-            | Op::Git(_)
-            | Op::Lease { .. }
-            | Op::Fork { .. }
-            | Op::Merge { .. }
-            | Op::Mr(_)
-            | Op::Comment(_) => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => {}
         }
         Ok(())
     }
@@ -801,16 +721,8 @@ fn materialize<'a>(
 
 fn tree_event(id: DeltaId, op: &Op) -> TreeEvent {
     let op = match op {
-        Op::Create { kind, parent, name, .. } => TreeOp::Create {
-            kind: *kind,
-            parent: *parent,
-            name: name.clone(),
-        },
-        Op::Move { inode, parent, name } => TreeOp::Move {
-            inode: *inode,
-            parent: *parent,
-            name: name.clone(),
-        },
+        Op::Create { kind, parent, name, .. } => TreeOp::Create { kind: *kind, parent: *parent, name: name.clone() },
+        Op::Move { inode, parent, name } => TreeOp::Move { inode: *inode, parent: *parent, name: name.clone() },
         Op::Delete { inode } => TreeOp::Delete { inode: *inode },
         _ => unreachable!("only tree operations become tree events"),
     };

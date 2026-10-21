@@ -9,11 +9,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, ContentChunk, Implementation, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    SessionId, SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
+    AgentCapabilities, ContentBlock, ContentChunk, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
+    StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 

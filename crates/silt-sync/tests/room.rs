@@ -23,13 +23,15 @@ fn malformed_deltas_are_refused_quickly() {
     let mut room = Room::new(1);
     room.push(vec![title(&mut family, ActorId(1), "a")]).expect("pushes");
 
-    let mut huge = family.delta(ActorId(2), THREAD, Author::User, 0, family.thread_head(THREAD), Op::Conv(ConvOp::Title("x".into())));
+    let mut huge =
+        family.delta(ActorId(2), THREAD, Author::User, 0, family.thread_head(THREAD), Op::Conv(ConvOp::Title("x".into())));
     huge.span.len = 1 << 62;
     let started = Instant::now();
     assert!(matches!(room.push(vec![huge]), Err(PushError::Invalid { .. })));
     assert!(started.elapsed() < Duration::from_secs(1));
 
-    let mut late = family.delta(ActorId(2), THREAD, Author::User, 0, family.thread_head(THREAD), Op::Conv(ConvOp::Title("x".into())));
+    let mut late =
+        family.delta(ActorId(2), THREAD, Author::User, 0, family.thread_head(THREAD), Op::Conv(ConvOp::Title("x".into())));
     late.span = DeltaSpan::new(ActorId(2), Lamport(u64::MAX), 1);
     assert!(matches!(room.push(vec![late]), Err(PushError::Invalid { .. })));
 

@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate, TextContent, ToolCallContent,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionId, SessionNotification, SessionUpdate, TextContent, ToolCallContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde_json::Value;
@@ -37,7 +37,10 @@ pub enum Command {
     Cancel,
     /// The person's answer to a permission request: an option id, or none
     /// to refuse.
-    Answer { id: u64, option: Option<String> },
+    Answer {
+        id: u64,
+        option: Option<String>,
+    },
     Stop,
 }
 
@@ -63,10 +66,16 @@ pub struct Permission {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// The session is ready; `loaded` when an earlier one was loaded.
-    Ready { session: String, loaded: bool, agent: String },
+    Ready {
+        session: String,
+        loaded: bool,
+        agent: String,
+    },
     Update(Update),
     Permission(Permission),
-    TurnEnded { reason: String },
+    TurnEnded {
+        reason: String,
+    },
     Failed(String),
     Exited,
 }
@@ -104,10 +113,7 @@ fn text_of(block: &ContentBlock) -> String {
 }
 
 fn label<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
 fn tool_output(content: &[ToolCallContent]) -> Option<String> {
@@ -151,7 +157,11 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
 
-async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: mpsc::UnboundedReceiver<Command>) -> Result<(), String> {
+async fn run(
+    start: Start,
+    events: mpsc::UnboundedSender<Event>,
+    mut commands: mpsc::UnboundedReceiver<Command>,
+) -> Result<(), String> {
     let mut child = tokio::process::Command::new(&start.program)
         .args(&start.args)
         // Only what the daemon chose to pass: see `registry::agent_environment`.
@@ -202,11 +212,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
         .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _connection| {
                 let id = next_id.fetch_add(1, Ordering::SeqCst);
-                let options = request
-                    .options
-                    .iter()
-                    .map(|option| (option.option_id.to_string(), option.name.clone()))
-                    .collect();
+                let options = request.options.iter().map(|option| (option.option_id.to_string(), option.name.clone())).collect();
                 let title = request.tool_call.fields.title.clone().unwrap_or_else(|| "a tool call".to_owned());
                 parked.lock().expect("lock").insert(id, responder);
                 let _ = asked.send(Event::Permission(Permission { id, title, options }));
@@ -215,19 +221,16 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |connection: ConnectionTo<Agent>| {
-            let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
-            let agent = init
-                .agent_info
-                .as_ref()
-                .map_or_else(|| start.program.clone(), |info| info.name.clone());
+            let init = connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
+            let agent = init.agent_info.as_ref().map_or_else(|| start.program.clone(), |info| info.name.clone());
             let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
                 Some(id) => {
                     replaying.store(true, Ordering::SeqCst);
                     let loaded = connection
-                        .send_request(LoadSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone()).mcp_servers(mcp_servers.clone()))
+                        .send_request(
+                            LoadSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
+                                .mcp_servers(mcp_servers.clone()),
+                        )
                         .block_task()
                         .await;
                     replaying.store(false, Ordering::SeqCst);
@@ -239,11 +242,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
             };
             let session: SessionId = match loaded {
                 Some(id) => {
-                    let _ = events.send(Event::Ready {
-                        session: id.clone(),
-                        loaded: true,
-                        agent,
-                    });
+                    let _ = events.send(Event::Ready { session: id.clone(), loaded: true, agent });
                     SessionId::new(id)
                 }
                 None => {
@@ -251,11 +250,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                         .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
                         .block_task()
                         .await?;
-                    let _ = events.send(Event::Ready {
-                        session: created.session_id.to_string(),
-                        loaded: false,
-                        agent,
-                    });
+                    let _ = events.send(Event::Ready { session: created.session_id.to_string(), loaded: false, agent });
                     created.session_id
                 }
             };
@@ -268,9 +263,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                         connection.spawn(async move {
                             match prompting.send_request(request).block_task().await {
                                 Ok(response) => {
-                                    let _ = ended.send(Event::TurnEnded {
-                                        reason: label(&response.stop_reason),
-                                    });
+                                    let _ = ended.send(Event::TurnEnded { reason: label(&response.stop_reason) });
                                 }
                                 Err(error) => {
                                     let _ = ended.send(Event::Failed(error.to_string()));
@@ -303,8 +296,7 @@ async fn run(start: Start, events: mpsc::UnboundedSender<Event>, mut commands: m
                 }
             }
             Ok(())
-        })
-;
+        });
     // The agent may die without closing the connection cleanly; its exit
     // ends the session either way.
     let result = tokio::select! {
