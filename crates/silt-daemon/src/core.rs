@@ -499,6 +499,8 @@ impl Core {
             }
             Request::Branches { clone } => to_response(self.branches(&clone)),
             Request::Projects => return answer_later(reply, Ok(self.projects())),
+            Request::Orgs => return answer_later(reply, self.orgs()),
+            Request::OrgChange { change } => return answer_later(reply, self.org_change(change)),
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),

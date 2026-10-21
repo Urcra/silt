@@ -11,6 +11,20 @@ export type AgentState = "starting" | "idle" | "working" | "awaiting_permission"
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
+export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
+
+export type OrgInfo = { name: string, role: OrgRole, 
+/**
+ * The caller owns it or administers the server.
+ */
+may_change: boolean, default_visibility: Visibility, members: Array<OrgMember>, teams: Array<TeamInfo>, projects: Array<string>, };
+
+export type OrgMember = { user: string, role: OrgRole, };
+
+export type OrgRole = "owner" | "member" | "admin";
+
+export type TeamInfo = { name: string, members: Array<string>, };
+
 export type Presence = { user: string, device: string, file: string | null, line: number | null, draft: string, agent: AgentActivity | null, 
 /**
  * Milliseconds since they were last heard from.

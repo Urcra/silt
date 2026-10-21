@@ -256,6 +256,12 @@ pub enum Request {
         thread: String,
         change: StateChange,
     },
+    /// The person's orgs, their members, teams and projects.
+    Orgs,
+    /// Changes an org, a team or a project's place, on the server.
+    OrgChange {
+        change: silt_proto::OrgChange,
+    },
     /// Makes the clone at `path` this machine's clone of its project.
     AddClone {
         path: PathBuf,
@@ -1051,6 +1057,11 @@ mod tests {
             silt_proto::AgentActivity::decl(&config),
             silt_proto::AgentState::decl(&config),
             silt_proto::InboxRead::decl(&config),
+            silt_proto::OrgChange::decl(&config),
+            silt_proto::OrgInfo::decl(&config),
+            silt_proto::OrgMember::decl(&config),
+            silt_proto::OrgRole::decl(&config),
+            silt_proto::TeamInfo::decl(&config),
             silt_proto::Presence::decl(&config),
             silt_proto::PresenceReply::decl(&config),
             silt_proto::ThreadStatus::decl(&config),

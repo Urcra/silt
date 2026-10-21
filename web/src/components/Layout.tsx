@@ -34,6 +34,7 @@ function useGlobalActions() {
     { id: 'new', label: 'New thread', keys: 'n', run: () => void navigate({ to: '/new' }) },
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/' }) },
     { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/projects' }) },
+    { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/orgs' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
   ])
@@ -138,6 +139,9 @@ export function Layout() {
           </Link>
           <Link to="/inbox" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
             Inbox
+          </Link>
+          <Link to="/orgs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
+            Orgs
           </Link>
           <ThemeToggle />
         </nav>

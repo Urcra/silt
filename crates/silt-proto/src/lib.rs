@@ -511,9 +511,13 @@ mod tests {
 
 /// An org as one of its members sees it (ADR 0013).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct OrgInfo {
     pub name: String,
     pub role: OrgRole,
+    /// The caller owns it or administers the server.
+    #[serde(default)]
+    pub may_change: bool,
     pub default_visibility: Visibility,
     pub members: Vec<OrgMember>,
     pub teams: Vec<TeamInfo>,
@@ -521,6 +525,7 @@ pub struct OrgInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct OrgMember {
     pub user: String,
     pub role: OrgRole,
@@ -630,6 +635,7 @@ impl std::fmt::Display for AgentState {
 
 /// Someone's place in an org.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum OrgRole {
     Owner,
@@ -668,6 +674,7 @@ impl std::str::FromStr for OrgRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TeamInfo {
     pub name: String,
     pub members: Vec<String>,
@@ -681,6 +688,7 @@ pub struct OrgsReply {
 /// A change to orgs, teams or projects; the caller must own the org or
 /// administer the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum OrgChange {
     Create {

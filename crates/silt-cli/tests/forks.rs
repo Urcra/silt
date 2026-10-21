@@ -331,8 +331,16 @@ fn the_inbox_hears_about_merge_requests_comments_and_mentions() {
     );
     let inbox = alice.stdout(&["inbox"]);
     assert!(inbox.contains("bob mentioned you"), "{inbox}");
-    let context = prompt_hook(alice, &first_session(alice));
-    assert!(context.contains("merge request") && context.contains("Add bob"), "Alice's agent hears about it: {context}");
+    // The inbox comes from the server, the agent's notice once Alice's
+    // daemon has pulled the merge request, which can be a moment later.
+    let session = first_session(alice);
+    assert!(
+        eventually(|| {
+            let context = prompt_hook(alice, &session);
+            context.contains("merge request") && context.contains("Add bob")
+        }),
+        "Alice's agent hears about it"
+    );
     assert!(bob.stdout(&["inbox"]).contains("nothing new"), "nobody hears about their own work");
 
     alice.silt(&["mr", "approve", &mr]);

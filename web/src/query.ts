@@ -23,6 +23,7 @@ export const keys = {
   agents: ['agents'] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
+  orgs: ['orgs'] as const,
   status: ['status'] as const,
 }
 

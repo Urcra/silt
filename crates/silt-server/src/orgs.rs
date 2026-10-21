@@ -162,6 +162,7 @@ pub(crate) async fn list(
             sqlx::query_scalar!("SELECT repo FROM projects WHERE org_id = ? ORDER BY repo", row.id).fetch_all(db).await?;
         orgs.push(OrgInfo {
             name: row.name,
+            may_change: admin || role == OrgRole::Owner,
             role,
             default_visibility: row.default_visibility.parse().unwrap_or(Visibility::Org),
             members,

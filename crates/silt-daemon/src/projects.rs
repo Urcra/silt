@@ -106,6 +106,35 @@ impl Core {
     }
 }
 
+impl Core {
+    /// The person's orgs, as the server has them.
+    pub(crate) fn orgs(
+        &self,
+    ) -> Result<impl Future<Output = Result<Vec<silt_proto::OrgInfo>, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move {
+            let reply = remote.orgs().await.map_err(|source| CoreError::Server { doing: "list your orgs", source })?;
+            Ok(reply.orgs)
+        })
+    }
+
+    /// Passes an org change to the server, which checks who may make it.
+    pub(crate) fn org_change(
+        &self,
+        change: silt_proto::OrgChange,
+    ) -> Result<impl Future<Output = Result<&'static str, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move {
+            remote.org_change(&change).await.map_err(|source| CoreError::Server { doing: "change the org", source })?;
+            Ok("done")
+        })
+    }
+
+    fn signed_in(&self) -> Result<crate::remote::Remote, CoreError> {
+        self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))
+    }
+}
+
 fn project(repo: &str) -> Project {
     Project {
         repo: repo.to_owned(),
