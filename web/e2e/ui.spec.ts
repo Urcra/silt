@@ -59,6 +59,34 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(codeComments.getByRole('button', { name: 'resolve' })).toHaveCount(0)
 })
 
+test("the palette finds threads and runs the page's actions, which keys run too", async ({ page }) => {
+  const { url } = fixture()
+  await page.goto(url)
+  await page.keyboard.press('ControlOrMeta+k')
+  const palette = page.getByRole('dialog', { name: 'Go to or do' })
+  await palette.getByLabel('command').fill('farewell')
+  await expect(palette.getByRole('option').filter({ hasText: 'History' }).first()).toBeVisible()
+  await palette.getByRole('option', { name: 'Threads Add a farewell' }).click()
+  await expect(page).toHaveURL(/\/t\//)
+
+  await page.keyboard.press('d')
+  await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+  await page.keyboard.press('ControlOrMeta+k')
+  await palette.getByLabel('command').fill('against main')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('tab', { name: 'Against main' })).toHaveAttribute('aria-selected', 'true')
+
+  await page.keyboard.press('n')
+  await expect(page).toHaveURL(/\/new$/)
+  // A key without a modifier is the person's while they type.
+  await page.keyboard.press('ControlOrMeta+k')
+  await palette.getByLabel('command').pressSequentially('inbox')
+  await expect(palette.getByLabel('command')).toHaveValue('inbox')
+  await expect(page).toHaveURL(/\/new$/)
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/inbox$/)
+})
+
 test('reviews and approves a merge request', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)

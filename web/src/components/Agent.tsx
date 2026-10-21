@@ -5,6 +5,7 @@ import { api, type AgentStatus, type Presence, type Preset, type PromptAttachmen
 import { readAttachment } from '../attachments'
 import { PRESETS, STATE_PHRASE, running } from '../agentState'
 import { keys, message } from '../query'
+import { useActions } from '../shortcuts'
 import { PromptQueue } from './Queue'
 
 export function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
@@ -142,6 +143,14 @@ export function AgentPanel({
   useEffect(() => {
     if (agentName && modes) rememberModes(agentName, modes)
   }, [agentName, modes])
+  const working = status?.state === 'working' || status?.state === 'awaiting_permission'
+  useActions([
+    ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
+    ...(working ? [{ id: 'cancel', label: 'Cancel the turn', run: () => act(api.cancelTurn(thread)) }] : []),
+    ...(status?.state === 'awaiting_input'
+      ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }]
+      : []),
+  ])
 
   return (
     <section aria-label="agent at work" className="mt-3 rounded border border-line p-3 text-sm">

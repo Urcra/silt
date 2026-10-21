@@ -1,14 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link, Outlet, useMatch, useParams } from '@tanstack/react-router'
+import { Link, Outlet, useMatch, useNavigate, useParams } from '@tanstack/react-router'
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react'
 import { api, short } from '../api'
 import { projectName } from '../projects'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
+import { useActions } from '../shortcuts'
 import { THEMES, applyTheme, storedTheme, type Theme } from '../theme'
 import { IconButton, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MergeRequest } from './MergeRequests'
+import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
 import { ThreadView } from './ThreadView'
 
@@ -17,16 +19,23 @@ const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const
 function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(storedTheme)
   const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]
-  return (
-    <IconButton
-      icon={THEME_ICON[theme]}
-      label={`${theme} theme; switch to ${next}`}
-      onClick={() => {
-        applyTheme(next)
-        setTheme(next)
-      }}
-    />
-  )
+  const switchTheme = () => {
+    applyTheme(next)
+    setTheme(next)
+  }
+  useActions([{ id: 'theme', label: `Switch to the ${next} theme`, run: switchTheme }])
+  return <IconButton icon={THEME_ICON[theme]} label={`${theme} theme; switch to ${next}`} onClick={switchTheme} />
+}
+
+/** Where anyone can go from anywhere, by key or from the palette. */
+function useGlobalActions() {
+  const navigate = useNavigate()
+  useActions([
+    { id: 'new', label: 'New thread', keys: 'n', run: () => void navigate({ to: '/new' }) },
+    { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/' }) },
+    { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
+    { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
+  ])
 }
 
 /** Where this page is: its project and thread, or which list. */
@@ -106,6 +115,7 @@ function useSidebarWidth() {
 }
 
 export function Layout() {
+  useGlobalActions()
   const sidebar = useSidebarWidth()
   const [sidebarShown, setSidebarShown] = useState(false)
   const scroll = useRef<HTMLElement>(null)
@@ -121,6 +131,7 @@ export function Layout() {
         />
         <Breadcrumbs />
         <nav className="ml-auto flex items-center gap-4 text-xs">
+          <Palette />
           <Link to="/mrs" className="text-fg-2 hover:text-fg-1" activeProps={{ className: 'text-accent-fg' }}>
             Merge requests
           </Link>

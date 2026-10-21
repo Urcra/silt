@@ -5,6 +5,7 @@ import { parseDiff } from '../diffParse'
 import { lineClass } from '../diffStyle'
 import { keys, message } from '../query'
 import { type Lines, linesOf, reviewPrompt } from '../review'
+import { useActions } from '../shortcuts'
 import { Button, Input, Select, Tabs } from '../ui'
 
 type View = 'last-turn' | 'thread' | 'main' | 'other'
@@ -147,6 +148,15 @@ export function DiffPanel({
     enabled: open,
   })
   const pending = comments.filter((comment) => !comment.resolved && linesOf(comment) !== null)
+  const show = (shown: View) => () => {
+    setOpen(true)
+    setView(shown)
+  }
+  useActions([
+    { id: 'changes', label: open ? 'Hide changes' : 'Show changes', keys: 'd', run: () => setOpen(!open) },
+    { id: 'last-turn', label: 'Changes in the last turn', run: show('last-turn') },
+    { id: 'against-main', label: 'Changes against main', run: show('main') },
+  ])
 
   return (
     <section aria-label="changes" className="my-3">
