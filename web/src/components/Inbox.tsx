@@ -2,8 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { APPROVED } from '../agentState'
-import { api, short, type InboxEntry, type InboxRead } from '../api'
+import { api, short, type InboxEntry, type InboxRead, type KindSetting } from '../api'
 import { useTopic } from '../bus'
+import { KIND_LABEL, notificationsAllowed } from '../notifier'
 import { keys, message } from '../query'
 import { Button, toast } from '../ui'
 
@@ -30,6 +31,38 @@ function Actions({ notification, done }: { notification: InboxEntry; done: () =>
   )
 }
 
+/** Which kinds notify, and asking the browser to show notifications at all. */
+function NotificationSettings() {
+  const queries = useQueryClient()
+  const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false })
+  const [allowed, setAllowed] = useState(notificationsAllowed())
+  if (!settings.data) return null
+  const change = (setting: KindSetting) =>
+    void api.setNotification(setting).then(
+      (saved) => queries.setQueryData(keys.notificationSettings, saved),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <details className="mb-4 rounded border border-line p-3 text-sm">
+      <summary className="cursor-pointer">Notifications</summary>
+      {!allowed && typeof Notification !== 'undefined' && (
+        <Button className="mt-2" onClick={() => void Notification.requestPermission().then(() => setAllowed(notificationsAllowed()))}>
+          Allow browser notifications
+        </Button>
+      )}
+      <fieldset className="mt-2 grid gap-1 sm:grid-cols-2">
+        <legend className="mb-1 text-xs text-fg-2">Notify me, not only list it, when:</legend>
+        {settings.data.map((setting) => (
+          <label key={setting.kind} className="flex items-center gap-2">
+            <input type="checkbox" checked={setting.notify} onChange={(event) => change({ kind: setting.kind, notify: event.target.checked })} />
+            {KIND_LABEL[setting.kind] ?? setting.kind}
+          </label>
+        ))}
+      </fieldset>
+    </details>
+  )
+}
+
 export function Inbox() {
   useTopic('inbox')
   const [all, setAll] = useState(false)
@@ -51,6 +84,7 @@ export function Inbox() {
           Mark all read
         </button>
       </div>
+      <NotificationSettings />
       {inbox.error && <p className="text-danger">{message(inbox.error)}</p>}
       {inbox.isSuccess && notifications.length === 0 && <p className="text-fg-3">Nothing new.</p>}
       <ul data-testid="inbox" className="space-y-2">

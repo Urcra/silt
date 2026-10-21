@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, useMatch, useNavigate, useParams } from '@tanstack/react-router'
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react'
 import { api, short } from '../api'
+import { useNotifier } from '../notifier'
 import { projectName } from '../projects'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
@@ -119,6 +120,7 @@ function useSidebarWidth() {
 
 export function Layout() {
   useGlobalActions()
+  useNotifier()
   const sidebar = useSidebarWidth()
   const [sidebarShown, setSidebarShown] = useState(false)
   const scroll = useRef<HTMLElement>(null)

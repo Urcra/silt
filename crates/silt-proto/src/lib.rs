@@ -817,6 +817,35 @@ pub struct Notification {
     pub read: bool,
     #[serde(default)]
     pub action: Option<InboxAction>,
+    /// Its kind notifies the person, not only lists it.
+    #[serde(default)]
+    pub notify: bool,
+}
+
+/// Every kind of notification, and whether it notifies unless the person
+/// says otherwise (ADR 0028): what waits on them does, the rest is listed.
+pub const NOTIFICATION_KINDS: [(&str, bool); 13] = [
+    ("permission", true),
+    ("plan", true),
+    ("errored", true),
+    ("offline", true),
+    ("finished", false),
+    ("recovered", false),
+    ("mr_opened", false),
+    ("mr_approved", false),
+    ("mr_declined", false),
+    ("mr_changes_requested", false),
+    ("comment", false),
+    ("reply", false),
+    ("mention", false),
+];
+
+/// Whether one kind of notification notifies the person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct KindSetting {
+    pub kind: String,
+    pub notify: bool,
 }
 
 /// What can be done from a notification in place (ADR 0028).

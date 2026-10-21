@@ -344,6 +344,8 @@ pub struct InboxEntry {
     pub read: bool,
     #[serde(default)]
     pub action: Option<InboxAction>,
+    #[serde(default)]
+    pub notify: bool,
 }
 
 /// A project as the web UI shows it (ADR 0023): the server's record when

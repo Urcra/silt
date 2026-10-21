@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notification_settings (user_id, kind, notify) VALUES (?, ?, ?)\n         ON CONFLICT (user_id, kind) DO UPDATE SET notify = excluded.notify",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d8c3dcee69e7db5a89b5d8d5e27e83b0c99687fddf36a2d10f40300b811a88f8"
+}

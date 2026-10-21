@@ -33,6 +33,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/search", get(search))
         .route("/app/api/inbox", get(inbox))
         .route("/app/api/inbox/read", post(inbox_read))
+        .route("/app/api/me/notifications", get(notification_settings).put(change_notification_setting))
         .route("/app/api/orgs", get(orgs))
         .route("/app/api/projects", get(projects))
 }
@@ -503,6 +504,7 @@ async fn inbox(
                 created_ms: note.created_ms,
                 read: note.read,
                 action: note.action,
+                notify: note.notify,
             })
             .collect(),
     ))
@@ -515,6 +517,21 @@ async fn inbox_read(
 ) -> Result<Json<&'static str>, ApiError> {
     crate::inbox::read(State(server), Extension(browser.caller()), Json(read)).await?;
     Ok(Json("read"))
+}
+
+async fn notification_settings(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+) -> Result<Json<Vec<silt_proto::KindSetting>>, ApiError> {
+    crate::inbox::settings(State(server), Extension(browser.caller())).await
+}
+
+async fn change_notification_setting(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Json(setting): Json<silt_proto::KindSetting>,
+) -> Result<Json<Vec<silt_proto::KindSetting>>, ApiError> {
+    crate::inbox::change_setting(State(server), Extension(browser.caller()), Json(setting)).await
 }
 
 async fn orgs(

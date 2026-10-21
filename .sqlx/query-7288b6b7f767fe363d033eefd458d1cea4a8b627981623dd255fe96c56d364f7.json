@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind, notify AS \"notify: bool\" FROM notification_settings WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notification_settings",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "notify: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notification_settings",
+            "name": "notify"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7288b6b7f767fe363d033eefd458d1cea4a8b627981623dd255fe96c56d364f7"
+}

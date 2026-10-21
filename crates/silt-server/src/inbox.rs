@@ -10,7 +10,7 @@ use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use silt_log::{CommentOp, Delta, MrOp, Op};
-use silt_proto::{InboxAction, InboxRead, InboxReply, Notification};
+use silt_proto::{InboxAction, InboxRead, InboxReply, KindSetting, NOTIFICATION_KINDS, Notification};
 use silt_types::ThreadId;
 use sqlx::sqlite::SqlitePool;
 
@@ -251,6 +251,48 @@ pub(crate) async fn notify_person(db: &SqlitePool, note: PersonNote<'_>) -> Resu
     Ok(())
 }
 
+/// Each kind of notification and whether it notifies `user`.
+async fn settings_of(db: &SqlitePool, user: UserId) -> Result<Vec<KindSetting>, sqlx::Error> {
+    let chosen: HashMap<String, bool> =
+        sqlx::query!(r#"SELECT kind, notify AS "notify: bool" FROM notification_settings WHERE user_id = ?"#, user)
+            .fetch_all(db)
+            .await?
+            .into_iter()
+            .map(|row| (row.kind, row.notify))
+            .collect();
+    Ok(NOTIFICATION_KINDS
+        .iter()
+        .map(|(kind, default)| KindSetting { kind: (*kind).to_owned(), notify: chosen.get(*kind).copied().unwrap_or(*default) })
+        .collect())
+}
+
+pub(crate) async fn settings(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<KindSetting>>, ApiError> {
+    Ok(Json(settings_of(server.db(), caller.user).await?))
+}
+
+pub(crate) async fn change_setting(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Json(setting): Json<KindSetting>,
+) -> Result<Json<Vec<KindSetting>>, ApiError> {
+    if !NOTIFICATION_KINDS.iter().any(|(kind, _)| *kind == setting.kind) {
+        return Err(crate::bad_request(format!("there are no {} notifications", setting.kind)));
+    }
+    sqlx::query!(
+        "INSERT INTO notification_settings (user_id, kind, notify) VALUES (?, ?, ?)
+         ON CONFLICT (user_id, kind) DO UPDATE SET notify = excluded.notify",
+        caller.user,
+        setting.kind,
+        setting.notify,
+    )
+    .execute(server.db())
+    .await?;
+    Ok(Json(settings_of(server.db(), caller.user).await?))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct InboxQuery {
     #[serde(default)]
@@ -272,10 +314,13 @@ pub(crate) async fn list(
     .fetch_all(server.db())
     .await?;
     let viewer = server.viewer(caller.user).await?;
+    let notifies: HashMap<String, bool> =
+        settings_of(server.db(), caller.user).await?.into_iter().map(|setting| (setting.kind, setting.notify)).collect();
     let notifications = rows
         .into_iter()
         .map(|row| Notification {
             id: row.id,
+            notify: notifies.get(&row.kind).copied().unwrap_or_default(),
             kind: row.kind,
             thread: ThreadId(id_from(&row.thread_id)),
             actor: row.actor,

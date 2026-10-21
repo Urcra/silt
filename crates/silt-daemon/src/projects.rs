@@ -130,6 +130,20 @@ impl Core {
         })
     }
 
+    pub(crate) fn notification_settings(
+        &self,
+        change: Option<silt_proto::KindSetting>,
+    ) -> Result<impl Future<Output = Result<Vec<silt_proto::KindSetting>, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move {
+            let settings = match change {
+                Some(setting) => remote.change_notification_setting(&setting).await,
+                None => remote.notification_settings().await,
+            };
+            settings.map_err(|source| CoreError::Server { doing: "read your notification settings", source })
+        })
+    }
+
     pub(crate) fn devices(
         &self,
     ) -> Result<impl Future<Output = Result<Vec<crate::protocol::DeviceView>, CoreError>> + Send + 'static, CoreError> {

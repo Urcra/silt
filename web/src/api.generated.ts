@@ -13,6 +13,8 @@ export type Capabilities = { answer_permissions: boolean, send_prompts: boolean,
 
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
+export type KindSetting = { kind: string, notify: boolean, };
+
 export type Startable = { id: string, name: string, };
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
@@ -175,7 +177,7 @@ export type HistoryPage = { thread: string, total: number, entries: Array<Histor
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
-export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, action: InboxAction | null, };
+export type InboxEntry = { id: number, kind: string, thread: string, actor: string, text: string, created_ms: number, read: boolean, action: InboxAction | null, notify: boolean, };
 
 export type LiveState = { deltas: number, 
 /**

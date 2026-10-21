@@ -839,6 +839,42 @@ async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
 }
 
 #[tokio::test]
+async fn each_person_chooses_which_notifications_notify_them() {
+    let world = world(Visibility::Org).await;
+    let alice = &world.alice;
+    let settings: Vec<silt_proto::KindSetting> =
+        alice.request(Method::GET, "/v1/me/notifications").send().await.expect("sends").json().await.expect("settings");
+    let notifies = |settings: &[silt_proto::KindSetting], kind: &str| {
+        settings.iter().find(|setting| setting.kind == kind).map(|setting| setting.notify)
+    };
+    assert_eq!((notifies(&settings, "permission"), notifies(&settings, "comment")), (Some(true), Some(false)), "the defaults");
+
+    let change = |kind: &str, notify: bool| {
+        alice.request(Method::PUT, "/v1/me/notifications").json(&silt_proto::KindSetting { kind: kind.into(), notify })
+    };
+    let changed: Vec<silt_proto::KindSetting> =
+        change("comment", true).send().await.expect("sends").json().await.expect("settings");
+    assert_eq!(notifies(&changed, "comment"), Some(true));
+    assert_eq!(alice.send(change("gossip", true)).await, StatusCode::BAD_REQUEST);
+
+    // Bob's comment on Alice's thread now notifies her; Bob's own settings stay his.
+    let bob = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
+    let head = world.family.thread_head(THREAD);
+    let comment = Op::Comment(CommentOp::Added {
+        target: CommentTarget::Message { delta: head.ids()[0] },
+        text: "nice".into(),
+        by: "bob".into(),
+    });
+    assert_eq!(bob.push(vec![world.family.delta(ActorId(600), THREAD, Author::User, 0, head, comment)]).await, StatusCode::OK);
+    let inbox: silt_proto::InboxReply =
+        alice.request(Method::GET, "/v1/inbox").send().await.expect("sends").json().await.expect("inbox");
+    assert!(inbox.notifications.iter().any(|note| note.kind == "comment" && note.notify), "{inbox:?}");
+    let bobs: Vec<silt_proto::KindSetting> =
+        bob.request(Method::GET, "/v1/me/notifications").send().await.expect("sends").json().await.expect("settings");
+    assert_eq!(notifies(&bobs, "comment"), Some(false));
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

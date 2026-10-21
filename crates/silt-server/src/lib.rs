@@ -283,6 +283,7 @@ impl Server {
             .route("/v1/control/{id}", post(control::answer))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
+            .route("/v1/me/notifications", get(inbox::settings).put(inbox::change_setting))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/projects", get(projects::list))
             .route("/v1/me/threads", get(me::threads))

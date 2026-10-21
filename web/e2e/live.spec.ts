@@ -295,6 +295,42 @@ test('the inbox hears that an agent waits, and answers it in place', async ({ pa
   await page.getByRole('button', { name: 'Stop agent' }).click()
 })
 
+test('a waiting agent notifies its person in a tab that is open but not in front', async ({ browser }) => {
+  const context = await browser.newContext()
+  await context.addInitScript(() => {
+    const shown: string[] = []
+    Object.assign(window, { shown })
+    class Recorder {
+      static permission = 'granted'
+      static requestPermission = async () => 'granted'
+      onclick: (() => void) | null = null
+      constructor(title: string, options?: NotificationOptions) {
+        shown.push(`${title}: ${options?.body ?? ''}`)
+      }
+      close() {}
+    }
+    Object.assign(window, { Notification: Recorder })
+    document.hasFocus = () => false
+  })
+  const watcher = await context.newPage()
+  await watcher.goto(live.alice)
+
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('permissions').selectOption('ask_for_everything')
+  await machine.getByLabel('draft').fill('notify me')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  const asked = machine.getByRole('group', { name: 'permission' })
+  await expect(asked).toContainText('Edit src/main.rs')
+  await expect
+    .poll(() => watcher.evaluate(() => (window as unknown as { shown: string[] }).shown.join('\n')), { timeout: 40_000 })
+    .toContain('An agent asks for a permission: Fake agent on alice asks to run: Edit src/main.rs')
+  await asked.getByRole('button', { name: 'Allow' }).click()
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await context.close()
+  await machine.context().close()
+})
+
 test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
   const hosted = await (await browser.newContext()).newPage()
   await hosted.goto(`${live.server}/app/t/${live.thread}`)

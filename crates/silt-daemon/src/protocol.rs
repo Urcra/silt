@@ -288,6 +288,11 @@ pub enum Request {
     },
     /// The person's orgs, their members, teams and projects.
     Orgs,
+    /// Which kinds of notification notify the person, on the server.
+    NotificationSettings,
+    NotificationSetting {
+        setting: silt_proto::KindSetting,
+    },
     /// The person's devices, on the server.
     Devices,
     DeviceChange {
@@ -811,6 +816,7 @@ mod tests {
             silt_proto::AgentState::decl(&config),
             silt_proto::Capabilities::decl(&config),
             silt_proto::InboxAction::decl(&config),
+            silt_proto::KindSetting::decl(&config),
             silt_proto::Startable::decl(&config),
             silt_proto::InboxRead::decl(&config),
             silt_proto::OrgChange::decl(&config),

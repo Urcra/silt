@@ -244,6 +244,18 @@ impl Remote {
         Ok(checked(request.send().await?).await?.json().await?)
     }
 
+    pub async fn notification_settings(&self) -> Result<Vec<silt_proto::KindSetting>, RemoteError> {
+        Ok(checked(self.request(reqwest::Method::GET, "/v1/me/notifications").send().await?).await?.json().await?)
+    }
+
+    pub async fn change_notification_setting(
+        &self,
+        setting: &silt_proto::KindSetting,
+    ) -> Result<Vec<silt_proto::KindSetting>, RemoteError> {
+        let response = self.request(reqwest::Method::PUT, "/v1/me/notifications").json(setting).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
     pub async fn devices(&self) -> Result<Vec<silt_proto::view::DeviceView>, RemoteError> {
         Ok(checked(self.request(reqwest::Method::GET, "/v1/devices").send().await?).await?.json().await?)
     }

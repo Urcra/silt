@@ -520,6 +520,8 @@ impl Core {
             Request::Projects => return answer_later(reply, Ok(self.projects())),
             Request::Orgs => return answer_later(reply, self.orgs()),
             Request::Devices => return answer_later(reply, self.devices()),
+            Request::NotificationSettings => return answer_later(reply, self.notification_settings(None)),
+            Request::NotificationSetting { setting } => return answer_later(reply, self.notification_settings(Some(setting))),
             Request::DeviceChange { id, change } => return answer_later(reply, self.device_change(id, change)),
             Request::DeviceRevoke { id } => return answer_later(reply, self.device_revoke(id)),
             Request::OrgChange { change } => return answer_later(reply, self.org_change(change)),
@@ -1415,6 +1417,7 @@ impl Core {
                     created_ms: notification.created_ms,
                     read: notification.read,
                     action: notification.action,
+                    notify: notification.notify,
                 })
                 .collect())
         })
