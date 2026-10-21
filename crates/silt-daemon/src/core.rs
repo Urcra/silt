@@ -5,10 +5,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::Repo;
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, SNAPSHOT_FORMAT, ThreadState};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
-use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, Snapshot, Store, ThreadRecord};
+use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, Store, ThreadRecord};
 use silt_sync::{ClientSync, Outcome};
 use silt_types::{ActorId, BlobHash, DeviceId, FamilyId, Frontier, GitOid, ThreadId};
 use tokio::sync::{mpsc, oneshot};
@@ -16,6 +16,7 @@ use tracing::warn;
 
 use crate::disk::{self, RawFile};
 use crate::lifecycle::Lifecycle;
+use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
 use crate::remote::{self, Remote};
 use crate::sessions::{self, PendingSession, Session};
@@ -272,19 +273,8 @@ impl Core {
                 .values()
                 .filter(|thread| thread.family == family_id && !thread.repo_root.as_os_str().is_empty())
                 .find_map(|thread| Repo::discover(&thread.repo_root).ok());
-            let deltas = core.store.deltas(family_id).await?;
-            match repo {
-                Some(repo) => {
-                    let snapshot = core.store.snapshot(family_id).await?;
-                    let (family, covered) = replay(snapshot.as_ref(), &deltas, &mut RepoBases(&repo));
-                    core.families.insert(family_id, family);
-                    core.snapshotted.insert(family_id, covered);
-                    core.snapshot_if_due(family_id).await;
-                }
-                None => {
-                    core.raw.insert(family_id, deltas);
-                }
-            }
+            core.take_loaded(family_id, load::family(&core.store, family_id, repo.as_ref()).await?);
+            core.snapshot_if_due(family_id).await;
             let state = core.store.sync_state(family_id).await?;
             core.syncs
                 .insert(family_id, ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
@@ -942,16 +932,9 @@ impl Core {
     }
 
     async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
-        let deltas = self.store.deltas(family_id).await?;
-        if self.families.contains_key(&family_id) {
-            let repo = self.family_repo(family_id)?;
-            let snapshot = self.store.snapshot(family_id).await?;
-            let (family, covered) = replay(snapshot.as_ref(), &deltas, &mut RepoBases(&repo));
-            self.families.insert(family_id, family);
-            self.snapshotted.insert(family_id, covered);
-        } else {
-            self.raw.insert(family_id, deltas);
-        }
+        let repo = if self.families.contains_key(&family_id) { Some(self.family_repo(family_id)?) } else { None };
+        let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
+        self.take_loaded(family_id, loaded);
         let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
@@ -962,6 +945,20 @@ impl Core {
         Ok(())
     }
 
+    fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded) {
+        match loaded {
+            Loaded::Projected { family, covered } => {
+                self.raw.remove(&family_id);
+                self.families.insert(family_id, *family);
+                self.snapshotted.insert(family_id, covered);
+            }
+            Loaded::Raw(deltas) => {
+                self.families.remove(&family_id);
+                self.raw.insert(family_id, deltas);
+            }
+        }
+    }
+
     /// Saves the family's projection once enough was recorded since its last
     /// snapshot. A snapshot that can't be saved only makes the next load
     /// slower.
@@ -970,19 +967,11 @@ impl Core {
             return;
         };
         let covered = self.snapshotted.get(&family_id).copied().unwrap_or_default();
-        if family.log().len() < covered + SNAPSHOT_EVERY {
+        if family.log().len() < covered + load::SNAPSHOT_EVERY {
             return;
         }
-        let covers = family.log().len();
-        let saved = match family.snapshot() {
-            Ok(data) => {
-                let snapshot = Snapshot { format: SNAPSHOT_FORMAT, covers: covers as u64, data };
-                self.store.put_snapshot(family_id, &snapshot).await.map_err(CoreError::from)
-            }
-            Err(error) => Err(CoreError::Encode(error)),
-        };
-        match saved {
-            Ok(()) => {
+        match load::save_snapshot(&self.store, family_id, family).await {
+            Ok(covers) => {
                 self.snapshotted.insert(family_id, covers);
             }
             Err(error) => warn!(%error, family = %family_id, "could not save a snapshot of the family"),
@@ -1417,27 +1406,6 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
     }
 }
 
-/// Deltas recorded since a family's last snapshot before it gets a new one.
-const SNAPSHOT_EVERY: usize = 1000;
-
-/// A family rebuilt from its stored deltas, starting from `snapshot` when it
-/// is a snapshot of them, and how much of its log that snapshot covers.
-fn replay(snapshot: Option<&Snapshot>, stored: &[Delta], bases: &mut dyn BaseText) -> (Family, usize) {
-    let restored = snapshot.filter(|snapshot| snapshot.format == SNAPSHOT_FORMAT).and_then(|snapshot| {
-        Family::from_snapshot(&snapshot.data, stored)
-            .inspect_err(|error| warn!(%error, "replaying the family instead of reading its snapshot"))
-            .ok()
-    });
-    let (mut family, rest) = restored.unwrap_or_else(|| (Family::new(), stored));
-    let covered = family.log().len();
-    for delta in rest {
-        if let Err(error) = family.apply(delta.clone(), bases) {
-            warn!(%error, "skipping a delta that no longer applies");
-        }
-    }
-    (family, covered)
-}
-
 /// What was found at a path that changed in a checkout.
 enum Probe {
     /// The checkout's root, with the files under it.
@@ -1555,67 +1523,9 @@ pub(crate) fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use silt_crdt::{InodeKind, Parent, TextOp};
-    use silt_log::{Content, FileView};
     use silt_types::{DeltaSpan, Lamport};
 
     use super::*;
-
-    /// A file created and then typed into, one character per delta.
-    fn typed(characters: usize) -> Vec<Delta> {
-        let thread = ThreadId(1);
-        let mut family = Family::new();
-        let mut stored = Vec::new();
-        let mut write = |family: &mut Family, op: Op| {
-            let delta = family.delta(ActorId(1), thread, Author::User, 0, family.thread_head(thread), op);
-            family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
-            stored.push(delta);
-        };
-        let create = Op::Create {
-            kind: InodeKind::File,
-            parent: Parent::Root,
-            name: "a".into(),
-            content: Content::Empty,
-            executable: false,
-        };
-        write(&mut family, create);
-        let inode = InodeId(family.log()[0].span.first());
-        for pos in 0..characters {
-            write(&mut family, Op::Text { inode, op: TextOp::Insert { pos, content: "x".into() } });
-        }
-        stored
-    }
-
-    fn text(family: &Family) -> Option<FileView> {
-        family.file(InodeId(family.log()[0].span.first()))
-    }
-
-    #[test]
-    fn a_family_starts_from_its_snapshot_and_applies_what_came_after() {
-        let stored = typed(20);
-        let (partway, _) = replay(None, &stored[..12], &mut HashMap::new());
-        let snapshot = Snapshot { format: SNAPSHOT_FORMAT, covers: 12, data: partway.snapshot().expect("encodes") };
-        let (restored, covered) = replay(Some(&snapshot), &stored, &mut HashMap::new());
-        let (replayed, nothing) = replay(None, &stored, &mut HashMap::new());
-        assert_eq!((covered, nothing), (12, 0));
-        assert_eq!(restored.log(), replayed.log());
-        assert_eq!(text(&restored), Some(FileView::Text("x".repeat(20))));
-    }
-
-    #[test]
-    fn a_snapshot_that_does_not_fit_is_replayed_instead() {
-        let stored = typed(3);
-        let (other, _) = replay(None, &typed(5), &mut HashMap::new());
-        let foreign = Snapshot { format: SNAPSHOT_FORMAT, covers: 6, data: other.snapshot().expect("encodes") };
-        let (partway, _) = replay(None, &stored[..2], &mut HashMap::new());
-        let later_format = Snapshot { format: SNAPSHOT_FORMAT + 1, covers: 2, data: partway.snapshot().expect("encodes") };
-        let garbage = Snapshot { format: SNAPSHOT_FORMAT, covers: 2, data: b"not a snapshot".to_vec() };
-        for snapshot in [foreign, later_format, garbage] {
-            let (family, covered) = replay(Some(&snapshot), &stored, &mut HashMap::new());
-            assert_eq!(covered, 0);
-            assert_eq!(text(&family), Some(FileView::Text("xxx".into())));
-        }
-    }
 
     #[test]
     fn a_rescan_looks_at_what_changed_and_what_may_be_gone() {

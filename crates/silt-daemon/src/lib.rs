@@ -8,6 +8,7 @@ mod forks;
 mod history;
 mod lifecycle;
 mod live;
+mod load;
 pub mod paths;
 pub mod protocol;
 mod recovery;
