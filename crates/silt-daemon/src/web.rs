@@ -101,6 +101,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/me/notifications", get(notification_settings).put(notification_setting))
         .route("/api/devices", get(devices))
         .route("/api/pair", post(pair_phone))
+        .route("/api/threads/{id}/links", get(thread_links).post(thread_link))
+        .route("/api/threads/{id}/links/{link}/revoke", post(thread_link_revoke))
         .route("/api/devices/{id}", axum::routing::patch(device_change))
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
@@ -495,6 +497,22 @@ async fn notification_settings(State(web): State<Web>) -> HttpResponse {
 
 async fn notification_setting(State(web): State<Web>, Json(setting): Json<silt_proto::KindSetting>) -> HttpResponse {
     ask(&web, Request::NotificationSetting { setting }).await
+}
+
+async fn thread_links(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadLinks { thread }).await
+}
+
+async fn thread_link(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(link): Json<crate::protocol::NewLink>,
+) -> HttpResponse {
+    ask(&web, Request::ThreadLink { thread, link }).await
+}
+
+async fn thread_link_revoke(State(web): State<Web>, Path((thread, link)): Path<(String, i64)>) -> HttpResponse {
+    ask(&web, Request::ThreadLinkRevoke { thread, link }).await
 }
 
 async fn pair_phone(State(web): State<Web>) -> HttpResponse {

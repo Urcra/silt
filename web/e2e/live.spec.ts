@@ -410,6 +410,31 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await machine.context().close()
 })
 
+test('a read-only link opens the conversation without signing in, until revoked', async ({ browser }) => {
+  const owner = await (await browser.newContext()).newPage()
+  await owner.goto(live.alice)
+  await owner.goto(new URL(`/t/${live.thread}`, live.alice).toString())
+  await owner.getByRole('button', { name: 'Share' }).click()
+  const links = owner.getByRole('region', { name: 'read-only links' })
+  await links.getByLabel('link lasts').selectOption('1')
+  await links.getByRole('button', { name: 'Make a link' }).click()
+  const url = (await links.getByTestId('new-link').textContent()) ?? ''
+  expect(url).toContain('/r/')
+
+  const anyone = await (await browser.newContext()).newPage()
+  await anyone.goto(url)
+  await expect(anyone.getByText('Please add a farewell line to main').first()).toBeVisible()
+  await expect(anyone.getByText('Turn 1')).toBeVisible()
+
+  await links.getByRole('button', { name: 'Revoke' }).first().click()
+  await expect(async () => {
+    await anyone.reload()
+    await expect(anyone.getByRole('heading', { name: 'Not available' })).toBeVisible({ timeout: 1_000 })
+  }).toPass({ timeout: 10_000 })
+  await owner.context().close()
+  await anyone.context().close()
+})
+
 test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
   const hosted = await (await browser.newContext()).newPage()
   await hosted.goto(`${live.server}/app/t/${live.thread}`)

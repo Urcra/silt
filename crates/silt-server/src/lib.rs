@@ -42,6 +42,7 @@ mod git;
 mod inbox;
 mod index;
 mod lifecycle;
+mod links;
 mod me;
 mod orgs;
 mod pages;
@@ -177,6 +178,8 @@ struct Shared {
     writes: Mutex<()>,
     /// Signs Web Push requests (ADR 0028).
     vapid: web_push_native::jwt_simple::algorithms::ES256KeyPair,
+    /// When read-only link tokens opened nothing, lately (ADR 0027).
+    link_misses: std::sync::Mutex<Vec<std::time::Instant>>,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
 }
@@ -248,6 +251,7 @@ impl Server {
                 control: control::Control::default(),
                 writes: Mutex::new(()),
                 vapid,
+                link_misses: std::sync::Mutex::new(Vec::new()),
                 passwords: accounts::PasswordChecks::default(),
                 config,
                 http,
@@ -301,6 +305,7 @@ impl Server {
             .merge(devices::routes())
             .merge(relayed::device_routes())
             .merge(pairing::device_routes())
+            .merge(links::device_routes())
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -319,7 +324,8 @@ impl Server {
             .route("/signup", get(pages::signup_page).post(pages::signup))
             .route("/auth/{provider}/start", get(pages::provider_start))
             .route("/auth/{provider}/callback", get(pages::provider_callback))
-            .merge(pairing::page_routes());
+            .merge(pairing::page_routes())
+            .merge(links::page_routes());
         Router::new()
             .merge(api)
             .merge(pages)
@@ -850,6 +856,12 @@ async fn set_visibility(
                     .rows_affected();
             if updated == 0 {
                 return Err(forbidden("only the thread's owner can change its visibility"));
+            }
+            if body.visibility == silt_proto::Visibility::Private {
+                let now = now_ms();
+                sqlx::query!("UPDATE thread_links SET revoked_ms = ? WHERE thread_id = ? AND revoked_ms IS NULL", now, thread)
+                    .execute(db)
+                    .await?;
             }
         }
         _ => return Err(bad_request("give either a repository or a thread")),

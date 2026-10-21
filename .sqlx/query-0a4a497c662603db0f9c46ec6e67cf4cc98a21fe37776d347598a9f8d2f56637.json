@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE thread_links SET revoked_ms = ? WHERE thread_id = ? AND revoked_ms IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0a4a497c662603db0f9c46ec6e67cf4cc98a21fe37776d347598a9f8d2f56637"
+}

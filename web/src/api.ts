@@ -19,6 +19,7 @@ import type {
   Mine,
   MrDetails,
   MrSummary,
+  NewLink,
   OrgChange,
   OrgInfo,
   PhonePairing,
@@ -32,6 +33,7 @@ import type {
   SearchResult,
   StartOptions,
   StateChange,
+  ThreadLink,
   ThreadSummary,
   TurnInfo,
 } from './api.generated'
@@ -135,6 +137,9 @@ export const api = {
   orgChange: (change: OrgChange) => request<string>('POST', '/api/orgs/change', change),
   devices: () => request<DeviceView[]>('GET', '/api/devices'),
   pairPhone: () => request<PhonePairing>('POST', '/api/pair'),
+  links: (id: string) => request<ThreadLink[]>('GET', `${thread(id)}/links`),
+  makeLink: (id: string, link: NewLink) => request<ThreadLink>('POST', `${thread(id)}/links`, link),
+  revokeLink: (id: string, link: number) => request<null>('POST', `${thread(id)}/links/${link}/revoke`),
   changeDevice: (id: string, change: DeviceChange) =>
     request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}`, change),
   revokeDevice: (id: string) => request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke`),

@@ -19,13 +19,17 @@ export type Startable = { id: string, name: string, };
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
-export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
+export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "links", org: string, on: boolean, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
 
 export type OrgInfo = { name: string, role: OrgRole, 
 /**
  * The caller owns it or administers the server.
  */
-may_change: boolean, default_visibility: Visibility, members: Array<OrgMember>, teams: Array<TeamInfo>, projects: Array<string>, };
+may_change: boolean, default_visibility: Visibility, members: Array<OrgMember>, teams: Array<TeamInfo>, projects: Array<string>, 
+/**
+ * Its threads may have read-only links.
+ */
+links: boolean, };
 
 export type OrgMember = { user: string, role: OrgRole, };
 
@@ -153,6 +157,18 @@ url: string,
  * The QR code, as an SVG image.
  */
 qr_svg: string, expires_ms: number, };
+
+export type NewLink = { days: number, frozen: boolean, };
+
+export type ThreadLink = { id: number, created_ms: number, expires_ms: number, 
+/**
+ * Shows the thread as it was when made, not as it goes on.
+ */
+frozen: boolean, revoked: boolean, 
+/**
+ * Only when just made: the server keeps no copy of the token.
+ */
+url: string | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 

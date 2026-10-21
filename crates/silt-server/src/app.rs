@@ -51,6 +51,7 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
         .merge(crate::writes::routes())
         .merge(crate::push::browser_routes())
         .merge(crate::pairing::browser_routes())
+        .merge(crate::links::browser_routes())
         // Not the page: the app would read it as an empty answer.
         .route(
             "/app/api/{*rest}",

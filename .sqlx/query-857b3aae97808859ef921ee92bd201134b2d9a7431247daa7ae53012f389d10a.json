@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT l.thread_id, l.created_ms, l.expires_ms, l.frozen_at, l.revoked_ms,\n             t.family_id, t.deleted_ms, t.visibility, u.name AS owner\n         FROM thread_links l JOIN threads t ON t.id = l.thread_id JOIN users u ON u.id = l.owner_id\n         WHERE l.token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "expires_ms",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "expires_ms"
+          }
+        }
+      },
+      {
+        "name": "frozen_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "frozen_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_ms",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "revoked_ms"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 5,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "deleted_ms",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "deleted_ms"
+          }
+        }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "name": "owner",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "857b3aae97808859ef921ee92bd201134b2d9a7431247daa7ae53012f389d10a"
+}

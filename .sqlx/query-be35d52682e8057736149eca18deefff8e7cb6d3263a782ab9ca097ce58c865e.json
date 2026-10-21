@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE orgs SET links = ?, links_off_ms = CASE WHEN ? THEN links_off_ms ELSE ? END WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "be35d52682e8057736149eca18deefff8e7cb6d3263a782ab9ca097ce58c865e"
+}

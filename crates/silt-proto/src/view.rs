@@ -410,6 +410,30 @@ pub struct DeviceAgent {
     pub state: AgentState,
 }
 
+/// A read-only link to a thread (ADR 0027).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ThreadLink {
+    pub id: i64,
+    pub created_ms: i64,
+    pub expires_ms: i64,
+    /// Shows the thread as it was when made, not as it goes on.
+    pub frozen: bool,
+    pub revoked: bool,
+    /// Only when just made: the server keeps no copy of the token.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// What a new link is: for how many days (1, 7 or 30), and whether frozen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NewLink {
+    pub days: u32,
+    #[serde(default)]
+    pub frozen: bool,
+}
+
 /// A one-time code that signs a phone in (ADR 0028), to show as a QR code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

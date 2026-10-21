@@ -122,7 +122,7 @@ impl Readable {
 }
 
 /// A thread's own history entries, each with the delta it came from.
-fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
+pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
     let mut transcripts = Transcripts::default();
     let mut out = Vec::new();
     for delta in log.iter().filter(|delta| delta.thread == thread) {
@@ -163,7 +163,7 @@ fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
 }
 
 /// The title it was given, or else the first line of its first prompt.
-fn title(own: &[&Delta], history: &[(DeltaId, HistoryEntry)]) -> Option<String> {
+pub(crate) fn title(own: &[&Delta], history: &[(DeltaId, HistoryEntry)]) -> Option<String> {
     let given = own.iter().rev().find_map(|delta| match &delta.op {
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,

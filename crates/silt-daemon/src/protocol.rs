@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
     CommentLocation, CommentOn, CommentView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit, HistoryEntry,
-    HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, Project, ReplyView, SearchFilters, SearchResult,
-    ShowLine, StateChange, ThreadSummary, TurnInfo,
+    HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink, Project, ReplyView, SearchFilters,
+    SearchResult, ShowLine, StateChange, ThreadLink, ThreadSummary, TurnInfo,
 };
 
 /// One request per line on the daemon socket, answered by one response line.
@@ -295,6 +295,18 @@ pub enum Request {
     },
     /// A one-time code that signs a phone in to the server's web app.
     PairPhone,
+    /// The thread's read-only links (ADR 0027), on the server.
+    ThreadLinks {
+        thread: String,
+    },
+    ThreadLink {
+        thread: String,
+        link: NewLink,
+    },
+    ThreadLinkRevoke {
+        thread: String,
+        link: i64,
+    },
     /// The person's devices, on the server.
     Devices,
     DeviceChange {
@@ -848,6 +860,8 @@ mod tests {
             DeviceChange::decl(&config),
             DeviceView::decl(&config),
             silt_proto::view::PhonePairing::decl(&config),
+            NewLink::decl(&config),
+            ThreadLink::decl(&config),
             FileEdit::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),

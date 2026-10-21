@@ -302,6 +302,26 @@ impl Remote {
         Ok(())
     }
 
+    pub async fn links(&self, thread: ThreadId) -> Result<Vec<silt_proto::view::ThreadLink>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, &format!("/v1/threads/{thread}/links")).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn make_link(
+        &self,
+        thread: ThreadId,
+        new: &silt_proto::view::NewLink,
+    ) -> Result<silt_proto::view::ThreadLink, RemoteError> {
+        let response = self.request(reqwest::Method::POST, &format!("/v1/threads/{thread}/links")).json(new).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn revoke_link(&self, thread: ThreadId, link: i64) -> Result<(), RemoteError> {
+        let path = format!("/v1/threads/{thread}/links/{link}/revoke");
+        checked(self.request(reqwest::Method::POST, &path).send().await?).await?;
+        Ok(())
+    }
+
     pub async fn share(&self, thread: ThreadId, user: &str, remove: bool) -> Result<(), RemoteError> {
         let request = ShareRequest { user: user.to_owned(), remove };
         let response =

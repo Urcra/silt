@@ -1047,6 +1047,89 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
 }
 
 #[tokio::test]
+async fn a_read_only_link_shows_the_conversation_to_anyone_until_it_stops() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Org).await;
+    let said = |family: &mut Family, text: &str| {
+        let line = serde_json::json!({ "type": "user", "message": { "role": "user", "content": text } }).to_string();
+        let op = Op::Conv(ConvOp::Native {
+            session: SessionRef { agent: "claude-code".into(), id: "s".into() },
+            file: SessionFile::Main,
+            line,
+        });
+        applied(family, family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op))
+    };
+    let first = said(&mut world.family, "Tidy the <parser>");
+    assert_eq!(world.alice.push(vec![first]).await, StatusCode::OK);
+
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let links = format!("/threads/{THREAD}/links");
+    let bob = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1, "bob").await;
+    assert_eq!(
+        bob.post(&links, serde_json::json!({ "days": 7 })).await.0,
+        StatusCode::FORBIDDEN,
+        "only the owner shares by link"
+    );
+    assert_eq!(alice.post(&links, serde_json::json!({ "days": 3 })).await.0, StatusCode::BAD_REQUEST);
+    let (status, following) = alice.post(&links, serde_json::json!({ "days": 7 })).await;
+    assert_eq!(status, StatusCode::OK, "{following}");
+    let (_, frozen) = alice.post(&links, serde_json::json!({ "days": 1, "frozen": true })).await;
+    let path = |link: &serde_json::Value| {
+        let url = link["url"].as_str().expect("a url");
+        url[url.find("/r/").expect("a link path")..].to_owned()
+    };
+    let (following, frozen) = (path(&following), path(&frozen));
+
+    let anyone = reqwest::Client::new();
+    let open = |path: String| {
+        let (anyone, base) = (anyone.clone(), alice.base.clone());
+        async move { anyone.get(format!("{base}{path}")).send().await.expect("sends") }
+    };
+    let page = open(following.clone()).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()["cache-control"], "no-store");
+    assert_eq!(page.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(page.headers()["x-robots-tag"], "noindex");
+    let html = page.text().await.expect("html");
+    assert!(html.contains("Tidy the &lt;parser&gt;") && html.contains("Turn 1"), "escaped, with turns: {html}");
+    assert!(!html.contains("app/api"), "a link opens no API");
+
+    let second = said(&mut world.family, "Now the lexer");
+    assert_eq!(world.alice.push(vec![second]).await, StatusCode::OK);
+    assert!(open(following.clone()).await.text().await.expect("html").contains("Now the lexer"), "a following link goes on");
+    let frozen_html = open(frozen.clone()).await.text().await.expect("html");
+    assert!(!frozen_html.contains("Now the lexer") && frozen_html.contains("as it was at"), "a frozen link stays: {frozen_html}");
+
+    let listed = alice.get(&links).await.1.as_array().expect("a list").clone();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|link| link["url"].is_null()), "the server keeps no token to show again");
+    let frozen_id = listed.iter().find(|link| link["frozen"] == true).expect("the frozen one")["id"].as_i64().expect("an id");
+    assert_eq!(alice.post(&format!("{links}/{frozen_id}/revoke"), serde_json::json!({})).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(open(frozen).await.status(), StatusCode::NOT_FOUND, "revoked at once");
+    assert_eq!(open("/r/nonsense".into()).await.status(), StatusCode::NOT_FOUND);
+
+    // The org's owners turn links off: every one made so far stops for good.
+    let links_on = |on: bool| silt_proto::OrgChange::Links { org: "acme".into(), on };
+    assert_eq!(world.alice.change(links_on(false)).await, StatusCode::NO_CONTENT);
+    assert_eq!(open(following.clone()).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(alice.post(&links, serde_json::json!({ "days": 7 })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(world.alice.change(links_on(true)).await, StatusCode::NO_CONTENT);
+    assert_eq!(open(following).await.status(), StatusCode::NOT_FOUND, "turning links on again brings none back");
+    let (_, fresh) = alice.post(&links, serde_json::json!({ "days": 7 })).await;
+    let fresh = path(&fresh);
+    assert_eq!(open(fresh.clone()).await.status(), StatusCode::OK);
+
+    let private = VisibilityRequest { repo: None, thread: Some(THREAD), visibility: Visibility::Private };
+    assert_eq!(world.alice.send(world.alice.request(Method::PUT, "/v1/visibility").json(&private)).await, StatusCode::NO_CONTENT);
+    assert_eq!(open(fresh).await.status(), StatusCode::NOT_FOUND, "making the thread private ends its links");
+
+    for _ in 0..30 {
+        open("/r/a-guess".into()).await;
+    }
+    assert_eq!(open("/r/a-guess".into()).await.status(), StatusCode::TOO_MANY_REQUESTS, "guessing tokens pauses the page");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

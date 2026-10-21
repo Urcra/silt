@@ -325,6 +325,16 @@ enum ThreadCommand {
         #[arg(long)]
         remove: bool,
     },
+    /// Make a read-only link to a thread of yours, for anyone holding it
+    Link {
+        thread: String,
+        /// How long it works: 1, 7 or 30 days
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+        /// Show the thread as it is now, not as it goes on
+        #[arg(long)]
+        frozen: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -603,6 +613,7 @@ fn run() -> Result<(), Exn<CliError>> {
             ThreadCommand::Share { thread, user, remove } => {
                 commands::thread_change(Request::ThreadShare { thread, user, remove })
             }
+            ThreadCommand::Link { thread, days, frozen } => commands::thread_link(thread, days, frozen),
         },
         Command::Inbox { all, command } => match command {
             None => commands::inbox(all),

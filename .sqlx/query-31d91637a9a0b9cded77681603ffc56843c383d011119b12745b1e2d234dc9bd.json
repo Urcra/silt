@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, created_ms, expires_ms, frozen_at, revoked_ms FROM thread_links WHERE thread_id = ? ORDER BY created_ms DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "expires_ms",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "expires_ms"
+          }
+        }
+      },
+      {
+        "name": "frozen_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "frozen_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_ms",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "revoked_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "31d91637a9a0b9cded77681603ffc56843c383d011119b12745b1e2d234dc9bd"
+}

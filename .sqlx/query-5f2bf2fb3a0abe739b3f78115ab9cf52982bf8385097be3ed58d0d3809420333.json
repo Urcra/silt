@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT o.id AS \"id!\", o.name, o.default_visibility, m.role AS \"role?\" FROM orgs o\n         LEFT JOIN org_members m ON m.org_id = o.id AND m.user_id = ?\n         ORDER BY o.name",
+  "query": "SELECT o.id AS \"id!\", o.name, o.default_visibility, o.links AS \"links: bool\", m.role AS \"role?\" FROM orgs o\n         LEFT JOIN org_members m ON m.org_id = o.id AND m.user_id = ?\n         ORDER BY o.name",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,19 @@
         }
       },
       {
-        "name": "role?",
+        "name": "links: bool",
         "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "orgs",
+            "name": "links"
+          }
+        }
+      },
+      {
+        "name": "role?",
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -55,8 +66,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "91861d56e150998add316a44ed873161811e4fc11f11262ae034e3659fb13dc0"
+  "hash": "5f2bf2fb3a0abe739b3f78115ab9cf52982bf8385097be3ed58d0d3809420333"
 }

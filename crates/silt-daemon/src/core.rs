@@ -521,6 +521,11 @@ impl Core {
             Request::Orgs => return answer_later(reply, self.orgs()),
             Request::Devices => return answer_later(reply, self.devices()),
             Request::PairPhone => return answer_later(reply, self.pair_phone()),
+            Request::ThreadLinks { thread } => return answer_later(reply, self.thread_links(&thread, None, None)),
+            Request::ThreadLink { thread, link } => return answer_later(reply, self.thread_links(&thread, Some(link), None)),
+            Request::ThreadLinkRevoke { thread, link } => {
+                return answer_later(reply, self.thread_links(&thread, None, Some(link)));
+            }
             Request::NotificationSettings => return answer_later(reply, self.notification_settings(None)),
             Request::NotificationSetting { setting } => return answer_later(reply, self.notification_settings(Some(setting))),
             Request::DeviceChange { id, change } => return answer_later(reply, self.device_change(id, change)),

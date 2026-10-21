@@ -1,8 +1,72 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, type ThreadSummary } from '../api'
+import { useNow } from '../now'
 import { keys, message } from '../query'
 import { Button, Dialog, Input, Select } from '../ui'
+
+/** Read-only links to the thread, for anyone holding one (ADR 0027); only its owner has them. */
+function Links({ thread }: { thread: string }) {
+  const links = useQuery({ queryKey: keys.links(thread), queryFn: () => api.links(thread), retry: false })
+  const queries = useQueryClient()
+  const [days, setDays] = useState(7)
+  const [frozen, setFrozen] = useState(false)
+  const [made, setMade] = useState<string>()
+  const [error, setError] = useState<string>()
+  const now = useNow()
+  if (links.error) return null
+  const refresh = () => queries.invalidateQueries({ queryKey: keys.links(thread) })
+  return (
+    <section aria-label="read-only links" className="space-y-2">
+      <p className="text-xs text-fg-2">Read-only links: anyone holding one reads the conversation until it expires or you revoke it.</p>
+      <ul className="space-y-1">
+        {(links.data ?? [])
+          .filter((link) => !link.revoked && Number(link.expires_ms) > now)
+          .map((link) => (
+            <li key={link.id} className="flex items-center gap-2 text-xs">
+              <span>
+                {link.frozen ? 'Frozen' : 'Following'}, until {new Date(Number(link.expires_ms)).toLocaleDateString()}
+              </span>
+              <Button variant="ghost" className="ml-auto" onClick={() => void api.revokeLink(thread, link.id).then(refresh)}>
+                Revoke
+              </Button>
+            </li>
+          ))}
+      </ul>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setError(undefined)
+          void api.makeLink(thread, { days, frozen }).then(
+            (link) => {
+              setMade(link.url ?? undefined)
+              return refresh()
+            },
+            (failure: unknown) => setError(message(failure)),
+          )
+        }}
+      >
+        <Select aria-label="link lasts" value={days} onChange={(event) => setDays(Number(event.target.value))}>
+          <option value={1}>A day</option>
+          <option value={7}>A week</option>
+          <option value={30}>30 days</option>
+        </Select>
+        <label className="flex items-center gap-1 text-xs">
+          <input type="checkbox" checked={frozen} onChange={(event) => setFrozen(event.target.checked)} />
+          As it is now
+        </label>
+        <Button type="submit">Make a link</Button>
+      </form>
+      {made && (
+        <p className="break-all rounded bg-surface-2 p-2 font-mono text-xs" data-testid="new-link">
+          {made}
+        </p>
+      )}
+      {error && <p className="text-xs text-danger">{error}</p>}
+    </section>
+  )
+}
 
 /** Who sees the thread and who may write into it (ADR 0013, ADR 0014). */
 export function ShareDialog({ thread }: { thread: ThreadSummary }) {
@@ -88,6 +152,7 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
                 </Button>
               </form>
             </div>
+            <Links thread={thread.id} />
             {error && <p className="text-xs text-danger">{error}</p>}
           </div>
         )}

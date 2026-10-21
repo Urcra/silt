@@ -123,7 +123,7 @@ pub(crate) async fn list(
     let db = server.db();
     let admin = is_admin(db, caller.user).await?;
     let rows = sqlx::query!(
-        r#"SELECT o.id AS "id!", o.name, o.default_visibility, m.role AS "role?" FROM orgs o
+        r#"SELECT o.id AS "id!", o.name, o.default_visibility, o.links AS "links: bool", m.role AS "role?" FROM orgs o
          LEFT JOIN org_members m ON m.org_id = o.id AND m.user_id = ?
          ORDER BY o.name"#,
         caller.user,
@@ -168,6 +168,7 @@ pub(crate) async fn list(
             members,
             teams,
             projects,
+            links: row.links,
         });
     }
     Ok(Json(OrgsReply { orgs }))
@@ -270,6 +271,21 @@ pub(crate) async fn change(
             }
             let visibility = visibility.to_string();
             sqlx::query!("UPDATE orgs SET default_visibility = ? WHERE id = ?", visibility, org_id).execute(db).await?;
+        }
+        OrgChange::Links { org, on } => {
+            let org_id = org_id(db, &org).await?;
+            require_owner(db, org_id, caller.user).await?;
+            // Turned off, every link of the org's threads made until now stops for good.
+            let now = now_ms();
+            sqlx::query!(
+                "UPDATE orgs SET links = ?, links_off_ms = CASE WHEN ? THEN links_off_ms ELSE ? END WHERE id = ?",
+                on,
+                on,
+                now,
+                org_id
+            )
+            .execute(db)
+            .await?;
         }
         OrgChange::MoveProject { repo, org } => {
             let target = org_id(db, &org).await?;

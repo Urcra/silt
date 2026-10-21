@@ -580,6 +580,9 @@ pub struct OrgInfo {
     pub members: Vec<OrgMember>,
     pub teams: Vec<TeamInfo>,
     pub projects: Vec<String>,
+    /// Its threads may have read-only links.
+    #[serde(default)]
+    pub links: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -782,6 +785,11 @@ pub enum OrgChange {
     DefaultVisibility {
         org: String,
         visibility: Visibility,
+    },
+    /// Whether the org's threads may have read-only links (ADR 0027).
+    Links {
+        org: String,
+        on: bool,
     },
     /// Moves the project (a normalized remote) into `org`.
     MoveProject {

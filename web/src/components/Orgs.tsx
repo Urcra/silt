@@ -64,6 +64,17 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
             ))}
           </Select>
         </label>
+        <label className="flex items-center gap-1 text-xs text-fg-2" title="Turned off, every link made until then stops for good">
+          <input
+            type="checkbox"
+            disabled={!owns}
+            checked={org.links}
+            onChange={(event) =>
+              void change({ change: 'links', org: org.name, on: event.target.checked }, event.target.checked ? 'Links allowed' : 'Links stopped')
+            }
+          />
+          Read-only links
+        </label>
       </div>
 
       <div>

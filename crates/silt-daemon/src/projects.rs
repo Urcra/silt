@@ -144,6 +144,30 @@ impl Core {
         })
     }
 
+    /// The thread's read-only links on the server, a new one when `new`
+    /// says, or with `revoke` revoked (ADR 0027).
+    pub(crate) fn thread_links(
+        &self,
+        selector: &str,
+        new: Option<crate::protocol::NewLink>,
+        revoke: Option<i64>,
+    ) -> Result<impl Future<Output = Result<serde_json::Value, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        let thread = self.find_thread(selector)?;
+        Ok(async move {
+            let server = |source| CoreError::Server { doing: "share the thread by link", source };
+            let answer = match (new, revoke) {
+                (Some(new), _) => serde_json::to_value(remote.make_link(thread, &new).await.map_err(server)?),
+                (None, Some(link)) => {
+                    remote.revoke_link(thread, link).await.map_err(server)?;
+                    serde_json::to_value("revoked")
+                }
+                (None, None) => serde_json::to_value(remote.links(thread).await.map_err(server)?),
+            };
+            answer.map_err(|error| CoreError::Invalid(error.to_string()))
+        })
+    }
+
     pub(crate) fn pair_phone(
         &self,
     ) -> Result<impl Future<Output = Result<silt_proto::view::PhonePairing, CoreError>> + Send + 'static, CoreError> {

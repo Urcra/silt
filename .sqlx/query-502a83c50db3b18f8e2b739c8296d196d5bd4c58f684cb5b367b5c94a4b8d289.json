@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT o.links AS \"links: bool\", o.links_off_ms FROM threads t\n         JOIN projects p ON p.repo = t.repo JOIN orgs o ON o.id = p.org_id WHERE t.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "links: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "orgs",
+            "name": "links"
+          }
+        }
+      },
+      {
+        "name": "links_off_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "orgs",
+            "name": "links_off_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "502a83c50db3b18f8e2b739c8296d196d5bd4c58f684cb5b367b5c94a4b8d289"
+}
