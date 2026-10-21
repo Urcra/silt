@@ -35,6 +35,7 @@ hook() {
 printf '%s\n' '{"type":"ai-title","aiTitle":"Add a greeting","sessionId":"x"}' >> "$transcript"
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"Please add a farewell line to main"}}' >> "$transcript"
 hook UserPromptSubmit
+sleep "${FAKE_PAUSE:-0}"
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Adding it now."},{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"src/main.rs"}}]}}' >> "$transcript"
 hook PreToolUse
 printf 'fn farewell() {}\n' >> src/main.rs
@@ -211,6 +212,21 @@ fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
     assert!(show.contains("> Please add a farewell line to main") && show.contains("Done: farewell added."), "{show}");
     assert!(!show.contains("outside tool calls"), "{show}");
     assert!(env.stdout(&["diff", &thread, "--turn", "1"]).contains("+fn farewell() {}"));
+}
+
+#[test]
+fn the_agent_starts_without_waiting_for_the_daemon_which_takes_over_once_it_answers() {
+    let env = Env::new();
+    let ran = env.run_with(&["claude"], &[("FAKE_PAUSE", "5")]);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    assert!(env.stdout(&["daemon", "status"]).starts_with("running"), "the wrapper started the daemon");
+    let log = fs::read_to_string(env.silt_home.join("daemon.log")).expect("daemon log");
+    assert!(log.contains("took over recording"), "the daemon took the session over mid-turn: {log}");
+
+    let thread = env.thread();
+    let show = env.stdout(&["show", &thread]);
+    assert!(show.contains("src/main.rs +17 -0") && !show.contains("outside tool calls"), "{show}");
+    assert!(show.contains("Done: farewell added."), "{show}");
 }
 
 #[test]

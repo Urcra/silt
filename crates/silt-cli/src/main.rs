@@ -1,6 +1,7 @@
 mod admin;
 mod commands;
 mod mcp;
+mod recording;
 mod render;
 
 use std::path::PathBuf;

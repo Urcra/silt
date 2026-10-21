@@ -419,7 +419,9 @@ fn turn_marks_say_which_tool_is_open_and_which_were_recorded() {
     let started = |id: &str| TurnMark::ToolStarted { tool_use_id: id.into(), tool: "Edit".into() };
     let finished = |id: &str| TurnMark::ToolFinished { tool_use_id: id.into() };
 
+    assert!(!family.in_turn(&session));
     mark(&mut family, TurnMark::PromptSubmitted);
+    assert!(family.in_turn(&session));
     assert_eq!(family.open_tool(&session), None);
     assert!(family.has_turn_mark(&session, &TurnMark::PromptSubmitted), "the same prompt mark again is a repeat");
     mark(&mut family, started("t1"));
@@ -435,6 +437,7 @@ fn turn_marks_say_which_tool_is_open_and_which_were_recorded() {
     assert_eq!(family.open_tool(&session), Some("t2"), "another tool finishing leaves this one open");
     mark(&mut family, TurnMark::Stopped);
     assert_eq!(family.open_tool(&session), None, "the turn's end closes it");
+    assert!(!family.in_turn(&session));
     let other = SessionRef { agent: "claude-code".into(), id: "other".into() };
     assert!(!family.has_turn_mark(&other, &started("t1")));
 }

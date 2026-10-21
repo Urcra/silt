@@ -41,6 +41,10 @@ impl Turns {
         self.open_tool.as_deref()
     }
 
+    pub(super) fn in_turn(&self) -> bool {
+        self.last.as_ref().is_some_and(|mark| *mark != TurnMark::Stopped)
+    }
+
     /// Whether `mark` is one already recorded: a tool's start or finish
     /// seen before, or a prompt or stop right after the same.
     pub(super) fn has(&self, mark: &TurnMark) -> bool {

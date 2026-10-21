@@ -200,6 +200,9 @@ pub struct Core {
     /// checkouts, rather than a hook or wrapper holding only its own
     /// family and watching nothing (ADR 0018).
     pub(crate) resident: bool,
+    /// Threads a wrapper recorded on its own until this daemon took them
+    /// over.
+    pub(crate) adopted: HashSet<ThreadId>,
 }
 
 /// Reads git blobs for lazily imported files.
@@ -347,6 +350,7 @@ impl Core {
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
             resident,
+            adopted: HashSet::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -376,6 +380,10 @@ impl Core {
             Request::Hook { event, input } => self.hook(&event, input).await,
             Request::EndSession { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.end_session(thread).await),
+                Err(error) => Response::error(error),
+            },
+            Request::Adopt { thread } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.adopt(thread).await),
                 Err(error) => Response::error(error),
             },
             Request::Threads => Response::ok(self.thread_summaries()),
@@ -481,6 +489,9 @@ impl Core {
     }
 
     pub async fn changed(&mut self, checkout: CheckoutId, paths: Vec<PathBuf>, noticed: Instant, settled: bool) {
+        if self.checkouts.get(&checkout).is_some_and(|checkout| self.recorded_elsewhere(checkout.record.thread)) {
+            return;
+        }
         if !settled && self.marks_from_transcripts(checkout) {
             self.settle_changes(checkout, paths, noticed);
             return;
@@ -502,7 +513,9 @@ impl Core {
         let ids: Vec<String> = self
             .sessions
             .iter()
-            .filter(|session| session.live || sessions::transcript_grew(session))
+            .filter(|session| {
+                (session.live || sessions::transcript_grew(session)) && !self.recorded_elsewhere(session.record.thread)
+            })
             .map(|session| session.record.session_id.clone())
             .collect();
         for id in ids {
@@ -510,6 +523,12 @@ impl Core {
                 warn!(%error, session = id, "could not read the session transcript");
             }
         }
+    }
+
+    /// Whether a wrapper records the thread on its own, so its changes and
+    /// transcripts are left to it.
+    fn recorded_elsewhere(&self, thread: ThreadId) -> bool {
+        !self.adopted.contains(&thread) && crate::capture_lock::RecordingLock::held(&self.data_dir, thread)
     }
 
     pub(crate) fn start_checkout(

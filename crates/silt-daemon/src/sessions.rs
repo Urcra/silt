@@ -609,6 +609,7 @@ impl Core {
     /// The agent in `thread` exited: find its session if it is still
     /// unknown, and record what it wrote last.
     pub(crate) async fn end_session(&mut self, thread: ThreadId) -> Result<&'static str, CoreError> {
+        self.adopted.remove(&thread);
         self.find_waiting(thread, Waiting::GiveUp).await?;
         let ids = self.live_sessions(thread, |_| true);
         // Edits still waiting for the transcript are taken in now, while
@@ -636,6 +637,36 @@ impl Core {
             }
         }
         Ok("ended")
+    }
+
+    /// Takes over recording the thread's running agent from its wrapper,
+    /// which recorded it on its own until now: its sessions are live here,
+    /// in the turn the log says, and what changed meanwhile is taken in.
+    pub(crate) async fn adopt(&mut self, thread: ThreadId) -> Result<&'static str, CoreError> {
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|session| session.record.thread == thread)
+            .map(|session| session.record.session_id.clone())
+            .collect();
+        self.adopted.insert(thread);
+        tracing::info!(%thread, "took over recording the agent from its wrapper");
+        let mut checkouts = HashSet::new();
+        for id in &ids {
+            let session = self.session(id).expect("listed above");
+            let in_turn = self.families().get(&session.family).is_some_and(|family| family.in_turn(&session.reference()));
+            let session = self.session_mut(id).expect("listed above");
+            session.live = true;
+            session.in_turn = in_turn;
+            checkouts.insert(session.record.checkout_id);
+            self.tail_session(id).await?;
+        }
+        for checkout in checkouts {
+            if self.checkouts.contains_key(&checkout) {
+                self.rescan(checkout).await?;
+            }
+        }
+        Ok("adopted")
     }
 
     /// The capture step for the thread's agent run by a process that isn't

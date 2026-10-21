@@ -339,6 +339,11 @@ impl Family {
         self.turns.get(session).and_then(Turns::open_tool)
     }
 
+    /// Whether the session's last turn mark leaves a turn going.
+    pub fn in_turn(&self, session: &SessionRef) -> bool {
+        self.turns.get(session).is_some_and(Turns::in_turn)
+    }
+
     /// Whether the session's `mark` is recorded already, so recording it
     /// again would add nothing.
     pub fn has_turn_mark(&self, session: &SessionRef, mark: &TurnMark) -> bool {

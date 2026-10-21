@@ -10,7 +10,7 @@ use silt_store::Store;
 use silt_types::ThreadId;
 
 use crate::capture::turn_in_time;
-use crate::capture_lock::CaptureLock;
+use crate::capture_lock::{CaptureLock, RecordingLock};
 use crate::core::{Core, CoreError};
 use crate::protocol::SessionStarted;
 
@@ -18,6 +18,7 @@ pub struct Recorder {
     core: Core,
     lock: CaptureLock,
     thread: ThreadId,
+    _recording: RecordingLock,
 }
 
 /// The session a wrapper starts, as `Request::StartSession` asks the daemon.
@@ -32,16 +33,21 @@ impl Recorder {
     /// Starts a thread for the agent's session in the clone at `run.cwd`,
     /// for the data in `data_dir`.
     pub async fn start(data_dir: &Path, run: NewRun<'_>) -> Result<(Self, SessionStarted), CoreError> {
+        // The first thing Silt runs on a machine may be this.
+        crate::paths::make_private(data_dir)?;
         let lock = CaptureLock::open(data_dir)?;
         let turn = turn_in_time(&lock).await?;
         let store = Store::open(data_dir).await?;
         let actor = crate::server::load_actor(data_dir)?;
         let mut core = Core::visiting(store, actor, data_dir).await?;
         let started = core.start_session(run.cwd, run.agent, run.session_id, run.isolated, false).await?;
+        let thread = core.find_thread(&started.thread)?;
+        // Before this turn ends, so a daemon catching up never takes the
+        // thread for one it records.
+        let recording = RecordingLock::hold(data_dir, thread)?;
         core.end_turn().await?;
         drop(turn);
-        let thread = core.find_thread(&started.thread)?;
-        Ok((Self { core, lock, thread }, started))
+        Ok((Self { core, lock, thread, _recording: recording }, started))
     }
 
     /// Runs the capture step, when the agent needs one.
@@ -54,6 +60,12 @@ impl Recorder {
         let stepped = self.core.record_step(self.thread).await;
         self.core.end_turn().await?;
         stepped
+    }
+
+    /// Whether the agent's session has been found, so the daemon can take
+    /// it over.
+    pub fn found(&self) -> bool {
+        !self.core.pending.iter().any(|pending| pending.thread == self.thread)
     }
 
     /// Records the session's end, once the agent exited.
