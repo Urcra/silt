@@ -981,7 +981,12 @@ impl Core {
         commit: GitOid,
         known: &[GitOid],
     ) -> Result<(), CoreError> {
-        let Some(bytes) = repo.bundle(commit, known)? else {
+        // Bundling a long history takes git a while; off the event loop.
+        let (root, known_commits) = (repo.root().to_owned(), known.to_vec());
+        let bundled = tokio::task::spawn_blocking(move || Repo::discover(&root)?.bundle(commit, &known_commits))
+            .await
+            .map_err(|error| CoreError::Invalid(format!("bundling failed: {error}")))?;
+        let Some(bytes) = bundled? else {
             return Ok(());
         };
         self.push_to_mirror(family_id, thread, repo, commit);

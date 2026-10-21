@@ -540,7 +540,11 @@ impl Core {
             .collect();
         for token in tokens {
             let pending = self.pending.iter().find(|pending| pending.token == token).expect("listed above");
-            let found = pending.agent.discover(&pending.agent_cwd, pending.since_ms, &known);
+            let (agent, cwd, since, known) = (pending.agent, pending.agent_cwd.clone(), pending.since_ms, known.clone());
+            // Discovery reads the agent's session files; off the event loop.
+            let found = tokio::task::spawn_blocking(move || agent.discover(&cwd, since, &known))
+                .await
+                .unwrap_or_default();
             if found.is_some() {
                 self.discovered(token, found).await;
             }

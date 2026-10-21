@@ -420,7 +420,7 @@ impl Core {
         if target.id() == source.id() {
             let recorded = self.recorded_session(&history, &session, as_fork, target).await?;
             recorded.check()?;
-            let transcript = target.restore(checkout, &agent_cwd, &recorded)?;
+            let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             let new_id = recorded.id.clone();
             self.register_session(NewSession {
                 agent: target,
@@ -460,7 +460,7 @@ impl Core {
                 main: lines.clone(),
                 ..Default::default()
             };
-            let transcript = target.restore(checkout, &agent_cwd, &recorded)?;
+            let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             // Blobs reach the server as they are, so secrets go first.
             let (redacted, found) = self.redactor.replace_found(&lines.join("\n"));
             self.learn_secrets(found);
@@ -626,6 +626,16 @@ impl Core {
         }
         Ok(recorded)
     }
+}
+
+/// Writes a session into the agent's own store, off the event loop: a long
+/// transcript, or OpenCode's import, takes a while.
+async fn restore(agent: &'static dyn Agent, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, CoreError> {
+    let (root, cwd, session) = (root.to_owned(), cwd.to_owned(), session.clone());
+    let written = tokio::task::spawn_blocking(move || agent.restore(&root, &cwd, &session))
+        .await
+        .map_err(|error| CoreError::Invalid(format!("restoring the session failed: {error}")))?;
+    Ok(written?)
 }
 
 /// One page of the family's deltas after server sequence `after`.

@@ -1,5 +1,16 @@
 use silt_crdt::TextOp;
-use similar::{Algorithm, DiffOp, capture_diff_slices};
+use similar::{Algorithm, DiffOp, capture_diff_slices_deadline};
+
+/// How long a diff may search for the smallest edit before settling for a
+/// larger, still correct one: a big file changed throughout would otherwise
+/// hold up the daemon. The browser has no clock to read, so it doesn't stop.
+fn diff_deadline() -> Option<std::time::Instant> {
+    if cfg!(target_arch = "wasm32") {
+        None
+    } else {
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(1))
+    }
+}
 
 /// Edits turning `old` into `new`, to be applied in order; positions count
 /// chars. Lines are diffed first and each changed hunk is then trimmed to
@@ -18,7 +29,7 @@ pub fn text_edits(old: &str, new: &str) -> Vec<TextOp> {
     let new_chars: Vec<char> = new.chars().collect();
 
     let mut hunks = Vec::new();
-    for op in capture_diff_slices(Algorithm::Myers, &old_lines, &new_lines) {
+    for op in capture_diff_slices_deadline(Algorithm::Myers, &old_lines, &new_lines, diff_deadline()) {
         if matches!(op, DiffOp::Equal { .. }) {
             continue;
         }
