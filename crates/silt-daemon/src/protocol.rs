@@ -272,20 +272,24 @@ impl Response {
         Self::Error { message: message.to_string() }
     }
 
-    /// `error` and what caused it, on one line.
     pub fn failure(error: &(dyn std::error::Error + 'static)) -> Self {
-        let mut message = error.to_string();
-        let mut cause = error.source();
-        while let Some(source) = cause {
-            let text = source.to_string();
-            if !message.ends_with(&text) {
-                message.push_str(": ");
-                message.push_str(&text);
-            }
-            cause = source.source();
-        }
-        Self::Error { message }
+        Self::Error { message: error_chain(error) }
     }
+}
+
+/// `error` and what caused it, on one line.
+pub(crate) fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(source) = cause {
+        let text = source.to_string();
+        if !message.ends_with(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        cause = source.source();
+    }
+    message
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

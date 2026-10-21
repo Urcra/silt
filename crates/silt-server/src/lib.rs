@@ -71,20 +71,31 @@ const LARGE_BODY: usize = 512 << 20;
 pub enum ServerError {
     #[error("database error")]
     Database(#[from] sqlx::Error),
-    #[error("could not migrate the database")]
-    Migrate(#[from] sqlx::migrate::MigrateError),
-    #[error("stored delta could not be decoded")]
-    Decode(#[from] postcard::Error),
-    #[error(transparent)]
-    Stored(#[from] silt_log::StoredError),
+    #[error("a delta could not be encoded")]
+    Encode(#[from] postcard::Error),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    #[error("could not set up the HTTP client for sign-in providers")]
-    HttpClient(#[from] reqwest::Error),
+    #[error("could not write JSON")]
+    Json(#[from] serde_json::Error),
     #[error("the deltas kept after a purge no longer fit together")]
     Kept(#[from] PushError),
+}
+
+/// Why the server's data could not be opened.
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("could not create the data directory")]
+    DataDir(#[from] std::io::Error),
+    #[error("could not open the database")]
+    Database(#[from] sqlx::Error),
+    #[error("could not migrate the database")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Stored(#[from] silt_log::StoredError),
+    #[error("could not set up the HTTP client for sign-in providers")]
+    HttpClient(#[from] reqwest::Error),
 }
 
 /// One family's room, locked on its own so families sync independently.
@@ -163,12 +174,12 @@ pub struct Server {
 impl Server {
     /// Opens the server's data in `data_dir` and loads every family. Each
     /// start gets a new generation, so clients re-check what they synced.
-    pub async fn open(data_dir: &Path) -> Result<Self, ServerError> {
+    pub async fn open(data_dir: &Path) -> Result<Self, OpenError> {
         let config = Config::load(data_dir)?;
         Self::open_with(data_dir, config).await
     }
 
-    pub async fn open_with(data_dir: &Path, config: Config) -> Result<Self, ServerError> {
+    pub async fn open_with(data_dir: &Path, config: Config) -> Result<Self, OpenError> {
         tokio::fs::create_dir_all(data_dir).await?;
         let db = open_db(data_dir).await?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
@@ -297,7 +308,7 @@ impl Server {
 /// Creates a one-time code that lets a device of `user` log in, valid for
 /// 15 minutes. The user is created if it doesn't exist.
 pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, AccountError> {
-    tokio::fs::create_dir_all(data_dir).await.map_err(ServerError::from)?;
+    tokio::fs::create_dir_all(data_dir).await.map_err(OpenError::from)?;
     let db = open_db(data_dir).await?;
     if accounts::user_by_name(&db, user).await?.is_none() {
         accounts::create_user(
@@ -316,7 +327,7 @@ pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, 
     Ok(code)
 }
 
-pub(crate) async fn open_db(data_dir: &Path) -> Result<SqlitePool, ServerError> {
+pub(crate) async fn open_db(data_dir: &Path) -> Result<SqlitePool, OpenError> {
     let options = SqliteConnectOptions::from_str("sqlite://")?
         .filename(data_dir.join("server.sqlite"))
         .create_if_missing(true)
@@ -786,7 +797,7 @@ async fn search(
     // so a common word doesn't fetch the whole index.
     let viewer = server.viewer(caller.user).await?;
     let visible: Vec<String> = viewer.visible_threads().map(|thread| hex_upper(&id_bytes(thread.0))).collect();
-    let visible = serde_json::to_string(&visible).map_err(|error| ServerError::Io(std::io::Error::other(error)))?;
+    let visible = serde_json::to_string(&visible).map_err(ServerError::from)?;
     let limit = i64::from(query.limit.unwrap_or(SEARCH_LIMIT).min(500));
     let rows = sqlx::query(
         "SELECT s.thread_id, s.kind, snippet(search, 0, '[', ']', '…', 12) AS snippet, CAST(s.time_ms AS INTEGER) AS time_ms,

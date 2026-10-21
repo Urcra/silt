@@ -2,6 +2,8 @@ use std::sync::OnceLock;
 
 use aho_corasick::{AhoCorasick, MatchKind};
 
+use crate::AgentError;
+
 /// A session as recorded elsewhere, possibly continued across machines
 /// and forks, to be written back under one id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,18 +39,15 @@ pub fn is_safe_id(id: &str) -> bool {
 impl RecordedSession {
     /// Refuses a session whose id, subagent names or side files would lead
     /// outside its agent's session store.
-    pub fn check(&self) -> std::io::Result<()> {
-        let refuse = |what: &str| {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("the recorded session has an unsafe {what}")))
-        };
+    pub fn check(&self) -> Result<(), AgentError> {
         if !is_safe_id(&self.id) {
-            return refuse("id");
+            return Err(AgentError::Unsafe("id"));
         }
         if self.subagents.iter().any(|(name, _)| !is_safe_id(name)) {
-            return refuse("subagent name");
+            return Err(AgentError::Unsafe("subagent name"));
         }
         if self.attachments.iter().any(|(name, _)| !is_side_file_name(name)) {
-            return refuse("side file");
+            return Err(AgentError::Unsafe("side file"));
         }
         Ok(())
     }

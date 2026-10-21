@@ -10,6 +10,7 @@ pub mod codex;
 pub mod conventions;
 pub mod copilot;
 mod entry;
+mod error;
 pub mod gemini;
 pub mod opencode;
 mod render;
@@ -18,10 +19,10 @@ mod tail;
 pub mod time;
 
 use std::ffi::OsString;
-use std::io;
 use std::path::{Path, PathBuf};
 
 pub use entry::Entry;
+pub use error::AgentError;
 pub use render::{Role, render_transcript, translated_text};
 pub use rewrite::{RecordedSession, Rewrites, is_safe_id, is_side_file_name};
 pub use tail::{complete_lines, complete_lines_ending};
@@ -69,10 +70,10 @@ pub struct Restore {
 }
 
 impl Restore {
-    pub fn apply(&self) -> io::Result<()> {
+    pub fn apply(&self) -> Result<(), AgentError> {
         for write in &self.writes {
             let (Write::Transcript { path, .. } | Write::File { path, .. }) = write;
-            std::fs::create_dir_all(path.parent().ok_or_else(|| io::Error::other("a restored file has a directory"))?)?;
+            std::fs::create_dir_all(path.parent().ok_or_else(|| AgentError::NoDirectory(path.clone()))?)?;
             match write {
                 Write::Transcript { path, lines } => replace_transcript(path, lines)?,
                 Write::File { path, bytes } => std::fs::write(path, bytes)?,
@@ -237,8 +238,8 @@ pub trait Agent: Send + Sync {
     /// id isn't in `known`.
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found>;
     /// The session's records as of now, for agents read by snapshot.
-    fn snapshot(&self, _found: &Found) -> io::Result<Vec<String>> {
-        Err(io::Error::other("this agent's sessions are files"))
+    fn snapshot(&self, _found: &Found) -> Result<Vec<String>, AgentError> {
+        Err(AgentError::NoSnapshot)
     }
     /// Identifies a snapshot record, so a record is stored once.
     fn record_key(&self, _line: &str) -> Option<String> {
@@ -250,13 +251,13 @@ pub trait Agent: Send + Sync {
     }
     /// Writes a recorded session so the agent continues it in `cwd`.
     /// Returns the main transcript to keep tailing.
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf>;
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError>;
     /// A native session holding `entries`, recorded by any agent, or `None`
     /// when this agent has no translation and needs a primed session.
     fn translate(&self, _entries: &[Entry], _cwd: &Path, _id: &str) -> Option<Vec<String>> {
         None
     }
-    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch>;
+    fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError>;
 }
 
 /// The environment variables that say where agents keep their sessions.
@@ -360,8 +361,8 @@ pub(crate) fn now_ms() -> i64 {
 /// The new file is renamed into place whole, so a crash leaves the old one.
 /// An old one that isn't the start of the new one has lines the recording
 /// lacks, written while Silt wasn't looking; it is kept beside the new one.
-pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<()> {
-    let dir = path.parent().ok_or_else(|| std::io::Error::other("a transcript has a directory"))?;
+pub(crate) fn replace_transcript(path: &Path, content: &str) -> Result<(), AgentError> {
+    let dir = path.parent().ok_or_else(|| AgentError::NoDirectory(path.to_owned()))?;
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     match std::fs::read(path) {
         Ok(existing) if !content.as_bytes().starts_with(&existing) => {
@@ -370,13 +371,13 @@ pub(crate) fn replace_transcript(path: &Path, content: &str) -> std::io::Result<
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     }
     let staged = dir.join(format!(".{name}.{}.silt-tmp", std::process::id()));
     let mut file = std::fs::File::create(&staged)?;
     std::io::Write::write_all(&mut file, content.as_bytes())?;
     file.sync_all()?;
-    std::fs::rename(&staged, path)
+    Ok(std::fs::rename(&staged, path)?)
 }
 
 /// Milliseconds since the epoch of a file's last change.

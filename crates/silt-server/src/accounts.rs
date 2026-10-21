@@ -12,7 +12,7 @@ use silt_types::DeviceId;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 
-use crate::{Server, ServerError, hash, id_bytes, id_from, now_ms, open_db};
+use crate::{OpenError, Server, ServerError, hash, id_bytes, id_from, now_ms, open_db};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const DEVICE_IDLE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
@@ -36,6 +36,8 @@ pub enum AccountError {
     WeakPassword,
     #[error(transparent)]
     Server(#[from] ServerError),
+    #[error(transparent)]
+    Open(#[from] OpenError),
 }
 
 impl From<sqlx::Error> for AccountError {
@@ -606,7 +608,7 @@ pub struct Admin {
 }
 
 impl Admin {
-    pub async fn open(data_dir: &Path) -> Result<Self, ServerError> {
+    pub async fn open(data_dir: &Path) -> Result<Self, OpenError> {
         tokio::fs::create_dir_all(data_dir).await?;
         Ok(Self { db: open_db(data_dir).await? })
     }

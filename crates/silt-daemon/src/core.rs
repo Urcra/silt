@@ -97,7 +97,7 @@ pub enum CoreError {
     Agent {
         doing: &'static str,
         #[source]
-        source: std::io::Error,
+        source: silt_agents::AgentError,
     },
     #[error("{0}")]
     Invalid(String),

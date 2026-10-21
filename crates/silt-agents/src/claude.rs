@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
 use crate::{
-    Agent, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
-    Stateless, Write, translated_text,
+    Agent, AgentError, Capture, Found, Launch, LaunchPlan, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds,
+    Start, Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "claude-code";
@@ -55,7 +55,7 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
 /// it, rewriting every former session directory, working directory and
 /// session id to the new ones (docs/research/probes.md).
-pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<SessionPaths> {
+pub fn restore_into(config_dir: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<SessionPaths, AgentError> {
     let paths = session_paths(config_dir, cwd, &session.id);
     plan_restore(&paths, root, cwd, session).apply()?;
     Ok(paths)
@@ -217,8 +217,8 @@ impl Agent for ClaudeCode {
             })
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
-        let config = config_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+        let config = config_dir().ok_or(AgentError::NoHome)?;
         Ok(restore_into(&config, root, cwd, session)?.transcript)
     }
 
@@ -226,7 +226,7 @@ impl Agent for ClaudeCode {
         Some(transcript_lines(&translated_text(entries), cwd, id))
     }
 
-    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
+    fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         let mut prompt = None;
         match &plan.start {

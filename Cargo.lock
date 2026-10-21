@@ -4145,6 +4145,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
+ "thiserror",
  "uuid",
 ]
 
@@ -4385,6 +4386,7 @@ dependencies = [
  "silt-crdt",
  "silt-log",
  "silt-types",
+ "thiserror",
  "wasm-bindgen",
 ]
 

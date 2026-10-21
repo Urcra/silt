@@ -13,7 +13,10 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Capture, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, SessionIds, Start};
+use crate::{
+    Agent, AgentError, Capture, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Rewrites, SessionIds,
+    Start,
+};
 
 pub const AGENT: &str = "opencode";
 
@@ -21,7 +24,7 @@ pub const AGENT: &str = "opencode";
 /// OpenCode cuts its output short when writing large amounts to a pipe. It
 /// holds a conversation, so the file is private to this user, unique to
 /// this call, and never one someone planted.
-fn opencode(args: &[&str], cwd: Option<&Path>) -> io::Result<Vec<u8>> {
+fn opencode(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, AgentError> {
     let launch = Launch::new("opencode");
     let output = tempfile::Builder::new().prefix("silt-opencode-").suffix(".out").tempfile()?;
     let mut command = Command::new(&launch.program);
@@ -33,13 +36,12 @@ fn opencode(args: &[&str], cwd: Option<&Path>) -> io::Result<Vec<u8>> {
     let stdout = fs::read(output.path());
     let result = result?;
     if result.status.success() {
-        stdout
+        Ok(stdout?)
     } else {
-        Err(io::Error::other(format!(
-            "opencode {} failed: {}",
-            args.first().unwrap_or(&""),
-            String::from_utf8_lossy(&result.stderr).trim()
-        )))
+        Err(AgentError::OpenCode {
+            command: args.first().unwrap_or(&"").to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).trim().to_owned(),
+        })
     }
 }
 
@@ -297,10 +299,10 @@ impl Agent for OpenCode {
         Capture::Snapshot
     }
 
-    fn snapshot(&self, found: &Found) -> io::Result<Vec<String>> {
+    fn snapshot(&self, found: &Found) -> Result<Vec<String>, AgentError> {
         let bytes = opencode(&["export", &found.id], None)?;
         let start = bytes.iter().position(|byte| *byte == b'{').unwrap_or(0);
-        let export: Value = serde_json::from_slice(&bytes[start..]).map_err(io::Error::other)?;
+        let export: Value = serde_json::from_slice(&bytes[start..]).map_err(AgentError::Export)?;
         Ok(export_records(&export))
     }
 
@@ -312,7 +314,7 @@ impl Agent for OpenCode {
         forked_id(from, &crate::now_ms().to_string())
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
         let export = restored_export(root, cwd, session);
         let mut file = tempfile::Builder::new().prefix("silt-opencode-").suffix(".json").tempfile()?;
         io::Write::write_all(&mut file, export.to_string().as_bytes())?;
@@ -320,7 +322,7 @@ impl Agent for OpenCode {
         Ok(PathBuf::from(format!("opencode:{}", session.id)))
     }
 
-    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
+    fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         match &plan.start {
             Start::Resume { id } => {

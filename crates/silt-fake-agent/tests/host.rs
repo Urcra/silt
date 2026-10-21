@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use silt_acp::{Command, Event, Start, Update, start};
+use silt_acp::{Command, Event, Start, StopReason, Update, start};
 use tokio::sync::mpsc;
 
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
@@ -39,7 +39,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
                 assert!(agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) }));
             }
             Event::TurnEnded { reason } => {
-                assert_eq!(reason, "end_turn");
+                assert_eq!(reason, StopReason::EndTurn);
                 break;
             }
             Event::Update(update) => seen.push(update),

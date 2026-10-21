@@ -3,13 +3,12 @@
 //! `session`, `prompt`, `message`, `thought`, `tool_call`, `tool_result`,
 //! `plan` and `stop`.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, SessionIds, Stateless};
+use crate::{Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, SessionIds, Stateless};
 
 pub const AGENT: &str = "acp";
 
@@ -95,10 +94,6 @@ pub fn read_line(line: &str) -> Read {
 /// agent CLI through translation.
 pub struct Acp;
 
-fn unsupported() -> io::Error {
-    io::Error::other("ACP sessions continue from the web UI; resume the thread with `--agent` to use an agent CLI")
-}
-
 impl Agent for Acp {
     fn id(&self) -> &'static str {
         AGENT
@@ -132,12 +127,12 @@ impl Agent for Acp {
         None
     }
 
-    fn restore(&self, _root: &Path, _cwd: &Path, _session: &RecordedSession) -> io::Result<PathBuf> {
-        Err(unsupported())
+    fn restore(&self, _root: &Path, _cwd: &Path, _session: &RecordedSession) -> Result<PathBuf, AgentError> {
+        Err(AgentError::AcpSession)
     }
 
-    fn launch(&self, _plan: &LaunchPlan) -> io::Result<Launch> {
-        Err(unsupported())
+    fn launch(&self, _plan: &LaunchPlan) -> Result<Launch, AgentError> {
+        Err(AgentError::AcpSession)
     }
 }
 

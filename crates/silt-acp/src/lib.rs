@@ -5,4 +5,4 @@
 mod host;
 pub mod registry;
 
-pub use host::{AgentHandle, Command, Event, Permission, Start, Update, start};
+pub use host::{AgentHandle, Command, Event, HostError, Permission, Start, StopReason, Update, start};

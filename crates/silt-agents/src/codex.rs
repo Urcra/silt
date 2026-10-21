@@ -4,15 +4,14 @@
 //! Codex picks the id itself, so a new session is found by its cwd.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
-    Stateless, Write, translated_text,
+    Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role,
+    SessionIds, Start, Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "codex";
@@ -100,7 +99,7 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
 /// Writes `session` as a rollout in the Codex home `home`. Codex trusts its
 /// database's path for an id over any other file, so an existing rollout
 /// of this id is replaced in place.
-pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
     let existing = rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id));
     let restore = plan_restore(home, existing, root, cwd, session, crate::now_ms());
     restore.apply()?;
@@ -325,8 +324,8 @@ impl Agent for Codex {
         discover_in(&home()?, cwd, since_ms, known)
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
-        let home = home().ok_or_else(|| io::Error::other("HOME is not set"))?;
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+        let home = home().ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
     }
 
@@ -334,7 +333,7 @@ impl Agent for Codex {
         Some(rollout_lines(&translated_text(entries), cwd, id))
     }
 
-    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
+    fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         let mut prompt = None;
         match &plan.start {

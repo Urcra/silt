@@ -128,7 +128,7 @@ pub async fn refresh(data_dir: PathBuf) {
         .and_then(|metadata| metadata.modified())
         .is_ok_and(|modified| SystemTime::now().duration_since(modified).is_ok_and(|age| age < CACHE_AGE));
     if !fresh
-        && let Ok(text) = download_text(REGISTRY_URL).await
+        && let Some(text) = download_text(REGISTRY_URL).await
         && !parse(&text).is_empty()
     {
         let _ = std::fs::write(&cache, &text);
@@ -240,17 +240,11 @@ pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
     agents
 }
 
-async fn download_text(url: &str) -> Result<String, String> {
-    let output = tokio::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "5", url])
-        .output()
-        .await
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|error| error.to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned())
-    }
+/// The text at `url`, or none when it can't be had; the bundled snapshot
+/// stands in for it then.
+async fn download_text(url: &str) -> Option<String> {
+    let output = tokio::process::Command::new("curl").args(["-fsSL", "--max-time", "5", url]).output().await.ok()?;
+    output.status.success().then(|| String::from_utf8(output.stdout).ok()).flatten()
 }
 
 /// How to start an agent.

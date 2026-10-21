@@ -406,7 +406,7 @@ impl Core {
             .expect("attached above");
         if target.id() == source.id() {
             let recorded = self.recorded_session(&history, &session, as_fork, target).await?;
-            recorded.check()?;
+            recorded.check().map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             let new_id = recorded.id.clone();
             self.register_session(NewSession {

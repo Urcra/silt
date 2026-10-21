@@ -63,7 +63,64 @@ pub struct Permission {
     pub options: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Why a turn ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    MaxTurnRequests,
+    Refusal,
+    Cancelled,
+    /// The prompt failed; an [`Event::Failed`] says why.
+    Error,
+    /// A reason from a newer protocol, by its name there.
+    Other(String),
+}
+
+impl StopReason {
+    fn of(reason: agent_client_protocol::schema::v1::StopReason) -> Self {
+        use agent_client_protocol::schema::v1::StopReason as Acp;
+        match reason {
+            Acp::EndTurn => Self::EndTurn,
+            Acp::MaxTokens => Self::MaxTokens,
+            Acp::MaxTurnRequests => Self::MaxTurnRequests,
+            Acp::Refusal => Self::Refusal,
+            Acp::Cancelled => Self::Cancelled,
+            other => Self::Other(label(&other)),
+        }
+    }
+
+    /// The protocol's name for it.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::EndTurn => "end_turn",
+            Self::MaxTokens => "max_tokens",
+            Self::MaxTurnRequests => "max_turn_requests",
+            Self::Refusal => "refusal",
+            Self::Cancelled => "cancelled",
+            Self::Error => "error",
+            Self::Other(name) => name,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HostError {
+    #[error("could not start {program}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the agent broke off the session")]
+    Protocol(#[from] agent_client_protocol::Error),
+    #[error("the agent exited with {0}")]
+    Exited(std::process::ExitStatus),
+    #[error("could not wait for the agent")]
+    Wait(#[source] std::io::Error),
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     /// The session is ready; `loaded` when an earlier one was loaded.
     Ready {
@@ -74,9 +131,9 @@ pub enum Event {
     Update(Update),
     Permission(Permission),
     TurnEnded {
-        reason: String,
+        reason: StopReason,
     },
-    Failed(String),
+    Failed(Arc<HostError>),
     Exited,
 }
 
@@ -98,7 +155,7 @@ pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle 
     let (commands, receiver) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         if let Err(error) = run(start, events.clone(), receiver).await {
-            let _ = events.send(Event::Failed(error));
+            let _ = events.send(Event::Failed(Arc::new(error)));
         }
         let _ = events.send(Event::Exited);
     });
@@ -161,7 +218,7 @@ async fn run(
     start: Start,
     events: mpsc::UnboundedSender<Event>,
     mut commands: mpsc::UnboundedReceiver<Command>,
-) -> Result<(), String> {
+) -> Result<(), HostError> {
     let mut child = tokio::process::Command::new(&start.program)
         .args(&start.args)
         // Only what the daemon chose to pass: see `registry::agent_environment`.
@@ -176,7 +233,7 @@ async fn run(
         .process_group(0)
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| format!("could not start {}: {error}", start.program))?;
+        .map_err(|source| HostError::Spawn { program: start.program.clone(), source })?;
     let group = child.id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
     let stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
@@ -263,11 +320,11 @@ async fn run(
                         connection.spawn(async move {
                             match prompting.send_request(request).block_task().await {
                                 Ok(response) => {
-                                    let _ = ended.send(Event::TurnEnded { reason: label(&response.stop_reason) });
+                                    let _ = ended.send(Event::TurnEnded { reason: StopReason::of(response.stop_reason) });
                                 }
                                 Err(error) => {
-                                    let _ = ended.send(Event::Failed(error.to_string()));
-                                    let _ = ended.send(Event::TurnEnded { reason: "error".into() });
+                                    let _ = ended.send(Event::Failed(Arc::new(HostError::Protocol(error))));
+                                    let _ = ended.send(Event::TurnEnded { reason: StopReason::Error });
                                 }
                             }
                             Ok(())
@@ -300,11 +357,11 @@ async fn run(
     // The agent may die without closing the connection cleanly; its exit
     // ends the session either way.
     let result = tokio::select! {
-        result = session => result.map_err(|error| error.to_string()),
+        result = session => result.map_err(HostError::Protocol),
         status = child.wait() => match status {
             Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("the agent exited with {status}")),
-            Err(error) => Err(error.to_string()),
+            Ok(status) => Err(HostError::Exited(status)),
+            Err(error) => Err(HostError::Wait(error)),
         },
     };
     if let Some(group) = group {

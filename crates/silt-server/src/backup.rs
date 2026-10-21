@@ -8,7 +8,7 @@ use std::io;
 use std::path::Path;
 
 use crate::config::CONFIG_FILE;
-use crate::{ServerError, now_ms, open_db};
+use crate::{OpenError, ServerError, now_ms, open_db};
 
 const DATABASE: &str = "server.sqlite";
 const COPIED: [&str; 2] = ["blobs", "git"];
@@ -22,6 +22,8 @@ pub enum BackupError {
     NotABackup(String),
     #[error(transparent)]
     Server(#[from] ServerError),
+    #[error(transparent)]
+    Open(#[from] OpenError),
     #[error(transparent)]
     Io(#[from] io::Error),
 }

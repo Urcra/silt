@@ -8,8 +8,22 @@ use std::str::FromStr;
 
 use silt_checkout::text_edits;
 use silt_log::{Author, Delta, Family, FileView, LogError, Op};
-use silt_types::{ActorId, Frontier, GitOid, ThreadId};
+use silt_types::{ActorId, Frontier, GitOid, ParseIdError, ThreadId};
 use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReplicaError {
+    #[error(transparent)]
+    Id(#[from] ParseIdError),
+    #[error("deltas from {after} on can't follow the {received} received")]
+    Gap { after: usize, received: usize },
+    #[error("{0} is not a file of this thread")]
+    NoFile(String),
+    #[error("{0} has no text to edit")]
+    NoText(String),
+    #[error(transparent)]
+    Log(#[from] LogError),
+}
 
 /// The replica's logic, free of JavaScript types so it runs in tests.
 pub struct Core {
@@ -27,12 +41,12 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn new(thread: &str, actor: &str) -> Result<Self, String> {
+    pub fn new(thread: &str, actor: &str) -> Result<Self, ReplicaError> {
         Ok(Self {
             family: Family::new(),
             bases: HashMap::new(),
-            actor: ActorId::from_str(actor).map_err(|error| error.to_string())?,
-            thread: ThreadId::from_str(thread).map_err(|error| error.to_string())?,
+            actor: ActorId::from_str(actor)?,
+            thread: ThreadId::from_str(thread)?,
             pending: VecDeque::new(),
             received: 0,
             shown: HashMap::new(),
@@ -42,33 +56,34 @@ impl Core {
     /// Takes the daemon's deltas from position `after` on. Ones already
     /// received, as when two syncs overlap, are skipped; a batch that would
     /// leave a gap is refused.
-    pub fn receive(&mut self, after: usize, deltas: Vec<Delta>) -> Result<Option<GitOid>, String> {
+    pub fn receive(&mut self, after: usize, deltas: Vec<Delta>) -> Result<Option<GitOid>, ReplicaError> {
         if after > self.received {
-            return Err(format!("deltas from {after} on can't follow the {} received", self.received));
+            return Err(ReplicaError::Gap { after, received: self.received });
         }
         let fresh: Vec<Delta> = deltas.into_iter().skip(self.received - after).collect();
         self.received += fresh.len();
         self.pending.extend(fresh);
-        self.apply_pending()
+        Ok(self.apply_pending())
     }
 
-    pub fn add_base(&mut self, oid: GitOid, text: String) -> Result<Option<GitOid>, String> {
+    pub fn add_base(&mut self, oid: GitOid, text: String) -> Result<Option<GitOid>, ReplicaError> {
         self.bases.insert(oid, text);
-        self.apply_pending()
+        Ok(self.apply_pending())
     }
 
     /// A delta that can't apply is dropped, as the daemon does (ADR 0016);
-    /// one waiting for a git base stays first until the text arrives.
-    fn apply_pending(&mut self) -> Result<Option<GitOid>, String> {
+    /// one waiting for a git base stays first until the text arrives, and
+    /// its base is returned.
+    fn apply_pending(&mut self) -> Option<GitOid> {
         while let Some(delta) = self.pending.front().cloned() {
             match self.family.apply(delta, &mut self.bases) {
-                Err(LogError::MissingBase(oid)) => return Ok(Some(oid)),
+                Err(LogError::MissingBase(oid)) => return Some(oid),
                 Ok(_) | Err(_) => {
                     self.pending.pop_front();
                 }
             }
         }
-        Ok(None)
+        None
     }
 
     pub fn paths(&self) -> Vec<String> {
@@ -107,23 +122,19 @@ impl Core {
     /// The editor turned what it showed of `path` into `text`: makes those
     /// edits, as this replica's actor, at the version it showed, and
     /// returns them.
-    pub fn edit(&mut self, path: &str, text: &str, time_ms: i64) -> Result<Vec<Delta>, String> {
-        let inode = *self
-            .family
-            .thread_view(self.thread)
-            .paths()
-            .get(path)
-            .ok_or_else(|| format!("{path} is not a file of this thread"))?;
+    pub fn edit(&mut self, path: &str, text: &str, time_ms: i64) -> Result<Vec<Delta>, ReplicaError> {
+        let inode =
+            *self.family.thread_view(self.thread).paths().get(path).ok_or_else(|| ReplicaError::NoFile(path.to_owned()))?;
         let (mut parents, old) = match self.shown.get(path) {
             Some(shown) => shown.clone(),
-            None => (self.family.thread_head(self.thread), self.text(path).ok_or_else(|| format!("{path} has no text to edit"))?),
+            None => (self.family.thread_head(self.thread), self.text(path).ok_or_else(|| ReplicaError::NoText(path.to_owned()))?),
         };
-        self.family.text_doc_or_base(inode, &mut self.bases).map_err(|error| error.to_string())?;
+        self.family.text_doc_or_base(inode, &mut self.bases)?;
         let mut made = Vec::new();
         for op in text_edits(&old, text) {
             let delta =
                 self.family.delta(self.actor, self.thread, Author::User, time_ms, parents.clone(), Op::Text { inode, op });
-            self.family.apply(delta.clone(), &mut self.bases).map_err(|error| error.to_string())?;
+            self.family.apply(delta.clone(), &mut self.bases)?;
             parents = Frontier::single(delta.span.last());
             made.push(delta);
         }

@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role, SessionIds, Start,
-    Write, translated_text,
+    Agent, AgentError, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, RecordedSession, Restore, Rewrites, Role,
+    SessionIds, Start, Write, translated_text,
 };
 
 pub const AGENT: &str = "gemini-cli";
@@ -138,7 +138,7 @@ pub fn discover_in(gemini: &Path, cwd: &Path, since_ms: i64, known: &[String]) -
 
 /// Writes `session` where the `.gemini` directory `gemini` finds it for
 /// `cwd`, with its subagents' sessions.
-pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
     let dir = claim_chats_dir(gemini, cwd)?;
     let existing = session_files(&dir).into_iter().find(|path| file_session_id(path).as_deref() == Some(&*session.id));
     let restore = plan_restore(&dir, existing, root, cwd, session, crate::now_ms());
@@ -452,8 +452,8 @@ impl Agent for Gemini {
         discover_in(&gemini_dir()?, cwd, since_ms, known)
     }
 
-    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
-        let gemini = gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
+    fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> Result<PathBuf, AgentError> {
+        let gemini = gemini_dir().ok_or(AgentError::NoHome)?;
         restore_into(&gemini, root, cwd, session)
     }
 
@@ -461,7 +461,7 @@ impl Agent for Gemini {
         Some(session_lines(&translated_text(entries), cwd, id))
     }
 
-    fn launch(&self, plan: &LaunchPlan) -> io::Result<Launch> {
+    fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         let mut prompt = None;
         match &plan.start {
@@ -481,7 +481,7 @@ impl Agent for Gemini {
         }
         // Registered before the run: Gemini's own registration replaces
         // the overlay's copy, which is dropped afterwards.
-        claim_chats_dir(&gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?, &plan.cwd)?;
+        claim_chats_dir(&gemini_dir().ok_or(AgentError::NoHome)?, &plan.cwd)?;
         let overlay = overlay_home(plan)?;
         launch.env("GEMINI_CLI_HOME", overlay);
         for arg in &plan.args {
@@ -499,8 +499,8 @@ impl Agent for Gemini {
 /// which add Silt's MCP server, the global context file, which adds the
 /// session's instructions, and the project registry, which Gemini replaces
 /// by renaming a new file over it. Sessions still land in the real home.
-fn overlay_home(plan: &LaunchPlan) -> io::Result<PathBuf> {
-    let real = gemini_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
+fn overlay_home(plan: &LaunchPlan) -> Result<PathBuf, AgentError> {
+    let real = gemini_dir().ok_or(AgentError::NoHome)?;
     fs::create_dir_all(&real)?;
     let overlay = plan.scratch.join("gemini-home");
     if overlay.exists() {

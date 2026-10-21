@@ -299,12 +299,12 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => run.asking.push(permission),
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
-                self.record_acp(thread, &acp::stop(&reason)).await?;
+                self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.state = RunState::Ready;
                 run.asking.clear();
             }
-            AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(error),
+            AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
@@ -457,7 +457,7 @@ fn spawn_agent(
         let handle = silt_acp::start(start, sender);
         let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });
         while let Some(event) = receiver.recv().await {
-            let exited = event == silt_acp::Event::Exited;
+            let exited = matches!(event, silt_acp::Event::Exited);
             if events.send(Event::Acp { thread, run, event: AcpEvent::Agent(event) }).is_err() || exited {
                 break;
             }
