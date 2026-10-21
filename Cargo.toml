@@ -9,6 +9,12 @@ rust-version = "1.99"
 license = "AGPL-3.0-only"
 publish = false
 
+# What `silt-bench` measures (ADR 0034): optimized like a release, and
+# incremental so the gate rebuilds it quickly.
+[profile.perf]
+inherits = "release"
+incremental = true
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 

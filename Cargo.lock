@@ -4905,6 +4905,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-bench"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "exn",
+ "rustix",
+ "serde",
+ "serde_json",
+ "silt-agents",
+ "silt-daemon",
+ "silt-log",
+ "silt-store",
+ "silt-types",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "silt-checkout"
 version = "0.0.1"
 dependencies = [

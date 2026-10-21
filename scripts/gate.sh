@@ -14,6 +14,10 @@ cargo fmt --all -- --check
 cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+
+# Performance budgets (ADR 0034), timed on an optimized build.
+cargo build --profile perf -p silt-cli -p silt-bench
+target/perf/silt-bench check
 cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm --target wasm32-unknown-unknown
 
 # Playwright drives the built UI against a real daemon.
