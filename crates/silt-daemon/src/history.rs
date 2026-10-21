@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
-use silt_log::{Author, ConvOp, Delta, Family, HistorySource, Op, TurnMark};
+use silt_log::{Author, ConvOp, Delta, Family, GraphEvent, HistorySource, Op, TurnMark};
+use silt_proto::view::{GraphQuery, GraphRow};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
@@ -228,6 +229,77 @@ impl Core {
             .collect()
     }
 
+    /// The history graph over the families here, as `query` asks: turns,
+    /// commits, forks, merge requests and merges, newest first.
+    pub(crate) fn graph(&self, query: &GraphQuery) -> Vec<GraphRow> {
+        let me = self.own_user();
+        let summaries: HashMap<String, crate::protocol::ThreadSummary> =
+            self.thread_summaries().into_iter().map(|summary| (summary.id.clone(), summary)).collect();
+        let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
+        let mut commits: HashMap<ThreadId, Vec<CommitView>> = HashMap::new();
+        let mut rows = Vec::new();
+        for (family_id, family) in &self.families {
+            if query.family.as_ref().is_some_and(|wanted| *wanted != family_id.to_string()) {
+                continue;
+            }
+            let requests = family.merge_requests();
+            for item in silt_log::graph_of(family.log()) {
+                let thread = graph_thread(&item.event);
+                let Some(summary) = summaries.get(&thread.to_string()) else {
+                    continue;
+                };
+                if query.project.as_ref().is_some_and(|project| *project != summary.repo)
+                    || (query.mine && !summary.owner.is_empty() && summary.owner != me)
+                {
+                    continue;
+                }
+                let (kind, turn, text, other, status) = match &item.event {
+                    GraphEvent::Turn { number, .. } => {
+                        let turns = turns.entry(thread).or_insert_with(|| self.turns(thread));
+                        let prompt = turns.get(number - 1).map(|turn| first_line(&turn.prompt)).unwrap_or_default();
+                        ("turn", Some(*number), prompt, None, None)
+                    }
+                    GraphEvent::Commit { commit, turn, .. } => {
+                        let commits = commits.entry(thread).or_insert_with(|| self.commits(thread));
+                        let id = commit.to_string();
+                        let subject = commits.iter().find(|known| known.commit == id).and_then(|known| known.subject.clone());
+                        ("commit", *turn, subject.unwrap_or_else(|| id[..8].to_owned()), None, None)
+                    }
+                    GraphEvent::Fork { from, .. } => {
+                        ("fork", None, format!("forked from {}", from.short()), Some(from.to_string()), None)
+                    }
+                    GraphEvent::Request { target, mr, title, .. } => {
+                        let status = requests.iter().find(|request| request.id == *mr).map(|request| match request.status {
+                            silt_log::MrStatus::Open => "open",
+                            silt_log::MrStatus::Approved => "approved",
+                            silt_log::MrStatus::Declined { .. } => "declined",
+                        });
+                        ("request", None, title.clone(), Some(target.to_string()), status.map(str::to_owned))
+                    }
+                    GraphEvent::Merged { from, title, .. } => ("merge", None, title.clone(), Some(from.to_string()), None),
+                };
+                if !query.shows(kind) {
+                    continue;
+                }
+                rows.push(GraphRow {
+                    id: item.delta.to_string(),
+                    kind: kind.to_owned(),
+                    thread: thread.to_string(),
+                    family: family_id.to_string(),
+                    time_ms: item.time_ms,
+                    turn,
+                    text,
+                    other,
+                    status,
+                    owner: summary.owner.clone(),
+                    agent: summary.agent.clone(),
+                    settled: summary.mine.settled,
+                });
+            }
+        }
+        query.page(rows)
+    }
+
     /// Each thread here that made a commit whose id starts with `prefix`,
     /// with the turn it came in.
     pub(crate) fn find_commit(&self, prefix: &str) -> Result<Vec<(String, Option<usize>)>, CoreError> {
@@ -336,6 +408,20 @@ impl Timeline {
 }
 
 /// The history entries one delta contributes, as kind and text.
+fn graph_thread(event: &GraphEvent) -> ThreadId {
+    match event {
+        GraphEvent::Turn { thread, .. }
+        | GraphEvent::Commit { thread, .. }
+        | GraphEvent::Fork { thread, .. }
+        | GraphEvent::Request { thread, .. }
+        | GraphEvent::Merged { thread, .. } => *thread,
+    }
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().chars().take(120).collect()
+}
+
 /// A commit's subject line, when the clone has the commit.
 fn subject(repo: &silt_git::Repo, commit: &str) -> Option<String> {
     let out = repo.git(&["log", "-1", "--format=%s", commit, "--"], None).ok()?;

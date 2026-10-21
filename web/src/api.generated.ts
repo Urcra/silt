@@ -113,6 +113,64 @@ replies: Array<ReplyView>, };
 
 export type CommitView = { commit: string, subject: string | null, branch: string | null, turn: number | null, time_ms: number, };
 
+export type GraphQuery = { 
+/**
+ * Only this project's threads, by its normalized remote.
+ */
+project: string | null, 
+/**
+ * Only this family's threads.
+ */
+family: string | null, 
+/**
+ * Only the person's own threads.
+ */
+mine: boolean, 
+/**
+ * Comma-separated kinds to show; all by default.
+ */
+kinds: string | null, 
+/**
+ * Settled threads too.
+ */
+settled: boolean, 
+/**
+ * Rows older than this, for the next page.
+ */
+before: number | null, limit: number | null, };
+
+export type GraphRow = { 
+/**
+ * The delta it comes from, which no other row shares.
+ */
+id: string, 
+/**
+ * `turn`, `commit`, `fork`, `request` or `merge`.
+ */
+kind: string, thread: string, family: string, time_ms: number, 
+/**
+ * A turn's number, or the turn a commit came in.
+ */
+turn: number | null, 
+/**
+ * A turn's prompt, a commit's subject or id, a request's or merge's
+ * title.
+ */
+text: string, 
+/**
+ * The other thread: a fork's source, a request's target, a merge's
+ * fork.
+ */
+other: string | null, 
+/**
+ * A request's state: `open`, `approved` or `declined`.
+ */
+status: string | null, owner: string, agent: string | null, 
+/**
+ * Its thread is settled for the person.
+ */
+settled: boolean, };
+
 export type DaemonStatus = { server: string | null, device: string | null, sync_error: string | null, threads: number, 
 /**
  * Threads whose history here differs from the server's, so they no

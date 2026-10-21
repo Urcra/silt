@@ -84,6 +84,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/show", get(show))
         .route("/api/threads/{id}/turns", get(turns))
         .route("/api/threads/{id}/commits", get(commits))
+        .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
@@ -332,6 +333,10 @@ async fn turns(State(web): State<Web>, Path(thread): Path<String>) -> HttpRespon
 
 async fn commits(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::Commits { thread }).await
+}
+
+async fn graph(State(web): State<Web>, Query(query): Query<silt_proto::view::GraphQuery>) -> HttpResponse {
+    ask(&web, Request::Graph { query }).await
 }
 
 #[derive(Deserialize)]

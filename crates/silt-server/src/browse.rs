@@ -10,10 +10,12 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use silt_agents::{Entry, Transcripts};
-use silt_log::{CommentTarget, ConvOp, Delta, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in};
+use silt_log::{
+    CommentTarget, ConvOp, Delta, GraphEvent, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in,
+};
 use silt_proto::view::{
-    CommentLocation, CommentView, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrGuide, MrSummary, Project, ReplyView,
-    SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
+    CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrGuide,
+    MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
 };
 use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
@@ -27,6 +29,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/history", get(history))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
+        .route("/app/api/graph", get(graph))
         .route("/app/api/threads/{id}/comments", get(comments))
         .route("/app/api/threads/{id}/state", patch(change_state))
         .route("/app/api/mrs", get(merge_requests))
@@ -205,12 +208,7 @@ fn summary(
         id: row.id.to_string(),
         repo: row.repo.clone(),
         title: title(&own, &history),
-        agent: own.iter().rev().find_map(|delta| match &delta.op {
-            Op::Conv(ConvOp::Native { session, .. }) => {
-                Some(silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()))
-            }
-            _ => None,
-        }),
+        agent: agent_of(&own),
         created_ms: row.created_ms,
         messages: history.iter().filter(|(_, entry)| entry.kind == "user" || entry.kind == "assistant").count(),
         edits: own.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
@@ -278,10 +276,13 @@ async fn turns(
 ) -> Result<Json<Vec<TurnInfo>>, ApiError> {
     let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
-    let log = readable.of(row);
-    let history = entries(log, row.id);
+    Ok(Json(turn_infos(readable.of(row), row.id)))
+}
+
+fn turn_infos(log: &[Delta], thread: ThreadId) -> Vec<TurnInfo> {
+    let history = entries(log, thread);
     let mut turns = Vec::new();
-    for delta in log.iter().filter(|delta| delta.thread == row.id) {
+    for delta in log.iter().filter(|delta| delta.thread == thread) {
         if let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = delta.op {
             // The latest prompt said at or before the mark.
             let prompt = history.iter().rev().find(|(_, entry)| entry.kind == "user" && entry.time_ms <= delta.time_ms);
@@ -292,7 +293,103 @@ async fn turns(
             });
         }
     }
-    Ok(Json(turns))
+    turns
+}
+
+/// The command of the agent that recorded the thread's latest session.
+fn agent_of(own: &[&Delta]) -> Option<String> {
+    own.iter().rev().find_map(|delta| match &delta.op {
+        Op::Conv(ConvOp::Native { session, .. }) => {
+            Some(silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()))
+        }
+        _ => None,
+    })
+}
+
+/// The history graph over what the person may read (ADR 0029, 0030).
+async fn graph(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Json<Vec<GraphRow>>, ApiError> {
+    let readable = Readable::load(&server, browser.user).await?;
+    let states = states(&server, browser).await?;
+    let mut rows = Vec::new();
+    for (family, log) in &readable.deltas {
+        if query.family.as_ref().is_some_and(|wanted| *wanted != family.to_string()) {
+            continue;
+        }
+        let requests = merge_requests_in(log);
+        let threads: HashMap<ThreadId, &Row> =
+            readable.rows.iter().filter(|row| row.family == *family).map(|row| (row.id, row)).collect();
+        let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
+        let mut agents: HashMap<ThreadId, Option<String>> = HashMap::new();
+        for item in silt_log::graph_of(log) {
+            let thread = match &item.event {
+                GraphEvent::Turn { thread, .. }
+                | GraphEvent::Commit { thread, .. }
+                | GraphEvent::Fork { thread, .. }
+                | GraphEvent::Request { thread, .. }
+                | GraphEvent::Merged { thread, .. } => *thread,
+            };
+            let Some(row) = threads.get(&thread) else {
+                continue;
+            };
+            if query.project.as_ref().is_some_and(|project| *project != row.repo) || (query.mine && row.owner != readable.me) {
+                continue;
+            }
+            let (kind, turn, text, other, status) = match &item.event {
+                GraphEvent::Turn { number, .. } => {
+                    let turns = turns.entry(thread).or_insert_with(|| turn_infos(log, thread));
+                    let prompt = turns
+                        .get(number - 1)
+                        .map(|turn| turn.prompt.lines().next().unwrap_or_default().chars().take(120).collect());
+                    ("turn", Some(*number), prompt.unwrap_or_default(), None, None)
+                }
+                GraphEvent::Commit { commit, turn, .. } => ("commit", *turn, commit.to_string(), None, None),
+                GraphEvent::Fork { from, .. } => {
+                    ("fork", None, format!("forked from {}", from.short()), Some(from.to_string()), None)
+                }
+                GraphEvent::Request { target, mr, title, .. } => {
+                    let status = requests.iter().find(|request| request.id == *mr).map(|request| match request.status {
+                        MrStatus::Open => "open",
+                        MrStatus::Approved => "approved",
+                        MrStatus::Declined { .. } => "declined",
+                    });
+                    ("request", None, title.clone(), Some(target.to_string()), status.map(str::to_owned))
+                }
+                GraphEvent::Merged { from, title, .. } => ("merge", None, title.clone(), Some(from.to_string()), None),
+            };
+            if !query.shows(kind) {
+                continue;
+            }
+            let agent = agents
+                .entry(thread)
+                .or_insert_with(|| agent_of(&log.iter().filter(|delta| delta.thread == thread).collect::<Vec<_>>()))
+                .clone();
+            rows.push(GraphRow {
+                id: item.delta.to_string(),
+                kind: kind.to_owned(),
+                thread: thread.to_string(),
+                family: family.to_string(),
+                time_ms: item.time_ms,
+                turn,
+                text,
+                other,
+                status,
+                owner: row.owner.clone(),
+                agent,
+                settled: Mine::of(states.get(&thread)).settled,
+            });
+        }
+    }
+    let mut rows = query.page(rows);
+    // Only the page's commits are looked up in the mirror.
+    for row in rows.iter_mut().filter(|row| row.kind == "commit") {
+        let mirror = server.git_root().join(format!("{}.git", row.family));
+        row.text = mirror_subject(&mirror, &row.text).await.unwrap_or_else(|| row.text[..8].to_owned());
+    }
+    Ok(Json(rows))
 }
 
 /// The thread's commits with the turns they came in (ADR 0030), and their

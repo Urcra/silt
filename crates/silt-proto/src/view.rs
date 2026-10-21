@@ -410,6 +410,69 @@ pub struct DeviceAgent {
     pub state: AgentState,
 }
 
+/// One row of the history graph, newest first in a page (ADR 0029, 0030).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct GraphRow {
+    /// The delta it comes from, which no other row shares.
+    pub id: String,
+    /// `turn`, `commit`, `fork`, `request` or `merge`.
+    pub kind: String,
+    pub thread: String,
+    pub family: String,
+    pub time_ms: i64,
+    /// A turn's number, or the turn a commit came in.
+    pub turn: Option<usize>,
+    /// A turn's prompt, a commit's subject or id, a request's or merge's
+    /// title.
+    pub text: String,
+    /// The other thread: a fork's source, a request's target, a merge's
+    /// fork.
+    pub other: Option<String>,
+    /// A request's state: `open`, `approved` or `declined`.
+    pub status: Option<String>,
+    pub owner: String,
+    pub agent: Option<String>,
+    /// Its thread is settled for the person.
+    pub settled: bool,
+}
+
+/// Which rows of the graph to show.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
+pub struct GraphQuery {
+    /// Only this project's threads, by its normalized remote.
+    pub project: Option<String>,
+    /// Only this family's threads.
+    pub family: Option<String>,
+    /// Only the person's own threads.
+    pub mine: bool,
+    /// Comma-separated kinds to show; all by default.
+    pub kinds: Option<String>,
+    /// Settled threads too.
+    pub settled: bool,
+    /// Rows older than this, for the next page.
+    pub before: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+impl GraphQuery {
+    pub const PAGE: usize = 200;
+
+    pub fn shows(&self, kind: &str) -> bool {
+        self.kinds.as_deref().is_none_or(|kinds| kinds.split(',').any(|shown| shown.trim() == kind))
+    }
+
+    /// Newest first, older than `before`, at most a page.
+    pub fn page(&self, mut rows: Vec<GraphRow>) -> Vec<GraphRow> {
+        rows.retain(|row| self.before.is_none_or(|before| row.time_ms < before) && (self.settled || !row.settled));
+        rows.sort_by(|a, b| b.time_ms.cmp(&a.time_ms).then_with(|| b.id.cmp(&a.id)));
+        rows.truncate(self.limit.unwrap_or(Self::PAGE).min(Self::PAGE));
+        rows
+    }
+}
+
 /// A commit a thread made, with the turn it came in (ADR 0030).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -472,6 +535,36 @@ mod tests {
 
     use super::*;
     use crate::Stamped;
+
+    fn row(id: &str, kind: &str, time_ms: i64, settled: bool) -> GraphRow {
+        GraphRow {
+            id: id.into(),
+            kind: kind.into(),
+            thread: "t".into(),
+            family: "f".into(),
+            time_ms,
+            turn: None,
+            text: String::new(),
+            other: None,
+            status: None,
+            owner: "alice".into(),
+            agent: None,
+            settled,
+        }
+    }
+
+    #[test]
+    fn a_graph_page_is_newest_first_before_its_cursor_and_hides_settled_threads() {
+        let rows =
+            vec![row("a", "turn", 1, false), row("b", "commit", 3, false), row("c", "turn", 2, true), row("d", "fork", 4, false)];
+        let ids = |rows: Vec<GraphRow>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+        assert_eq!(ids(GraphQuery::default().page(rows.clone())), ["d", "b", "a"]);
+        let older = GraphQuery { before: Some(4), settled: true, limit: Some(2), ..GraphQuery::default() };
+        assert_eq!(ids(older.page(rows)), ["b", "c"]);
+        let kinds = GraphQuery { kinds: Some("turn, fork".into()), ..GraphQuery::default() };
+        assert!(kinds.shows("turn") && kinds.shows("fork") && !kinds.shows("commit"));
+        assert!(GraphQuery::default().shows("merge"));
+    }
 
     #[test]
     fn a_change_from_the_web_ui_sets_only_what_it_names() {

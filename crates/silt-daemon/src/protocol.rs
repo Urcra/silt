@@ -154,6 +154,10 @@ pub enum Request {
     Commits {
         thread: String,
     },
+    /// The history graph over the families here.
+    Graph {
+        query: silt_proto::view::GraphQuery,
+    },
     /// The threads and turns that made commits starting with `commit`.
     FindCommit {
         commit: String,
@@ -864,6 +868,8 @@ mod tests {
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
+            silt_proto::view::GraphQuery::decl(&config),
+            silt_proto::view::GraphRow::decl(&config),
             DaemonStatus::decl(&config),
             DeviceAgent::decl(&config),
             DeviceChange::decl(&config),

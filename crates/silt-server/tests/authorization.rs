@@ -1130,6 +1130,69 @@ async fn a_read_only_link_shows_the_conversation_to_anyone_until_it_stops() {
 }
 
 #[tokio::test]
+async fn the_graph_shows_turns_forks_and_requests_of_what_each_person_sees() {
+    use silt_log::{ConvOp, SessionFile, SessionRef, TurnMark};
+    const FORK: ThreadId = ThreadId(303);
+    let mut world = world(Visibility::Org).await;
+    let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
+    let family = &mut world.family;
+    let said = Op::Conv(ConvOp::Native {
+        session: session.clone(),
+        file: SessionFile::Main,
+        line: r#"{"type":"user","message":{"role":"user","content":"Tidy the parser\nand more"}}"#.into(),
+    });
+    let said = applied(family, family.delta(ActorId(1), THREAD, Author::User, 10, family.thread_head(THREAD), said));
+    let mark = Op::Conv(ConvOp::Turn { session, mark: TurnMark::PromptSubmitted });
+    let mark = applied(family, family.delta(ActorId(1), THREAD, Author::User, 11, family.thread_head(THREAD), mark));
+    assert_eq!(world.alice.push(vec![said, mark]).await, StatusCode::OK);
+
+    let bob = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
+    let info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 3,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    assert_eq!(bob.send(bob.request(Method::POST, "/v1/threads").json(&info)).await, StatusCode::NO_CONTENT);
+    let family = &mut world.family;
+    let head = family.thread_head(THREAD);
+    let forked = applied(family, family.delta(ActorId(500), FORK, Author::User, 20, head, Op::Fork { from: THREAD }));
+    let opened = Op::Mr(silt_log::MrOp::Opened { target: THREAD, title: "Quiet work".into(), summary: String::new() });
+    let opened = applied(family, family.delta(ActorId(500), FORK, Author::User, 30, forked.span.last().into(), opened));
+    assert_eq!(bob.push(vec![forked, opened]).await, StatusCode::OK);
+
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let (status, rows) = alice.get("/graph").await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    let kinds: Vec<(&str, &str)> = rows
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| (row["kind"].as_str().expect("a kind"), row["text"].as_str().expect("text")))
+        .collect();
+    assert_eq!(
+        kinds[..3],
+        [("request", "Quiet work"), ("fork", &*format!("forked from {}", THREAD.short())), ("turn", "Tidy the parser")],
+        "newest first: {kinds:?}"
+    );
+    assert_eq!(rows[0]["status"], "open");
+    assert_eq!(rows[0]["other"], THREAD.to_string());
+
+    let (_, mine) = alice.get("/graph?mine=true").await;
+    assert!(mine.as_array().expect("rows").iter().all(|row| row["thread"] == THREAD.to_string()), "{mine}");
+    let (_, turns) = alice.get("/graph?kinds=turn").await;
+    assert_eq!(turns.as_array().expect("rows").len(), 1);
+    let (_, older) = alice.get("/graph?before=20").await;
+    assert!(older.as_array().expect("rows").iter().all(|row| row["time_ms"].as_i64() < Some(20)));
+
+    let dave = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "dave").expect("dave").1, "dave").await;
+    assert_eq!(dave.get("/graph").await.1, serde_json::json!([]), "dave isn't in the org");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

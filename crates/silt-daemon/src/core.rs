@@ -490,6 +490,7 @@ impl Core {
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
             Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
+            Request::Graph { query } => Response::ok(self.graph(&query)),
             Request::OpenWeb { cwd, once } => {
                 if let Some(cwd) = cwd {
                     self.remember_clone(&cwd).await;
