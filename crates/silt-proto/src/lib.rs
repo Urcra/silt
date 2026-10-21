@@ -148,6 +148,7 @@ pub struct PullReply {
 /// Who sees a thread or a project's threads (ADR 0013). Written as
 /// `private`, `org` or `team:<name>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 #[serde(try_from = "String", into = "String")]
 pub enum Visibility {
     /// Only its owner, and what merge requests offer to others.
@@ -352,6 +353,7 @@ pub struct OrgMember {
 
 /// How a thread stands, for search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadStatus {
     /// Changed lately.
@@ -392,6 +394,7 @@ impl std::str::FromStr for ThreadStatus {
 
 /// What an agent the web UI started is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum AgentState {
     Starting,
@@ -528,6 +531,7 @@ pub struct InboxReply {
 
 /// Marks notifications read: `ids`, or every one with `all`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct InboxRead {
     #[serde(default)]
     pub ids: Vec<i64>,
@@ -559,6 +563,7 @@ pub struct PresenceUpdate {
 
 /// An agent at work in a thread, as its co-viewers see it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentActivity {
     pub name: String,
     pub state: AgentState,
@@ -568,6 +573,7 @@ pub struct AgentActivity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Presence {
     pub user: String,
     pub device: String,
@@ -582,6 +588,7 @@ pub struct Presence {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PresenceReply {
     /// Everyone else on the thread.
     pub people: Vec<Presence>,

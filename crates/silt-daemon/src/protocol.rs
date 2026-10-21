@@ -316,6 +316,7 @@ pub struct SessionStarted {
 /// A managed checkout that was just mounted, for the CLI to link shared
 /// paths into and run `prepare` in, where the user sees the output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Mount {
     /// The clone the checkout was made from.
     pub source: PathBuf,
@@ -324,6 +325,7 @@ pub struct Mount {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ThreadSummary {
     pub id: String,
     pub repo: String,
@@ -350,6 +352,7 @@ pub struct ThreadSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "line", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum ShowLine {
     Entry {
         kind: String,
@@ -381,6 +384,7 @@ pub enum ShowLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FileEdit {
     pub path: String,
     pub inserted: usize,
@@ -388,6 +392,7 @@ pub struct FileEdit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct SearchResult {
     pub thread: String,
     pub kind: String,
@@ -403,6 +408,7 @@ pub struct SearchResult {
 
 /// Server search filters (ADR 0011); dates are milliseconds since the epoch.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct SearchFilters {
     pub repo: Option<String>,
     pub author: Option<String>,
@@ -420,6 +426,7 @@ impl SearchFilters {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DaemonStatus {
     pub server: Option<String>,
     pub device: Option<String>,
@@ -434,6 +441,7 @@ pub struct DaemonStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Resumed {
     pub thread: String,
     pub checkout: PathBuf,
@@ -449,6 +457,7 @@ pub struct Resumed {
 /// How the CLI starts the agent on a resumed or forked thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum AgentStart {
     /// The agent's own session, restored natively or translated.
     Resume { id: String },
@@ -464,6 +473,7 @@ pub struct HookReply {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Pulled {
     pub thread: String,
     pub from: String,
@@ -473,6 +483,7 @@ pub struct Pulled {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct MrSummary {
     pub id: String,
     pub fork: String,
@@ -485,6 +496,7 @@ pub struct MrSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct MrDetails {
     pub mr: MrSummary,
     /// The fork's changes since the merge base.
@@ -496,6 +508,7 @@ pub struct MrDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct HistoryEntry {
     pub index: usize,
     /// The thread the entry was recorded in.
@@ -510,6 +523,7 @@ pub struct HistoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct HistoryPage {
     pub thread: String,
     pub total: usize,
@@ -517,6 +531,7 @@ pub struct HistoryPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct HistoryHit {
     /// The entry's index in the thread's history.
     pub index: usize,
@@ -526,6 +541,7 @@ pub struct HistoryHit {
 
 /// Edits to one file in one turn, by one tool call or outside tool calls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FileTouch {
     pub thread: String,
     /// The prompt of the turn the edits were made in.
@@ -539,6 +555,7 @@ pub struct FileTouch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct InFlight {
     pub thread: String,
     pub owner: String,
@@ -548,6 +565,7 @@ pub struct InFlight {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "on", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum CommentOn {
     /// A history entry, by its index.
     Entry { index: usize },
@@ -557,6 +575,7 @@ pub enum CommentOn {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "at", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub enum CommentLocation {
     Entry {
         index: usize,
@@ -573,6 +592,7 @@ pub enum CommentLocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CommentView {
     pub id: String,
     pub by: String,
@@ -583,6 +603,7 @@ pub struct CommentView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct TurnInfo {
     /// 1-based, as `silt diff --turn` counts them.
     pub number: usize,
@@ -593,6 +614,7 @@ pub struct TurnInfo {
 
 /// A notification, with the thread id as text like everywhere in this API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct InboxEntry {
     pub id: i64,
     pub kind: String,
@@ -605,6 +627,7 @@ pub struct InboxEntry {
 
 /// Deltas for the browser's replica (ADR 0014).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ReplicaDeltas {
     /// How many deltas the family has here; ask for those after next time.
     pub total: usize,
@@ -616,6 +639,7 @@ pub struct ReplicaDeltas {
 
 /// What the web UI watches for changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct LiveState {
     pub deltas: usize,
     /// The agent the web UI started in the thread, if any.
@@ -623,6 +647,7 @@ pub struct LiveState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AgentStatus {
     pub agent: String,
     pub state: silt_proto::AgentState,
@@ -634,6 +659,7 @@ pub struct AgentStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PermissionAsked {
     pub id: u64,
     pub title: String,
@@ -642,12 +668,14 @@ pub struct PermissionAsked {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AgentChoices {
     pub agents: Vec<AgentChoice>,
     pub clones: Vec<CloneInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AgentChoice {
     pub id: String,
     pub name: String,
@@ -655,6 +683,7 @@ pub struct AgentChoice {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CloneInfo {
     pub repo: String,
     pub path: PathBuf,
@@ -667,6 +696,65 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     #[error("could not take the lease")]
     struct Outer(#[source] std::io::Error);
+
+    /// The web UI reads these types; its declarations of them are written
+    /// from here, so the two can't drift.
+    #[test]
+    fn the_web_ui_declares_the_api_types_as_they_are() {
+        use ts_rs::TS;
+        let config = ts_rs::Config::new().with_large_int("number");
+        let declarations = [
+            silt_proto::AgentActivity::decl(&config),
+            silt_proto::AgentState::decl(&config),
+            silt_proto::InboxRead::decl(&config),
+            silt_proto::Presence::decl(&config),
+            silt_proto::PresenceReply::decl(&config),
+            silt_proto::ThreadStatus::decl(&config),
+            silt_proto::Visibility::decl(&config),
+            AgentChoice::decl(&config),
+            AgentChoices::decl(&config),
+            AgentStart::decl(&config),
+            AgentStatus::decl(&config),
+            CloneInfo::decl(&config),
+            CommentLocation::decl(&config),
+            CommentOn::decl(&config),
+            CommentView::decl(&config),
+            DaemonStatus::decl(&config),
+            FileEdit::decl(&config),
+            FileTouch::decl(&config),
+            HistoryEntry::decl(&config),
+            HistoryHit::decl(&config),
+            HistoryPage::decl(&config),
+            InFlight::decl(&config),
+            InboxEntry::decl(&config),
+            LiveState::decl(&config),
+            Mount::decl(&config),
+            MrDetails::decl(&config),
+            MrSummary::decl(&config),
+            PermissionAsked::decl(&config),
+            Pulled::decl(&config),
+            ReplicaDeltas::decl(&config),
+            Resumed::decl(&config),
+            SearchFilters::decl(&config),
+            SearchResult::decl(&config),
+            ShowLine::decl(&config),
+            ThreadSummary::decl(&config),
+            TurnInfo::decl(&config),
+        ];
+        let generated = format!(
+            "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",
+            declarations.iter().map(|declaration| format!("export {declaration}")).collect::<Vec<_>>().join("\n\n")
+        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/api.generated.ts");
+        if std::env::var_os("UPDATE_API_TYPES").is_some() {
+            std::fs::write(&path, &generated).expect("writes the declarations");
+        }
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            written == generated,
+            "web/src/api.generated.ts is out of date: run `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`"
+        );
+    }
 
     #[test]
     fn a_failure_says_what_caused_it() {

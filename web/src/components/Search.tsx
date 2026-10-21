@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { api, short, type SearchFilters, type SearchResult } from '../api'
+import { api, short, type SearchForm, type SearchResult } from '../api'
 import { href } from '../router'
 
-const FILTERS: [keyof SearchFilters, string][] = [
+const FILTERS: [keyof SearchForm, string][] = [
   ['repo', 'repo'],
   ['author', 'author'],
   ['status', 'status'],
@@ -13,7 +13,7 @@ const FILTERS: [keyof SearchFilters, string][] = [
 
 export function Search() {
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState<SearchFilters>({})
+  const [filters, setFilters] = useState<SearchForm>({})
   const [results, setResults] = useState<SearchResult[]>()
   const [error, setError] = useState<string>()
 

@@ -41,7 +41,9 @@ tracing = "0.1.44"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
 
 [dev-dependencies]
+silt-proto = { path = "../silt-proto", features = ["ts"] }
 tempfile = "3.27.0"
+ts-rs = "12.0.1"
 
 [[bench]]
 name = "hook_latency"
