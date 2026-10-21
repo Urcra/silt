@@ -12,6 +12,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
+use crate::capture_lock::CaptureLock;
 use crate::core::{Core, CoreError, Event};
 use crate::protocol::{Request, Response};
 
@@ -109,7 +110,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
     });
 
+    let capture_lock = CaptureLock::open(data_dir)?;
     while let Some(event) = inbox.recv().await {
+        let _turn = capture_lock.turn().await?;
         match event {
             Event::Request(Request::Shutdown, reply) => {
                 core.tick().await;
