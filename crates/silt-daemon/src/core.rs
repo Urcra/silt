@@ -462,6 +462,15 @@ impl Core {
             Request::Status => Response::ok(crate::protocol::DaemonStatus {
                 server: self.remote.as_ref().map(|remote| remote.config.url.clone()),
                 device: self.remote.as_ref().map(|remote| remote.config.device.to_string()),
+                servers: remote::load_sign_ins(&self.data_dir)
+                    .into_iter()
+                    .map(|kept| silt_proto::view::SignIn {
+                        url: kept.url,
+                        user: kept.user,
+                        device: kept.device.to_string(),
+                        name: kept.name,
+                    })
+                    .collect(),
                 sync_error: self.sync_error.clone(),
                 threads: self.threads.len(),
                 diverged: self

@@ -468,8 +468,9 @@ fn mirrored_family(server: &Server) -> Option<std::ffi::OsString> {
 
 /// Runs git against the server's mirror of the only family, as `machine`.
 fn mirror_git(machine: &Machine, server: &Server, args: &[&str]) -> std::process::Output {
-    let config: serde_json::Value =
-        serde_json::from_str(&read(&machine.silt_home.join("server.json"))).expect("the machine is signed in");
+    let sign_ins: serde_json::Value =
+        serde_json::from_str(&read(&machine.silt_home.join("servers.json"))).expect("the machine is signed in");
+    let config = &sign_ins[0];
     let family = mirrored_family(server).expect("the mirror exists");
     let url = format!("{}/git/{}", server.url, family.to_string_lossy());
     let header = format!("http.extraHeader=Authorization: Bearer {}", config["token"].as_str().expect("token"));

@@ -14,7 +14,7 @@ use silt_proto::{
 use silt_sync::Outcome;
 use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
 
-/// The server this daemon syncs with, saved by `silt auth login`.
+/// This machine's sign-in to one server, saved by `silt auth login`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteConfig {
     pub url: String,
@@ -40,13 +40,56 @@ pub enum RemoteError {
     Json(#[from] serde_json::Error),
 }
 
-pub fn config_path(data_dir: &Path) -> PathBuf {
+/// Where this machine keeps its sign-ins, one per server (ADR 0032).
+pub fn sign_ins_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("servers.json")
+}
+
+/// The one sign-in kept before there could be several.
+fn single_sign_in_path(data_dir: &Path) -> PathBuf {
     data_dir.join("server.json")
 }
 
+/// This machine's sign-ins, the default first.
+pub fn load_sign_ins(data_dir: &Path) -> Vec<RemoteConfig> {
+    if let Ok(text) = fs::read_to_string(sign_ins_path(data_dir)) {
+        return serde_json::from_str(&text).unwrap_or_default();
+    }
+    let Ok(text) = fs::read_to_string(single_sign_in_path(data_dir)) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&text)
+        .ok()
+        .or_else(|| serde_json::from_str::<LegacyConfig>(&text).ok().map(RemoteConfig::from))
+        .into_iter()
+        .collect()
+}
+
+/// The default sign-in.
 pub fn load_config(data_dir: &Path) -> Option<RemoteConfig> {
-    let text = fs::read_to_string(config_path(data_dir)).ok()?;
-    serde_json::from_str(&text).ok().or_else(|| serde_json::from_str::<LegacyConfig>(&text).ok().map(RemoteConfig::from))
+    load_sign_ins(data_dir).into_iter().next()
+}
+
+/// Keeps `config` as the sign-in to its server, in place of one before it
+/// there; a new server goes last, so the default stays the default.
+pub fn keep_sign_in(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteError> {
+    let mut sign_ins = load_sign_ins(data_dir);
+    match sign_ins.iter_mut().find(|kept| kept.url == config.url) {
+        Some(kept) => kept.clone_from(config),
+        None => sign_ins.push(config.clone()),
+    }
+    save_sign_ins(data_dir, &sign_ins)
+}
+
+/// Forgets the sign-in to `url`, returning it if there was one.
+pub fn forget_sign_in(data_dir: &Path, url: &str) -> Result<Option<RemoteConfig>, RemoteError> {
+    let mut sign_ins = load_sign_ins(data_dir);
+    let Some(at) = sign_ins.iter().position(|kept| kept.url == url.trim_end_matches('/')) else {
+        return Ok(None);
+    };
+    let forgotten = sign_ins.remove(at);
+    save_sign_ins(data_dir, &sign_ins)?;
+    Ok(Some(forgotten))
 }
 
 /// Settings saved before ids were written as hex, with the device as a
@@ -67,16 +110,19 @@ impl From<LegacyConfig> for RemoteConfig {
     }
 }
 
-/// Saves the settings, with the device's token, for this user's eyes only.
-pub fn save_config(data_dir: &Path, config: &RemoteConfig) -> Result<(), RemoteError> {
+/// Saves the sign-ins, with the devices' tokens, for this user's eyes only.
+fn save_sign_ins(data_dir: &Path, sign_ins: &[RemoteConfig]) -> Result<(), RemoteError> {
     use std::io::Write as _;
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     crate::paths::make_private(data_dir)?;
-    let path = config_path(data_dir);
+    let path = sign_ins_path(data_dir);
     let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-    file.write_all(&serde_json::to_vec_pretty(config)?)?;
-    Ok(())
+    file.write_all(&serde_json::to_vec_pretty(sign_ins)?)?;
+    match fs::remove_file(single_sign_in_path(data_dir)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 fn post(url: &str, path: &str) -> reqwest::RequestBuilder {
@@ -481,10 +527,28 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let device = u128::MAX - 5;
         let legacy = format!(r#"{{"url":"https://silt.example","token":"t","device":{device},"name":"laptop"}}"#);
-        fs::write(config_path(dir.path()), legacy).expect("writes");
+        fs::write(single_sign_in_path(dir.path()), legacy).expect("writes");
         assert_eq!(load_config(dir.path()).expect("loads").device, DeviceId(device));
-        save_config(dir.path(), &load_config(dir.path()).expect("loads")).expect("saves");
-        assert!(fs::read_to_string(config_path(dir.path())).expect("reads").contains(&format!("\"{device:032x}\"")));
+        keep_sign_in(dir.path(), &load_config(dir.path()).expect("loads")).expect("saves");
+        assert!(fs::read_to_string(sign_ins_path(dir.path())).expect("reads").contains(&format!("\"{device:032x}\"")));
+        assert!(!single_sign_in_path(dir.path()).exists(), "the single sign-in became the list");
         assert_eq!(load_config(dir.path()).expect("loads").device, DeviceId(device));
+    }
+
+    fn sign_in(url: &str, token: &str) -> RemoteConfig {
+        RemoteConfig { url: url.into(), token: token.into(), device: DeviceId(1), name: "laptop".into(), user: "ada".into() }
+    }
+
+    #[test]
+    fn each_server_keeps_one_sign_in_and_the_first_stays_the_default() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        keep_sign_in(dir.path(), &sign_in("https://work.example", "a")).expect("saves");
+        keep_sign_in(dir.path(), &sign_in("https://oss.example", "b")).expect("saves");
+        keep_sign_in(dir.path(), &sign_in("https://work.example", "c")).expect("saves");
+        let tokens: Vec<String> = load_sign_ins(dir.path()).into_iter().map(|kept| kept.token).collect();
+        assert_eq!(tokens, ["c", "b"]);
+        assert_eq!(forget_sign_in(dir.path(), "https://work.example/").expect("saves").map(|gone| gone.token), Some("c".into()));
+        assert_eq!(load_config(dir.path()).map(|kept| kept.url), Some("https://oss.example".into()));
+        assert_eq!(forget_sign_in(dir.path(), "https://nowhere.example").expect("saves"), None);
     }
 }

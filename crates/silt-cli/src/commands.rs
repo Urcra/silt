@@ -453,8 +453,11 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let status: DaemonStatus = call(&Request::Status)?;
     match status.server {
-        Some(server) => {
-            println!("syncing with {server} as device {}", status.device.unwrap_or_default());
+        Some(_) => {
+            for (index, server) in status.servers.iter().enumerate() {
+                let default = if index == 0 { " (the default for new projects)" } else { "" };
+                println!("syncing with {} as {}, device {} ({}){default}", server.url, server.user, server.device, server.name);
+            }
             if let Some(error) = status.sync_error {
                 println!("last sync error: {error}");
             }

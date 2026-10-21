@@ -181,7 +181,15 @@ status: string | null, owner: string, agent: string | null,
  */
 settled: boolean, };
 
-export type DaemonStatus = { server: string | null, device: string | null, sync_error: string | null, threads: number, 
+export type DaemonStatus = { 
+/**
+ * The default server's URL, and this machine's device there.
+ */
+server: string | null, device: string | null, 
+/**
+ * Every server this machine is signed in to, the default first (ADR 0032).
+ */
+servers: Array<SignIn>, sync_error: string | null, threads: number, 
 /**
  * Threads whose history here differs from the server's, so they no
  * longer push.
@@ -191,6 +199,12 @@ diverged: Array<string>,
  * Recovery forks made since the daemon started.
  */
 recovered: Array<string>, };
+
+export type SignIn = { url: string, user: string, device: string, 
+/**
+ * This device's name there.
+ */
+name: string, };
 
 export type DeviceAgent = { thread: string, title: string | null, agent: string, state: AgentState, };
 

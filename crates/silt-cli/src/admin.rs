@@ -279,7 +279,7 @@ pub fn restore(backup: &std::path::Path, data: Option<PathBuf>, replace: bool) -
 }
 
 fn save(config: &RemoteConfig) -> Result<(), Exn<CliError>> {
-    remote::save_config(&paths::data_dir(), config).or_raise(|| CliError("could not save the server settings".into()))?;
+    remote::keep_sign_in(&paths::data_dir(), config).or_raise(|| CliError("could not save the server settings".into()))?;
     if is_running() {
         call::<String>(&silt_daemon::protocol::Request::Reload)?;
     }
@@ -341,12 +341,21 @@ fn remote_client() -> Result<Remote, Exn<CliError>> {
         .ok_or_else(|| fail("not signed in to a server; use `silt auth login --server <url>`"))
 }
 
-pub fn auth_logout() -> Result<(), Exn<CliError>> {
-    let remote = remote_client()?;
+/// Signs out of `server`, or of the default server.
+pub fn auth_logout(server: Option<String>) -> Result<(), Exn<CliError>> {
+    let data_dir = paths::data_dir();
+    let config = match &server {
+        Some(url) => remote::load_sign_ins(&data_dir)
+            .into_iter()
+            .find(|kept| kept.url == url.trim_end_matches('/'))
+            .ok_or_else(|| fail(format!("not signed in to {url}")))?,
+        None => remote_client()?.config,
+    };
+    let remote = Remote::new(config);
     if let Err(error) = runtime()?.block_on(remote.logout()) {
         eprintln!("silt: the server could not be told ({error}); forgetting the sign-in here anyway");
     }
-    fs::remove_file(remote::config_path(&paths::data_dir())).or_raise(|| CliError("cannot remove the server settings".into()))?;
+    remote::forget_sign_in(&data_dir, &remote.config.url).or_raise(|| CliError("cannot remove the server settings".into()))?;
     if is_running() {
         call::<String>(&silt_daemon::protocol::Request::Reload)?;
     }

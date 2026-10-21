@@ -317,9 +317,13 @@ enum AuthCommand {
         #[arg(long)]
         no_browser: bool,
     },
-    /// Sign this machine out of its server
-    Logout,
-    /// Show which server this machine syncs with
+    /// Sign this machine out of a server
+    Logout {
+        /// The server to sign out of; defaults to the first signed in to
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Show which servers this machine syncs with
     Status,
 }
 
@@ -619,7 +623,7 @@ fn run() -> Result<(), Exn<CliError>> {
             AuthCommand::Login { server, code, user, password_stdin, name, no_browser } => {
                 admin::auth_login(admin::LoginOptions { server, code, user, password_stdin, name, no_browser })
             }
-            AuthCommand::Logout => admin::auth_logout(),
+            AuthCommand::Logout { server } => admin::auth_logout(server),
             AuthCommand::Status => commands::auth_status(),
         },
         Command::Thread { command } => match command {

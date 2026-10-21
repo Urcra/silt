@@ -193,8 +193,12 @@ impl SearchFilters {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DaemonStatus {
+    /// The default server's URL, and this machine's device there.
     pub server: Option<String>,
     pub device: Option<String>,
+    /// Every server this machine is signed in to, the default first (ADR 0032).
+    #[serde(default)]
+    pub servers: Vec<SignIn>,
     pub sync_error: Option<String>,
     pub threads: usize,
     /// Threads whose history here differs from the server's, so they no
@@ -203,6 +207,17 @@ pub struct DaemonStatus {
     /// Recovery forks made since the daemon started.
     #[serde(default)]
     pub recovered: Vec<String>,
+}
+
+/// This machine's sign-in to a server, without its token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SignIn {
+    pub url: String,
+    pub user: String,
+    pub device: String,
+    /// This device's name there.
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
