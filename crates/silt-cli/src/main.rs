@@ -541,7 +541,38 @@ struct Continue {
 #[error("{0}")]
 pub struct CliError(pub String);
 
-fn main() -> Result<(), Exn<CliError>> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("silt: {}", render::safe(&explain(&error)));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// The error and what caused it, outermost first, as one line for people:
+/// no source locations, which are for Silt's developers.
+fn explain(error: &Exn<CliError>) -> String {
+    let mut causes: Vec<String> = Vec::new();
+    let mut frame = error.frame();
+    loop {
+        causes.push(frame.error().to_string());
+        match frame.children().first() {
+            Some(child) => frame = child,
+            None => break,
+        }
+    }
+    let mut source = frame.error().source();
+    while let Some(cause) = source {
+        causes.push(cause.to_string());
+        source = cause.source();
+    }
+    causes.dedup();
+    causes.join(": ")
+}
+
+fn run() -> Result<(), Exn<CliError>> {
     match Cli::parse().command {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
