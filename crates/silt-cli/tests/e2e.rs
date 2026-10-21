@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 set -eu
 session=""
+settings=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --session-id) session="$2"; shift 2 ;;
-        --settings) shift 2 ;;
+        --settings) settings="$2"; shift 2 ;;
         --mcp-config) printf '%s' "$2" > "$CLAUDE_CONFIG_DIR/mcp-config.json"; shift 2 ;;
         *) shift ;;
     esac
@@ -23,8 +24,13 @@ slug=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
 dir="$CLAUDE_CONFIG_DIR/projects/$slug"
 mkdir -p "$dir"
 transcript="$dir/$session.jsonl"
+# Like Claude Code, runs the command the settings give for the event, and
+# without settings no hook at all.
 hook() {
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"toolu_1"}' "$session" "$1" | $SILT_HOOK "$1"
+    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
+    [ -n "$settings" ] || return 0
+    [ -n "$command" ] || { echo "no $1 hook in the settings" >&2; exit 8; }
+    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"toolu_1"}' "$session" "$1" | sh -c "$command"
 }
 printf '%s\n' '{"type":"ai-title","aiTitle":"Add a greeting","sessionId":"x"}' >> "$transcript"
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"Please add a farewell line to main"}}' >> "$transcript"
@@ -89,7 +95,6 @@ impl Env {
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
-            .env("SILT_HOOK", format!("{} hook", env!("CARGO_BIN_EXE_silt")))
             .output()
             .expect("silt runs")
     }
@@ -209,8 +214,7 @@ fn track_attaches_to_a_session_started_without_silt() {
     fake.args(["--session-id", "11111111-2222-4333-8444-555555555555"])
         .current_dir(&env.repo)
         .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
-        .env("SILT_HOME", &env.silt_home)
-        .env("SILT_HOOK", "true");
+        .env("SILT_HOME", &env.silt_home);
     // Another test forking while this script was being written can hold it
     // open for a moment.
     let output = (0..50)

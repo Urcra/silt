@@ -122,7 +122,18 @@ events="$dir/events.jsonl"
 now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 n=0
 event() { n=$((n + 1)); printf '{"type":"%s","data":%s,"id":"%s-%s","timestamp":"%s","parentId":null}\n' "$1" "$2" "$session" "$n" "$now" >> "$events"; }
+# Like Copilot, runs the plugin's command for the event with its input on
+# stdin, keeping what it prints.
+hook() {
+    command=$(sed -n "s/.*\"$1\":\[[^]]*\"bash\":\"\([^\"]*\)\".*/\1/p" "$plugin/hooks/hooks.json" | sed 's/\\"/"/g')
+    if [ -z "$command" ]; then
+        [ "${3:-}" = optional ] && return 0
+        echo "no $1 hook in the plugin" >&2; exit 8
+    fi
+    printf '{"sessionId":"%s","timestamp":"%s","cwd":"%s","prompt":"%s"}' "$session" "$now" "$(pwd)" "${2:-}" | sh -c "$command" > "$COPILOT_HOME/hook-$1"
+}
 turn() {
+    hook userPromptSubmitted "$1"
     event user.message "{\"content\":\"$1\",\"transformedContent\":\"$1\"}"
     event assistant.turn_start '{"turnId":"0"}'
     event assistant.message "{\"content\":\"\",\"toolRequests\":[{\"toolCallId\":\"$2\",\"name\":\"edit\",\"arguments\":{\"path\":\"$(pwd)/src/main.rs\"}}]}"
@@ -151,6 +162,7 @@ fi
 mkdir -p "$dir"
 printf 'id: %s\ncwd: %s\n' "$session" "$(pwd)" > "$dir/workspace.yaml"
 event session.start "{\"sessionId\":\"$session\",\"context\":{\"cwd\":\"$(pwd)\",\"gitRoot\":\"$(pwd)\"}}"
+hook sessionStart "" optional
 turn "Please add a farewell line to main" call_1 "fn farewell() {}"
 "#;
 

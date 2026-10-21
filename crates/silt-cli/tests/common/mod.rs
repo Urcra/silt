@@ -18,11 +18,12 @@ pub const FAKE_CLAUDE: &str = r#"#!/bin/sh
 set -eu
 session=""
 resume=""
+settings=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --session-id) session="$2"; shift 2 ;;
         --resume) session="$2"; resume=1; shift 2 ;;
-        --settings) shift 2 ;;
+        --settings) settings="$2"; shift 2 ;;
         --append-system-prompt) printf '%s' "$2" > "$FAKE_LOG_DIR/claude-instructions"; shift 2 ;;
         --plugin-dir) ls "$2/skills" > "$FAKE_LOG_DIR/claude-skills"; shift 2 ;;
         *) shift ;;
@@ -31,8 +32,13 @@ done
 slug=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
 dir="$CLAUDE_CONFIG_DIR/projects/$slug"
 transcript="$dir/$session.jsonl"
+# Like Claude Code, runs the command the settings give for the event, and
+# without settings no hook at all.
 hook() {
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"%s"}' "$session" "$1" "$2" | $SILT_HOOK "$1"
+    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
+    [ -n "$settings" ] || return 0
+    [ -n "$command" ] || { echo "no $1 hook in the settings" >&2; exit 8; }
+    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"%s"}' "$session" "$1" "$2" | sh -c "$command"
 }
 say() {
     printf '%s\n' "$1" >> "$transcript"
@@ -260,7 +266,6 @@ impl Machine {
             .env("FAKE_OPENCODE_DIR", self.agents.join("opencode"))
             .env("FAKE_LOG_DIR", self.agents.join("logs"))
             .env("HOME", self.agents.parent().expect("the machine's home"))
-            .env("SILT_HOOK", format!("{} hook", env!("CARGO_BIN_EXE_silt")))
             .envs(envs.iter().copied());
         command
     }

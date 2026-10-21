@@ -101,6 +101,10 @@ fn gemini_and_copilot_sessions_continue_natively_elsewhere() {
     for (agent, said) in [("gemini", "Gemini says done."), ("copilot", "Copilot says done.")] {
         let world = world();
         let thread = recorded(&world, agent, said);
+        if agent == "copilot" {
+            let ran = world.laptop.agents.join("copilot/hook-userPromptSubmitted");
+            assert!(ran.exists(), "the plugin's prompt hook ran through `silt hook`");
+        }
         let checkout = resume_on_home(&world, &[&thread], &[("FAKE_EXPECT", "Please-add-a-farewell-line")]);
         let main = fs::read_to_string(checkout.join("src/main.rs")).expect("read");
         assert!(main.ends_with(&format!("fn {agent}() {{}}\n")), "{main}");
