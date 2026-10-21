@@ -47,7 +47,8 @@ pub enum Request {
     },
     /// What the thread changed: one `turn`, or everything since `base`
     /// (`merge-base`, `last-commit`, `last-turn`, `commit:<sha>`), by
-    /// default since it started.
+    /// default since it started; or how it differs from a branch as git has
+    /// it now (`main`, `branch:<name>`).
     Diff {
         thread: String,
         turn: Option<usize>,

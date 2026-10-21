@@ -175,6 +175,11 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
         let graph = family.graph();
         let head = family.thread_head(thread);
+        if turn.is_none()
+            && let Some(rev) = base.and_then(git_base)
+        {
+            return self.diff_against_git(family_id, &graph.version_vector(&head), rev);
+        }
         let (from, to) = match (turn, base) {
             (Some(turn), _) => {
                 let marks = prompt_marks(family, thread);
@@ -188,6 +193,66 @@ impl Core {
             (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
         };
         Ok(render_diff(&self.changes(family_id, &from, &to)))
+    }
+
+    /// How the files at `head` differ from a commit's tree in this machine's
+    /// clone, such as its main branch as it is now.
+    fn diff_against_git(&self, family_id: FamilyId, head: &VersionVector, rev: GitBase) -> Result<String, CoreError> {
+        let family = &self.families()[&family_id];
+        let repos = self.family_repos(family_id);
+        let names: &[&str] = match rev {
+            GitBase::Main => &["origin/HEAD", "origin/main", "origin/master", "main", "master"],
+            GitBase::Rev(rev) => &[rev],
+        };
+        let (repo, commit) = names
+            .iter()
+            .find_map(|name| repos.iter().find_map(|repo| Some((repo, repo.commit_of(name).ok().flatten()?))))
+            .ok_or_else(|| match rev {
+                GitBase::Main => CoreError::Invalid("this machine's clone has no main branch".into()),
+                GitBase::Rev(rev) => CoreError::Invalid(format!("{rev} names no commit in this machine's clone")),
+            })?;
+        let in_git: BTreeMap<String, GitOid> = repo
+            .files_at(commit)?
+            .into_iter()
+            .filter(|file| file.mode != silt_git::FileMode::Symlink)
+            .map(|file| (file.path, file.oid))
+            .collect();
+        let tree = family.tree().at(|id| head.contains(id));
+        let ours: BTreeMap<String, InodeId> =
+            tree.paths().into_iter().filter(|(_, inode)| tree.kind(*inode) == Some(InodeKind::File)).collect();
+        let text = |oid: GitOid| repos.iter().find_map(|repo| RepoBases(repo).text(oid));
+        let paths: BTreeSet<&String> = in_git.keys().chain(ours.keys()).collect();
+        let mut changes = Vec::new();
+        for path in paths {
+            let theirs = in_git.get(path).copied();
+            let inode = ours.get(path).copied();
+            let view = inode.and_then(|inode| family.file_at(inode, head));
+            if let (Some(oid), Some(FileView::GitText(same))) = (theirs, &view)
+                && oid == *same
+            {
+                continue;
+            }
+            let old_text = theirs.map(text);
+            let new_text = match &view {
+                Some(FileView::Text(written)) => Some(Some(written.clone())),
+                Some(FileView::GitText(oid)) => Some(text(*oid)),
+                Some(FileView::Blob(_)) => Some(None),
+                None => None,
+            };
+            if old_text == new_text {
+                continue;
+            }
+            let binary = matches!(old_text, Some(None)) || matches!(new_text, Some(None));
+            changes.push(FileChange {
+                inode,
+                old_path: theirs.map(|_| path.clone()),
+                new_path: view.as_ref().map(|_| path.clone()),
+                old_text: old_text.flatten().unwrap_or_default(),
+                new_text: new_text.flatten().unwrap_or_default(),
+                binary,
+            });
+        }
+        Ok(render_diff(&changes))
     }
 
     /// How the family's files differ between two versions.
@@ -227,7 +292,7 @@ impl Core {
                 continue;
             }
             changes.push(FileChange {
-                inode,
+                inode: Some(inode),
                 binary: matches!(old, Some(FileView::Blob(_))) || matches!(new, Some(FileView::Blob(_))),
                 old_text: text_of(&old),
                 new_text: text_of(&new),
@@ -377,7 +442,8 @@ fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<Option<String>, 
 /// One file's change between two versions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileChange {
-    pub(crate) inode: InodeId,
+    /// None for a file only git has.
+    pub(crate) inode: Option<InodeId>,
     pub(crate) old_path: Option<String>,
     pub(crate) new_path: Option<String>,
     pub(crate) old_text: String,
@@ -417,6 +483,21 @@ pub(crate) fn render_diff(changes: &[FileChange]) -> String {
     out
 }
 
+/// A diff base that is a commit in the clone rather than a version of the
+/// thread: its main branch, or `branch:<rev>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitBase<'a> {
+    Main,
+    Rev(&'a str),
+}
+
+fn git_base(base: &str) -> Option<GitBase<'_>> {
+    match base {
+        "main" => Some(GitBase::Main),
+        other => other.strip_prefix("branch:").map(GitBase::Rev),
+    }
+}
+
 /// The version a diff of `thread` starts from (ADR 0011's diff bases).
 fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<VersionVector, CoreError> {
     let graph = family.graph();
@@ -445,7 +526,9 @@ fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<Ve
         }
         Some(other) => {
             let sha = other.strip_prefix("commit:").ok_or_else(|| {
-                CoreError::Invalid(format!("unknown diff base {other:?}; use merge-base, last-commit, last-turn or commit:<sha>"))
+                CoreError::Invalid(format!(
+                    "unknown diff base {other:?}; use merge-base, last-commit, last-turn, commit:<sha>, main or branch:<name>"
+                ))
             })?;
             commits()
                 .rfind(|(_, commit)| commit.to_string().starts_with(sha))
@@ -495,7 +578,7 @@ mod tests {
     #[test]
     fn a_changed_binary_file_is_listed_as_such() {
         let change = FileChange {
-            inode: InodeId(silt_types::DeltaId::new(silt_types::ActorId(1), silt_types::Lamport(0))),
+            inode: None,
             old_path: Some("logo.png".into()),
             new_path: Some("logo.png".into()),
             old_text: String::new(),

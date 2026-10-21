@@ -278,3 +278,28 @@ test("an agent that takes no images is told a text file's content in the prompt,
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText(/^Done: see this\s+notes\.txt:\s+```\s+hello\s+```$/)).toBeVisible()
 })
+
+test("comments on the agent's last turn go back to it as a prompt", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Show changes' }).click()
+  const changes = page.getByRole('region', { name: 'changes' })
+  await page.getByRole('tab', { name: 'Last turn' }).click()
+  await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
+  await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
+  await page.getByLabel('code comment').fill('give it a better name')
+  await page.getByRole('button', { name: 'Add' }).click()
+  await expect(changes.getByText('alice: give it a better name')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()
+  await expect(page.getByText('Sent to the agent')).toBeVisible()
+  await expect(
+    page.getByText(/^Done: Please address these review comments:\s+- src\/main\.rs:\d+ \(alice\): give it a better name$/),
+  ).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Against main' }).click()
+  await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
+})

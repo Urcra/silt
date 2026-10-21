@@ -7,6 +7,7 @@ import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { MainScroll } from '../scroll'
 import { Diff } from './Diff'
+import { DiffPanel } from './DiffPanel'
 import { LivePanel } from './Live'
 
 const KIND_STYLE: Record<string, string> = {
@@ -128,50 +129,13 @@ function Entry({
   )
 }
 
-function CodeComment({ onSave }: { onSave: (path: string, start: number, end: number, text: string) => Promise<void> }) {
-  const [path, setPath] = useState('')
-  const [lines, setLines] = useState('')
-  const [text, setText] = useState('')
-  const [error, setError] = useState<string>()
-  return (
-    <form
-      className="mt-3 space-y-1 text-xs"
-      onSubmit={(event) => {
-        event.preventDefault()
-        const [start, end = start] = lines.split('-').map((part) => Number(part.trim()))
-        setError(undefined)
-        onSave(path, start, end, text).then(
-          () => setText(''),
-          (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
-        )
-      }}
-    >
-      <p className="font-semibold text-fg-2">Comment on code</p>
-      <input aria-label="file" placeholder="src/main.rs" value={path} onChange={(event) => setPath(event.target.value)} className="w-full rounded border border-line px-2 py-1" />
-      <input aria-label="lines" placeholder="10-14" value={lines} onChange={(event) => setLines(event.target.value)} className="w-full rounded border border-line px-2 py-1" />
-      <input aria-label="code comment" placeholder="comment" value={text} onChange={(event) => setText(event.target.value)} className="w-full rounded border border-line px-2 py-1" />
-      <button className="rounded bg-accent px-2 py-1 text-on-accent">Add</button>
-      {error && <p className="text-danger">{error}</p>}
-    </form>
-  )
-}
-
 export function ThreadView({ id }: { id: string }) {
   const queries = useQueryClient()
   const history = useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
   const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(id) })
-  const [showDiff, setShowDiff] = useState(false)
-  const [base, setBase] = useState('')
   const [agent, setAgent] = useState('')
-  const [commit, setCommit] = useState('')
-  const diffBase = base === 'commit' ? (commit ? `commit:${commit}` : '') : base
-  const diff = useQuery({
-    queryKey: keys.diff(id, { base: diffBase }),
-    queryFn: () => api.diff(id, { base: diffBase }),
-    enabled: showDiff,
-  })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const summary = threads.data?.find((thread) => thread.id === history.data?.thread)
   const fullId = history.data?.thread ?? id
@@ -227,39 +191,8 @@ export function ThreadView({ id }: { id: string }) {
           </select>
           <Copy command={`silt resume ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
           <Copy command={`silt fork ${short(fullId)}${agent ? ` --agent ${agent}` : ''}`} />
-          <button className="text-sm text-accent-fg" onClick={() => setShowDiff(!showDiff)}>
-            {showDiff ? 'Hide' : 'Show'} all changes
-          </button>
         </div>
-        {showDiff && (
-          <div className="mb-2 flex items-center gap-2 text-sm">
-            <label htmlFor="diff-base">Changes since</label>
-            <select
-              id="diff-base"
-              aria-label="diff base"
-              value={base}
-              onChange={(event) => setBase(event.target.value)}
-              className="rounded border border-line px-2 py-1"
-            >
-              <option value="">the thread started</option>
-              <option value="merge-base">the merge base with its source</option>
-              <option value="last-commit">the last commit</option>
-              <option value="last-turn">the last turn started</option>
-              <option value="commit">a commit…</option>
-            </select>
-            {base === 'commit' && (
-              <input
-                aria-label="commit"
-                placeholder="sha"
-                value={commit}
-                onChange={(event) => setCommit(event.target.value)}
-                className="w-28 rounded border border-line px-2 py-1 font-mono"
-              />
-            )}
-          </div>
-        )}
-        {showDiff && diff.error && <p className="text-sm text-danger">{message(diff.error)}</p>}
-        {showDiff && diff.data !== undefined && <Diff text={diff.data} />}
+        <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
         {history.data?.thread && (
           <LivePanel
             thread={history.data.thread}
@@ -326,12 +259,7 @@ export function ThreadView({ id }: { id: string }) {
             </li>
           ))}
         </ul>
-        <CodeComment
-          onSave={async (path, start, end, text) => {
-            await api.addComment(id, { on: 'lines', path, start, end }, text)
-            await reloadComments()
-          }}
-        />
+        <p className="mt-3 text-xs text-fg-3">Comment on code from the line numbers in Show changes.</p>
       </aside>
     </div>
   )

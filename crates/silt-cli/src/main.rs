@@ -120,7 +120,8 @@ enum Command {
         #[arg(long, conflicts_with = "base")]
         turn: Option<usize>,
         /// Diff from merge-base (with the fork's source), last-commit,
-        /// last-turn or commit:<sha>; by default from the thread's start
+        /// last-turn or commit:<sha>; by default from the thread's start.
+        /// Or against a branch as git has it now: main or branch:<name>
         #[arg(long)]
         base: Option<String>,
     },

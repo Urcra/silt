@@ -386,7 +386,7 @@ fn files_note(files: &[String]) -> String {
 fn conflicts(ours: &[FileChange], theirs: &[FileChange]) -> Vec<String> {
     let mut conflicts = Vec::new();
     for change in theirs {
-        let Some(other) = ours.iter().find(|other| other.inode == change.inode) else {
+        let Some(other) = ours.iter().find(|other| other.inode.is_some() && other.inode == change.inode) else {
             continue;
         };
         for (start, end) in overlapping_lines(&change.old_text, &other.new_text, &change.new_text) {
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn conflicts_name_the_file_and_lines_both_sides_changed() {
         let change = |actor: u128, path: &str, new_text: &str| FileChange {
-            inode: InodeId(DeltaId::new(silt_types::ActorId(actor), silt_types::Lamport(0))),
+            inode: Some(InodeId(DeltaId::new(silt_types::ActorId(actor), silt_types::Lamport(0)))),
             old_path: Some(path.to_owned()),
             new_path: Some(path.to_owned()),
             old_text: "a\nb\nc\n".to_owned(),

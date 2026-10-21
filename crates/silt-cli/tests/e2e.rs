@@ -617,6 +617,14 @@ fn diffs_start_from_the_base_asked_for() {
     assert!(last_turn.contains("+fn farewell() {}"), "{last_turn}");
     let refused = env.run(&["diff", &thread, "--base", "commit:0000000"]);
     assert!(String::from_utf8_lossy(&refused.stderr).contains("never was at a commit"));
+
+    // Against a branch as git has it now, rather than a version of the thread.
+    let against_main = env.stdout(&["diff", &thread, "--base", "main"]);
+    assert!(against_main.contains("+fn later() {}") && !against_main.contains("+fn farewell"), "{against_main}");
+    let against_first = env.stdout(&["diff", &thread, "--base", &format!("branch:{first}")]);
+    assert!(against_first.contains("+fn later() {}") && against_first.contains("+fn farewell() {}"), "{against_first}");
+    let nowhere = env.run(&["diff", &thread, "--base", "branch:nowhere"]);
+    assert!(String::from_utf8_lossy(&nowhere.stderr).contains("names no commit"));
 }
 
 #[test]

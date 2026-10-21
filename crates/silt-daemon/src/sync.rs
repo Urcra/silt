@@ -342,6 +342,24 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("no local clone for family {family}")))
     }
 
+    /// Every repository here holding the family's git objects: the person's
+    /// clones first, as only they follow the remote's branches, then the
+    /// thread checkouts made from them.
+    pub(crate) fn family_repos(&self, family: FamilyId) -> Vec<silt_git::Repo> {
+        let threads = self.threads.values().filter(|thread| thread.family == family);
+        let clones = threads.clone().filter_map(|thread| self.clones.get(&thread.repo).cloned());
+        let roots = threads.filter(|thread| !thread.repo_root.as_os_str().is_empty()).map(|thread| thread.repo_root.clone());
+        let checkouts =
+            self.checkouts.values().filter(|checkout| checkout.family == family).map(|checkout| checkout.record.path.clone());
+        let mut seen = std::collections::HashSet::new();
+        clones
+            .chain(roots)
+            .chain(checkouts)
+            .filter_map(|path| silt_git::Repo::discover(&path).ok())
+            .filter(|repo| seen.insert(repo.root().to_owned()))
+            .collect()
+    }
+
     pub(crate) async fn listed(&mut self, listing: Result<Listing, String>, requested: Instant) {
         let listing = match listing {
             Ok(listing) => listing,
