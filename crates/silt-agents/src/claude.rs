@@ -366,6 +366,9 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// For tool hooks: the tool's arguments, as the model gave them.
+    #[serde(default)]
+    pub tool_input: Option<Value>,
     /// For `SessionStart`: `startup`, `resume`, `clear` or `compact`.
     #[serde(default)]
     pub source: Option<String>,

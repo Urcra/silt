@@ -165,6 +165,7 @@ fn a_thread_moves_from_claude_to_codex_and_back() {
     );
     let show = world.laptop.stdout(&["show", &thread]);
     assert!(show.contains("> Back in claude"), "{show}");
+    assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains("> Back in claude")));
 
     world.home.silt_with(
         &["resume", &thread],

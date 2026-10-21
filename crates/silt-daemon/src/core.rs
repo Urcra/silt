@@ -34,11 +34,6 @@ pub enum Event {
         settled: bool,
     },
     Tick,
-    CloseTool {
-        session_id: String,
-        tool_use_id: Option<String>,
-        reply: oneshot::Sender<Response>,
-    },
     /// A push's answer, from sync epoch `epoch`.
     Pushed {
         family: FamilyId,
@@ -310,13 +305,7 @@ impl Core {
             Request::StartSession { cwd, agent, session_id, isolated, existing } => {
                 to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await)
             }
-            Request::Hook { event, input } => match self.hook(&event, input, reply).await {
-                Some((response, reply)) => {
-                    let _ = reply.send(response);
-                    return;
-                }
-                None => return,
-            },
+            Request::Hook { event, input } => self.hook(&event, input).await,
             Request::EndSession { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.end_session(thread).await),
                 Err(error) => Response::error(error),
@@ -482,7 +471,7 @@ impl Core {
     }
 
     /// Records changes under `paths` (absolute; directories are scanned).
-    async fn ingest_paths(&mut self, checkout_id: CheckoutId, paths: Vec<PathBuf>) -> Result<(), CoreError> {
+    pub(crate) async fn ingest_paths(&mut self, checkout_id: CheckoutId, paths: Vec<PathBuf>) -> Result<(), CoreError> {
         let checkout = self.checkout(checkout_id)?;
         let root = checkout.record.path.clone();
         if paths.iter().any(|path| *path == root || path.file_name() == Some(".gitattributes".as_ref())) {

@@ -38,7 +38,7 @@ hook() {
     command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
     [ -n "$settings" ] || return 0
     [ -n "$command" ] || { echo "no $1 hook in the settings" >&2; exit 8; }
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"%s"}' "$session" "$1" "$2" | sh -c "$command"
+    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"%s","tool_input":{"file_path":"%s/src/main.rs"}}' "$session" "$1" "$2" "$(pwd)" | sh -c "$command"
 }
 say() {
     printf '%s\n' "$1" >> "$transcript"

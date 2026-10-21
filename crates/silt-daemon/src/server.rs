@@ -121,7 +121,6 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
             Event::Tick => core.tick().await,
-            Event::CloseTool { session_id, tool_use_id, reply } => core.close_tool(&session_id, tool_use_id, reply).await,
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,

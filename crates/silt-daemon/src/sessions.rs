@@ -14,16 +14,12 @@ use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
 use silt_store::{CheckoutId, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, FamilyId, ThreadId};
-use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::attribution;
 use crate::core::{CanonicalCwd, Core, CoreError, Event, now_ms, to_response};
-use crate::protocol::{HookReply, Response, SessionStarted};
+use crate::protocol::{Response, SessionStarted};
 
-/// How long after a tool finishes its file changes still count as its own;
-/// covers the watcher's debounce.
-const TOOL_SETTLE: Duration = Duration::from_millis(250);
 /// How long edits wait for the transcript of an agent without Silt's
 /// hooks: agents flush their transcripts late, and some only write a tool
 /// call once it finished.
@@ -930,87 +926,19 @@ impl Core {
         attribution::author(self.importing, &sessions, pending, noticed)
     }
 
-    /// Returns a response to send now, or `None` when the reply is deferred.
-    pub(crate) async fn hook(
-        &mut self,
-        event: &str,
-        input: serde_json::Value,
-        reply: oneshot::Sender<Response>,
-    ) -> Option<(Response, oneshot::Sender<Response>)> {
-        let input: silt_agents::claude::HookInput = match serde_json::from_value(input) {
-            Ok(input) => input,
-            Err(error) => return Some((Response::error(error), reply)),
-        };
-        let session_id = input.session_id.clone();
-        let Some((thread, hooked)) =
-            self.session(&session_id).map(|session| (session.record.thread, session.agent.capture() == Capture::Hooks))
-        else {
-            return Some((Response::ok(HookReply::default()), reply));
-        };
-        if !hooked {
-            let tailed = self.tail_session(&session_id).await;
-            let context = if event == "UserPromptSubmit" { self.prompt_context(thread).await } else { None };
-            let reply_data = HookReply { additional_context: context };
-            return Some((to_response(tailed.map(|()| reply_data)), reply));
+    pub(crate) async fn hook(&mut self, event: &str, input: serde_json::Value) -> Response {
+        match serde_json::from_value::<silt_agents::claude::HookInput>(input) {
+            Ok(input) => to_response(self.capture(event, &input).await),
+            Err(error) => Response::error(error),
         }
-        let result = match event {
-            "UserPromptSubmit" => {
-                let tailed = self.tail_session(&session_id).await;
-                let recorded = match tailed {
-                    Ok(()) => self.record_turn(&session_id, TurnMark::PromptSubmitted).await,
-                    Err(error) => Err(error),
-                };
-                let reply_data = HookReply { additional_context: self.prompt_context(thread).await };
-                return Some((to_response(recorded.map(|()| reply_data)), reply));
-            }
-            "PreToolUse" => {
-                let tool_use_id = input.tool_use_id.clone().unwrap_or_default();
-                let mark = TurnMark::ToolStarted { tool_use_id, tool: input.tool_name.clone().unwrap_or_default() };
-                self.record_turn(&session_id, mark).await
-            }
-            "PostToolUse" => {
-                let events = self.events.clone();
-                let tool_use_id = input.tool_use_id.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(TOOL_SETTLE).await;
-                    let _ = events.send(Event::CloseTool { session_id, tool_use_id, reply });
-                });
-                return None;
-            }
-            "SessionStart" if input.source.as_deref() == Some("compact") => {
-                let tailed = self.tail_session(&session_id).await;
-                let reply_data = HookReply {
-                    additional_context: Some(format!("{} This session's thread is {thread}.", silt_mcp::INSTRUCTIONS)),
-                };
-                return Some((to_response(tailed.map(|()| reply_data)), reply));
-            }
-            "Stop" => {
-                let tailed = self.tail_session(&session_id).await;
-                match tailed {
-                    Ok(()) => self.record_turn(&session_id, TurnMark::Stopped).await,
-                    Err(error) => Err(error),
-                }
-            }
-            _ => Ok(()),
-        };
-        Some((to_response(result.map(|()| HookReply::default())), reply))
     }
 
     /// What the agent hears with a prompt: Silt's notices and teammates'
     /// live drafts.
-    async fn prompt_context(&mut self, thread: ThreadId) -> Option<String> {
+    pub(crate) async fn prompt_context(&mut self, thread: ThreadId) -> Option<String> {
         let parts: Vec<String> =
             [self.take_notices(thread).await, self.teammates_drafts(thread).await].into_iter().flatten().collect();
         (!parts.is_empty()).then(|| parts.join("\n\n"))
-    }
-
-    /// Finishes `tool_use_id`, or without one whichever tool is open.
-    pub(crate) async fn close_tool(&mut self, session_id: &str, tool_use_id: Option<String>, reply: oneshot::Sender<Response>) {
-        let tool = tool_use_id.filter(|id| !id.is_empty()).or_else(|| self.open_tool(session_id).map(str::to_owned));
-        if let Some(tool_use_id) = tool {
-            let _ = self.record_turn(session_id, TurnMark::ToolFinished { tool_use_id }).await;
-        }
-        let _ = reply.send(Response::ok("ok"));
     }
 
     /// Records a turn mark, unless the log has it already: a mark seen by

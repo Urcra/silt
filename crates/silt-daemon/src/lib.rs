@@ -1,5 +1,6 @@
 mod acp;
 mod attribution;
+mod capture;
 pub mod client;
 mod comments;
 mod core;
