@@ -632,14 +632,14 @@ pub fn mr_create(thread: Option<String>, title: Option<String>, summary: Option<
 pub fn mr_list(thread: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let requests: Vec<MrSummary> = call(&Request::MrList { thread })?;
-    print!("{}", render::merge_requests(&requests));
+    print!("{}", render::safe(&render::merge_requests(&requests)));
     Ok(())
 }
 
 pub fn mr_show(mr: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let details: MrDetails = call(&Request::MrShow { mr: mr.into() })?;
-    print!("{}", render::merge_request(&details));
+    print!("{}", render::safe(&render::merge_request(&details)));
     Ok(())
 }
 
@@ -681,7 +681,7 @@ pub fn trash() -> Result<(), Exn<CliError>> {
     if threads.is_empty() {
         println!("the trash is empty");
     } else {
-        print!("{}", render::threads(&threads));
+        print!("{}", render::safe(&render::threads(&threads)));
     }
     Ok(())
 }
@@ -689,7 +689,7 @@ pub fn trash() -> Result<(), Exn<CliError>> {
 pub fn inbox(all: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let entries: Vec<silt_daemon::protocol::InboxEntry> = call(&Request::Inbox { all })?;
-    print!("{}", render::inbox(&entries));
+    print!("{}", render::safe(&render::inbox(&entries)));
     Ok(())
 }
 
@@ -708,14 +708,14 @@ pub fn inbox_read(ids: Vec<i64>, all: bool) -> Result<(), Exn<CliError>> {
 pub fn log() -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let threads: Vec<ThreadSummary> = call(&Request::Threads)?;
-    print!("{}", render::threads(&threads));
+    print!("{}", render::safe(&render::threads(&threads)));
     Ok(())
 }
 
 pub fn show(thread: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let lines: Vec<ShowLine> = call(&Request::Show { thread: thread.into() })?;
-    print!("{}", render::show(&lines));
+    print!("{}", render::safe(&render::show(&lines)));
     Ok(())
 }
 
@@ -726,7 +726,7 @@ pub fn diff(thread: &str, turn: Option<usize>, base: Option<String>) -> Result<(
         turn,
         base,
     })?;
-    print!("{diff}");
+    print!("{}", render::safe(&diff));
     Ok(())
 }
 
@@ -737,7 +737,7 @@ pub fn search(query: &str, filters: SearchFilters) -> Result<(), Exn<CliError>> 
         limit: 20,
         filters,
     })?;
-    print!("{}", render::search(&hits));
+    print!("{}", render::safe(&render::search(&hits)));
     Ok(())
 }
 
@@ -747,7 +747,7 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
         cwd: current_dir()?,
         path: path.into(),
     })?;
-    print!("{}", render::in_flight(&found));
+    print!("{}", render::safe(&render::in_flight(&found)));
     Ok(())
 }
 
@@ -789,7 +789,7 @@ pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliE
         offset,
         limit,
     })?;
-    print!("{}", render::history(&page));
+    print!("{}", render::safe(&render::history(&page)));
     Ok(())
 }
 
@@ -840,7 +840,7 @@ pub fn comments(thread: &str, resolve: Option<&str>) -> Result<(), Exn<CliError>
         thread: thread.into(),
         cwd: current_dir()?,
     })?;
-    print!("{}", render::comments(&comments));
+    print!("{}", render::safe(&render::comments(&comments)));
     Ok(())
 }
 

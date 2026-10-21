@@ -3,6 +3,13 @@ use std::fmt::Write;
 use silt_daemon::protocol::{
     CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary};
 
+/// Text that came from other people, fit for a terminal: control characters
+/// other than newline and tab could move the cursor, rewrite what was
+/// printed before or set the window's title.
+pub fn safe(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t')).collect()
+}
+
 /// The last 12 hex digits: UUIDv7 ids share their leading time digits.
 fn short(id: &str) -> &str {
     &id[id.len().saturating_sub(12)..]
@@ -210,6 +217,12 @@ pub fn merge_request(details: &MrDetails) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_controls_from_others_are_dropped() {
+        let planted = "title\x1b]0;owned\x07\x1b[2J\r\u{9b}31m\nnext\tline";
+        assert_eq!(safe(planted), "title]0;owned[2J31m\nnext\tline");
+    }
 
     #[test]
     fn clipping_keeps_short_text_and_flattens_lines() {
