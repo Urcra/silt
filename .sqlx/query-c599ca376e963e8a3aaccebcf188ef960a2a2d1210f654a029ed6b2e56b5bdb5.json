@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, seq FROM family_positions",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_positions",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "family_positions",
+            "name": "seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c599ca376e963e8a3aaccebcf188ef960a2a2d1210f654a029ed6b2e56b5bdb5"
+}

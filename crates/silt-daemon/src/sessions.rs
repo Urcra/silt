@@ -119,6 +119,33 @@ pub(crate) fn transcript_grew(session: &Session) -> bool {
     fs::metadata(transcript).is_ok_and(|metadata| metadata.len() > read.offset)
 }
 
+/// Feeds `sessions` what `deltas` recorded of them, as their transcripts'
+/// readers would have read it.
+pub(crate) fn read_recorded(sessions: &mut [Session], deltas: &[silt_log::Delta]) {
+    let by_reference: HashMap<SessionRef, usize> =
+        sessions.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
+    for delta in deltas {
+        match &delta.op {
+            Op::Conv(ConvOp::Native { session, file, line }) => {
+                let Some(found) = by_reference.get(session).map(|index| &mut sessions[*index]) else {
+                    continue;
+                };
+                let agent = found.agent;
+                found.readers.entry(file_key(file)).or_insert_with(|| agent.reader()).push(line);
+                if let Some(key) = agent.record_key(line) {
+                    found.recorded.insert(key);
+                }
+            }
+            Op::Conv(ConvOp::SessionStarted { session, cwd, .. }) => {
+                if let Some(index) = by_reference.get(session) {
+                    sessions[*index].agent_cwd = PathBuf::from(cwd);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub(crate) fn file_key(file: &SessionFile) -> String {
     match file {
         SessionFile::Main => "main".to_owned(),
@@ -386,21 +413,33 @@ impl Core {
     /// Loads the sessions recorded before a restart, with readers that have
     /// seen what was already recorded.
     pub(crate) async fn load_sessions(&mut self) -> Result<(), CoreError> {
+        let records = self.store.sessions().await?;
+        self.take_sessions(records).await
+    }
+
+    /// How far each of the session's files was read, as the store has it.
+    pub(crate) async fn stored_offsets(&self, record: &SessionRecord) -> Result<HashMap<String, SessionFileOffset>, CoreError> {
+        Ok(self
+            .store
+            .session_offsets(&record.agent, &record.session_id)
+            .await?
+            .into_iter()
+            .map(|offset| (offset.file.clone(), offset))
+            .collect())
+    }
+
+    /// Takes on the sessions of `records`, reading what each recorded so far
+    /// from its family's log.
+    pub(crate) async fn take_sessions(&mut self, records: Vec<SessionRecord>) -> Result<(), CoreError> {
         let mut loaded: Vec<Session> = Vec::new();
-        for record in self.store.sessions().await? {
+        for record in records {
             let Some(family) = self.threads.get(&record.thread).map(|thread| thread.family) else {
                 continue;
             };
             let Some(agent) = silt_agents::agent(&record.agent) else {
                 continue;
             };
-            let offsets: HashMap<String, SessionFileOffset> = self
-                .store
-                .session_offsets(&record.agent, &record.session_id)
-                .await?
-                .into_iter()
-                .map(|offset| (offset.file.clone(), offset))
-                .collect();
+            let offsets = self.stored_offsets(&record).await?;
             loaded.push(Session {
                 transcript: offsets.get("main").map(|offset| offset.path.clone()),
                 record,
@@ -420,29 +459,8 @@ impl Core {
             });
         }
         let families: HashSet<FamilyId> = loaded.iter().map(|session| session.family).collect();
-        let by_reference: HashMap<SessionRef, usize> =
-            loaded.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
         for family in families {
-            for delta in self.local_log(family) {
-                match &delta.op {
-                    Op::Conv(ConvOp::Native { session, file, line }) => {
-                        let Some(found) = by_reference.get(session).map(|index| &mut loaded[*index]) else {
-                            continue;
-                        };
-                        let agent = found.agent;
-                        found.readers.entry(file_key(file)).or_insert_with(|| agent.reader()).push(line);
-                        if let Some(key) = agent.record_key(line) {
-                            found.recorded.insert(key);
-                        }
-                    }
-                    Op::Conv(ConvOp::SessionStarted { session, cwd, .. }) => {
-                        if let Some(index) = by_reference.get(session) {
-                            loaded[*index].agent_cwd = PathBuf::from(cwd);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            read_recorded(&mut loaded, self.local_log(family));
         }
         self.sessions.extend(loaded);
         Ok(())

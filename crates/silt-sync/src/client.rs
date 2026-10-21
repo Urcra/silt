@@ -190,6 +190,19 @@ impl ClientSync {
         }
     }
 
+    /// Another process sharing this replica's store synced it as far as
+    /// `stored` (ADR 0018). It is taken when nothing here is in flight, as an
+    /// answer on its way would move the same cursors.
+    pub fn caught_up(&mut self, stored: &ClientSync) {
+        if self.push_in_flight.is_none() && stored.generation == self.generation && stored.pushed > self.pushed {
+            self.pushed = stored.pushed;
+        }
+        if self.pull_in_flight.is_none() && stored.generation == self.generation && stored.pulled > self.pulled {
+            self.pulled = stored.pulled;
+            self.last_pulled = stored.last_pulled;
+        }
+    }
+
     /// Deltas from the server were appended to the local log right after
     /// position `at`; when nothing local is waiting before them they don't
     /// need pushing back.
@@ -251,6 +264,24 @@ mod tests {
         sync.on_pull(Some(8), Outcome::Pulled(Vec::new()));
         assert_eq!(sync.diverged(), None, "the new server may not have the colliding delta");
         assert_eq!(sync.next_push(3), Some(Push { from: 0, to: 3 }));
+    }
+
+    #[test]
+    fn progress_another_process_stored_is_taken_unless_something_is_in_flight() {
+        let last = Some(DeltaId::new(ActorId(1), Lamport(5)));
+        let stored = ClientSync::new(Some(1), 6, 9, last, 0);
+        let mut sync = ClientSync::new(Some(1), 2, 3, None, 0);
+        sync.caught_up(&stored);
+        assert_eq!((sync.pushed(), sync.pulled(), sync.last_pulled()), (6, 9, last));
+
+        let mut busy = ClientSync::new(Some(1), 2, 3, None, 0);
+        busy.next_push(4);
+        busy.next_pull();
+        busy.caught_up(&stored);
+        assert_eq!((busy.pushed(), busy.pulled()), (2, 3));
+        let mut elsewhere = ClientSync::new(Some(2), 2, 3, None, 0);
+        elsewhere.caught_up(&stored);
+        assert_eq!((elsewhere.pushed(), elsewhere.pulled()), (2, 3), "another server generation's progress");
     }
 
     #[test]

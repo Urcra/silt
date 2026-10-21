@@ -3,6 +3,7 @@ mod blobs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use silt_log::Delta;
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
@@ -136,6 +137,15 @@ pub struct SearchHit {
 pub struct Store {
     pool: SqlitePool,
     blobs: BlobStore,
+    watch: Arc<tokio::sync::Mutex<Watch>>,
+}
+
+/// A connection of its own for telling whether the database changed: what
+/// SQLite reports there counts every other connection's commits.
+#[derive(Debug)]
+struct Watch {
+    connection: sqlx::SqliteConnection,
+    seen: Option<i64>,
 }
 
 impl Store {
@@ -156,9 +166,39 @@ impl Store {
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(std::time::Duration::from_secs(10))
             .foreign_keys(true);
-        let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options).await?;
+        let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options.clone()).await?;
         MIGRATOR.run(&pool).await?;
-        Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")) })
+        let watch = Watch { connection: sqlx::ConnectOptions::connect(&options).await?, seen: None };
+        Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")), watch: Arc::new(tokio::sync::Mutex::new(watch)) })
+    }
+
+    /// Whether anyone committed to the database since the last call, this
+    /// process too through its other connections; true the first time.
+    pub async fn changed(&self) -> Result<bool, StoreError> {
+        let mut watch = self.watch.lock().await;
+        // A pragma, which sqlx's macros can't describe.
+        let version: i64 = sqlx::query_scalar("PRAGMA data_version").fetch_one(&mut watch.connection).await?;
+        Ok(watch.seen.replace(version) != Some(version))
+    }
+
+    /// The position of each family's last stored delta.
+    pub async fn positions(&self) -> Result<HashMap<FamilyId, i64>, StoreError> {
+        let rows = sqlx::query!("SELECT family_id, seq FROM family_positions").fetch_all(&self.pool).await?;
+        rows.into_iter().map(|row| Ok((FamilyId(id_from(&row.family_id)?), row.seq))).collect()
+    }
+
+    pub async fn position(&self, family: FamilyId) -> Result<Option<i64>, StoreError> {
+        let family = id_bytes(family.0);
+        Ok(sqlx::query_scalar!("SELECT seq FROM family_positions WHERE family_id = ?", family).fetch_optional(&self.pool).await?)
+    }
+
+    /// The family's deltas stored after position `after`, in order.
+    pub async fn deltas_after(&self, family: FamilyId, after: i64) -> Result<Vec<Delta>, StoreError> {
+        let family = id_bytes(family.0);
+        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, after)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?)).collect()
     }
 
     pub fn blobs(&self) -> &BlobStore {

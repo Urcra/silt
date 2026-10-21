@@ -181,6 +181,8 @@ pub struct Core {
     pub(crate) heads: HashMap<CheckoutId, GitOid>,
     /// How much of each family's log its stored snapshot covers.
     pub(crate) snapshotted: HashMap<FamilyId, usize>,
+    /// The position of each family's last stored delta this daemon holds.
+    pub(crate) positions: HashMap<FamilyId, i64>,
     pub(crate) web: Option<crate::web::WebInfo>,
     /// What recovery forks this daemon made, for `silt auth status`.
     pub(crate) recoveries: Vec<String>,
@@ -243,6 +245,7 @@ impl Core {
             sync_error: None,
             heads: HashMap::new(),
             snapshotted: HashMap::new(),
+            positions: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
             uploaded: std::sync::Arc::default(),
@@ -290,6 +293,7 @@ impl Core {
                 settled: true,
             });
         }
+        core.end_turn().await?;
         Ok(core)
     }
 
@@ -932,7 +936,7 @@ impl Core {
         Ok(())
     }
 
-    fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded) {
+    pub(crate) fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded) {
         match loaded {
             Loaded::Projected { family, covered } => {
                 self.raw.remove(&family_id);
@@ -1447,7 +1451,7 @@ fn moved_threads(deltas: &[Delta], device: DeviceId, holder: impl Fn(ThreadId) -
 }
 
 /// What the store says a checkout's files on disk were last recorded as.
-async fn stored_entries(store: &Store, checkout: CheckoutId) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
+pub(crate) async fn stored_entries(store: &Store, checkout: CheckoutId) -> Result<BTreeMap<String, DiskEntry>, CoreError> {
     Ok(store
         .disk_files(checkout)
         .await?

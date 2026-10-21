@@ -17,7 +17,7 @@ silt-log = { path = "../silt-log" }
 silt-types = { path = "../silt-types" }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "sqlx-toml"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.0", features = ["fs"] }
+tokio = { version = "1.54.0", features = ["fs", "sync"] }
 
 [dev-dependencies]
 silt-crdt = { path = "../silt-crdt" }

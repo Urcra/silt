@@ -79,7 +79,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let store = Store::open(data_dir).await?;
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
+    let capture_lock = CaptureLock::open(data_dir)?;
+    let turn = capture_lock.turn().await?;
     let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
+    drop(turn);
 
     if socket.exists() {
         fs::remove_file(socket)?;
@@ -110,9 +113,11 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
     });
 
-    let capture_lock = CaptureLock::open(data_dir)?;
     while let Some(event) = inbox.recv().await {
         let _turn = capture_lock.turn().await?;
+        if let Err(error) = core.catch_up_with_store().await {
+            warn!(%error, "could not take in what was recorded without the daemon");
+        }
         match event {
             Event::Request(Request::Shutdown, reply) => {
                 core.tick().await;
@@ -134,6 +139,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 core.pulled(family, epoch, generation, outcome, error).await
             }
             Event::Listed(listing, requested) => core.listed(listing, requested).await,
+        }
+        if let Err(error) = core.end_turn().await {
+            warn!(%error, "could not note what the store holds");
         }
     }
     let _ = fs::remove_file(socket);
