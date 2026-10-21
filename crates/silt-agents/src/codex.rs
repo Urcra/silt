@@ -283,14 +283,21 @@ impl Agent for Codex {
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
         let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
         let cwd = cwd.to_string_lossy();
+        // The session that started first since: a session that started
+        // earlier but is still written to belongs to another run.
         rollouts_since(&home()?, since_ms)
             .into_iter()
             .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
             .filter_map(|path| Some((rollout_id(&path)?, path)))
             .filter(|(id, _)| !known.contains(id))
-            .filter(|(_, path)| session_meta(path).is_some_and(|meta| meta.get("cwd").and_then(Value::as_str) == Some(&*cwd)))
-            .max_by_key(|(_, path)| crate::modified_ms(path))
-            .map(|(id, transcript)| Found { id, transcript })
+            .filter_map(|(id, path)| {
+                let meta = session_meta(&path)?;
+                (meta.get("cwd").and_then(Value::as_str) == Some(&*cwd)).then_some(())?;
+                let started = meta.get("timestamp").and_then(Value::as_str).and_then(crate::time::parse_timestamp)?;
+                (started >= since_ms).then_some((started, id, path))
+            })
+            .min_by_key(|(started, _, _)| *started)
+            .map(|(_, id, transcript)| Found { id, transcript })
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
