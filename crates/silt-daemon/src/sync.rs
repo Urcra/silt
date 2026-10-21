@@ -187,6 +187,11 @@ impl Core {
         let Some(sync) = self.syncs.get(&family) else {
             return;
         };
+        // A family listed before any of it is stored here has nowhere to keep
+        // its progress yet; it is saved with the first deltas pulled.
+        if !self.families.contains_key(&family) && !self.raw.contains_key(&family) {
+            return;
+        }
         let state = SyncState {
             generation: sync.generation(),
             pushed: sync.pushed(),
@@ -195,7 +200,7 @@ impl Core {
             view: sync.view(),
         };
         if let Err(error) = self.store.set_sync_state(family, &state).await {
-            warn!(%error, "could not save sync progress");
+            warn!(?error, "could not save sync progress");
         }
     }
 
@@ -235,7 +240,8 @@ impl Core {
                         break;
                     }
                     Err(error) => {
-                        warn!(%error, id = %delta.span.first(), "skipping a delta from the server that can't apply here");
+                        let op: String = format!("{:?}", delta.op).chars().take(60).collect();
+                        warn!(%error, id = %delta.span.first(), thread = %delta.thread, op, "skipping a delta from the server that can't apply here");
                     }
                 }
             }

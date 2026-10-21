@@ -140,10 +140,12 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success());
 }
 
+/// Whether `check` holds within ten seconds. A check that panics, as a
+/// command that fails while the daemon catches up does, counts as not yet.
 fn eventually(mut check: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if check() {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut check)).unwrap_or(false) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(100));

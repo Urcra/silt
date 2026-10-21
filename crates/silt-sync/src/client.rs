@@ -98,12 +98,14 @@ impl ClientSync {
     }
 
     /// Takes the server's current view fingerprint. When it changed, deltas
-    /// skipped earlier may be readable now, so pulling starts over.
+    /// skipped earlier may be readable now, so pulling starts over. So it
+    /// does when the first view comes after pulling: those pulls were read
+    /// under a view this client never saw.
     pub fn observe_view(&mut self, view: u64) -> bool {
         if view == self.view {
             return false;
         }
-        let changed = self.view != 0;
+        let changed = self.view != 0 || self.pulled > 0;
         self.view = view;
         if changed {
             self.pulled = 0;
@@ -270,11 +272,19 @@ mod tests {
 
     #[test]
     fn a_new_view_pulls_again_from_the_start() {
-        let mut sync = ClientSync::new(Some(1), 4, 9, Some(DeltaId::new(ActorId(1), Lamport(3))), 0);
-        assert!(!sync.observe_view(7), "the first view is just remembered");
-        assert_eq!(sync.pulled(), 9);
+        let mut sync = ClientSync::new(Some(1), 4, 0, None, 0);
+        assert!(!sync.observe_view(7), "the first view before pulling is just remembered");
+        let mut sync = ClientSync::new(Some(1), 4, 9, Some(DeltaId::new(ActorId(1), Lamport(3))), 7);
         assert!(!sync.observe_view(7));
+        assert_eq!(sync.pulled(), 9);
         assert!(sync.observe_view(8));
         assert_eq!((sync.pulled(), sync.last_pulled(), sync.pushed()), (0, None, 4));
+    }
+
+    #[test]
+    fn a_first_view_after_pulling_pulls_again() {
+        let mut sync = ClientSync::new(Some(1), 4, 9, Some(DeltaId::new(ActorId(1), Lamport(3))), 0);
+        assert!(sync.observe_view(7), "what was pulled was read under a view never seen");
+        assert_eq!((sync.pulled(), sync.last_pulled()), (0, None));
     }
 }

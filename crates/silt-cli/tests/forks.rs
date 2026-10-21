@@ -199,7 +199,18 @@ fn a_private_project_stays_invisible_to_teammates() {
     alice.silt(&["claude"]);
     let thread = thread_of(alice);
     assert!(eventually(|| alice.stdout(&["auth", "status"]).contains("syncing")));
-    std::thread::sleep(std::time::Duration::from_secs(4));
+    // A later thread Bob may see shows his machine has listed what came
+    // before it.
+    alice.silt(&["claude"]);
+    let later = alice
+        .stdout(&["log"])
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .find(|id| *id != thread)
+        .expect("a second thread")
+        .to_owned();
+    alice.silt(&["visibility", "org", "--thread", &later]);
+    assert!(eventually(|| bob.log_line(&later).is_some()), "Bob's machine has listed since");
     assert!(bob.log_line(&thread).is_none(), "{}", bob.stdout(&["log"]));
     let refused = bob.run(&["fork", &thread]);
     assert!(!refused.status.success());
@@ -285,7 +296,10 @@ fn a_private_fork_is_shared_only_through_its_merge_request() {
     fs::write(&fork_main, read(&fork_main) + "fn quieter() {}\n").expect("Bob keeps working");
     assert!(eventually(|| bob.stdout(&["diff", &fork]).contains("+fn quieter() {}")));
 
-    std::thread::sleep(std::time::Duration::from_secs(4));
+    // Pushed after the fork's work, so once Alice has it she has had the
+    // chance to see the fork too.
+    bob.silt(&["comment", &thread, "--entry", "0", "seen after the fork"]);
+    assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("seen after the fork")));
     assert!(alice.log_line(&fork).is_none(), "{}", alice.stdout(&["log"]));
     assert!(alice.stdout(&["search", "quietly"]).contains("no matches"));
 
@@ -389,7 +403,10 @@ fn deleted_threads_hide_everywhere_and_purged_ones_are_gone() {
     alice.silt(&["thread", "purge", &second]);
     assert!(eventually(|| bob.log_line(&second).is_none()));
     bob.silt(&["daemon", "stop"]);
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // Once Alice has what Bob's restarted machine sent, it would have sent
+    // the purged thread back too.
+    bob.silt(&["comment", &fork, "--entry", "0", "back after a restart"]);
+    assert!(eventually(|| alice.stdout(&["comments", &fork]).contains("back after a restart")));
     assert!(bob.log_line(&second).is_none(), "a restarted device doesn't bring it back");
     assert!(alice.log_line(&second).is_none());
 }

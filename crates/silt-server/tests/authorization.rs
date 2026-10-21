@@ -312,6 +312,75 @@ async fn what_someone_sees_follows_each_change_at_once() {
 }
 
 #[tokio::test]
+async fn a_merge_request_shares_a_private_fork_read_past_before() {
+    const FORK: ThreadId = ThreadId(303);
+    let mut world = world(Visibility::Org).await;
+    let bob = &world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1;
+    let alice = &world.alice;
+    let info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 3,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    let register = silt_proto::RegisterThread {
+        thread: info,
+        visibility: Some(Visibility::Private),
+    };
+    assert_eq!(bob.send(bob.request(Method::POST, "/v1/threads").json(&register)).await, StatusCode::NO_CONTENT);
+    let family = &mut world.family;
+    let head = family.thread_head(THREAD);
+    let forked = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, head.clone(), Op::Fork { from: THREAD }));
+    let work = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, forked.span.last().into(), file("quiet.rs", Content::Empty)));
+    let comment = Op::Comment(CommentOp::Added {
+        target: CommentTarget::Message { delta: head.ids()[0] },
+        text: "after the fork".into(),
+        by: "bob".into(),
+    });
+    let comment = applied(family, family.delta(ActorId(501), THREAD, Author::User, 0, head.clone(), comment));
+    assert_eq!(bob.push(vec![forked, work.clone(), comment]).await, StatusCode::OK);
+
+    let before = family_info(alice).await;
+    assert!(!pulled(alice).await.iter().any(|(_, delta)| delta.thread == FORK), "the fork is private");
+
+    let opened = Op::Mr(silt_log::MrOp::Opened {
+        target: THREAD,
+        title: "Quiet work".into(),
+        summary: String::new(),
+    });
+    let opened = applied(family, family.delta(ActorId(500), FORK, Author::User, 0, work.span.last().into(), opened));
+    assert_eq!(bob.push(vec![opened]).await, StatusCode::OK);
+    let after = family_info(alice).await;
+    assert_ne!(after.view, before.view, "the request makes the fork's history readable");
+    assert!(pulled(alice).await.iter().any(|(_, delta)| delta.span.first() == work.span.first()), "read again from the start");
+}
+
+fn applied(family: &mut Family, delta: Delta) -> Delta {
+    family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+    delta
+}
+
+async fn family_info(client: &Client) -> silt_proto::FamilyInfo {
+    let listing: Listing = client.request(Method::GET, "/v1/listing").send().await.expect("sends").json().await.expect("listing");
+    listing.families.into_iter().find(|family| family.id == FAMILY).expect("listed")
+}
+
+async fn pulled(client: &Client) -> Vec<(u64, Delta)> {
+    let reply: PullReply = client
+        .request(Method::GET, &format!("/v1/families/{FAMILY}/deltas?after=0"))
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("pull");
+    reply.deltas
+}
+
+#[tokio::test]
 async fn nothing_is_open_without_signing_in() {
     let world = world(Visibility::Org).await;
     let stranger = Client {

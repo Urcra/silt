@@ -84,10 +84,12 @@ hook Stop toolu_1
 
 pub const WAIT: Duration = Duration::from_secs(30);
 
+/// Whether `check` holds within [`WAIT`]. A check that panics, as a command
+/// that fails while the daemon catches up does, counts as not yet.
 pub fn eventually(mut check: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + WAIT;
     while Instant::now() < deadline {
-        if check() {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut check)).unwrap_or(false) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -120,33 +122,60 @@ pub struct Server {
 }
 
 impl Server {
+    /// A server on a free port. The port is free when picked but could be
+    /// taken before the server binds it, so a server that can't listen is
+    /// started again on another.
     pub fn start(data: &Path) -> Self {
-        let port = TcpListener::bind("127.0.0.1:0")
-            .expect("free port")
-            .local_addr()
-            .expect("address")
-            .port();
-        let listen = format!("127.0.0.1:{port}");
-        let mut server = Self {
-            data: data.to_owned(),
-            url: format!("http://{listen}"),
-            listen,
-            child: None,
-        };
-        server.run();
-        server
+        for _ in 0..5 {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("free port")
+                .local_addr()
+                .expect("address")
+                .port();
+            let listen = format!("127.0.0.1:{port}");
+            let mut server = Self {
+                data: data.to_owned(),
+                url: format!("http://{listen}"),
+                listen,
+                child: None,
+            };
+            if server.try_run() {
+                return server;
+            }
+        }
+        panic!("the server never listened: {}", fs::read_to_string(Self::log_path(data)).unwrap_or_default());
     }
 
+    /// Starts the server again on its port, which a restart keeps.
     pub fn run(&mut self) {
-        let child = silt_command()
+        assert!(self.try_run(), "the server listens: {}", fs::read_to_string(Self::log_path(&self.data)).unwrap_or_default());
+    }
+
+    fn log_path(data: &Path) -> PathBuf {
+        data.with_extension("log")
+    }
+
+    /// Whether the server listens, rather than exiting first.
+    fn try_run(&mut self) -> bool {
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Self::log_path(&self.data))
+            .expect("server log");
+        let mut child = silt_command()
             .args(["server", "run", "--listen", &self.listen, "--data"])
             .arg(&self.data)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(log)
             .spawn()
             .expect("server starts");
-        self.child = Some(child);
-        assert!(eventually(|| std::net::TcpStream::connect(&self.listen).is_ok()), "server listens");
+        let listens = eventually(|| {
+            std::net::TcpStream::connect(&self.listen).is_ok() || child.try_wait().is_ok_and(|exited| exited.is_some())
+        }) && child.try_wait().is_ok_and(|exited| exited.is_none());
+        if listens {
+            self.child = Some(child);
+        }
+        listens
     }
 
     pub fn stop(&mut self) {
