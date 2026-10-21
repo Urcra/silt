@@ -250,7 +250,10 @@ impl Server {
         *purged = now_purged;
         for (family, room) in rebuilt {
             match (room, slots.get_mut(&family)) {
-                (Some(room), Some(slot)) => slot.room = room,
+                (Some(room), Some(slot)) => {
+                    slot.room = room;
+                    slot.views.clear();
+                }
                 (Some(_), None) => {}
                 (None, slot) => {
                     if let Some(slot) = slot {
@@ -273,7 +276,11 @@ impl Server {
         index::clear(&mut tx).await?;
         index::write(&mut tx, &rows).await?;
         tx.commit().await?;
-        *self.shared.index.lock().await = index;
+        {
+            let mut current = self.shared.index.lock().await;
+            index.forks_version = current.forks_version + 1;
+            *current = index;
+        }
         drop(purged);
         drop(slots);
         drop(rooms);

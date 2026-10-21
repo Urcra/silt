@@ -91,6 +91,45 @@ pub(crate) struct RoomSlot {
     /// Set by a purge that dropped the family: whoever looked the room up
     /// before then finds out once they hold its lock.
     pub(crate) retired: bool,
+    /// Listing views by viewer serial, with the `seq` they were worked
+    /// out at: clients list every few seconds, and a view reads every delta.
+    pub(crate) views: HashMap<u64, (u64, u64)>,
+}
+
+/// How far everything visibility is worked out from has changed: the
+/// database's visibility epoch and the fork map's version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VisibilityAt {
+    epoch: i64,
+    forks: u64,
+}
+
+/// Views kept per room before they are dropped together.
+const VIEWS_KEPT: usize = 64;
+
+impl RoomSlot {
+    fn new(room: Room) -> Self {
+        Self {
+            room,
+            retired: false,
+            views: HashMap::new(),
+        }
+    }
+
+    fn view(&mut self, family: FamilyId, viewer: &Viewer) -> u64 {
+        let seq = self.room.seq();
+        if let Some((at, view)) = self.views.get(&viewer.serial())
+            && *at == seq
+        {
+            return *view;
+        }
+        let view = viewer.view_of(family.0, &self.room);
+        if self.views.len() >= VIEWS_KEPT {
+            self.views.clear();
+        }
+        self.views.insert(viewer.serial(), (seq, view));
+        view
+    }
 }
 
 pub(crate) type SharedRoom = Arc<Mutex<RoomSlot>>;
@@ -105,6 +144,9 @@ struct Shared {
     rooms: RwLock<HashMap<FamilyId, SharedRoom>>,
     waiters: Waiters,
     index: Mutex<Index>,
+    /// Each user's latest visibility snapshot, with when it was taken.
+    viewers: Mutex<HashMap<i64, (VisibilityAt, Arc<Viewer>)>>,
+    viewer_serial: std::sync::atomic::AtomicU64,
     data_dir: std::path::PathBuf,
     config: Config,
     http: reqwest::Client,
@@ -173,11 +215,13 @@ impl Server {
                 rooms: RwLock::new(
                     rooms
                         .into_iter()
-                        .map(|(family, room)| (family, Arc::new(Mutex::new(RoomSlot { room, retired: false }))))
+                        .map(|(family, room)| (family, Arc::new(Mutex::new(RoomSlot::new(room)))))
                         .collect(),
                 ),
                 waiters: Waiters::default(),
                 index: Mutex::new(index),
+                viewers: Mutex::new(HashMap::new()),
+                viewer_serial: std::sync::atomic::AtomicU64::new(0),
                 data_dir: data_dir.to_owned(),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
@@ -498,12 +542,12 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         if !viewer.sees_family(id.0) {
             continue;
         }
-        let slot = shared.lock().await;
+        let mut slot = shared.lock().await;
         if !slot.retired {
             families.push(FamilyInfo {
                 id,
                 seq: slot.room.seq(),
-                view: viewer.view_of(id.0, &slot.room),
+                view: slot.view(id, &viewer),
             });
         }
     }
@@ -967,12 +1011,14 @@ impl Server {
             let found = self.shared.rooms.read().await.get(&family).cloned();
             let shared = match found {
                 Some(shared) => shared,
-                None => Arc::clone(self.shared.rooms.write().await.entry(family).or_insert_with(|| {
-                    Arc::new(Mutex::new(RoomSlot {
-                        room: Room::new(self.shared.generation),
-                        retired: false,
-                    }))
-                })),
+                None => Arc::clone(
+                    self.shared
+                        .rooms
+                        .write()
+                        .await
+                        .entry(family)
+                        .or_insert_with(|| Arc::new(Mutex::new(RoomSlot::new(Room::new(self.shared.generation))))),
+                ),
             };
             let slot = shared.lock_owned().await;
             if !slot.retired {
@@ -989,10 +1035,25 @@ impl Server {
         rooms
     }
 
-    /// What `user` can see right now.
-    async fn viewer(&self, user: i64) -> Result<Viewer, sqlx::Error> {
+    /// What `user` can see right now: the snapshot taken since nothing it is
+    /// worked out from last changed, else a new one.
+    async fn viewer(&self, user: i64) -> Result<Arc<Viewer>, sqlx::Error> {
+        let epoch: i64 = sqlx::query_scalar("SELECT value FROM visibility_epoch").fetch_one(&self.shared.db).await?;
+        let key = VisibilityAt {
+            epoch,
+            forks: self.shared.index.lock().await.forks_version,
+        };
+        let cached = self.shared.viewers.lock().await.get(&user).filter(|(at, _)| *at == key).map(|(_, viewer)| Arc::clone(viewer));
+        if let Some(viewer) = cached {
+            return Ok(viewer);
+        }
+        // Whatever changes from here on bumps the key past this one, so a
+        // snapshot that already saw some of it is replaced on the next call.
         let forks = self.shared.index.lock().await.forks().clone();
-        Viewer::load(&self.shared.db, user, &forks).await
+        let serial = self.shared.viewer_serial.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let viewer = Arc::new(Viewer::load(&self.shared.db, user, &forks, serial).await?);
+        self.shared.viewers.lock().await.insert(user, (key, Arc::clone(&viewer)));
+        Ok(viewer)
     }
 
     /// Takes stored deltas into the index, returning the rows to write.

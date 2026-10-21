@@ -26,6 +26,9 @@ pub(crate) struct Index {
     requests: HashMap<DeltaId, ThreadId>,
     /// Each fork's source.
     forks: HashMap<ThreadId, ThreadId>,
+    /// Counts changes to `forks`, which visibility is worked out from;
+    /// carried over when the index is rebuilt.
+    pub(crate) forks_version: u64,
     /// The deltas that refer to each blob: whoever may read one of them
     /// may fetch the blob.
     blobs: HashMap<BlobHash, Vec<(FamilyId, DeltaId)>>,
@@ -111,7 +114,9 @@ impl Index {
                 None
             }
             Op::Fork { from } => {
-                self.forks.insert(thread, *from);
+                if self.forks.insert(thread, *from) != Some(*from) {
+                    self.forks_version += 1;
+                }
                 None
             }
             Op::Mr(MrOp::Approved { mr }) => {

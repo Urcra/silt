@@ -68,7 +68,7 @@ fn clip(text: &str) -> String {
 
 /// Viewers loaded once per notified user within one push.
 #[derive(Default)]
-struct Viewers(HashMap<i64, Viewer>);
+struct Viewers(HashMap<i64, std::sync::Arc<Viewer>>);
 
 impl Viewers {
     async fn sees(&mut self, server: &Server, user: i64, thread: ThreadId) -> Result<bool, sqlx::Error> {

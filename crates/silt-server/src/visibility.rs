@@ -34,6 +34,8 @@ struct Project {
 /// What one user can see.
 #[derive(Debug, Default)]
 pub(crate) struct Viewer {
+    /// Unique to this snapshot, for caching what is worked out from it.
+    serial: u64,
     threads: HashSet<ThreadId>,
     /// Families with at least one visible thread.
     families: HashSet<u128>,
@@ -52,6 +54,7 @@ impl Viewer {
         db: &SqlitePool,
         user: i64,
         forks: &HashMap<ThreadId, ThreadId>,
+        serial: u64,
     ) -> Result<Self, sqlx::Error> {
         let projects: HashMap<String, Project> = sqlx::query("SELECT repo, org_id, visibility FROM projects")
             .fetch_all(db)
@@ -133,6 +136,7 @@ impl Viewer {
             (org, Visibility::Private)
         };
         let mut viewer = Self {
+            serial,
             owned: sqlx::query("SELECT id FROM families WHERE owner_id = ?")
                 .bind(user)
                 .fetch_all(db)
@@ -167,6 +171,10 @@ impl Viewer {
             }
         }
         Ok(viewer)
+    }
+
+    pub(crate) fn serial(&self) -> u64 {
+        self.serial
     }
 
     pub(crate) fn sees_thread(&self, thread: ThreadId) -> bool {

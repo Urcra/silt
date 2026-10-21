@@ -288,6 +288,30 @@ async fn a_collaborator_the_thread_was_hidden_from_stops_writing_it() {
 }
 
 #[tokio::test]
+async fn what_someone_sees_follows_each_change_at_once() {
+    let world = world(Visibility::Team("core".into())).await;
+    let person = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("known").1;
+    let (alice, carol, erin) = (&world.alice, person("carol"), person("erin"));
+    assert!(carol.lists_the_thread().await && !erin.lists_the_thread().await);
+    let set = |visibility| VisibilityRequest {
+        repo: None,
+        thread: Some(THREAD),
+        visibility,
+    };
+    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Org))).await, StatusCode::NO_CONTENT);
+    assert!(erin.lists_the_thread().await, "a wider visibility shows at once");
+    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Private))).await, StatusCode::NO_CONTENT);
+    assert!(!carol.lists_the_thread().await && !erin.lists_the_thread().await, "and a narrower one hides at once");
+    assert_eq!(alice.send(alice.request(Method::PUT, "/v1/visibility").json(&set(Visibility::Team("core".into())))).await, StatusCode::NO_CONTENT);
+    assert!(carol.lists_the_thread().await);
+    let root = Client::sign_in(&alice.base, "root").await;
+    let leave = OrgChange::RemoveFromTeam { org: "acme".into(), team: "core".into(), user: "carol".into() };
+    assert_eq!(root.change(leave).await, StatusCode::NO_CONTENT);
+    assert!(!carol.lists_the_thread().await, "leaving the team hides it at once");
+    assert!(!carol.pulls_the_thread().await);
+}
+
+#[tokio::test]
 async fn nothing_is_open_without_signing_in() {
     let world = world(Visibility::Org).await;
     let stranger = Client {
