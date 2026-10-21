@@ -506,6 +506,10 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
     let (status, refused) = bob.post(&format!("/threads/{THREAD}/agent/prompt"), prompt.clone()).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "bob writes the thread, but the agent runs on alice's machine");
     assert_eq!(refused["error"], "alice's agent runs on their machine; only they can direct it");
+    let to_itself = machine
+        .request(Method::POST, &format!("/v1/threads/{THREAD}/relay"))
+        .json(&silt_proto::RelayRequest { command: RemoteCommand::Cancel, when_back: false });
+    assert_eq!(machine.send(to_itself).await, StatusCode::CONFLICT, "a device doesn't relay to itself");
 
     // Alice's machine takes each command and answers it as it would its own web UI.
     let daemon = async {

@@ -8,6 +8,8 @@ const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 interface Live {
   alice: string
   bob: string
+  /** Alice's second machine. */
+  laptop: string
   server: string
   thread: string
   work: string
@@ -21,8 +23,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  for (const user of ['alice', 'bob']) {
-    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(live.work, user, 'silt') } })
+  for (const home of ['alice', 'bob', 'alice-laptop']) {
+    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(live.work, home, 'silt') } })
   }
   const pid = Number(readFileSync(join(live.work, 'server.pid'), 'utf8'))
   process.kill(pid)
@@ -221,6 +223,7 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await hosted.getByLabel('Password').fill('correct horse battery')
   await hosted.getByRole('button', { name: 'Sign in' }).click()
   const there = hosted.getByRole('region', { name: 'live' })
+  await there.getByLabel('device to continue on').selectOption({ label: 'alice' })
   await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
   await there.getByRole('button', { name: 'Continue there' }).click()
   await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -235,19 +238,53 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await hosted.context().close()
 })
 
+test("another of Alice's machines directs the agent running on the first, through the server", async ({ browser }) => {
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('permissions').selectOption('ask_for_everything')
+  await machine.getByLabel('draft').fill('from the desk')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  const asked = machine.getByRole('group', { name: 'permission' })
+  await expect(asked).toContainText('Edit src/main.rs')
+  const thread = new URL(machine.url()).pathname.split('/t/')[1]
+
+  const laptop = await (await browser.newContext()).newPage()
+  await laptop.goto(live.laptop)
+  const state = laptop.getByTestId('agent-state')
+  await expect(async () => {
+    await laptop.goto(new URL(`/t/${thread}`, live.laptop).toString())
+    await expect(state).toHaveText('Fake agent on alice is waiting for your permission', { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await laptop.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
+  await expect(machine.getByText(/^Done: [\s\S]*from the desk$/)).toBeVisible()
+  await expect(state).toHaveText('Fake agent on alice is ready', { timeout: 10_000 })
+
+  await laptop.getByLabel('draft').fill('from the laptop')
+  await laptop.getByRole('button', { name: 'Send' }).click()
+  await expect(asked).toContainText('Edit src/main.rs')
+  await expect(laptop.getByRole('group', { name: 'permission' })).toBeVisible({ timeout: 10_000 })
+  await laptop.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
+  await expect(machine.getByText('I was not allowed to edit.').last()).toBeVisible()
+  await laptop.getByRole('button', { name: 'Stop agent' }).click()
+  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await machine.context().close()
+  await laptop.context().close()
+})
+
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByRole('banner').getByRole('link', { name: 'Devices' }).click()
-  const here = page.getByRole('region').filter({ hasText: 'this device' })
+  const here = page.getByRole('region').filter({ has: page.getByText('this device', { exact: true }) })
   await expect(here.getByText('online', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'alice-laptop' }).getByText('online', { exact: true })).toBeVisible()
   const prompts = here.getByLabel('Send prompts')
   await expect(prompts).toBeChecked()
   await prompts.click()
   await expect(prompts).not.toBeChecked()
   await page.reload()
-  await expect(page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts')).not.toBeChecked()
-  await page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts').click()
-  await expect(page.getByRole('region').filter({ hasText: 'this device' }).getByLabel('Send prompts')).toBeChecked()
+  await expect(prompts).not.toBeChecked()
+  await prompts.click()
+  await expect(prompts).toBeChecked()
 })
 
 test('a new thread starts with an agent in a known clone, which edits without asking by default', async ({ page }) => {

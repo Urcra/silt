@@ -11,12 +11,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use silt_proto::{AgentReport, ErrorReply, RemoteCommand};
+use silt_proto::{AgentReport, ErrorReply, RelayRequest, RemoteCommand};
 use silt_types::{DeviceId, ThreadId};
 
 use crate::app::Browser;
 use crate::control::{self, Relay};
-use crate::{ApiError, Server, UserId, id_bytes, id_from};
+use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from};
 
 /// How long the browser waits for the daemon to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
@@ -36,6 +36,27 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/agent/setting", post(setting))
         .route("/app/api/threads/{id}/queue", post(enqueue))
         .route("/app/api/threads/{id}/continue", post(continue_on))
+}
+
+/// For a daemon passing on what its own web UI asks of an agent running on
+/// another of the person's devices.
+pub(crate) fn device_routes() -> Router<Server> {
+    Router::new().route("/v1/threads/{id}/relay", post(device_relay))
+}
+
+impl From<Refused> for ApiError {
+    fn from(Refused(status, message): Refused) -> Self {
+        ApiError(status, ErrorReply::Invalid { message })
+    }
+}
+
+async fn device_relay(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(body): Json<RelayRequest>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(relay_from(&server, caller.user, Some(caller.device), &id, body.command, body.when_back).await?)
 }
 
 /// A refusal as the web app reads one.
@@ -109,8 +130,6 @@ async fn runner(server: &Server, user: UserId, thread: ThreadId) -> Result<(Devi
     Ok((device, owner.name, online, report))
 }
 
-/// Relays `command` and answers with what the daemon answers. A prompt for
-/// an offline device waits for it when `when_back` says so.
 async fn relayed(
     server: &Server,
     browser: Browser,
@@ -118,14 +137,31 @@ async fn relayed(
     command: RemoteCommand,
     when_back: bool,
 ) -> Result<Json<Value>, Refused> {
-    let thread = thread_for(server, browser.user, selector).await?;
-    let (device, name, online, _) = runner(server, browser.user, thread).await?;
+    relay_from(server, browser.user, None, selector, command, when_back).await
+}
+
+/// Relays `command` from `user`, on their device `from` if not a browser,
+/// and answers with what the daemon answers. A prompt for an offline device
+/// waits for it when `when_back` says so.
+async fn relay_from(
+    server: &Server,
+    user: UserId,
+    from: Option<DeviceId>,
+    selector: &str,
+    command: RemoteCommand,
+    when_back: bool,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(server, user, selector).await?;
+    let (device, name, online, _) = runner(server, user, thread).await?;
+    if from == Some(device) {
+        return Err(Refused(StatusCode::CONFLICT, "the agent runs on this device".into()));
+    }
     let queues = when_back && matches!(command, RemoteCommand::Prompt { .. } | RemoteCommand::Queue { .. });
     if !online && !queues {
         return Err(Refused(StatusCode::CONFLICT, format!("{name} is offline")));
     }
     let ttl = if online { ANSWER_WAIT } else { QUEUED_WAIT };
-    let id = control::relay(server, Relay { device, thread, sender: browser.user, from: None, command, ttl }).await?;
+    let id = control::relay(server, Relay { device, thread, sender: user, from, command, ttl }).await?;
     if !online {
         return Ok(Json(json!(format!("queued until {name} is back"))));
     }

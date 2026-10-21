@@ -41,7 +41,7 @@ impl Core {
 
     pub(crate) fn announce_agent(&self, thread: ThreadId) {
         if self.heard() {
-            self.announce(BusEvent::Agent { thread: thread.to_string(), status: self.agent_status(thread) });
+            self.announce(BusEvent::Agent { thread: thread.to_string(), status: self.shown_status(thread) });
         }
     }
 

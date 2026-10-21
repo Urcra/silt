@@ -276,6 +276,27 @@ pub struct Listing {
     /// follow their project's or org's.
     #[serde(default)]
     pub visibility: Vec<(ThreadId, Visibility)>,
+    /// Agents running on the person's other online devices, for a daemon to
+    /// show and pass commands on to (ADR 0026).
+    #[serde(default)]
+    pub running: Vec<RunningElsewhere>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningElsewhere {
+    pub device: DeviceId,
+    pub device_name: String,
+    pub agent: AgentReport,
+}
+
+/// A command for the device running a thread's agent, from another of the
+/// person's devices.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayRequest {
+    pub command: RemoteCommand,
+    /// For a prompt: wait for the device if it's offline.
+    #[serde(default)]
+    pub when_back: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

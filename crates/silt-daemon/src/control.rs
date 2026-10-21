@@ -2,14 +2,21 @@
 //! open for the commands people send its threads from elsewhere, and
 //! reports of the agents it runs, when they change and as a heartbeat.
 
+use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
 use std::time::{Duration, Instant};
 
-use silt_proto::{AgentReport, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, RemoteCommand, Startable};
+use silt_proto::{
+    AgentReport, AgentState, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, ErrorReply, RelayRequest,
+    RemoteCommand, RunningElsewhere, Startable,
+};
+use silt_types::ThreadId;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::core::{Core, Event};
-use crate::protocol::{Preset, Request, Response, StartOptions};
+use crate::core::{Core, CoreError, Event};
+use crate::protocol::{AgentStatus, BusEvent, PermissionAsked, Preset, Request, Response, StartOptions};
+use crate::remote::RemoteError;
 
 /// How long one poll waits on the server for a command.
 const POLL_WAIT: Duration = Duration::from_secs(25);
@@ -28,11 +35,21 @@ pub(crate) struct Control {
     report_after: Option<Instant>,
     /// What the server last took, and when.
     reported: Option<(Instant, Vec<AgentReport>)>,
+    /// Agents running on the person's other online devices, by thread, as
+    /// the last listing said.
+    elsewhere: HashMap<ThreadId, RunningElsewhere>,
 }
 
 pub(crate) enum ControlEvent {
     Polled(Result<Vec<ControlCommand>, String>),
     Reported(Result<Vec<AgentReport>, String>),
+}
+
+/// What this machine's web UI asks of an agent running on another of the
+/// person's devices.
+pub(crate) enum Elsewhere {
+    PassOn(ThreadId, RemoteCommand),
+    Refuse(&'static str),
 }
 
 fn waited(after: Option<Instant>) -> bool {
@@ -195,6 +212,118 @@ impl Core {
                 agent,
                 options: StartOptions { mode, preset: chosen.map(preset).transpose()?, ..StartOptions::default() },
             },
+        })
+    }
+}
+
+impl Core {
+    /// Takes in what the listing says runs on the person's other devices,
+    /// and tells browsers of each thread whose agent's place changed.
+    pub(crate) fn take_running_elsewhere(&mut self, running: Vec<RunningElsewhere>) {
+        let now: HashMap<ThreadId, RunningElsewhere> =
+            running.into_iter().map(|running| (running.agent.thread, running)).collect();
+        let changed: BTreeSet<ThreadId> = now
+            .keys()
+            .chain(self.control.elsewhere.keys())
+            .copied()
+            .filter(|thread| now.get(thread) != self.control.elsewhere.get(thread))
+            .collect();
+        self.control.elsewhere = now;
+        for thread in &changed {
+            self.announce_agent(*thread);
+        }
+        if !changed.is_empty() {
+            self.announce(BusEvent::Threads);
+        }
+    }
+
+    fn running_here(&self, thread: ThreadId) -> bool {
+        self.acp.contains_key(&thread) && self.agent_state(thread).is_some_and(AgentState::running)
+    }
+
+    /// The agent another of the person's devices runs in the thread, while
+    /// none runs here.
+    fn elsewhere_of(&self, thread: ThreadId) -> Option<&RunningElsewhere> {
+        if self.running_here(thread) { None } else { self.control.elsewhere.get(&thread) }
+    }
+
+    /// How the thread's agent stands for this machine's web UI: the one
+    /// here, or one running on another of the person's devices (ADR 0026).
+    pub(crate) fn shown_status(&self, thread: ThreadId) -> Option<AgentStatus> {
+        let Some(running) = self.elsewhere_of(thread) else {
+            return self.agent_status(thread);
+        };
+        Some(AgentStatus {
+            agent: format!("{} on {}", running.agent.agent, running.device_name),
+            state: running.agent.state,
+            streaming: String::new(),
+            thinking: String::new(),
+            permissions: running
+                .agent
+                .permissions
+                .iter()
+                .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
+                .collect(),
+            error: None,
+            modes: None,
+            settings: Vec::new(),
+            takes_images: false,
+            takes_files: false,
+        })
+    }
+
+    pub(crate) fn shown_state(&self, thread: ThreadId) -> Option<AgentState> {
+        self.elsewhere_of(thread).map(|running| running.agent.state).or_else(|| self.agent_state(thread))
+    }
+
+    pub(crate) fn shown_preset(&self, thread: ThreadId) -> Preset {
+        self.elsewhere_of(thread).and_then(|running| Preset::parse(&running.agent.preset)).unwrap_or_else(|| self.preset(thread))
+    }
+
+    /// The command `request` makes of an agent on another device, when the
+    /// thread's agent runs there and not here.
+    pub(crate) fn elsewhere(&self, request: &Request) -> Option<Elsewhere> {
+        let (selector, command) = match request {
+            Request::AcpPrompt { thread, text, plan, attachments } => {
+                if !attachments.is_empty() {
+                    let thread = self.find_thread(thread).ok()?;
+                    return self
+                        .elsewhere_of(thread)
+                        .map(|_| Elsewhere::Refuse("attach files from the machine running the agent"));
+                }
+                (thread, RemoteCommand::Prompt { text: text.clone(), plan: *plan })
+            }
+            Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
+            Request::AcpCancel { thread } => (thread, RemoteCommand::Cancel),
+            Request::AcpAnswer { thread, id, option } => (thread, RemoteCommand::Answer { id: *id, option: option.clone() }),
+            Request::AcpStop { thread } => (thread, RemoteCommand::Stop),
+            Request::AcpMode { thread, mode } => (thread, RemoteCommand::Mode { mode: mode.clone() }),
+            Request::AcpSetting { thread, id, value } => {
+                (thread, RemoteCommand::Setting { id: id.clone(), value: value.clone() })
+            }
+            Request::AgentPreset { thread, preset } => (thread, RemoteCommand::Preset { preset: preset.as_str().to_owned() }),
+            Request::QueueAdd { thread, text } => (thread, RemoteCommand::Queue { text: text.clone() }),
+            _ => return None,
+        };
+        let thread = self.find_thread(selector).ok()?;
+        self.elsewhere_of(thread).map(|_| Elsewhere::PassOn(thread, command))
+    }
+
+    /// Passes `command` on through the server to the device running the
+    /// thread's agent, answering with its answer.
+    pub(crate) fn pass_on(
+        &self,
+        thread: ThreadId,
+        command: RemoteCommand,
+    ) -> Result<impl Future<Output = Result<serde_json::Value, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.remote.clone().ok_or_else(|| CoreError::Invalid("not connected to a server".into()))?;
+        Ok(async move {
+            remote.relay(thread, &RelayRequest { command, when_back: false }).await.map_err(|error| match error {
+                RemoteError::Refused(ErrorReply::Invalid { message } | ErrorReply::Forbidden { message }) => {
+                    CoreError::Invalid(message)
+                }
+                source => CoreError::Server { doing: "pass the command on", source },
+            })
         })
     }
 }

@@ -391,6 +391,16 @@ impl Core {
 
     /// Handles a request. Some answer `reply` later, off the event loop.
     pub async fn request(&mut self, request: Request, reply: oneshot::Sender<Response>) {
+        match self.elsewhere(&request) {
+            Some(crate::control::Elsewhere::PassOn(thread, command)) => {
+                return answer_later(reply, self.pass_on(thread, command));
+            }
+            Some(crate::control::Elsewhere::Refuse(why)) => {
+                let _ = reply.send(Response::error(why));
+                return;
+            }
+            None => {}
+        }
         let response = match request {
             Request::Ping => Response::ok("pong"),
             Request::AgentHomes => {

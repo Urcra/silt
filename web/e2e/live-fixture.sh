@@ -41,19 +41,21 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 
+# A machine of `user`, named and kept under `home` (the user's name unless given).
 machine() {
     user=$1
-    export SILT_HOME="$work/$user/silt"
-    export CLAUDE_CONFIG_DIR="$work/$user/claude"
+    home=${2:-$1}
+    export SILT_HOME="$work/$home/silt"
+    export CLAUDE_CONFIG_DIR="$work/$home/claude"
     export SILT_CLAUDE_BIN="$root/web/e2e/fake-claude.sh"
     export SILT_HOOK="$silt hook"
     mkdir -p "$CLAUDE_CONFIG_DIR" "$SILT_HOME"
     fake="$root/target/debug/silt-fake-agent"
     printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}, {"id": "plain", "name": "Plain agent", "command": "%s", "env": {"FAKE_ACP_NO_MODES": "1"}}]\n' \
         "$fake" "$fake" > "$SILT_HOME/agents.json"
-    git clone -q "$work/origin.git" "$work/$user/repo"
-    cd "$work/$user/repo"
-    printf '%s\n' "$password" | "$silt" auth login --server "$url" --user "$user" > /dev/null
+    git clone -q "$work/origin.git" "$work/$home/repo"
+    cd "$work/$home/repo"
+    printf '%s\n' "$password" | "$silt" auth login --server "$url" --user "$user" --name "$home" > /dev/null
 }
 
 machine alice
@@ -76,4 +78,9 @@ for _ in $(seq 1 100); do
 done
 bob_url=$("$silt" open --no-browser)
 
-printf '{"alice":"%s","bob":"%s","server":"%s","thread":"%s","work":"%s"}\n' "$alice_url" "$bob_url" "$url" "$thread" "$work"
+# Alice's second machine, which runs nothing of its own.
+machine alice alice-laptop
+laptop_url=$("$silt" open --no-browser)
+
+printf '{"alice":"%s","bob":"%s","laptop":"%s","server":"%s","thread":"%s","work":"%s"}\n' \
+    "$alice_url" "$bob_url" "$laptop_url" "$url" "$thread" "$work"

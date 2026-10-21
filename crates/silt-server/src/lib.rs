@@ -288,6 +288,7 @@ impl Server {
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())
+            .merge(relayed::device_routes())
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -589,7 +590,8 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         })
         .collect();
     let (deleted, purged) = server.lifecycle(&viewer).await?;
-    Ok(Json(Listing { families, threads, deleted, purged, visibility }))
+    let running = control::running_elsewhere(&server, caller).await?;
+    Ok(Json(Listing { families, threads, deleted, purged, visibility, running }))
 }
 
 async fn register_thread(

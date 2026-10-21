@@ -259,6 +259,13 @@ impl Remote {
         Ok(())
     }
 
+    /// Has the device running the thread's agent do `relay`, and gives its answer.
+    pub async fn relay(&self, thread: ThreadId, relay: &silt_proto::RelayRequest) -> Result<serde_json::Value, RemoteError> {
+        let path = format!("/v1/threads/{thread}/relay");
+        let request = self.request(reqwest::Method::POST, &path).json(relay).timeout(Duration::from_secs(45));
+        Ok(checked(request.send().await?).await?.json().await?)
+    }
+
     /// The commands waiting for this device, waiting up to `wait` for one.
     pub async fn control(&self, wait: Duration) -> Result<silt_proto::ControlReply, RemoteError> {
         let path = format!("/v1/control?wait_ms={}", wait.as_millis());

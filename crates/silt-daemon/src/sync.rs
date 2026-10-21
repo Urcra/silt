@@ -397,6 +397,7 @@ impl Core {
             self.visibility = visibility;
             self.announce(crate::protocol::BusEvent::Threads);
         }
+        self.take_running_elsewhere(listing.running);
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {

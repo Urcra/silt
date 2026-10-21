@@ -10,7 +10,8 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use silt_proto::{
-    AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand, Startable,
+    AgentReport, AgentsReport, Capabilities, CommandAnswer, ControlCommand, ControlReply, RemoteCommand, RunningElsewhere,
+    Startable,
 };
 use silt_types::{DeviceId, ThreadId};
 use tokio::sync::{Mutex, Notify};
@@ -100,6 +101,25 @@ impl Control {
             .flat_map(|(device, heard)| heard.agents.iter().map(|agent| (agent.thread, (*device, agent.clone()))))
             .collect()
     }
+}
+
+/// The agents running on the caller's person's other online devices.
+pub(crate) async fn running_elsewhere(server: &Server, caller: Caller) -> Result<Vec<RunningElsewhere>, sqlx::Error> {
+    let mut running = Vec::new();
+    for device in crate::accounts::devices_of(server.db(), caller.user).await? {
+        if device.id == caller.device {
+            continue;
+        }
+        let (online, report) = server.shared.control.heard(device.id).await;
+        if online {
+            running.extend(report.agents.into_iter().map(|agent| RunningElsewhere {
+                device: device.id,
+                device_name: device.name.clone(),
+                agent,
+            }));
+        }
+    }
+    Ok(running)
 }
 
 #[derive(Deserialize)]
