@@ -154,9 +154,14 @@ impl Server {
         data.with_extension("log")
     }
 
-    /// Whether the server listens, rather than exiting first.
+    /// Whether the server listens, rather than exiting first. It says so
+    /// once it has the port: something else answering there may be another
+    /// test's server that took the port first.
     fn try_run(&mut self) -> bool {
-        let log = fs::OpenOptions::new().create(true).append(true).open(Self::log_path(&self.data)).expect("server log");
+        let log_path = Self::log_path(&self.data);
+        let before = fs::metadata(&log_path).map_or(0, |log| usize::try_from(log.len()).unwrap_or(usize::MAX));
+        let announced = format!("listening on {}", self.listen);
+        let log = fs::OpenOptions::new().create(true).append(true).open(&log_path).expect("server log");
         let mut child = silt_command()
             .args(["server", "run", "--listen", &self.listen, "--data"])
             .arg(&self.data)
@@ -164,9 +169,12 @@ impl Server {
             .stderr(log)
             .spawn()
             .expect("server starts");
-        let listens = eventually(|| {
-            std::net::TcpStream::connect(&self.listen).is_ok() || child.try_wait().is_ok_and(|exited| exited.is_some())
-        }) && child.try_wait().is_ok_and(|exited| exited.is_none());
+        let says_so = || {
+            fs::read(&log_path)
+                .is_ok_and(|log| log.get(before..).is_some_and(|new| String::from_utf8_lossy(new).contains(&announced)))
+        };
+        let listens = eventually(|| says_so() || child.try_wait().is_ok_and(|exited| exited.is_some()))
+            && child.try_wait().is_ok_and(|exited| exited.is_none());
         if listens {
             self.child = Some(child);
         }
