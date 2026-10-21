@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM web_sessions WHERE rowid = ? AND user_id = ? AND capabilities IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7910c942a5ee1532e0446e84d2e959f01c495537f88debc76d2fad650e1b6f2e"
+}

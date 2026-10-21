@@ -969,6 +969,84 @@ async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() 
 }
 
 #[tokio::test]
+async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
+    let world = world(Visibility::Private).await;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let (status, pairing) = alice.post("/pair", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{pairing}");
+    let code = pairing["code"].as_str().expect("a code").to_owned();
+    assert!(pairing["qr_svg"].as_str().is_some_and(|svg| svg.contains("<svg")));
+    assert!(pairing["url"].as_str().is_some_and(|url| url.ends_with(&format!("/pair/{code}"))), "{pairing}");
+
+    // The phone opens the link, sees whose account it joins, and confirms.
+    let phone_http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("client");
+    let asked = phone_http.get(format!("{}/pair/{}", alice.base, code.to_lowercase())).send().await.expect("sends");
+    assert!(asked.text().await.expect("html").contains("as <strong>alice</strong>"));
+    let foreign = phone_http
+        .post(format!("{}/pair/{code}", alice.base))
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(foreign.status(), StatusCode::FORBIDDEN, "another site can't sign a phone in");
+    let paired = phone_http.post(format!("{}/pair/{code}", alice.base)).send().await.expect("sends");
+    assert_eq!(paired.status(), StatusCode::SEE_OTHER);
+    assert_eq!(paired.headers()[reqwest::header::LOCATION], "/app/needs-you");
+    let cookie = paired
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .expect("a session")
+        .to_owned();
+    let phone = Browser { http: phone_http.clone(), base: alice.base.clone(), cookie };
+    let again = phone_http.post(format!("{}/pair/{code}", alice.base)).send().await.expect("sends");
+    assert_eq!(again.status(), StatusCode::NOT_FOUND, "a code works once");
+
+    // A phone answers and reviews; prompting, pairing more and changing
+    // devices take more than that.
+    let prompt = serde_json::json!({ "text": "from the phone" });
+    let (status, refused) = phone.post(&format!("/threads/{THREAD}/agent/prompt"), prompt.clone()).await;
+    assert_eq!(
+        (status, refused["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("this device may not send prompts; change that on the Devices page"))
+    );
+    let (status, _) =
+        phone.post(&format!("/threads/{THREAD}/agent/answer"), serde_json::json!({ "id": 1, "option": "allow" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "answering passes the phone's checks, and finds no agent running");
+    assert_eq!(phone.post("/pair", serde_json::json!({})).await.0, StatusCode::FORBIDDEN);
+
+    let devices = alice.get("/devices").await.1.as_array().expect("a list").clone();
+    let listed = devices.iter().find(|device| device["kind"] == "phone").expect("the phone is listed");
+    assert_eq!(
+        listed["capabilities"],
+        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true })
+    );
+    let id = listed["id"].as_str().expect("an id").to_owned();
+    let change = |browser: &Browser, body: serde_json::Value| {
+        browser
+            .http
+            .patch(format!("{}/app/api/devices/{id}", browser.base))
+            .header(reqwest::header::COOKIE, &browser.cookie)
+            .header("x-silt-request", "1")
+            .json(&body)
+            .send()
+    };
+    let more = serde_json::json!({ "capabilities": { "answer_permissions": true, "send_prompts": true, "run_agents": false, "review": true } });
+    assert_eq!(
+        change(&phone, more.clone()).await.expect("sends").status(),
+        StatusCode::FORBIDDEN,
+        "a phone can't give itself more"
+    );
+    assert_eq!(change(&alice, more).await.expect("sends").status(), StatusCode::OK);
+    let (status, _) = phone.post(&format!("/threads/{THREAD}/agent/prompt"), prompt).await;
+    assert_eq!(status, StatusCode::CONFLICT, "now it may prompt, and finds no agent running");
+
+    assert_eq!(alice.post(&format!("/devices/{id}/revoke"), serde_json::json!({})).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(phone.get("/threads").await.0, StatusCode::UNAUTHORIZED, "signed out from the Devices page");
+}
+
+#[tokio::test]
 async fn changes_from_the_hosted_app_need_its_header() {
     let world = world(Visibility::Org).await;
     let alice = Browser::sign_in(&world.alice, "alice").await;

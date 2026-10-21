@@ -21,6 +21,7 @@ import type {
   MrSummary,
   OrgChange,
   OrgInfo,
+  PhonePairing,
   PresenceReply,
   Preset,
   Project,
@@ -133,6 +134,7 @@ export const api = {
   orgs: () => request<OrgInfo[]>('GET', '/api/orgs'),
   orgChange: (change: OrgChange) => request<string>('POST', '/api/orgs/change', change),
   devices: () => request<DeviceView[]>('GET', '/api/devices'),
+  pairPhone: () => request<PhonePairing>('POST', '/api/pair'),
   changeDevice: (id: string, change: DeviceChange) =>
     request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}`, change),
   revokeDevice: (id: string) => request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke`),

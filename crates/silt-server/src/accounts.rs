@@ -7,7 +7,7 @@ use std::path::Path;
 use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
-use silt_proto::{DevicePollReply, LoginReply};
+use silt_proto::{Capabilities, DevicePollReply, LoginReply};
 use silt_types::DeviceId;
 use sqlx::sqlite::SqlitePool;
 
@@ -343,11 +343,114 @@ pub(crate) async fn end_other_sessions(db: &SqlitePool, user: UserId, keep: &str
 
 pub(crate) async fn create_session(db: &SqlitePool, user: UserId) -> Result<String, sqlx::Error> {
     let token = random_token();
-    let (token_hash, expires) = (hash(&token), now_ms() + SESSION_TTL_MS);
-    sqlx::query!("INSERT INTO web_sessions (token_hash, user_id, expires_ms) VALUES (?, ?, ?)", token_hash, user, expires)
-        .execute(db)
-        .await?;
+    let (token_hash, now) = (hash(&token), now_ms());
+    let expires = now + SESSION_TTL_MS;
+    sqlx::query!(
+        "INSERT INTO web_sessions (token_hash, user_id, expires_ms, created_ms) VALUES (?, ?, ?, ?)",
+        token_hash,
+        user,
+        expires,
+        now
+    )
+    .execute(db)
+    .await?;
     Ok(token)
+}
+
+/// A session for a phone paired from another of the person's devices,
+/// named, with what it may do (ADR 0028).
+pub(crate) async fn create_paired_session(
+    db: &SqlitePool,
+    user: UserId,
+    name: &str,
+    capabilities: Capabilities,
+) -> Result<String, sqlx::Error> {
+    let token = random_token();
+    let (token_hash, now) = (hash(&token), now_ms());
+    let expires = now + SESSION_TTL_MS;
+    let capabilities = serde_json::to_string(&capabilities).unwrap_or_default();
+    sqlx::query!(
+        "INSERT INTO web_sessions (token_hash, user_id, expires_ms, created_ms, name, capabilities) VALUES (?, ?, ?, ?, ?, ?)",
+        token_hash,
+        user,
+        expires,
+        now,
+        name,
+        capabilities
+    )
+    .execute(db)
+    .await?;
+    Ok(token)
+}
+
+/// What the session holding `token` may do to the person's devices: a
+/// paired phone what it was given, a password's session everything.
+pub(crate) async fn session_capabilities(db: &SqlitePool, token: &str) -> Result<Capabilities, sqlx::Error> {
+    let token_hash = hash(token);
+    let chosen =
+        sqlx::query_scalar!("SELECT capabilities FROM web_sessions WHERE token_hash = ?", token_hash).fetch_optional(db).await?;
+    Ok(chosen.flatten().map_or(Capabilities::ALL, |json| serde_json::from_str(&json).unwrap_or_default()))
+}
+
+/// A paired phone's session, as the Devices page lists it.
+pub(crate) struct PairedSession {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) created_ms: i64,
+    pub(crate) capabilities: Capabilities,
+}
+
+pub(crate) async fn paired_sessions(db: &SqlitePool, user: UserId) -> Result<Vec<PairedSession>, sqlx::Error> {
+    let now = now_ms();
+    let rows = sqlx::query!(
+        r#"SELECT rowid AS "id!: i64", name AS "name!", created_ms, capabilities AS "capabilities!"
+         FROM web_sessions WHERE user_id = ? AND name IS NOT NULL AND capabilities IS NOT NULL AND expires_ms > ?
+         ORDER BY created_ms DESC"#,
+        user,
+        now
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| PairedSession {
+            id: row.id,
+            name: row.name,
+            created_ms: row.created_ms,
+            capabilities: serde_json::from_str(&row.capabilities).unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// Renames a paired phone's session, sets what it may do, or ends it;
+/// whether `user` had one with that id.
+pub(crate) async fn change_paired_session(
+    db: &SqlitePool,
+    user: UserId,
+    id: i64,
+    name: Option<&str>,
+    capabilities: Option<Capabilities>,
+    end: bool,
+) -> Result<bool, sqlx::Error> {
+    if end {
+        let ended =
+            sqlx::query!("DELETE FROM web_sessions WHERE rowid = ? AND user_id = ? AND capabilities IS NOT NULL", id, user)
+                .execute(db)
+                .await?;
+        return Ok(ended.rows_affected() == 1);
+    }
+    let capabilities = capabilities.map(|capabilities| serde_json::to_string(&capabilities).unwrap_or_default());
+    let changed = sqlx::query!(
+        "UPDATE web_sessions SET name = COALESCE(?, name), capabilities = COALESCE(?, capabilities)
+         WHERE rowid = ? AND user_id = ? AND capabilities IS NOT NULL",
+        name,
+        capabilities,
+        id,
+        user
+    )
+    .execute(db)
+    .await?;
+    Ok(changed.rows_affected() == 1)
 }
 
 pub(crate) async fn session_user(db: &SqlitePool, token: &str) -> Result<Option<User>, sqlx::Error> {

@@ -43,12 +43,14 @@ async fn actor_of(server: &Server, user: UserId) -> Result<ActorId, sqlx::Error>
 /// Writes `op` on `thread` as `user`, after the thread's head and `also`.
 async fn write_as(
     server: &Server,
-    user: UserId,
+    browser: Browser,
     family: FamilyId,
     thread: ThreadId,
     also: Option<DeltaId>,
     op: Op,
 ) -> Result<DeltaId, ApiError> {
+    browser.may(browser.capabilities.review, "comment or review")?;
+    let user = browser.user;
     // One at a time: each takes the next lamport, which a write between
     // working it out and pushing would take too.
     let _one = server.shared.writes.lock().await;
@@ -104,7 +106,7 @@ async fn add_comment(
     };
     let (delta, _) = seen.entries.get(index).ok_or_else(|| bad_request("no such message"))?;
     let op = Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: *delta }, text, by: seen.me });
-    let comment = write_as(&server, browser.user, seen.family, seen.thread, None, op).await?;
+    let comment = write_as(&server, browser, seen.family, seen.thread, None, op).await?;
     comment_view(&server, browser, seen.thread, comment).await
 }
 
@@ -123,7 +125,7 @@ async fn reply(
     let seen = browse::seen_thread(&server, browser.user, &id).await?;
     let parent = seen.comments.iter().find(|candidate| short(candidate.id) == comment).ok_or_else(not_found)?.id;
     let op = Op::Comment(CommentOp::Replied { parent, text, by: seen.me });
-    write_as(&server, browser.user, seen.family, seen.thread, None, op).await?;
+    write_as(&server, browser, seen.family, seen.thread, None, op).await?;
     comment_view(&server, browser, seen.thread, parent).await
 }
 
@@ -134,7 +136,7 @@ async fn resolve(
 ) -> Result<Json<CommentView>, ApiError> {
     let seen = browse::seen_thread(&server, browser.user, &id).await?;
     let comment = seen.comments.iter().find(|candidate| short(candidate.id) == comment).ok_or_else(not_found)?.id;
-    write_as(&server, browser.user, seen.family, seen.thread, None, Op::Comment(CommentOp::Resolved { comment })).await?;
+    write_as(&server, browser, seen.family, seen.thread, None, Op::Comment(CommentOp::Resolved { comment })).await?;
     comment_view(&server, browser, seen.thread, comment).await
 }
 
@@ -154,12 +156,11 @@ async fn approve(
     if request.status != MrStatus::Open {
         return Err(bad_request("the merge request isn't open"));
     }
-    let user = browser.user;
     let merge = Op::Merge { from: request.fork, mr: Some(request.id) };
-    write_as(&server, user, family, request.target, Some(request.id), merge).await?;
-    write_as(&server, user, family, request.target, None, Op::Mr(MrOp::Approved { mr: request.id })).await?;
+    write_as(&server, browser, family, request.target, Some(request.id), merge).await?;
+    write_as(&server, browser, family, request.target, None, Op::Mr(MrOp::Approved { mr: request.id })).await?;
     let merged = ConvOp::Merged { from: request.fork, mr: request.id, title: request.title, summary: request.summary };
-    write_as(&server, user, family, request.target, None, Op::Conv(merged)).await?;
+    write_as(&server, browser, family, request.target, None, Op::Conv(merged)).await?;
     summary(&server, browser, request.id).await
 }
 
@@ -181,7 +182,7 @@ async fn decline(
         return Err(bad_request("the merge request isn't open"));
     }
     let op = Op::Mr(MrOp::Declined { mr: request.id, reason });
-    write_as(&server, browser.user, family, request.target, None, op).await?;
+    write_as(&server, browser, family, request.target, None, op).await?;
     summary(&server, browser, request.id).await
 }
 
@@ -197,7 +198,7 @@ async fn request_changes(
         return Err(bad_request("the merge request isn't open"));
     }
     let op = Op::Mr(MrOp::ChangesRequested { mr: request.id, reason });
-    write_as(&server, browser.user, family, request.target, None, op).await?;
+    write_as(&server, browser, family, request.target, None, op).await?;
     summary(&server, browser, request.id).await
 }
 
@@ -219,6 +220,6 @@ async fn guide(
     let guide = said(&text).map_err(|_| bad_request("write the guide here, or ask the fork's agent from its machine"))?;
     let (family, request, me) = browse::seen_request(&server, browser.user, &id).await?;
     let op = Op::Mr(MrOp::Guided { mr: request.id, guide, by: me });
-    write_as(&server, browser.user, family, request.fork, None, op).await?;
+    write_as(&server, browser, family, request.fork, None, op).await?;
     Ok(Json("kept"))
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO control_commands (device_id, thread_id, sender_id, from_device, command, created_ms, expires_ms)\n         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "query": "INSERT INTO control_commands (device_id, thread_id, sender_id, from_device, command, created_ms, expires_ms, capabilities)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 7
+      "Right": 8
     },
     "nullable": [
       null
     ]
   },
-  "hash": "bf0711dac8cfa42f82ebab74b76dbdf61918b5cbb2ffc60e3a76bade352d0f85"
+  "hash": "2fe88c65e1b9638fdb0f48b9bfeef60fbcee3bb0133b2caa972cca08c798c702"
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO phone_pairings (code_hash, user_id, expires_ms) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "04cf91a4187ab389b1696a23facbc71dfce433b15e5cb4b39cead97b9e92aadc"
+}

@@ -47,6 +47,7 @@ async fn list(server: &Server, user: UserId, this: Option<DeviceId>) -> Result<V
         let (online, report) = server.shared.control.heard(device.id).await;
         views.push(DeviceView {
             id: device.id.to_string(),
+            kind: "device".into(),
             name: device.name,
             created_ms: device.created_ms,
             last_used_ms: device.last_used_ms,
@@ -64,7 +65,36 @@ async fn list(server: &Server, user: UserId, this: Option<DeviceId>) -> Result<V
             startable: report.startable,
         });
     }
+    for phone in crate::accounts::paired_sessions(server.db(), user).await? {
+        views.push(DeviceView {
+            id: format!("{PHONE}{}", phone.id),
+            kind: "phone".into(),
+            name: phone.name,
+            created_ms: phone.created_ms,
+            last_used_ms: phone.created_ms,
+            online: false,
+            this: false,
+            capabilities: phone.capabilities,
+            agents: Vec::new(),
+            startable: Vec::new(),
+        });
+    }
     Ok(views)
+}
+
+/// How a paired phone's session is named among devices.
+const PHONE: &str = "phone-";
+
+fn phone_session(id: &str) -> Option<i64> {
+    id.strip_prefix(PHONE)?.parse().ok()
+}
+
+fn valid_name(name: &str) -> Result<&str, ApiError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME {
+        return Err(bad_request(format!("a device's name is 1 to {MAX_NAME} characters")));
+    }
+    Ok(name)
 }
 
 /// The person's device `id` names, by its full id or the end of it, and its
@@ -84,13 +114,18 @@ pub(crate) async fn own_device(server: &Server, user: UserId, id: &str) -> Resul
 }
 
 async fn change(server: &Server, user: UserId, id: &str, change: DeviceChange) -> Result<DeviceView, ApiError> {
+    let name = change.name.as_deref().map(valid_name).transpose()?;
+    if let Some(session) = phone_session(id) {
+        let found = crate::accounts::change_paired_session(server.db(), user, session, name, change.capabilities, false).await?;
+        if !found {
+            return Err(not_found());
+        }
+        let views = list(server, user, None).await?;
+        return views.into_iter().find(|view| view.id == id).ok_or_else(not_found);
+    }
     let (device, _) = own_device(server, user, id).await?;
     let key = id_bytes(device.0);
-    if let Some(name) = change.name {
-        let name = name.trim();
-        if name.is_empty() || name.chars().count() > MAX_NAME {
-            return Err(bad_request(format!("a device's name is 1 to {MAX_NAME} characters")));
-        }
+    if let Some(name) = name {
         sqlx::query!("UPDATE devices SET name = ? WHERE id = ?", name, key).execute(server.db()).await?;
     }
     if let Some(capabilities) = change.capabilities {
@@ -102,6 +137,10 @@ async fn change(server: &Server, user: UserId, id: &str, change: DeviceChange) -
 }
 
 async fn revoke(server: &Server, user: UserId, id: &str) -> Result<StatusCode, ApiError> {
+    if let Some(session) = phone_session(id) {
+        let ended = crate::accounts::change_paired_session(server.db(), user, session, None, None, true).await?;
+        return if ended { Ok(StatusCode::NO_CONTENT) } else { Err(not_found()) };
+    }
     let (device, _) = own_device(server, user, id).await?;
     if !crate::accounts::revoke_device(server.db(), user, device).await? {
         return Err(not_found());
@@ -148,6 +187,8 @@ async fn browser_change(
     Path(id): Path<String>,
     Json(body): Json<DeviceChange>,
 ) -> Result<Json<DeviceView>, ApiError> {
+    // Else a phone could give itself more than its person did.
+    browser.may(browser.capabilities == Capabilities::ALL, "change devices")?;
     Ok(Json(change(&server, browser.user, &id, body).await?))
 }
 
@@ -156,5 +197,6 @@ async fn browser_revoke(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    browser.may(browser.capabilities == Capabilities::ALL, "sign devices out")?;
     revoke(&server, browser.user, &id).await
 }

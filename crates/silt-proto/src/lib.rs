@@ -1034,6 +1034,8 @@ pub struct Capabilities {
 
 impl Capabilities {
     pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true };
+    /// A paired phone's, unless its person gives it more (ADR 0028).
+    pub const PHONE: Self = Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true };
 
     /// Whether these let the device send `command`, and if not, what it
     /// would need, for saying so.

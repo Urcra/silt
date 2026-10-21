@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM phone_pairings WHERE code_hash = ? AND expires_ms > ? RETURNING user_id AS \"user_id: UserId\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id: UserId",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "phone_pairings",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1504758612d8cc5c2626b62443f904fb8e8362591cb33edd5e422222d98df091"
+}

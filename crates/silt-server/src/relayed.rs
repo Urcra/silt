@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use silt_proto::{AgentReport, ErrorReply, RelayRequest, RemoteCommand};
+use silt_proto::{AgentReport, Capabilities, ErrorReply, RelayRequest, RemoteCommand};
 use silt_types::{DeviceId, ThreadId};
 
 use crate::app::Browser;
@@ -56,7 +56,8 @@ async fn device_relay(
     Path(id): Path<String>,
     Json(body): Json<RelayRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(relay_from(&server, caller.user, Some(caller.device), &id, body.command, body.when_back).await?)
+    let capabilities = crate::devices::capabilities_of(server.db(), caller.device).await?;
+    Ok(relay_from(&server, caller.user, Some(caller.device), capabilities, &id, body.command, body.when_back).await?)
 }
 
 /// A refusal as the web app reads one.
@@ -137,7 +138,7 @@ async fn relayed(
     command: RemoteCommand,
     when_back: bool,
 ) -> Result<Json<Value>, Refused> {
-    relay_from(server, browser.user, None, selector, command, when_back).await
+    relay_from(server, browser.user, None, browser.capabilities, selector, command, when_back).await
 }
 
 /// Relays `command` from `user`, on their device `from` if not a browser,
@@ -147,10 +148,14 @@ async fn relay_from(
     server: &Server,
     user: UserId,
     from: Option<DeviceId>,
+    capabilities: Capabilities,
     selector: &str,
     command: RemoteCommand,
     when_back: bool,
 ) -> Result<Json<Value>, Refused> {
+    if let Err(needs) = capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this device may not {needs}; change that on the Devices page")));
+    }
     let thread = thread_for(server, user, selector).await?;
     let (device, name, online, _) = runner(server, user, thread).await?;
     if from == Some(device) {
@@ -161,7 +166,7 @@ async fn relay_from(
         return Err(Refused(StatusCode::CONFLICT, format!("{name} is offline")));
     }
     let ttl = if online { ANSWER_WAIT } else { QUEUED_WAIT };
-    let id = control::relay(server, Relay { device, thread, sender: user, from, command, ttl }).await?;
+    let id = control::relay(server, Relay { device, thread, sender: user, from, capabilities, command, ttl }).await?;
     if !online {
         return Ok(Json(json!(format!("queued until {name} is back"))));
     }
@@ -233,8 +238,12 @@ async fn continue_on(
         return Err(Refused(StatusCode::CONFLICT, format!("{name} is offline")));
     }
     let command = RemoteCommand::Start { agent: body.agent, preset: body.preset, mode: body.mode };
-    let id =
-        control::relay(&server, Relay { device, thread, sender: browser.user, from: None, command, ttl: ANSWER_WAIT }).await?;
+    if let Err(needs) = browser.capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
+    }
+    let relay =
+        Relay { device, thread, sender: browser.user, from: None, capabilities: browser.capabilities, command, ttl: ANSWER_WAIT };
+    let id = control::relay(&server, relay).await?;
     match control::answer_of(&server, id, ANSWER_WAIT).await? {
         Some(answer) if answer.ok => Ok(Json(answer.data)),
         Some(answer) => Err(Refused(StatusCode::CONFLICT, answer.message)),

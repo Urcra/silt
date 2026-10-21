@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO web_sessions (token_hash, user_id, expires_ms, created_ms) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1776f9d65763fc4e9682e57dc8f28a18249ff798bd51b2a9a7fcd12bae654d90"
+}

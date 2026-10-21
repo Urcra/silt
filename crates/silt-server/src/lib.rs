@@ -45,6 +45,7 @@ mod lifecycle;
 mod me;
 mod orgs;
 mod pages;
+mod pairing;
 mod presence;
 mod projects;
 mod push;
@@ -299,6 +300,7 @@ impl Server {
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())
             .merge(relayed::device_routes())
+            .merge(pairing::device_routes())
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -316,7 +318,8 @@ impl Server {
             .route("/device", get(pages::device_page).post(pages::device))
             .route("/signup", get(pages::signup_page).post(pages::signup))
             .route("/auth/{provider}/start", get(pages::provider_start))
-            .route("/auth/{provider}/callback", get(pages::provider_callback));
+            .route("/auth/{provider}/callback", get(pages::provider_callback))
+            .merge(pairing::page_routes());
         Router::new()
             .merge(api)
             .merge(pages)

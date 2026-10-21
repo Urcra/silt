@@ -362,6 +362,54 @@ test('on a phone, the hosted app answers a waiting agent from Needs you', async 
   await phone.context().close()
 })
 
+test('a phone paired by QR code answers a permission, but may not prompt until allowed', async ({ browser }) => {
+  const desk = await (await browser.newContext()).newPage()
+  await desk.goto(`${live.server}/app/devices`)
+  await desk.getByLabel('User').fill('alice')
+  await desk.getByLabel('Password').fill('correct horse battery')
+  await desk.getByRole('button', { name: 'Sign in' }).click()
+  await desk.getByRole('region', { name: 'pair a phone' }).getByRole('button', { name: 'Show a code' }).click()
+  await expect(desk.getByRole('img', { name: 'QR code to pair a phone' })).toBeVisible()
+  const code = (await desk.getByTestId('pairing-code').textContent()) ?? ''
+
+  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage()
+  await phone.goto(`${live.server}/pair`)
+  await phone.getByLabel('Code').fill(code.toLowerCase())
+  await phone.getByRole('button', { name: 'Continue' }).click()
+  await expect(phone.getByText('Sign this phone in to Silt as alice?')).toBeVisible()
+  await phone.getByRole('button', { name: 'Sign in' }).click()
+  await expect(phone).toHaveURL(`${live.server}/app/needs-you`)
+  await desk.getByRole('button', { name: "It's paired" }).click()
+  await expect(desk.getByRole('region', { name: 'Phone' })).toContainText('phone')
+
+  const machine = await (await browser.newContext()).newPage()
+  await startInNewThread(machine, 'Fake agent')
+  await machine.getByLabel('permissions').selectOption('ask_for_everything')
+  await machine.getByLabel('draft').fill('paired phone')
+  await machine.getByRole('button', { name: 'Send' }).click()
+  await expect(machine.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
+  const thread = new URL(machine.url()).pathname.split('/t/')[1]
+
+  const waiting = phone.getByRole('region', { name: 'waiting on you' }).getByRole('group', { name: /paired phone needs you/ })
+  await expect(async () => {
+    await phone.reload()
+    await expect(waiting.getByRole('button', { name: 'Allow' })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await waiting.getByRole('button', { name: 'Allow' }).tap()
+  await expect(machine.getByText(/^Done: [\s\S]*paired phone$/)).toBeVisible()
+
+  await phone.goto(`${live.server}/app/t/${thread}`)
+  const there = phone.getByRole('region', { name: 'live' })
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
+  await there.getByLabel('draft').fill('may I?')
+  await there.getByRole('button', { name: 'Send' }).tap()
+  await expect(there.getByText('this device may not send prompts; change that on the Devices page')).toBeVisible()
+  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await desk.context().close()
+  await phone.context().close()
+  await machine.context().close()
+})
+
 test('a comment written in the server-hosted app reaches the machines', async ({ browser }) => {
   const hosted = await (await browser.newContext()).newPage()
   await hosted.goto(`${live.server}/app/t/${live.thread}`)

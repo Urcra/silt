@@ -293,6 +293,8 @@ pub enum Request {
     NotificationSetting {
         setting: silt_proto::KindSetting,
     },
+    /// A one-time code that signs a phone in to the server's web app.
+    PairPhone,
     /// The person's devices, on the server.
     Devices,
     DeviceChange {
@@ -845,6 +847,7 @@ mod tests {
             DeviceAgent::decl(&config),
             DeviceChange::decl(&config),
             DeviceView::decl(&config),
+            silt_proto::view::PhonePairing::decl(&config),
             FileEdit::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),

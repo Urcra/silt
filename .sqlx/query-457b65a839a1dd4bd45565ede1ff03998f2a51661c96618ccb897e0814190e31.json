@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.name FROM phone_pairings p JOIN users u ON u.id = p.user_id WHERE p.code_hash = ? AND p.expires_ms > ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "457b65a839a1dd4bd45565ede1ff03998f2a51661c96618ccb897e0814190e31"
+}

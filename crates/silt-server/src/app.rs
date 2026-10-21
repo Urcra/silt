@@ -11,9 +11,9 @@ use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde_json::json;
 
-use silt_proto::ErrorReply;
+use silt_proto::{Capabilities, ErrorReply};
 
-use crate::{Server, UserId, pages};
+use crate::{ApiError, Server, UserId, pages};
 
 /// Longest error answer rewritten for the app.
 const ERROR_BODY: usize = 64 * 1024;
@@ -23,10 +23,23 @@ const ERROR_BODY: usize = 64 * 1024;
 #[allow_missing = true]
 struct Assets;
 
-/// The person a browser request is from, by their session cookie.
+/// The person a browser request is from, by their session cookie, and what
+/// that session may do: everything, unless it's a paired phone's.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Browser {
     pub(crate) user: UserId,
+    pub(crate) capabilities: Capabilities,
+}
+
+impl Browser {
+    /// Refuses what this session may not do (ADR 0028).
+    pub(crate) fn may(&self, allowed: bool, what: &str) -> Result<(), ApiError> {
+        if allowed {
+            Ok(())
+        } else {
+            Err(crate::forbidden(format!("this phone may not {what}; change that on the Devices page")))
+        }
+    }
 }
 
 pub(crate) fn router(server: &Server) -> Router<Server> {
@@ -37,6 +50,7 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
         .merge(crate::devices::browser_routes())
         .merge(crate::writes::routes())
         .merge(crate::push::browser_routes())
+        .merge(crate::pairing::browser_routes())
         // Not the page: the app would read it as an empty answer.
         .route(
             "/app/api/{*rest}",
@@ -114,7 +128,12 @@ async fn browser_session(State(server): State<Server>, mut request: Request, nex
     if !reads && !(marked && pages::same_origin(&server, request.headers())) {
         return refused(StatusCode::FORBIDDEN, "this request didn't come from Silt's own pages");
     }
-    request.extensions_mut().insert(Browser { user: user.id });
+    let token = pages::cookie_value(request.headers(), pages::SESSION_COOKIE).unwrap_or_default();
+    let capabilities = match crate::accounts::session_capabilities(server.db(), &token).await {
+        Ok(capabilities) => capabilities,
+        Err(_) => return refused(StatusCode::INTERNAL_SERVER_ERROR, "could not read the session"),
+    };
+    request.extensions_mut().insert(Browser { user: user.id, capabilities });
     next.run(request).await
 }
 

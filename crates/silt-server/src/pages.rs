@@ -16,13 +16,13 @@ use crate::config::SignupPolicy;
 use crate::sign_in;
 use crate::{Server, UserId, now_ms};
 
-const SESSION_COOKIE: &str = "silt_session";
+pub(crate) const SESSION_COOKIE: &str = "silt_session";
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-fn page(title: &str, body: &str) -> Html<String> {
+pub(crate) fn page(title: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -65,7 +65,7 @@ fn secure_attribute(server: &Server) -> &'static str {
     if server.config().public_url().starts_with("https://") { "; Secure" } else { "" }
 }
 
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -98,10 +98,14 @@ async fn start_session(server: &Server, user: UserId, next: &str) -> Response {
         Ok(_) => return error_page(StatusCode::FORBIDDEN, "This account is disabled."),
         Err(_) => return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
     }
-    let token = match accounts::create_session(server.db(), user).await {
-        Ok(token) => token,
-        Err(_) => return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
-    };
+    match accounts::create_session(server.db(), user).await {
+        Ok(token) => with_session(server, &token, next),
+        Err(_) => error_page(StatusCode::INTERNAL_SERVER_ERROR, "Could not sign you in."),
+    }
+}
+
+/// Continues to `next` holding the session `token`.
+pub(crate) fn with_session(server: &Server, token: &str, next: &str) -> Response {
     let secure = if server.config().public_url().starts_with("https://") { "; Secure" } else { "" };
     let cookie = format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}");
     let mut response = Redirect::to(next).into_response();
@@ -109,7 +113,7 @@ async fn start_session(server: &Server, user: UserId, next: &str) -> Response {
     response
 }
 
-fn error_page(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error_page(status: StatusCode, message: &str) -> Response {
     (status, page("Something went wrong", &format!("<p class=\"error\">{}</p><p><a href=\"/\">Back</a></p>", escape(message))))
         .into_response()
 }

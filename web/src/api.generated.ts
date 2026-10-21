@@ -122,7 +122,11 @@ export type DeviceAgent = { thread: string, title: string | null, agent: string,
 
 export type DeviceChange = { name: string | null, capabilities: Capabilities | null, };
 
-export type DeviceView = { id: string, name: string, created_ms: number, last_used_ms: number, 
+export type DeviceView = { id: string, 
+/**
+ * `device`, a machine with a daemon, or `phone`, a paired browser.
+ */
+kind: string, name: string, created_ms: number, last_used_ms: number, 
 /**
  * Heard from in the last minute and a half.
  */
@@ -139,6 +143,16 @@ agents: Array<DeviceAgent>,
  * The agents it could start, to continue a thread there.
  */
 startable: Array<Startable>, };
+
+export type PhonePairing = { code: string, 
+/**
+ * What the QR code holds: the page that signs the phone in.
+ */
+url: string, 
+/**
+ * The QR code, as an SVG image.
+ */
+qr_svg: string, expires_ms: number, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { STATE_TAG } from '../agentState'
-import { api, type Capabilities, type DeviceChange, type DeviceView } from '../api'
+import { api, type Capabilities, type DeviceChange, type DeviceView, type PhonePairing } from '../api'
 import { keys, message } from '../query'
 import { Button, EmptyState, Input, Skeleton, Tag, toast } from '../ui'
 
@@ -51,7 +51,11 @@ function Device({ device }: { device: DeviceView }) {
             <Button onClick={() => setName(null)}>Cancel</Button>
           </form>
         )}
-        <Tag tone={device.online ? 'ok' : 'neutral'}>{device.online ? 'online' : 'offline'}</Tag>
+        {device.kind === 'phone' ? (
+          <Tag tone="info">phone</Tag>
+        ) : (
+          <Tag tone={device.online ? 'ok' : 'neutral'}>{device.online ? 'online' : 'offline'}</Tag>
+        )}
         {device.this && <Tag tone="accent">this device</Tag>}
         <span className="ml-auto text-xs text-fg-3">signed in {new Date(Number(device.created_ms)).toLocaleDateString()}</span>
       </div>
@@ -101,12 +105,49 @@ function Device({ device }: { device: DeviceView }) {
   )
 }
 
+/** A QR code and a short code that sign a phone in, for ten minutes (ADR 0028). */
+function PairPhone() {
+  const queries = useQueryClient()
+  const [pairing, setPairing] = useState<PhonePairing>()
+  const start = () =>
+    void api.pairPhone().then(setPairing, (failure: unknown) => toast(message(failure), 'danger'))
+  return (
+    <section aria-label="pair a phone" className="space-y-2 rounded-md border border-line p-3 text-sm">
+      <div className="flex items-center gap-2">
+        <h3 className="font-medium">Pair a phone</h3>
+        <Button className="ml-auto" onClick={start}>
+          {pairing ? 'New code' : 'Show a code'}
+        </Button>
+      </div>
+      {pairing && (
+        <div className="flex flex-wrap items-center gap-4">
+          <img alt="QR code to pair a phone" className="h-44 w-44 rounded bg-white p-1" src={`data:image/svg+xml;utf8,${encodeURIComponent(pairing.qr_svg)}`} />
+          <div className="space-y-1">
+            <p>Scan it with the phone's camera, or open {pairing.url.replace(/\/pair\/.*$/, '/pair')} and type</p>
+            <p className="font-mono text-lg tracking-widest" data-testid="pairing-code">
+              {pairing.code}
+            </p>
+            <p className="text-xs text-fg-3">
+              It works once, until {new Date(Number(pairing.expires_ms)).toLocaleTimeString()}. The phone may answer permissions and review;
+              give it more below once it's paired.
+            </p>
+            <Button className="text-xs" onClick={() => void queries.invalidateQueries({ queryKey: keys.devices })}>
+              It's paired
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
 /** The person's devices: which are online, what runs on each, what each may do (ADR 0026). */
 export function Devices() {
   const devices = useQuery({ queryKey: keys.devices, queryFn: api.devices })
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <h2 className="text-lg font-semibold">Devices</h2>
+      <PairPhone />
       {devices.isPending && <Skeleton className="h-24" />}
       {devices.error && <p className="text-danger">{message(devices.error)}</p>}
       {devices.data?.length === 0 && <EmptyState title="No devices">Sign one in with `silt auth login`.</EmptyState>}

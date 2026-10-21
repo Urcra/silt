@@ -520,6 +520,7 @@ impl Core {
             Request::Projects => return answer_later(reply, Ok(self.projects())),
             Request::Orgs => return answer_later(reply, self.orgs()),
             Request::Devices => return answer_later(reply, self.devices()),
+            Request::PairPhone => return answer_later(reply, self.pair_phone()),
             Request::NotificationSettings => return answer_later(reply, self.notification_settings(None)),
             Request::NotificationSetting { setting } => return answer_later(reply, self.notification_settings(Some(setting))),
             Request::DeviceChange { id, change } => return answer_later(reply, self.device_change(id, change)),

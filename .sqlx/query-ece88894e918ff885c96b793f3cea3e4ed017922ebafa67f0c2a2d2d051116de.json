@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"id!: i64\", name AS \"name!\", created_ms, capabilities AS \"capabilities!\"\n         FROM web_sessions WHERE user_id = ? AND name IS NOT NULL AND capabilities IS NOT NULL AND expires_ms > ?\n         ORDER BY created_ms DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "capabilities!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "capabilities"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "ece88894e918ff885c96b793f3cea3e4ed017922ebafa67f0c2a2d2d051116de"
+}

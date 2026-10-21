@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE web_sessions SET name = COALESCE(?, name), capabilities = COALESCE(?, capabilities)\n         WHERE rowid = ? AND user_id = ? AND capabilities IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d1529679550a74fac52132faf4d0f524b1b7992ad3996f676c934675f4cd42d1"
+}

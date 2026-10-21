@@ -65,8 +65,8 @@ struct Readable {
 }
 
 impl Readable {
-    async fn load(server: &Server, browser: Browser) -> Result<Self, ApiError> {
-        let viewer = server.viewer(browser.user).await?;
+    async fn load(server: &Server, user: UserId) -> Result<Self, ApiError> {
+        let viewer = server.viewer(user).await?;
         let rows = sqlx::query!(
             r#"SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner
              FROM threads t JOIN users u ON u.id = t.owner_id
@@ -96,7 +96,7 @@ impl Readable {
             deltas.insert(family, kept.collect());
         }
         let collaborators = crate::collab::collaborators(server.db()).await?;
-        let me = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", browser.user).fetch_one(server.db()).await?;
+        let me = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", user).fetch_one(server.db()).await?;
         Ok(Self { rows, deltas, collaborators, me })
     }
 
@@ -178,7 +178,7 @@ fn title(own: &[&Delta], history: &[(DeltaId, HistoryEntry)]) -> Option<String> 
 
 /// The titles of the threads the person sees, as their thread list shows them.
 pub(crate) async fn titles(server: &Server, user: UserId) -> Result<HashMap<ThreadId, Option<String>>, ApiError> {
-    let readable = Readable::load(server, Browser { user }).await?;
+    let readable = Readable::load(server, user).await?;
     Ok(readable
         .rows
         .iter()
@@ -241,7 +241,7 @@ async fn threads(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
 ) -> Result<Json<Vec<ThreadSummary>>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let requests = readable.requests();
     let states = states(&server, browser).await?;
     let running = server.shared.control.running().await;
@@ -262,7 +262,7 @@ async fn history(
     Path(id): Path<String>,
     Query(page): Query<Page>,
 ) -> Result<Json<HistoryPage>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
     let all: Vec<HistoryEntry> = entries(readable.of(row), row.id).into_iter().map(|(_, entry)| entry).collect();
     let total = all.len();
@@ -276,7 +276,7 @@ async fn turns(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<TurnInfo>>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
     let log = readable.of(row);
     let history = entries(log, row.id);
@@ -312,7 +312,7 @@ pub(crate) struct SeenThread {
 }
 
 pub(crate) async fn seen_thread(server: &Server, user: UserId, selector: &str) -> Result<SeenThread, ApiError> {
-    let readable = Readable::load(server, Browser { user }).await?;
+    let readable = Readable::load(server, user).await?;
     let row = readable.row(selector)?;
     let log = readable.of(row);
     Ok(SeenThread {
@@ -331,7 +331,7 @@ pub(crate) async fn seen_request(
     user: UserId,
     selector: &str,
 ) -> Result<(FamilyId, MergeRequest, String), ApiError> {
-    let readable = Readable::load(server, Browser { user }).await?;
+    let readable = Readable::load(server, user).await?;
     let (family, request) = readable
         .requests()
         .into_iter()
@@ -345,7 +345,7 @@ pub(crate) async fn comments(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<CommentView>>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
     let log = readable.of(row);
     let history = entries(log, row.id);
@@ -382,7 +382,7 @@ async fn change_state(
     Path(id): Path<String>,
     Json(change): Json<StateChange>,
 ) -> Result<Json<Mine>, ApiError> {
-    let thread = Readable::load(&server, browser).await?.row(&id)?.id;
+    let thread = Readable::load(&server, browser.user).await?.row(&id)?.id;
     let Json(state) = crate::me::change_thread(
         State(server),
         Extension(browser.caller()),
@@ -423,7 +423,7 @@ async fn merge_requests(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
 ) -> Result<Json<Vec<MrSummary>>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let mut requests = readable.requests();
     requests.sort_by_key(|(_, request)| request.opened_ms);
     Ok(Json(requests.iter().map(|(family, request)| mr_summary(&readable.deltas[family], request)).collect()))
@@ -434,7 +434,7 @@ pub(crate) async fn merge_request(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
 ) -> Result<Json<MrDetails>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let (family, request) = readable
         .requests()
         .into_iter()
@@ -543,7 +543,7 @@ async fn orgs(
 }
 
 async fn projects(State(server): State<Server>, Extension(browser): Extension<Browser>) -> Result<Json<Vec<Project>>, ApiError> {
-    let readable = Readable::load(&server, browser).await?;
+    let readable = Readable::load(&server, browser.user).await?;
     let requests = readable.requests();
     let Json(reply) = crate::projects::list(State(server), Extension(browser.caller())).await?;
     Ok(Json(

@@ -144,6 +144,13 @@ impl Core {
         })
     }
 
+    pub(crate) fn pair_phone(
+        &self,
+    ) -> Result<impl Future<Output = Result<silt_proto::view::PhonePairing, CoreError>> + Send + 'static, CoreError> {
+        let remote = self.signed_in()?;
+        Ok(async move { remote.pair_phone().await.map_err(|source| CoreError::Server { doing: "pair a phone", source }) })
+    }
+
     pub(crate) fn devices(
         &self,
     ) -> Result<impl Future<Output = Result<Vec<crate::protocol::DeviceView>, CoreError>> + Send + 'static, CoreError> {

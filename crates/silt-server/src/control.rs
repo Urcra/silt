@@ -174,7 +174,7 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
     let rows = sqlx::query!(
         r#"UPDATE control_commands SET taken_ms = ?
          WHERE device_id = ? AND taken_ms IS NULL AND expires_ms > ?
-         RETURNING id AS "id!", thread_id, from_device, command, created_ms,
+         RETURNING id AS "id!", thread_id, from_device, command, created_ms, capabilities,
            (SELECT name FROM users WHERE users.id = sender_id) AS "sender!: String""#,
         now,
         device,
@@ -189,11 +189,7 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
             continue;
         };
         let from = row.from_device.as_deref().map(|device| DeviceId(id_from(device)));
-        // A browser signed in with the person's password may do all they may.
-        let capabilities = match from {
-            Some(device) => crate::devices::capabilities_of(server.db(), device).await?,
-            None => Capabilities::ALL,
-        };
+        let capabilities = row.capabilities.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
         commands.push(ControlCommand {
             id: row.id,
             thread: ThreadId(id_from(&row.thread_id)),
@@ -398,6 +394,8 @@ pub(crate) struct Relay {
     pub(crate) thread: ThreadId,
     pub(crate) sender: UserId,
     pub(crate) from: Option<DeviceId>,
+    /// What the sending device or session may do, as it stands now.
+    pub(crate) capabilities: Capabilities,
     pub(crate) command: RemoteCommand,
     pub(crate) ttl: Duration,
 }
@@ -406,18 +404,20 @@ pub(crate) struct Relay {
 pub(crate) async fn relay(server: &Server, relay: Relay) -> Result<i64, ServerError> {
     let (device, thread, from) = (id_bytes(relay.device.0), id_bytes(relay.thread.0), relay.from.map(|from| id_bytes(from.0)));
     let command = serde_json::to_string(&relay.command)?;
+    let capabilities = serde_json::to_string(&relay.capabilities)?;
     let now = now_ms();
     let expires = now.saturating_add(i64::try_from(relay.ttl.as_millis()).unwrap_or(i64::MAX));
     let id = sqlx::query_scalar!(
-        r#"INSERT INTO control_commands (device_id, thread_id, sender_id, from_device, command, created_ms, expires_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id AS "id!""#,
+        r#"INSERT INTO control_commands (device_id, thread_id, sender_id, from_device, command, created_ms, expires_ms, capabilities)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS "id!""#,
         device,
         thread,
         relay.sender,
         from,
         command,
         now,
-        expires
+        expires,
+        capabilities
     )
     .fetch_one(server.db())
     .await?;
@@ -515,7 +515,16 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
         let prompt = RemoteCommand::Prompt { text: "add a test".into(), plan: false };
-        let relay = |command, ttl| Relay { device, thread: ThreadId(7), sender: alice, from: Some(phone_device), command, ttl };
+        let relay_with = |command, ttl, capabilities| Relay {
+            device,
+            thread: ThreadId(7),
+            sender: alice,
+            from: Some(phone_device),
+            capabilities,
+            command,
+            ttl,
+        };
+        let relay = |command, ttl| relay_with(command, ttl, Capabilities::ALL);
         let id = super::relay(&server, relay(prompt.clone(), Duration::from_secs(60))).await.expect("relays");
         let (laptop, commands) = tokio::time::timeout(Duration::from_secs(5), waiting).await.expect("wakes").expect("joins");
         assert_eq!(commands.len(), 1, "the waiting poll hears of it at once");
@@ -524,14 +533,11 @@ mod tests {
         assert_eq!(commands[0].capabilities, Capabilities::ALL, "a new device may do everything");
         assert!(laptop.poll(0).await.is_empty(), "a command is taken once");
 
-        let phone_id = id_bytes(phone_device.0);
-        sqlx::query!(r#"UPDATE devices SET capabilities = '{"answer_permissions":true}' WHERE id = ?"#, phone_id)
-            .execute(server.db())
+        super::relay(&server, relay_with(RemoteCommand::Cancel, Duration::from_secs(60), Capabilities::PHONE))
             .await
-            .expect("updates");
-        super::relay(&server, relay(RemoteCommand::Cancel, Duration::from_secs(60))).await.expect("relays");
+            .expect("relays");
         let limited = laptop.poll(0).await;
-        assert_eq!(limited[0].capabilities, Capabilities { answer_permissions: true, ..Capabilities::default() });
+        assert_eq!(limited[0].capabilities, Capabilities::PHONE, "a command carries what its sender could do when sent");
 
         let stale = super::relay(&server, relay(RemoteCommand::Stop, Duration::ZERO)).await.expect("relays");
         assert!(laptop.poll(0).await.is_empty(), "an expired command isn't taken");

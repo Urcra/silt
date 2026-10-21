@@ -256,6 +256,10 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
+    pub async fn pair_phone(&self) -> Result<silt_proto::view::PhonePairing, RemoteError> {
+        Ok(checked(self.request(reqwest::Method::POST, "/v1/pair").send().await?).await?.json().await?)
+    }
+
     pub async fn devices(&self) -> Result<Vec<silt_proto::view::DeviceView>, RemoteError> {
         Ok(checked(self.request(reqwest::Method::GET, "/v1/devices").send().await?).await?.json().await?)
     }

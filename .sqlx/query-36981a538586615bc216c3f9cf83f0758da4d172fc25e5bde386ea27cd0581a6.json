@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE control_commands SET taken_ms = ?\n         WHERE device_id = ? AND taken_ms IS NULL AND expires_ms > ?\n         RETURNING id AS \"id!\", thread_id, from_device, command, created_ms,\n           (SELECT name FROM users WHERE users.id = sender_id) AS \"sender!: String\"",
+  "query": "UPDATE control_commands SET taken_ms = ?\n         WHERE device_id = ? AND taken_ms IS NULL AND expires_ms > ?\n         RETURNING id AS \"id!\", thread_id, from_device, command, created_ms, capabilities,\n           (SELECT name FROM users WHERE users.id = sender_id) AS \"sender!: String\"",
   "describe": {
     "columns": [
       {
@@ -59,8 +59,19 @@
         }
       },
       {
-        "name": "sender!: String",
+        "name": "capabilities",
         "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "control_commands",
+            "name": "capabilities"
+          }
+        }
+      },
+      {
+        "name": "sender!: String",
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -79,8 +90,9 @@
       true,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "9d9f905cd233c902ccf176a7463b2596e770f4cb620e1a6ee342ad23468b3dbe"
+  "hash": "36981a538586615bc216c3f9cf83f0758da4d172fc25e5bde386ea27cd0581a6"
 }

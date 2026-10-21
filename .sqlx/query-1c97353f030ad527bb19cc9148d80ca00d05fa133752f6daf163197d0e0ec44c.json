@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT capabilities FROM web_sessions WHERE token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "capabilities",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "capabilities"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1c97353f030ad527bb19cc9148d80ca00d05fa133752f6daf163197d0e0ec44c"
+}

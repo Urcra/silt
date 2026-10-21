@@ -385,6 +385,8 @@ pub enum CommentOn {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DeviceView {
     pub id: String,
+    /// `device`, a machine with a daemon, or `phone`, a paired browser.
+    pub kind: String,
     pub name: String,
     pub created_ms: i64,
     pub last_used_ms: i64,
@@ -406,6 +408,18 @@ pub struct DeviceAgent {
     pub title: Option<String>,
     pub agent: String,
     pub state: AgentState,
+}
+
+/// A one-time code that signs a phone in (ADR 0028), to show as a QR code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PhonePairing {
+    pub code: String,
+    /// What the QR code holds: the page that signs the phone in.
+    pub url: String,
+    /// The QR code, as an SVG image.
+    pub qr_svg: String,
+    pub expires_ms: i64,
 }
 
 /// Renames a device or changes what it may do; what's left out stays.

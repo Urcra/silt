@@ -100,6 +100,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/orgs/change", post(org_change))
         .route("/api/me/notifications", get(notification_settings).put(notification_setting))
         .route("/api/devices", get(devices))
+        .route("/api/pair", post(pair_phone))
         .route("/api/devices/{id}", axum::routing::patch(device_change))
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
@@ -494,6 +495,10 @@ async fn notification_settings(State(web): State<Web>) -> HttpResponse {
 
 async fn notification_setting(State(web): State<Web>, Json(setting): Json<silt_proto::KindSetting>) -> HttpResponse {
     ask(&web, Request::NotificationSetting { setting }).await
+}
+
+async fn pair_phone(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::PairPhone).await
 }
 
 async fn devices(State(web): State<Web>) -> HttpResponse {
