@@ -135,6 +135,42 @@ pub fn read_line(line: &str) -> Read {
     read
 }
 
+/// The newest session started in `cwd` no earlier than `since_ms` in the
+/// Copilot home `home`, whose id isn't in `known`.
+pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
+    let cwd = cwd.to_string_lossy();
+    fs::read_dir(home.join("session-state"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("events.jsonl"))
+        .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
+        .filter_map(|path| {
+            let id = path.parent()?.file_name()?.to_string_lossy().into_owned();
+            let start: Value = serde_json::from_str(&crate::first_line(&path)?).ok()?;
+            (start.pointer("/data/context/cwd")?.as_str()? == cwd && !known.contains(&id)).then_some((id, path))
+        })
+        .max_by_key(|(_, path)| crate::modified_ms(path))
+        .map(|(id, transcript)| Found { id, transcript })
+}
+
+/// Writes `session` as a session directory in the Copilot home `home`.
+pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+    let dir = session_dir(home, &session.id);
+    let rewrites = Rewrites::new(session, Some(&dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
+    fs::create_dir_all(&dir)?;
+    crate::replace_transcript(&dir.join("events.jsonl"), &rewrites.lines(&session.main))?;
+    fs::write(dir.join("workspace.yaml"), workspace_yaml(&session.id, cwd, root))?;
+    for (name, bytes) in &session.attachments {
+        let relative = Path::new(name);
+        if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            let path = dir.join(relative);
+            fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
+            fs::write(path, bytes)?;
+        }
+    }
+    Ok(dir.join("events.jsonl"))
+}
+
 fn workspace_yaml(id: &str, cwd: &Path, root: &Path) -> String {
     let now = crate::time::timestamp_now();
     let quote = |value: &str| serde_json::to_string(value).expect("strings serialize");
@@ -234,37 +270,12 @@ impl Agent for Copilot {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        let cwd = cwd.to_string_lossy();
-        fs::read_dir(home()?.join("session-state"))
-            .ok()?
-            .flatten()
-            .map(|entry| entry.path().join("events.jsonl"))
-            .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
-            .filter_map(|path| {
-                let id = path.parent()?.file_name()?.to_string_lossy().into_owned();
-                let start: Value = serde_json::from_str(&crate::first_line(&path)?).ok()?;
-                (start.pointer("/data/context/cwd")?.as_str()? == cwd && !known.contains(&id)).then_some((id, path))
-            })
-            .max_by_key(|(_, path)| crate::modified_ms(path))
-            .map(|(id, transcript)| Found { id, transcript })
+        discover_in(&home()?, cwd, since_ms, known)
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
         let home = home().ok_or_else(|| io::Error::other("HOME is not set"))?;
-        let dir = session_dir(&home, &session.id);
-        let rewrites = Rewrites::new(session, Some(&dir.to_string_lossy()), &cwd.to_string_lossy(), &root.to_string_lossy());
-        fs::create_dir_all(&dir)?;
-        crate::replace_transcript(&dir.join("events.jsonl"), &rewrites.lines(&session.main))?;
-        fs::write(dir.join("workspace.yaml"), workspace_yaml(&session.id, cwd, root))?;
-        for (name, bytes) in &session.attachments {
-            let relative = Path::new(name);
-            if relative.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
-                let path = dir.join(relative);
-                fs::create_dir_all(path.parent().expect("joined onto the session dir"))?;
-                fs::write(path, bytes)?;
-            }
-        }
-        Ok(dir.join("events.jsonl"))
+        restore_into(&home, root, cwd, session)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {

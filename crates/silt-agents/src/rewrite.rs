@@ -45,9 +45,10 @@ impl RecordedSession {
         if self.subagents.iter().any(|(name, _)| !is_safe_id(name)) {
             return refuse("subagent name");
         }
+        // A file, so not a name ending in `/`, which `Path` would ignore.
         let inside = |name: &str| {
             let path = std::path::Path::new(name);
-            !name.is_empty() && path.components().all(|component| matches!(component, std::path::Component::Normal(_)))
+            !name.is_empty() && !name.ends_with('/') && path.components().all(|component| matches!(component, std::path::Component::Normal(_)))
         };
         if self.attachments.iter().any(|(name, _)| !inside(name)) {
             return refuse("side file");

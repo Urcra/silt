@@ -576,6 +576,12 @@ impl Family {
         if let Some(parent) = delta.parents.ids().iter().find(|id| !self.graph.contains(**id)) {
             return Err(CausalError::UnknownParent(*parent).into());
         }
+        // The graph's own checks first: `check` may turn a file from git into
+        // text, which a delta the graph then refused would leave behind.
+        self.graph.begin();
+        let fits = self.graph.add(delta.span, &delta.parents);
+        self.graph.roll_back();
+        fits?;
         let applies_text = self.check(&delta, bases)?;
         // Kept as a guard: the first id was new, so the span can't be known.
         if let Added::AlreadyKnown = self.graph.add(delta.span, &delta.parents)? {

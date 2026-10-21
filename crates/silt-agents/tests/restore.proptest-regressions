@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3e539698eba3aec481a3ff68d86adb7539b1e0a9a61caf851e496963dde1e133 # shrinks to session = RecordedSession { id: "a", former_ids: ["old"], former_cwds: ["/old/repo"], former_roots: [], former_dirs: [], main: ["{\"type\":\"user\",\"cwd\":\"/old/repo\",\"sessionId\":\"old\"}"], subagents: [], attachments: [("\\/", [])] }

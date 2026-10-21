@@ -75,6 +75,48 @@ fn rollout_id(path: &Path) -> Option<String> {
     (parts.len() == 6).then(|| parts[..5].iter().rev().copied().collect::<Vec<_>>().join("-"))
 }
 
+/// The session of a run started in `cwd` no earlier than `since_ms`, in
+/// the Codex home `home`: the one that started first since, as a session
+/// that started earlier but is still written to belongs to another run.
+pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
+    let cwd = cwd.to_string_lossy();
+    rollouts_since(home, since_ms)
+        .into_iter()
+        .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
+        .filter_map(|path| Some((rollout_id(&path)?, path)))
+        .filter(|(id, _)| !known.contains(id))
+        .filter_map(|(id, path)| {
+            let meta = session_meta(&path)?;
+            (meta.get("cwd").and_then(Value::as_str) == Some(&*cwd)).then_some(())?;
+            let started = meta.get("timestamp").and_then(Value::as_str).and_then(crate::time::parse_timestamp)?;
+            (started >= since_ms).then_some((started, id, path))
+        })
+        .min_by_key(|(started, _, _)| *started)
+        .map(|(_, id, transcript)| Found { id, transcript })
+}
+
+/// Writes `session` as a rollout in the Codex home `home`. Codex trusts its
+/// database's path for an id over any other file, so an existing rollout
+/// of this id is replaced in place.
+pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+    let path = match rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id)) {
+        Some(path) => path,
+        None => {
+            let stamp = crate::time::file_stamp(crate::now_ms());
+            home.join("sessions")
+                .join(&stamp[..4])
+                .join(&stamp[5..7])
+                .join(&stamp[8..10])
+                .join(format!("rollout-{stamp}-{}.jsonl", session.id))
+        }
+    };
+    let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
+    fs::create_dir_all(path.parent().expect("dated directory"))?;
+    crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
+    Ok(path)
+}
+
 /// The first line's `session_meta` payload.
 fn session_meta(path: &Path) -> Option<Value> {
     let value: Value = serde_json::from_str(&crate::first_line(path)?).ok()?;
@@ -281,44 +323,12 @@ impl Agent for Codex {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
-        let cwd = cwd.to_string_lossy();
-        // The session that started first since: a session that started
-        // earlier but is still written to belongs to another run.
-        rollouts_since(&home()?, since_ms)
-            .into_iter()
-            .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
-            .filter_map(|path| Some((rollout_id(&path)?, path)))
-            .filter(|(id, _)| !known.contains(id))
-            .filter_map(|(id, path)| {
-                let meta = session_meta(&path)?;
-                (meta.get("cwd").and_then(Value::as_str) == Some(&*cwd)).then_some(())?;
-                let started = meta.get("timestamp").and_then(Value::as_str).and_then(crate::time::parse_timestamp)?;
-                (started >= since_ms).then_some((started, id, path))
-            })
-            .min_by_key(|(started, _, _)| *started)
-            .map(|(_, id, transcript)| Found { id, transcript })
+        discover_in(&home()?, cwd, since_ms, known)
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
         let home = home().ok_or_else(|| io::Error::other("HOME is not set"))?;
-        // Codex trusts its database's path for an id over any other file, so
-        // an existing rollout of this id is replaced in place.
-        let path = match rollouts(&home).into_iter().find(|path| rollout_id(path).as_deref() == Some(&*session.id)) {
-            Some(path) => path,
-            None => {
-                let stamp = crate::time::file_stamp(crate::now_ms());
-                home.join("sessions")
-                    .join(&stamp[..4])
-                    .join(&stamp[5..7])
-                    .join(&stamp[8..10])
-                    .join(format!("rollout-{stamp}-{}.jsonl", session.id))
-            }
-        };
-        let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
-        fs::create_dir_all(path.parent().expect("dated directory"))?;
-        crate::replace_transcript(&path, &rewrites.lines(&session.main))?;
-        Ok(path)
+        restore_into(&home, root, cwd, session)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {

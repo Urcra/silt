@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1996c77d66faa5d768a56dfb76e0e907eb758c79a24119afd1ecf9499bdbb6cf # shrinks to steps = [Step { actor: 0, thread: 0, parents: Head, lamport: None, len: None, op: Create { dir: false, parent: None, name: 0, git: true } }, Step { actor: 0, thread: 0, parents: Head, lamport: Some(1099511627778), len: None, op: Remove { inode: 0, pos: 0, len: 1 } }]

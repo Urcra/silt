@@ -16,3 +16,6 @@ serde = { version = "1.0.229", features = ["derive"] }
 silt-crdt = { path = "../silt-crdt" }
 silt-types = { path = "../silt-types" }
 thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.12.0"

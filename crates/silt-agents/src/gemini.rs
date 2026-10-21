@@ -127,9 +127,22 @@ fn file_session_id(path: &Path) -> Option<String> {
     value.get("sessionId")?.as_str().map(str::to_owned)
 }
 
-/// Writes `session` where the Gemini CLI home `gemini` finds it for `cwd`,
-/// with its subagents' sessions.
-fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
+/// The newest session of `cwd` written since `since_ms` in the `.gemini`
+/// directory `gemini`, whose id isn't in `known`.
+pub fn discover_in(gemini: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
+    let dir = chats_dir(gemini, cwd)?;
+    session_files(&dir)
+        .into_iter()
+        .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
+        .filter_map(|path| Some((file_session_id(&path)?, path)))
+        .filter(|(id, _)| !known.contains(id))
+        .max_by_key(|(_, path)| crate::modified_ms(path))
+        .map(|(id, transcript)| Found { id, transcript })
+}
+
+/// Writes `session` where the `.gemini` directory `gemini` finds it for
+/// `cwd`, with its subagents' sessions.
+pub fn restore_into(gemini: &Path, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
     let dir = claim_chats_dir(gemini, cwd)?;
     let path = session_files(&dir)
         .into_iter()
@@ -437,14 +450,7 @@ impl Agent for Gemini {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        let dir = chats_dir(&gemini_dir()?, cwd)?;
-        session_files(&dir)
-            .into_iter()
-            .filter(|path| crate::modified_ms(path).is_some_and(|modified| modified >= since_ms))
-            .filter_map(|path| Some((file_session_id(&path)?, path)))
-            .filter(|(id, _)| !known.contains(id))
-            .max_by_key(|(_, path)| crate::modified_ms(path))
-            .map(|(id, transcript)| Found { id, transcript })
+        discover_in(&gemini_dir()?, cwd, since_ms, known)
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &RecordedSession) -> io::Result<PathBuf> {
