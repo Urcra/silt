@@ -22,6 +22,12 @@ export function fixture(): Fixture {
   return JSON.parse(readFileSync(FILE, 'utf8')) as Fixture
 }
 
+/** Runs `silt` against the fixture's data, as a person at a terminal would. */
+export function silt(...args: string[]): string {
+  const { siltHome } = fixture()
+  return execFileSync(SILT, args, { encoding: 'utf8', env: { ...process.env, SILT_HOME: siltHome } })
+}
+
 export function removeFixture(): void {
   const { siltHome, work } = fixture()
   execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: siltHome } })

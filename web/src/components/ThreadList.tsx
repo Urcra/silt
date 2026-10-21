@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { api, short } from '../api'
+import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { NewAgentThread } from './Agent'
 import { Search } from './Search'
 
 export function ThreadList() {
+  useTopic('threads')
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   return (
     <div>

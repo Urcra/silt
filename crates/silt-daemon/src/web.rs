@@ -164,7 +164,7 @@ async fn authenticate(State(web): State<Web>, request: HttpRequest, next: Next) 
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    // The browser's EventSource can't send headers, so event streams carry
+    // The browser's WebSocket can't send headers, so the event bus carries
     // the token in the query instead.
     let query_token = request.uri().query().and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("token=")));
     if header_token.or(query_token).is_some_and(|given| same_token(given, &web.token)) {
@@ -399,30 +399,9 @@ async fn presence(State(web): State<Web>, Path(thread): Path<String>, Json(body)
     ask(&web, request).await
 }
 
-/// How often a thread's event stream looks for changes.
-const LIVE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
-
-/// Server-sent events with the thread's live state whenever it changes.
+/// The thread's live state now; what changes later comes on the event bus.
 async fn live(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    let stream = futures_util::stream::unfold((web, thread, None::<serde_json::Value>), |(web, thread, last)| async move {
-        loop {
-            let (reply, answer) = oneshot::channel();
-            let request = Request::Live { thread: thread.clone() };
-            if web.events.send(Event::Request(request, reply)).is_err() {
-                return None;
-            }
-            let state = match answer.await {
-                Ok(Response::Ok { data }) => data,
-                _ => return None,
-            };
-            if last.as_ref() != Some(&state) {
-                let event = axum::response::sse::Event::default().event("state").data(state.to_string());
-                return Some((Ok::<_, std::convert::Infallible>(event), (web, thread, Some(state))));
-            }
-            tokio::time::sleep(LIVE_INTERVAL).await;
-        }
-    });
-    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()).into_response()
+    ask(&web, Request::Live { thread }).await
 }
 
 async fn agents(State(web): State<Web>) -> HttpResponse {

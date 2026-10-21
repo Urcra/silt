@@ -1,26 +1,66 @@
 import { EditorView, basicSetup } from 'codemirror'
 import { useEffect, useRef, useState } from 'react'
-import { api, type LiveState, type Presence } from '../api'
+import { api, type AgentStatus, type Presence } from '../api'
+import { useBusEvents, useTopic } from '../bus'
 import { LiveReplica } from '../replica'
 import { AgentPanel } from './Agent'
 
 const HEARTBEAT_MS = 2000
 const EDIT_DEBOUNCE_MS = 150
 
-/** The thread's live state as the daemon streams it, and how often it changed. */
-function useLive(thread: string): { changes: number; state: LiveState | null } {
-  const [live, setLive] = useState<{ changes: number; state: LiveState | null }>({ changes: 0, state: null })
+interface Live {
+  /** How often the family grew since this view opened. */
+  changes: number
+  deltas: number | null
+  agent: AgentStatus | null
+  /** What the running tool printed so far. */
+  tool: { id: string | null; text: string }
+}
+
+const NO_TOOL = { id: null, text: '' }
+
+/** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
+function useLive(thread: string): Live {
+  const [live, setLive] = useState<Live>({ changes: 0, deltas: null, agent: null, tool: NO_TOOL })
+  const [round, setRound] = useState(0)
   useEffect(() => {
-    const source = new EventSource(api.liveUrl(thread))
-    source.addEventListener('state', (event) =>
-      setLive((previous) => {
-        const state = JSON.parse((event as MessageEvent<string>).data) as LiveState
-        const grew = previous.state === null || previous.state.deltas !== state.deltas
-        return { changes: previous.changes + (grew ? 1 : 0), state }
-      }),
+    let current = true
+    api.live(thread).then(
+      (state) =>
+        current &&
+        setLive((previous) => ({
+          ...previous,
+          changes: previous.deltas !== null && previous.deltas !== state.deltas ? previous.changes + 1 : previous.changes,
+          deltas: state.deltas,
+          agent: state.agent,
+        })),
+      () => undefined,
     )
-    return () => source.close()
-  }, [thread])
+    return () => {
+      current = false
+    }
+  }, [thread, round])
+  useTopic(`thread:${thread}`)
+  useBusEvents((event) => {
+    if (event.event === 'lagged') {
+      setRound((value) => value + 1)
+      return
+    }
+    if (!('thread' in event) || event.thread !== thread) return
+    if (event.event === 'thread') {
+      setLive((previous) =>
+        previous.deltas === event.deltas ? previous : { ...previous, deltas: event.deltas, changes: previous.changes + 1 },
+      )
+    } else if (event.event === 'agent') {
+      const working = event.status?.state === 'working'
+      setLive((previous) => ({ ...previous, agent: event.status, tool: working ? previous.tool : NO_TOOL }))
+    } else if (event.event === 'agent_text' && event.kind === 'tool') {
+      setLive((previous) => {
+        const same = !event.restart && previous.tool.id === event.tool_use_id
+        return { ...previous, tool: { id: event.tool_use_id, text: same ? previous.tool.text + event.text : event.text } }
+      })
+    }
+  })
   return live
 }
 
@@ -197,11 +237,9 @@ function FileEditor({
 /** Who else is here, their drafts and the thread's files, live (ADR 0014). */
 export function LivePanel({
   thread,
-  onChange,
   lastPrompt,
 }: {
   thread: string
-  onChange?: () => void
   /** The latest prompt in the conversation, to clear a draft once it was sent. */
   lastPrompt?: string
 }) {
@@ -211,7 +249,7 @@ export function LivePanel({
   const [draft, setDraft] = useState('')
   const [line, setLine] = useState<number | null>(null)
   const [following, setFollowing] = useState<string | null>(null)
-  const { changes, state } = useLive(thread)
+  const { changes, agent, tool } = useLive(thread)
   const people = usePresence(thread, file, line, draft, (present) => {
     const followed = present.find((person) => person.device === following)?.file
     if (followed) setFile(followed)
@@ -227,13 +265,6 @@ export function LivePanel({
     setFile(path)
     setLine(null)
   }
-  const changed = useRef(onChange)
-  useEffect(() => {
-    changed.current = onChange
-  })
-  useEffect(() => {
-    if (changes > 0) changed.current?.()
-  }, [changes])
   const sent = useRef(lastPrompt)
   useEffect(() => {
     if (lastPrompt !== sent.current && draft.trim() && lastPrompt?.includes(draft.trim())) setDraft('')
@@ -288,7 +319,14 @@ export function LivePanel({
           rows={2}
         />
       </label>
-      <AgentPanel thread={thread} status={state?.agent ?? null} draft={draft} onSent={() => setDraft('')} people={people} />
+      <AgentPanel
+        thread={thread}
+        status={agent}
+        toolOutput={tool.text}
+        draft={draft}
+        onSent={() => setDraft('')}
+        people={people}
+      />
       {error && <p className="text-rose-700">{error}</p>}
       {replica && (
         <div className="mt-3 grid grid-cols-[12rem_1fr] gap-3">

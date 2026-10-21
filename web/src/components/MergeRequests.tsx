@@ -2,11 +2,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short } from '../api'
+import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { Conversation } from './Conversation'
 import { Diff } from './Diff'
 
 export function MergeRequests() {
+  useTopic('mrs')
   const requests = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests })
   return (
     <div>
@@ -30,6 +32,7 @@ export function MergeRequests() {
 }
 
 export function MergeRequest({ id }: { id: string }) {
+  useTopic('mrs')
   const details = useQuery({ queryKey: keys.mr(id), queryFn: () => api.mergeRequest(id) })
   const queries = useQueryClient()
   const [error, setError] = useState<string>()

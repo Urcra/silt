@@ -74,12 +74,15 @@ export function NewAgentThread() {
 export function AgentPanel({
   thread,
   status,
+  toolOutput,
   draft,
   onSent,
   people,
 }: {
   thread: string
   status: AgentStatus | null
+  /** What the running tool printed so far. */
+  toolOutput: string
   draft: string
   onSent: () => void
   /** Everyone else here, whose machines may run an agent in the thread. */
@@ -126,6 +129,11 @@ export function AgentPanel({
           </p>
           {status.thinking && <p className="text-xs italic text-neutral-500">{status.thinking}</p>}
           {status.streaming && <p className="whitespace-pre-wrap">{status.streaming}</p>}
+          {toolOutput && (
+            <pre data-testid="tool-output" className="max-h-48 overflow-auto rounded bg-neutral-50 p-2 text-xs">
+              {toolOutput}
+            </pre>
+          )}
           {status.permissions.map((asked) => (
             <div key={asked.id} className="rounded bg-amber-50 p-2" role="group" aria-label="permission">
               <p>The agent asks to run: {asked.title}</p>

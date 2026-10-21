@@ -14,7 +14,6 @@ workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
 postcard = { version = "1.1.3", features = ["alloc"] }
-futures-util = "0.3.34"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 reqwest = { version = "0.13.5", features = ["json", "query"] }

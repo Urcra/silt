@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useWindowVirtualizer } from '@tanstack/react-virtual'
 import { useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type TurnInfo } from '../api'
+import { useTopic } from '../bus'
 import { keys, message } from '../query'
 import { Diff } from './Diff'
 import { LivePanel } from './Live'
@@ -173,6 +174,8 @@ export function ThreadView({ id }: { id: string }) {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const summary = threads.data?.find((thread) => thread.id === history.data?.thread)
   const fullId = history.data?.thread ?? id
+  useTopic('threads')
+  useTopic(history.data ? `thread:${history.data.thread}` : null)
   const entries = history.data?.entries ?? []
   const list = useRef<HTMLDivElement>(null)
   const rows = useWindowVirtualizer({
@@ -257,7 +260,6 @@ export function ThreadView({ id }: { id: string }) {
         {history.data?.thread && (
           <LivePanel
             thread={history.data.thread}
-            onChange={() => void queries.invalidateQueries({ queryKey: keys.thread(id) })}
             lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}
           />
         )}

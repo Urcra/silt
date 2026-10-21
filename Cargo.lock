@@ -4277,7 +4277,6 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
- "futures-util",
  "notify",
  "notify-debouncer-full",
  "postcard",

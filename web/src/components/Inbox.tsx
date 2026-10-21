@@ -2,9 +2,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short, type InboxRead } from '../api'
+import { useTopic } from '../bus'
 import { keys, message } from '../query'
 
 export function Inbox() {
+  useTopic('inbox')
   const [all, setAll] = useState(false)
   const queries = useQueryClient()
   const inbox = useQuery({ queryKey: keys.inbox(all), queryFn: () => api.inbox(all) })

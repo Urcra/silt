@@ -9,6 +9,7 @@ import type {
   HistoryPage,
   InboxEntry,
   InboxRead,
+  LiveState,
   MrDetails,
   MrSummary,
   PresenceReply,
@@ -103,7 +104,7 @@ export const api = {
   sendDeltas: (id: string, deltas: string) => request<number>('POST', `${thread(id)}/replica`, { deltas }),
   presence: (id: string, state: { file: string | null; line: number | null; draft: string; leaving?: boolean }) =>
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
-  liveUrl: (id: string) => `${thread(id)}/live?token=${token()}`,
+  live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
   startAgent: (agent: string, where: { thread: string } | { clone: string }) =>
     request<string>('POST', '/api/agents/start', { agent, ...where }),

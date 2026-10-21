@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test'
-import { fixture } from './fixture'
+import { fixture, silt } from './fixture'
+
+test('a thread page shows what changes elsewhere without a reload', async ({ page }) => {
+  const { url, thread } = fixture()
+  await page.goto(url)
+  await page.getByRole('link', { name: thread }).click()
+  await expect(page.getByText('Please add a farewell line to main')).toBeVisible()
+  silt('comment', thread, '--entry', '0', 'said from a terminal')
+  await expect(page.getByText(/: said from a terminal/)).toBeVisible()
+})
 
 test('lists threads and searches across compaction', async ({ page }) => {
   const { url, thread, fork } = fixture()
