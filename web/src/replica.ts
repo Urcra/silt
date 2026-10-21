@@ -62,11 +62,16 @@ export class LiveReplica {
     return next
   }
 
+  /** Takes the daemon's deltas a page at a time, until it has them all. */
   private async syncOnce(): Promise<void> {
-    const after = this.use((replica) => replica.received())
-    const reply = await api.replica(this.thread, after)
-    this.writable = reply.writable
-    await this.fill(this.use((replica) => replica.receive(after, fromBase64(reply.deltas))))
+    for (;;) {
+      const after = this.use((replica) => replica.received())
+      const reply = await api.replica(this.thread, after)
+      this.writable = reply.writable
+      await this.fill(this.use((replica) => replica.receive(after, fromBase64(reply.deltas))))
+      const now = this.use((replica) => replica.received())
+      if (now >= reply.total || now === after) return
+    }
   }
 
   private async fill(needed: string | undefined): Promise<void> {

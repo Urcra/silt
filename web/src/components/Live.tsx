@@ -371,10 +371,14 @@ export function LivePanel({
       {error && <p className="text-danger">{error}</p>}
       {replica && (
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[12rem_1fr]">
-          <ul aria-label="files" className="text-sm">
+          <ul aria-label="files" className="max-h-96 overflow-y-auto text-sm">
             {replica.paths().map((path) => (
               <li key={path}>
-                <button className={path === file ? 'font-semibold' : 'text-accent-fg'} onClick={() => open(path)}>
+                <button
+                  className={`block w-full truncate text-left ${path === file ? 'font-semibold' : 'text-accent-fg'}`}
+                  title={path}
+                  onClick={() => open(path)}
+                >
                   {path}
                 </button>
               </li>
