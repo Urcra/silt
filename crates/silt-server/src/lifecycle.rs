@@ -1,8 +1,9 @@
 //! Deleting threads to the trash, restoring them, and purging them for good
 //! (ADR 0013).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::Json;
@@ -13,10 +14,11 @@ use silt_proto::ThreadInfo;
 use silt_sync::Room;
 use silt_types::{BlobHash, FamilyId, ThreadId};
 use sqlx::Row;
+use tokio::sync::OwnedMutexGuard;
 
 use crate::index::{self, Index};
 use crate::visibility::Viewer;
-use crate::{ApiError, Caller, Server, ServerError, bad_request, forbidden, id_bytes, id_from, not_found, now_ms};
+use crate::{ApiError, Caller, RoomSlot, Server, ServerError, SharedRoom, bad_request, forbidden, id_bytes, id_from, not_found, now_ms};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Blobs this new may belong to a push still on its way, so they stay.
@@ -155,7 +157,14 @@ impl Server {
             return Ok(());
         }
         let db = self.db();
-        let mut rooms = self.shared.rooms.lock().await;
+        // Every room, as the index is rebuilt from all of them.
+        let mut rooms = self.shared.rooms.write().await;
+        let mut ordered: Vec<(FamilyId, SharedRoom)> = rooms.iter().map(|(family, room)| (*family, Arc::clone(room))).collect();
+        ordered.sort_by_key(|(family, _)| *family);
+        let mut slots: BTreeMap<FamilyId, OwnedMutexGuard<RoomSlot>> = BTreeMap::new();
+        for (family, room) in ordered {
+            slots.insert(family, room.lock_owned().await);
+        }
         let mut purged = self.shared.purged.lock().await;
         let mut now_purged = purged.clone();
         now_purged.extend(threads.iter().map(|(thread, _)| *thread));
@@ -194,8 +203,9 @@ impl Server {
                 .get("remaining");
             // A fork whose device hasn't registered it yet still has deltas
             // here, and keeps the family alive.
-            let kept: Vec<Delta> = rooms
+            let kept: Vec<Delta> = slots
                 .get(&family)
+                .map(|slot| &slot.room)
                 .map(|room| {
                     room.deltas()
                         .iter()
@@ -218,7 +228,7 @@ impl Server {
                 gone.push(family);
                 continue;
             }
-            if !rooms.contains_key(&family) {
+            if !slots.contains_key(&family) {
                 continue;
             }
             let mut room = Room::new(self.shared.generation);
@@ -239,16 +249,22 @@ impl Server {
         tx.commit().await?;
         *purged = now_purged;
         for (family, room) in rebuilt {
-            match room {
-                Some(room) => rooms.insert(family, room),
-                None => rooms.remove(&family),
-            };
+            match (room, slots.get_mut(&family)) {
+                (Some(room), Some(slot)) => slot.room = room,
+                (Some(_), None) => {}
+                (None, slot) => {
+                    if let Some(slot) = slot {
+                        slot.retired = true;
+                    }
+                    rooms.remove(&family);
+                }
+            }
         }
         let mut index = Index::default();
         let mut rows = Vec::new();
         let mut referenced = HashSet::new();
-        for (family, room) in rooms.iter() {
-            for delta in room.deltas() {
+        for (family, slot) in slots.iter().filter(|(_, slot)| !slot.retired) {
+            for delta in slot.room.deltas() {
                 rows.extend(index.observe(*family, delta));
                 referenced.extend(blob_of(delta));
             }
@@ -259,6 +275,7 @@ impl Server {
         tx.commit().await?;
         *self.shared.index.lock().await = index;
         drop(purged);
+        drop(slots);
         drop(rooms);
         for family in threads.iter().map(|(_, family)| *family).collect::<HashSet<_>>() {
             self.wake_pulls(family);

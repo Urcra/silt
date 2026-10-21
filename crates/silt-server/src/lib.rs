@@ -28,7 +28,7 @@ use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 
 pub mod accounts;
 pub mod backup;
@@ -85,13 +85,25 @@ pub enum ServerError {
     HttpClient(#[from] reqwest::Error),
 }
 
+/// One family's room, locked on its own so families sync independently.
+pub(crate) struct RoomSlot {
+    pub(crate) room: Room,
+    /// Set by a purge that dropped the family: whoever looked the room up
+    /// before then finds out once they hold its lock.
+    pub(crate) retired: bool,
+}
+
+pub(crate) type SharedRoom = Arc<Mutex<RoomSlot>>;
+
 struct Shared {
     db: SqlitePool,
     blobs: BlobStore,
     generation: u64,
-    rooms: Mutex<HashMap<FamilyId, Room>>,
+    /// Held only to look rooms up, except by a purge, which holds it
+    /// throughout so no room appears meanwhile. Room locks come after it,
+    /// then `purged`, then `index`.
+    rooms: RwLock<HashMap<FamilyId, SharedRoom>>,
     waiters: Waiters,
-    /// Locked after `rooms` when both are needed.
     index: Mutex<Index>,
     data_dir: std::path::PathBuf,
     config: Config,
@@ -158,7 +170,12 @@ impl Server {
                 db,
                 blobs: BlobStore::new(data_dir.join("blobs")),
                 generation,
-                rooms: Mutex::new(rooms),
+                rooms: RwLock::new(
+                    rooms
+                        .into_iter()
+                        .map(|(family, room)| (family, Arc::new(Mutex::new(RoomSlot { room, retired: false }))))
+                        .collect(),
+                ),
                 waiters: Waiters::default(),
                 index: Mutex::new(index),
                 data_dir: data_dir.to_owned(),
@@ -476,19 +493,20 @@ async fn logout_device(State(server): State<Server>, Extension(caller): Extensio
 
 async fn listing(State(server): State<Server>, Extension(caller): Extension<Caller>) -> Result<Json<Listing>, ApiError> {
     let viewer = server.viewer(caller.user).await?;
-    let families = server
-        .shared
-        .rooms
-        .lock()
-        .await
-        .iter()
-        .filter(|(id, _)| viewer.sees_family(id.0))
-        .map(|(id, room)| FamilyInfo {
-            id: *id,
-            seq: room.seq(),
-            view: viewer.view_of(id.0, room),
-        })
-        .collect();
+    let mut families = Vec::new();
+    for (id, shared) in server.rooms().await {
+        if !viewer.sees_family(id.0) {
+            continue;
+        }
+        let slot = shared.lock().await;
+        if !slot.retired {
+            families.push(FamilyInfo {
+                id,
+                seq: slot.room.seq(),
+                view: viewer.view_of(id.0, &slot.room),
+            });
+        }
+    }
     let rows = sqlx::query(
         "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id, l.epoch, u.name AS owner
          FROM threads t
@@ -592,13 +610,11 @@ async fn push(
 ) -> Result<Json<PushReply>, ApiError> {
     let family = FamilyId::from_str(&family).map_err(|_| bad_request("invalid family id"))?;
     claim_family(&server, family, caller).await?;
-    let mut rooms = server.shared.rooms.lock().await;
-    // Under the rooms lock, so a purge can't finish between this filter
+    let mut slot = server.room_or_new(family).await;
+    // Under the room's lock, so a purge can't finish between this filter
     // and the push.
     let pushed = server.without_purged(body.deltas).await;
-    let room = rooms
-        .entry(family)
-        .or_insert_with(|| Room::new(server.shared.generation));
+    let room = &mut slot.room;
     let (known, new): (Vec<&Delta>, Vec<&Delta>) = pushed.iter().partition(|delta| room.position(delta.span.first()).is_some());
     let (new, claims) = collab::admit(&server, caller.user, family, new).await?;
     // Building on history the caller can't read would let them pull it in
@@ -634,7 +650,7 @@ async fn push(
     tx.commit().await?;
     let outcome = prepared.commit();
     let index_rows = server.observe(family, &stored).await;
-    drop(rooms);
+    drop(slot);
     server.write_index(&index_rows).await;
     if !stored.is_empty() {
         server.wake_pulls(family);
@@ -680,9 +696,9 @@ async fn pull(
         tokio::pin!(waiting);
         waiting.as_mut().enable();
         let deltas = {
-            let rooms = server.shared.rooms.lock().await;
-            match rooms.get(&family) {
-                Some(room) => {
+            match server.room(family).await {
+                Some(slot) => {
+                    let room = &slot.room;
                     let readable = viewer.readable(family.0, room);
                     room.after(query.after, last)
                         .map_err(|error| match error {
@@ -917,14 +933,15 @@ async fn get_blob(
     let hash = parse_blob_hash(&hash_hex).ok_or_else(|| bad_request("invalid blob hash"))?;
     let references = server.shared.index.lock().await.blob_references(hash);
     let viewer = server.viewer(caller.user).await?;
-    let readable = {
-        let rooms = server.shared.rooms.lock().await;
-        references.iter().any(|(family, id)| {
-            rooms
-                .get(family)
-                .is_some_and(|room| viewer.readable_history(family.0, room).contains(*id))
-        })
-    };
+    let mut readable = false;
+    for (family, id) in references {
+        if let Some(slot) = server.room(family).await
+            && viewer.readable_history(family.0, &slot.room).contains(id)
+        {
+            readable = true;
+            break;
+        }
+    }
     if !readable {
         return Err(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound));
     }
@@ -937,6 +954,41 @@ async fn get_blob(
 }
 
 impl Server {
+    /// The family's room, locked, unless a purge dropped it.
+    pub(crate) async fn room(&self, family: FamilyId) -> Option<OwnedMutexGuard<RoomSlot>> {
+        let shared = self.shared.rooms.read().await.get(&family).cloned()?;
+        let slot = shared.lock_owned().await;
+        (!slot.retired).then_some(slot)
+    }
+
+    /// The family's room, locked, made if there is none.
+    async fn room_or_new(&self, family: FamilyId) -> OwnedMutexGuard<RoomSlot> {
+        loop {
+            let found = self.shared.rooms.read().await.get(&family).cloned();
+            let shared = match found {
+                Some(shared) => shared,
+                None => Arc::clone(self.shared.rooms.write().await.entry(family).or_insert_with(|| {
+                    Arc::new(Mutex::new(RoomSlot {
+                        room: Room::new(self.shared.generation),
+                        retired: false,
+                    }))
+                })),
+            };
+            let slot = shared.lock_owned().await;
+            if !slot.retired {
+                return slot;
+            }
+        }
+    }
+
+    /// Every room, unlocked, by family.
+    pub(crate) async fn rooms(&self) -> Vec<(FamilyId, SharedRoom)> {
+        let mut rooms: Vec<(FamilyId, SharedRoom)> =
+            self.shared.rooms.read().await.iter().map(|(family, room)| (*family, Arc::clone(room))).collect();
+        rooms.sort_by_key(|(family, _)| *family);
+        rooms
+    }
+
     /// What `user` can see right now.
     async fn viewer(&self, user: i64) -> Result<Viewer, sqlx::Error> {
         let forks = self.shared.index.lock().await.forks().clone();
