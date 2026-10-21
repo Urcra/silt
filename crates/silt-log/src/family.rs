@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use silt_crdt::{
@@ -216,7 +217,7 @@ impl ThreadView<'_> {
         let state = self.family.files.get(&inode)?;
         let (_, content) = state.content_at(|id| seen.contains(id))?;
         Some(match content {
-            FileContent::Text(doc) => FileView::Text(doc.text_at(&self.family.graph, &self.version)),
+            FileContent::Text(doc) => FileView::Text(doc.text_at_vv(seen)),
             FileContent::GitText(oid) => FileView::GitText(*oid),
             FileContent::Blob(hash) => FileView::Blob(*hash),
         })
@@ -232,6 +233,14 @@ impl ThreadView<'_> {
                 .is_some_and(|state| state.executable_at(|id| seen.contains(id))),
         }
     }
+}
+
+/// What one [`Family::history`] call has worked out so far: each pull would
+/// otherwise rebuild the whole history of the thread it pulled from.
+#[derive(Default)]
+struct Expansion<'a> {
+    open: HashSet<ThreadId>,
+    done: HashMap<ThreadId, Rc<[HistoryItem<'a>]>>,
 }
 
 /// What a view of one version holds beyond the family itself.
@@ -322,24 +331,31 @@ impl Family {
     /// for a fork, the source chain's conversation up to the fork point, then
     /// its own, with what each pull brought in from upstream just before it.
     pub fn history(&self, thread: ThreadId) -> Vec<HistoryItem<'_>> {
-        self.history_within(thread, &mut HashSet::new())
+        self.history_within(thread, &mut Expansion::default()).0.to_vec()
     }
 
-    /// `history`, skipping threads already being expanded: threads may pull
-    /// from each other both ways.
-    fn history_within(&self, thread: ThreadId, expanding: &mut HashSet<ThreadId>) -> Vec<HistoryItem<'_>> {
-        let Some(state) = self.threads.get(&thread) else {
-            return Vec::new();
-        };
-        if !expanding.insert(thread) {
-            return Vec::new();
+    /// `history`, with what this call already worked out. The flag says
+    /// whether the history is whole rather than cut short where threads pull
+    /// from each other both ways; only whole ones are reused.
+    fn history_within<'a>(&'a self, thread: ThreadId, expansion: &mut Expansion<'a>) -> (Rc<[HistoryItem<'a>]>, bool) {
+        if let Some(done) = expansion.done.get(&thread) {
+            return (Rc::clone(done), true);
         }
+        let Some(state) = self.threads.get(&thread) else {
+            return (Rc::from([]), true);
+        };
+        if !expansion.open.insert(thread) {
+            return (Rc::from([]), false);
+        }
+        let mut whole = true;
         let mut items = Vec::new();
         if let (Some(source), Some(point)) = (state.forked_from, &state.fork_point) {
             let before = self.graph.version_vector(point);
+            let (inherited, inherited_whole) = self.history_within(source, expansion);
+            whole &= inherited_whole;
             items.extend(
-                self.history_within(source, expanding)
-                    .into_iter()
+                inherited
+                    .iter()
                     .filter(|item| before.contains(item.delta.span.first()))
                     .map(|item| HistoryItem {
                         // What the source pulled in stays upstream progress.
@@ -347,7 +363,7 @@ impl Family {
                             HistorySource::Upstream => HistorySource::Upstream,
                             HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
                         },
-                        ..item
+                        ..*item
                     }),
             );
         }
@@ -359,7 +375,9 @@ impl Family {
             let delta = &self.log[index];
             if let Op::Merge { from, mr: None } = delta.op {
                 let merged = self.graph.version_vector(&delta.parents);
-                for item in self.history_within(from, expanding) {
+                let (upstream, upstream_whole) = self.history_within(from, expansion);
+                whole &= upstream_whole;
+                for item in upstream.iter() {
                     let id = item.delta.span.first();
                     if merged.contains(id) && seen.insert(id) {
                         items.push(HistoryItem {
@@ -375,8 +393,12 @@ impl Family {
                 source: HistorySource::Own,
             });
         }
-        expanding.remove(&thread);
-        items
+        expansion.open.remove(&thread);
+        let items: Rc<[HistoryItem<'a>]> = items.into();
+        if whole {
+            expansion.done.insert(thread, Rc::clone(&items));
+        }
+        (items, whole)
     }
 
     /// The comments on `thread`, oldest first by causal order, so every

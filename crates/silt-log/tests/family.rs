@@ -376,6 +376,57 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
     assert_eq!(lines(&family, THREAD), vec![("source 1".into(), Own), ("source 2".into(), Own)]);
 }
 
+fn pull(family: &mut Family, into: ThreadId, from: ThreadId) {
+    let parents: Frontier = family
+        .thread_head(into)
+        .ids()
+        .iter()
+        .chain(family.thread_head(from).ids())
+        .copied()
+        .collect();
+    on_thread(family, DAEMON.derive(into.0), into, parents, Op::Merge { from, mr: None });
+}
+
+#[test]
+fn repeated_pulls_both_ways_keep_each_line_once() {
+    use silt_log::HistorySource::{Inherited, Own, Upstream};
+    let mut family = Family::new();
+    create_main(&mut family);
+    say(&mut family, THREAD, "source 1");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    say(&mut family, THREAD, "source 2");
+    pull(&mut family, FORK, THREAD);
+    say(&mut family, FORK, "fork 1");
+    say(&mut family, THREAD, "source 3");
+    pull(&mut family, FORK, THREAD);
+    pull(&mut family, THREAD, FORK);
+    let merge = |from: ThreadId| format!("merge from {} (false)", from.0);
+    assert_eq!(
+        lines(&family, FORK),
+        vec![
+            ("source 1".into(), Inherited),
+            ("source 2".into(), Upstream),
+            (merge(THREAD), Own),
+            ("fork 1".into(), Own),
+            ("source 3".into(), Upstream),
+            (merge(THREAD), Own),
+        ]
+    );
+    assert_eq!(
+        lines(&family, THREAD),
+        vec![
+            ("source 1".into(), Own),
+            ("source 2".into(), Own),
+            ("source 3".into(), Own),
+            (merge(THREAD), Upstream),
+            ("fork 1".into(), Upstream),
+            (merge(THREAD), Upstream),
+            (merge(FORK), Own),
+        ]
+    );
+}
+
 #[test]
 fn a_forks_new_content_and_mode_stay_in_the_fork() {
     let mut family = Family::new();
