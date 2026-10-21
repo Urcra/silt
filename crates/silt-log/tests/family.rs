@@ -443,6 +443,9 @@ fn a_forks_new_content_and_mode_stay_in_the_fork() {
     let fork = family.thread_view(FORK);
     assert_eq!(fork.file(main), Some(FileView::Blob(BlobHash([7; 32]))));
     assert!(fork.is_executable(main));
+
+    let before = family.graph().version_vector(&replaced.parents);
+    assert_eq!(family.file_at(main, &before), Some(FileView::GitText(oid(1))), "content as of a version");
 }
 
 #[test]

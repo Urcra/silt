@@ -4,7 +4,7 @@ use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
 use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_store::ThreadRecord;
-use silt_types::{FamilyId, Frontier, ThreadId};
+use silt_types::{FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
@@ -229,31 +229,33 @@ impl Core {
         };
         let (before_files, after_files) = (files_at(before), files_at(after));
         let inodes: BTreeSet<InodeId> = before_files.keys().chain(after_files.keys()).copied().collect();
+        let mut git_texts: HashMap<GitOid, String> = HashMap::new();
+        let mut text_of = |view: &Option<FileView>| -> String {
+            match view {
+                Some(FileView::Text(text)) => text.clone(),
+                Some(FileView::GitText(oid)) => git_texts
+                    .entry(*oid)
+                    .or_insert_with(|| bases.as_mut().and_then(|bases| bases.text(*oid)).unwrap_or_default())
+                    .clone(),
+                Some(FileView::Blob(_)) | None => String::new(),
+            }
+        };
         let mut changes = Vec::new();
         for inode in inodes {
             let (old_path, new_path) = (before_files.get(&inode).cloned(), after_files.get(&inode).cloned());
-            let mut content = |present: bool, vv: &VersionVector| -> String {
-                if !present {
-                    return String::new();
-                }
-                match (family.text_doc(inode), family.file(inode)) {
-                    (Some(doc), _) => doc.text_at_vv(vv),
-                    (None, Some(FileView::GitText(oid))) => {
-                        bases.as_mut().and_then(|bases| bases.text(oid)).unwrap_or_default()
-                    }
-                    _ => String::new(),
-                }
-            };
-            let (old_text, new_text) = (content(old_path.is_some(), before), content(new_path.is_some(), after));
-            if old_text != new_text || old_path != new_path {
-                changes.push(FileChange {
-                    inode,
-                    old_path,
-                    new_path,
-                    old_text,
-                    new_text,
-                });
+            let old = old_path.as_ref().and_then(|_| family.file_at(inode, before));
+            let new = new_path.as_ref().and_then(|_| family.file_at(inode, after));
+            if old == new && old_path == new_path {
+                continue;
             }
+            changes.push(FileChange {
+                inode,
+                binary: matches!(old, Some(FileView::Blob(_))) || matches!(new, Some(FileView::Blob(_))),
+                old_text: text_of(&old),
+                new_text: text_of(&new),
+                old_path,
+                new_path,
+            });
         }
         changes.sort_by(|a, b| a.path().cmp(b.path()));
         changes
@@ -408,6 +410,9 @@ pub(crate) struct FileChange {
     pub(crate) new_path: Option<String>,
     pub(crate) old_text: String,
     pub(crate) new_text: String,
+    /// Content on either side is stored whole rather than as text; the
+    /// texts are then empty.
+    pub(crate) binary: bool,
 }
 
 impl FileChange {
@@ -431,9 +436,11 @@ pub(crate) fn render_diff(changes: &[FileChange]) -> String {
         {
             out.push_str(&format!("rename from {old}\nrename to {new}\n"));
         }
-        if change.old_text != change.new_text {
-            let old_name = change.old_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("a/{path}"));
-            let new_name = change.new_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("b/{path}"));
+        let old_name = change.old_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("a/{path}"));
+        let new_name = change.new_path.as_ref().map_or_else(|| "/dev/null".to_owned(), |path| format!("b/{path}"));
+        if change.binary {
+            out.push_str(&format!("Binary files {old_name} and {new_name} differ\n"));
+        } else if change.old_text != change.new_text {
             let diff = TextDiff::from_lines(&change.old_text, &change.new_text);
             out.push_str(&diff.unified_diff().header(&old_name, &new_name).to_string());
         }
@@ -528,4 +535,25 @@ fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
 fn short_id(thread: ThreadId) -> String {
     let id = thread.to_string();
     id[id.len().saturating_sub(12)..].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_binary_file_is_listed_as_such() {
+        let change = FileChange {
+            inode: InodeId(silt_types::DeltaId::new(silt_types::ActorId(1), silt_types::Lamport(0))),
+            old_path: Some("logo.png".into()),
+            new_path: Some("logo.png".into()),
+            old_text: String::new(),
+            new_text: String::new(),
+            binary: true,
+        };
+        assert_eq!(
+            render_diff(&[change]),
+            "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n"
+        );
+    }
 }

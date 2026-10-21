@@ -214,13 +214,7 @@ impl ThreadView<'_> {
             return self.family.file(inode);
         };
         self.tree().kind(inode)?;
-        let state = self.family.files.get(&inode)?;
-        let (_, content) = state.content_at(|id| seen.contains(id))?;
-        Some(match content {
-            FileContent::Text(doc) => FileView::Text(doc.text_at_vv(seen)),
-            FileContent::GitText(oid) => FileView::GitText(*oid),
-            FileContent::Blob(hash) => FileView::Blob(*hash),
-        })
+        self.family.file_at(inode, seen)
     }
 
     pub fn is_executable(&self, inode: InodeId) -> bool {
@@ -493,6 +487,17 @@ impl Family {
         let state = self.files.get(&inode)?;
         Some(match &state.content {
             FileContent::Text(doc) => FileView::Text(doc.text()),
+            FileContent::GitText(oid) => FileView::GitText(*oid),
+            FileContent::Blob(hash) => FileView::Blob(*hash),
+        })
+    }
+
+    /// The file's content as of the version containing exactly the ids in
+    /// `vv`, whether or not the tree there holds it.
+    pub fn file_at(&self, inode: InodeId, vv: &VersionVector) -> Option<FileView> {
+        let (_, content) = self.files.get(&inode)?.content_at(|id| vv.contains(id))?;
+        Some(match content {
+            FileContent::Text(doc) => FileView::Text(doc.text_at_vv(vv)),
             FileContent::GitText(oid) => FileView::GitText(*oid),
             FileContent::Blob(hash) => FileView::Blob(*hash),
         })
