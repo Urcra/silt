@@ -68,6 +68,10 @@ pub enum Event {
         session_id: String,
         result: Result<Vec<String>, String>,
     },
+    /// Read the next chunk of a session's backlog.
+    Drain {
+        session_id: String,
+    },
     Acp {
         thread: ThreadId,
         run: u64,
@@ -237,6 +241,8 @@ pub struct Core {
     /// Files that vanished from each checkout, waiting a moment for the
     /// other half of a rename.
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
+    /// Sessions with a backlog whose next chunk is queued.
+    pub(crate) draining: HashSet<String>,
 }
 
 /// How long a vanished file waits for the file it was renamed to.
@@ -412,6 +418,7 @@ impl Core {
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
+            draining: HashSet::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -1238,14 +1245,27 @@ impl Core {
         texts: Vec<(String, String)>,
         read: Option<SessionRead<'_>>,
     ) -> Result<Delta, CoreError> {
+        let (delta, rows) = self.stage_conv(family_id, thread, author, op, texts)?;
+        self.persist_with(family_id, std::slice::from_ref(&delta), &rows, read).await?;
+        Ok(delta)
+    }
+
+    /// Applies a conversation delta to the family in memory only, with its
+    /// search rows; the caller persists it, alone or with others.
+    pub(crate) fn stage_conv(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        author: Author,
+        op: ConvOp,
+        texts: Vec<(String, String)>,
+    ) -> Result<(Delta, Vec<SearchRow>), CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
         let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
-        let rows: Vec<SearchRow> =
-            texts.into_iter().map(|(kind, body)| SearchRow { thread, delta: delta.span.first(), kind, body }).collect();
-        self.persist_with(family_id, std::slice::from_ref(&delta), &rows, read).await?;
-        Ok(delta)
+        let rows = texts.into_iter().map(|(kind, body)| SearchRow { thread, delta: delta.span.first(), kind, body }).collect();
+        Ok((delta, rows))
     }
 
     /// Stores deltas just applied to the family in memory. If the store
@@ -1307,7 +1327,7 @@ impl Core {
     /// snapshot. A snapshot that can't be saved only makes the next load
     /// slower.
     async fn snapshot_if_due(&mut self, family_id: FamilyId) {
-        let Some(family) = self.families.get(&family_id) else {
+        let Some(family) = self.families.get_mut(&family_id) else {
             return;
         };
         let covered = self.snapshotted.get(&family_id).copied().unwrap_or_default();

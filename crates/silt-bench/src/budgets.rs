@@ -56,7 +56,7 @@ pub const BUDGETS: &[Budget] = &[
         name: RECORD_HOOK,
         measures: "a hook's capture step in process, p95 of the slowest event, at 100k deltas and 20k files",
         limit: Limit::Time(Duration::from_millis(20)),
-        status: Status::Pending("M18-03"),
+        status: Status::Pending("M18-10"),
     },
     Budget {
         name: STORE_SIZE,

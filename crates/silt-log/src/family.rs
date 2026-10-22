@@ -332,6 +332,10 @@ pub struct Family {
     turns: HashMap<SessionRef, Turns>,
     log: Vec<Delta>,
     shapes: Shapes,
+    /// The fingerprints snapshots took of the log's first deltas. The log
+    /// only grows, so each delta is fingerprinted once rather than by every
+    /// snapshot, which made recording a long session quadratic.
+    fingerprints: Vec<u64>,
 }
 
 impl Family {

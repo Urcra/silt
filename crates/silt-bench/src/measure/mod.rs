@@ -29,7 +29,13 @@ impl Scenario {
         }
     }
 
-    pub async fn run(self, silt: &Path, fixtures: &Fixtures) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
+    /// Measures this scenario's budgets: at least those `wanted` names.
+    pub async fn run(
+        self,
+        silt: &Path,
+        fixtures: &Fixtures,
+        wanted: &[&str],
+    ) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
         // In /tmp, so the daemon's socket path stays short enough to sit in
         // its data dir.
         let root = tempfile::Builder::new()
@@ -42,7 +48,7 @@ impl Scenario {
                 let repo = fixtures.big_repo().or_raise(|| BenchError("cannot write the 50k-file repository".into()))?;
                 Ok(vec![(CHECKOUT_RESCAN, rescan::measure(root.path(), &repo).await?)])
             }
-            Self::Daemon => daemon::measure(silt, root.path(), fixtures).await,
+            Self::Daemon => daemon::measure(silt, root.path(), fixtures, wanted).await,
         }
     }
 }

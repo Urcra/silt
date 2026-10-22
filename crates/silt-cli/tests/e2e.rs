@@ -480,6 +480,33 @@ fn track_attaches_to_a_session_started_without_silt() {
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
 }
 
+/// A session longer than one read is taken in whole, each line once.
+#[test]
+fn track_takes_in_a_long_session_whole() {
+    let env = Env::new();
+    let session = "11111111-2222-4333-8444-666666666666";
+    let project =
+        env.claude_dir.join("projects").join(env.repo.to_string_lossy().replace(|ch: char| !ch.is_ascii_alphanumeric(), "-"));
+    fs::create_dir_all(&project).expect("mkdir");
+    let padding = "x".repeat(1_000);
+    let lines: String = (0..3_000)
+        .map(|index| {
+            let text = format!("prompt-{index}-end {padding}");
+            format!("{}\n", serde_json::json!({ "type": "user", "message": { "role": "user", "content": text } }))
+        })
+        .collect();
+    assert!(lines.len() > 2 << 20, "longer than one read");
+    fs::write(project.join(format!("{session}.jsonl")), lines).expect("write the session");
+
+    assert!(env.stdout(&["track"]).contains("tracking session"));
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["show", &thread]).contains("prompt-2999-end")));
+    let show = env.stdout(&["show", &thread]);
+    for index in [0, 1_499, 2_999] {
+        assert_eq!(show.matches(&format!("prompt-{index}-end")).count(), 1, "prompt {index} is recorded once");
+    }
+}
+
 #[test]
 fn a_renamed_file_keeps_its_history() {
     let env = Env::new();

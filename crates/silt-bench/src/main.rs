@@ -98,9 +98,10 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
         return Ok(true);
     }
 
+    let wanted: Vec<&str> = selected.iter().map(|budget| budget.name).collect();
     let mut measured: HashMap<&str, Measured> = HashMap::new();
     for scenario in &scenarios {
-        measured.extend(scenario.run(&silt, &fixtures).await?);
+        measured.extend(scenario.run(&silt, &fixtures, &wanted).await?);
     }
     if cli.mode == Mode::Check {
         // ADR 0034: one more run before an enforced budget fails, for the
@@ -108,14 +109,14 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
         for scenario in &scenarios {
             if scenario.budgets().iter().any(|name| over(&selected, &measured, name)) {
                 eprintln!("silt-bench: over budget; measuring {scenario:?} again");
-                measured.extend(scenario.run(&silt, &fixtures).await?);
+                measured.extend(scenario.run(&silt, &fixtures, &wanted).await?);
             }
         }
     }
 
     let machine = machine(&fixture_dir);
     println!("silt-bench on {machine}");
-    for budget in BUDGETS.iter().filter(|budget| cli.mode == Mode::Report || selected.contains(budget)) {
+    for budget in BUDGETS.iter().filter(|budget| selected.contains(budget) || measured.contains_key(budget.name)) {
         println!("{}", budgets::line(budget, measured.get(budget.name).copied()));
     }
     let mut within = true;

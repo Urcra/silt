@@ -10,7 +10,7 @@ use std::sync::Arc;
 use silt_log::Delta;
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 pub use blobs::BlobStore;
 pub use queue::QueuedPrompt;
@@ -190,6 +190,10 @@ impl Store {
             .filename(dir.join("silt.sqlite"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
+            // With WAL, a crash can't corrupt the store at NORMAL; a power
+            // cut may lose the last commits, which recording takes in again
+            // from the transcripts' stored offsets.
+            .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(std::time::Duration::from_secs(10))
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options.clone()).await?;
