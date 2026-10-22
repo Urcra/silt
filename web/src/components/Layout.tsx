@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link, Outlet, useMatch, useNavigate, useParams } from '@tanstack/react-router'
+import { Link, Outlet, useMatch, useNavigate } from '@tanstack/react-router'
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react'
 import { api, short } from '../api'
 import { useNotifier } from '../notifier'
@@ -14,10 +14,8 @@ import { THEMES, applyTheme, storedTheme, type Theme } from '../theme'
 import { Icon, IconButton, Toaster, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { ErrorBoundary } from './ErrorBoundary'
-import { MergeRequest } from './MergeRequests'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
-import { ThreadView } from './ThreadView'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const
@@ -237,14 +235,4 @@ export function Layout() {
       <Toaster />
     </div>
   )
-}
-
-export function ThreadPage() {
-  const { id } = useParams({ from: '/t/$id' })
-  return <ThreadView id={id} />
-}
-
-export function MergeRequestPage() {
-  const { id } = useParams({ from: '/mr/$id' })
-  return <MergeRequest id={id} />
 }

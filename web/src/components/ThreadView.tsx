@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
+import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
@@ -327,6 +327,11 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
       {error && <p className="w-full text-sm text-danger">{error}</p>}
     </>
   )
+}
+
+export function ThreadPage() {
+  const { id } = useParams({ from: '/t/$id' })
+  return <ThreadView id={id} />
 }
 
 export function ThreadView({ id }: { id: string }) {

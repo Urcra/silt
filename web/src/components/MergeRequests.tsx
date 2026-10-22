@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, useParams, useRouterState } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { api, short, type MrFile, type MrGuide } from '../api'
 import { useTopic } from '../bus'
@@ -93,6 +93,11 @@ function ChangeGuide({ id, guide, act }: { id: string; guide: MrGuide | null; ac
       )}
     </section>
   )
+}
+
+export function MergeRequestPage() {
+  const { id } = useParams({ from: '/mr/$id' })
+  return <MergeRequest id={id} />
 }
 
 export function MergeRequest({ id }: { id: string }) {
