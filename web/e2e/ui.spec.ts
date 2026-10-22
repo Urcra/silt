@@ -93,6 +93,8 @@ test("the palette finds threads and runs the page's actions, which keys run too"
   await expect(palette.getByText('In history, including before compaction')).toBeVisible()
   await palette.getByRole('option', { name: /^Add a farewell/ }).click()
   await expect(page).toHaveURL(/\/t\//)
+  // The thread's keys are its page's, which comes once its history has.
+  await expect(page.getByTestId('history')).toBeVisible()
 
   await page.keyboard.press('d')
   await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()

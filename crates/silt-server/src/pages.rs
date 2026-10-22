@@ -25,8 +25,13 @@ pub(crate) fn escape(text: &str) -> String {
 /// Nous's tokens, the same file the web app styles itself with (ADR 0039).
 const NOUS: &str = include_str!("../../../web/src/nous.css");
 
-/// The pages' own rules, on Nous's tokens, as the Sign in board draws them.
+/// The pages' own rules, on Nous's tokens, as the Sign in board draws them,
+/// in the app's IBM Plex rather than whatever the machine falls back to.
 const STYLE: &str = r#"
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 400; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 500; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-display: swap; src: url(/fonts/ibm-plex-mono-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 500; font-display: swap; src: url(/fonts/ibm-plex-mono-latin-500-normal.woff2) format('woff2'); }
 body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 48px; box-sizing: border-box; }
 main { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 20px; }
 .mark { font-weight: 500; font-size: 28px; letter-spacing: -0.04em; }
