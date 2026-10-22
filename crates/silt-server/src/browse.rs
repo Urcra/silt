@@ -277,6 +277,7 @@ fn summary(
         visibility: row.visibility.clone(),
         server: None,
         local_only: false,
+        cloud: silt_proto::view::cloud_session(own.iter().copied()),
     }
 }
 

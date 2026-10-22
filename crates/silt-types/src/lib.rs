@@ -7,12 +7,14 @@
 
 mod hex_serde;
 
+mod cloud;
 mod entity;
 mod frontier;
 mod hex;
 mod id;
 mod oid;
 
+pub use cloud::{CloudSessionId, ParseCloudSessionError};
 pub use entity::{BlobHash, DeviceId, FamilyId, ThreadId};
 pub use frontier::{Frontier, Version};
 pub use hex::ParseIdError;

@@ -191,6 +191,8 @@ pub struct Core {
     /// Clones this machine knows by repository, for projecting families
     /// that started elsewhere.
     pub(crate) clones: HashMap<String, PathBuf>,
+    /// The cloud sessions started here, newest last (ADR 0040).
+    pub(crate) cloud_launches: Vec<crate::protocol::CloudLaunch>,
     /// Families whose next pull waits until then, after a delta that
     /// couldn't apply yet.
     pub(crate) pull_paused: HashMap<FamilyId, Instant>,
@@ -441,6 +443,7 @@ impl Core {
             collaborators: HashMap::new(),
             visibility: HashMap::new(),
             clones: HashMap::new(),
+            cloud_launches: Vec::new(),
             pull_paused: HashMap::new(),
             acp: HashMap::new(),
             events,
@@ -521,8 +524,13 @@ impl Core {
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
                 Response::ok(homes)
             }
-            Request::StartSession { cwd, agent, session_id, isolated, existing } => {
-                to_response(self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await)
+            Request::StartSession { cwd, agent, session_id, isolated, existing, cloud } => {
+                let started = self.start_session(&cwd, &agent, session_id.as_deref(), isolated, existing).await;
+                let started = match (started, cloud) {
+                    (Ok(started), Some(cloud)) => self.mark_cloud(started, &agent, cloud).await,
+                    (started, _) => started,
+                };
+                to_response(started)
             }
             Request::Hook { event, input } => self.hook(&event, input).await,
             Request::EndSession { thread } => match self.find_thread(&thread) {
@@ -650,6 +658,13 @@ impl Core {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
             Request::Branches { clone } => to_response(self.branches(&clone)),
+            Request::CloudStart { clone, task } => return answer_later(reply, self.cloud_start(&clone, &task)),
+            Request::CloudLaunched { launch } => {
+                self.cloud_launched(launch);
+                Response::ok(())
+            }
+            Request::CloudLaunches => Response::ok(self.cloud_launches()),
+            Request::CloudSend { thread, text } => return answer_later(reply, self.cloud_send(&thread, &text)),
             Request::Projects => return answer_later(reply, Ok(self.projects())),
             Request::Orgs => return answer_later(reply, self.orgs()),
             Request::Devices => return answer_later(reply, self.devices()),

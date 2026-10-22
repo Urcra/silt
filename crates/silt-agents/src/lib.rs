@@ -6,6 +6,7 @@
 
 pub mod acp;
 pub mod claude;
+pub mod cloud;
 pub mod codex;
 pub mod conventions;
 pub mod copilot;

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use silt_crdt::{Anchor, InodeId, InodeKind, Parent, TextOp, is_valid_name};
-use silt_types::{BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
+use silt_types::{BlobHash, CloudSessionId, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +246,11 @@ pub enum ConvOp {
     Turn {
         session: SessionRef,
         mark: TurnMark,
+    },
+    /// The session runs as a Claude Code cloud session (ADR 0040).
+    CloudSession {
+        session: SessionRef,
+        id: CloudSessionId,
     },
     Title(String),
     /// Where the agent kept the session's side files (subagent transcripts,

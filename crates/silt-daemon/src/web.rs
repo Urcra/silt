@@ -97,6 +97,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/agents", get(agents))
         .route("/api/agents/start", post(agent_start))
         .route("/api/clones/branches", get(branches))
+        .route("/api/cloud", get(cloud_launches).post(cloud_start))
+        .route("/api/threads/{id}/cloud/send", post(cloud_send))
         .route("/api/projects", get(projects).post(add_clone))
         .route("/api/orgs", get(orgs))
         .route("/api/orgs/change", post(org_change))
@@ -484,6 +486,29 @@ struct AgentStart {
 async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {
     let request = Request::AcpStart { thread: body.thread, clone: body.clone, agent: body.agent, options: body.options };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct CloudStart {
+    clone: std::path::PathBuf,
+    task: String,
+}
+
+async fn cloud_start(State(web): State<Web>, Json(body): Json<CloudStart>) -> HttpResponse {
+    ask(&web, Request::CloudStart { clone: body.clone, task: body.task }).await
+}
+
+async fn cloud_launches(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::CloudLaunches).await
+}
+
+#[derive(Deserialize)]
+struct CloudSend {
+    text: String,
+}
+
+async fn cloud_send(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<CloudSend>) -> HttpResponse {
+    ask(&web, Request::CloudSend { thread, text: body.text }).await
 }
 
 #[derive(Deserialize)]

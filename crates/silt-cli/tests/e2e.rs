@@ -541,7 +541,8 @@ fn track_attaches_to_a_session_started_without_silt() {
 }
 
 /// What a cloud session's `SessionStart` hook does, where Claude Code starts
-/// without Silt: run again on resume, it records into the same thread.
+/// without Silt: run again on resume, it records into the same thread, and
+/// the thread names its cloud session.
 #[test]
 fn track_from_hook_records_the_hooks_session_once() {
     let env = Env::new();
@@ -567,6 +568,7 @@ fn track_from_hook_records_the_hooks_session_once() {
             .current_dir("/")
             .env("SILT_HOME", &env.silt_home)
             .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01CloudSessionOfTheHook")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -582,6 +584,8 @@ fn track_from_hook_records_the_hooks_session_once() {
     assert_eq!(env.stdout(&["log"]).lines().count(), 1, "{}", env.stdout(&["log"]));
     let thread = env.thread();
     assert!(eventually(|| env.stdout(&["show", &thread]).contains("> Please add a farewell line to main")));
+    let threads = Api::open(&env).ok("GET", "/api/threads", None);
+    assert_eq!(threads[0]["cloud"], "session_01CloudSessionOfTheHook", "{threads}");
 }
 
 /// A session longer than one read is taken in whole, each line once.
