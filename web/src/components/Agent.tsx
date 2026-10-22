@@ -8,7 +8,8 @@ import { useNow } from '../now'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, type DotTone, Icon, type IconName, Kbd, cx } from '../ui'
+import { Button, Dot, type DotTone, Icon, Kbd, cx } from '../ui'
+import { CHIP, ChipSelect } from './ChipSelect'
 import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
 
@@ -31,45 +32,6 @@ export function AgentPicker({ value, onChange, className }: { value: string; onC
   )
 }
 
-const CHIP =
-  'inline-flex items-center gap-1.5 rounded-sm border border-line bg-elevated px-2 py-0.5 text-xs text-fg-1 hover:bg-surface-2 max-md:min-h-11'
-
-/** A choice in the composer's row, drawn as a chip: `prefix` then the chosen option. */
-function ChipSelect({
-  label,
-  prefix,
-  icon,
-  value,
-  onChange,
-  options,
-}: {
-  label: string
-  prefix?: string
-  icon?: IconName
-  value: string
-  onChange: (value: string) => void
-  options: { id: string; name: string; description?: string | null }[]
-}) {
-  return (
-    <label className={cx(CHIP, 'relative cursor-pointer pr-1')}>
-      {icon && <Icon name={icon} className="h-3 w-3" />}
-      {prefix && <span className="text-fg-2">{prefix}</span>}
-      <select
-        aria-label={label}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="cursor-pointer appearance-none bg-transparent pr-4 text-xs text-fg-1 focus:outline-none"
-      >
-        {options.map((option) => (
-          <option key={option.id} value={option.id} title={option.description ?? undefined}>
-            {option.name}
-          </option>
-        ))}
-      </select>
-      <Icon name="chevronDown" className="pointer-events-none absolute right-1 h-3 w-3 text-fg-2" />
-    </label>
-  )
-}
 
 /** Whether a prompt goes straight to the agent rather than its queue. */
 function ready(status: AgentStatus): boolean {

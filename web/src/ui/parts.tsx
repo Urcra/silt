@@ -104,7 +104,7 @@ export function DiffBlock({
       <header className="flex items-center gap-2 border-b border-line bg-surface-1 px-3 py-1.5 font-mono text-2xs text-fg-2">
         <span className="min-w-0 truncate text-fg-1">{path}</span>
         {(added !== undefined || removed !== undefined) && <Counts added={added ?? 0} removed={removed ?? 0} className="ml-auto" />}
-        {actions && <span className={cx('flex items-center gap-1', added === undefined && 'ml-auto')}>{actions}</span>}
+        {actions && <span className={cx('flex items-center gap-3', added === undefined && 'ml-auto')}>{actions}</span>}
       </header>
       {children}
     </section>

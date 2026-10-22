@@ -66,8 +66,11 @@ function Crumbs() {
   const threadPage = useMatch({ from: '/t/$id', shouldThrow: false })
   const filePage = useMatch({ from: '/t/$id/files/$', shouldThrow: false })
   const livePage = useMatch({ from: '/t/$id/live', shouldThrow: false })
-  const thread = threadPage ?? filePage ?? livePage
+  const reconcilePage = useMatch({ from: '/t/$id/reconcile', shouldThrow: false })
+  const thread = threadPage ?? filePage ?? livePage ?? reconcilePage
   const mr = useMatch({ from: '/mr/$id', shouldThrow: false })
+  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: mr !== undefined })
+  const mrTitle = mr && mrs.data?.find((candidate) => candidate.id === mr.params.id)?.title
   const path = useRouterState({ select: (state) => state.location.pathname })
   const chosen = useWorkspace()
   const workspace =
@@ -78,10 +81,10 @@ function Crumbs() {
     ? [
         { text: shown ? projectName(shown.repo || 'no remote') : '', mono: true },
         { text: shown?.title ?? short(thread.params.id) },
-        { text: livePage ? 'Live' : '' },
+        { text: livePage ? 'Live' : reconcilePage ? 'Reconcile' : '' },
       ]
     : mr
-      ? [{ text: 'Merge requests' }, { text: short(mr.params.id), mono: true }]
+      ? [{ text: 'Merge requests' }, mrTitle ? { text: mrTitle } : { text: short(mr.params.id), mono: true }]
       : [{ text: workspace }, { text: PAGES[path.replace(/\/$/, '') || '/'] ?? '' }]
   const shownCrumbs = crumbs.filter((crumb) => crumb.text)
   return (

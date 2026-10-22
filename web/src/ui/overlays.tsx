@@ -265,7 +265,7 @@ export function Dialog({
       className={cx(
         'rounded-lg border border-line bg-elevated p-0 text-fg-1 shadow-overlay backdrop:bg-backdrop',
         bare ? 'mx-auto mt-[14vh] w-[min(620px,calc(100vw-2rem))]' : 'm-auto',
-        !bare && (wide ? 'w-[min(44rem,calc(100vw-2rem))]' : 'w-[min(32rem,calc(100vw-2rem))]'),
+        !bare && (wide ? 'w-[min(44rem,calc(100vw-2rem))]' : 'w-[min(35rem,calc(100vw-2rem))]'),
       )}
     >
       {open && bare && (
@@ -277,16 +277,21 @@ export function Dialog({
         </>
       )}
       {open && !bare && (
-        <div className="p-4">
-          <div className="mb-3 flex items-center">
-            <h2 id={heading} className="text-base font-medium">
+        <div>
+          <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+            <h2 id={heading} className="min-w-0 truncate text-[16px] font-medium">
               {title}
             </h2>
-            <button type="button" aria-label="close" onClick={onClose} className="ml-auto rounded-sm p-1 text-fg-2 hover:bg-surface-2">
+            <button
+              type="button"
+              aria-label="close"
+              onClick={onClose}
+              className="ml-auto inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 max-md:min-h-11 max-md:min-w-11"
+            >
               <Icon name="x" />
             </button>
           </div>
-          {children}
+          <div className="px-5 py-4">{children}</div>
         </div>
       )}
     </dialog>

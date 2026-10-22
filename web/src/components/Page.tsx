@@ -26,7 +26,7 @@ export function Page({
   inspector?: ReactNode
   inspectorLabel?: string
   width?: 'full' | 'wide' | 'narrow'
-  /** What a screen reader calls the view, when its title isn't plain text. */
+  /** Which view this is, as `data-page`, for tests and styles to find it. */
   label?: string
   /** The body sets its own padding, such as a list running edge to edge. */
   flush?: boolean
@@ -38,7 +38,7 @@ export function Page({
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
   return (
     <div className="flex min-h-full flex-1 flex-col lg:flex-row">
-      <div className="flex min-w-0 flex-1 flex-col" aria-label={label}>
+      <div className="flex min-w-0 flex-1 flex-col" data-page={label}>
         {(title || actions) && (
           <header className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-4 py-2.5 md:px-6">
             {title && <h1 className="text-lg font-medium">{title}</h1>}

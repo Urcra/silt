@@ -72,8 +72,19 @@ function NeedsYouCard({ thread, review }: { thread: ThreadSummary; review: MrSum
   )
 }
 
-function ThreadRow({ thread, now, review }: { thread: ThreadSummary; now: number; review: MrSummary | undefined }) {
-  const where = threadWhere(thread)
+function ThreadRow({
+  thread,
+  now,
+  review,
+  recovered,
+}: {
+  thread: ThreadSummary
+  now: number
+  review: MrSummary | undefined
+  /** It holds this machine's work after its copy differed from the server's (ADR 0009). */
+  recovered: boolean
+}) {
+  const where = recovered ? { label: 'Recovered', tone: 'danger' as const } : threadWhere(thread)
   const meta = [
     thread.agent,
     `${thread.messages} ${thread.messages === 1 ? 'message' : 'messages'}`,
@@ -114,7 +125,11 @@ function ThreadRow({ thread, now, review }: { thread: ThreadSummary; now: number
         {ago(thread.last_ms, now)}
       </span>
       <span className="flex justify-end">
-        {review ? (
+        {recovered ? (
+          <Link to="/t/$id/reconcile" params={{ id: thread.id }} className={buttonClass('secondary')}>
+            Review
+          </Link>
+        ) : review ? (
           <Link to="/mr/$id" params={{ id: review.id }} className={buttonClass('secondary')}>
             Review
           </Link>
@@ -222,7 +237,13 @@ export function ThreadList() {
             <SectionLabel className="px-0 pt-3">{nameOf(repo)}</SectionLabel>
             <ul className="overflow-hidden rounded-md border border-line bg-elevated">
               {forksUnderSources(inRepo).map((thread) => (
-                <ThreadRow key={thread.id} thread={thread} now={now} review={openInto(thread)} />
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
+                  now={now}
+                  review={openInto(thread)}
+                  recovered={(status.data?.recoveries ?? []).some((recovery) => recovery.recovery === thread.id)}
+                />
               ))}
             </ul>
           </section>

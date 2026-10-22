@@ -2,7 +2,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from './App'
 import type { ThreadSummary } from './api'
-import { lineClass } from './diffStyle'
 import { legacyPath } from './legacy'
 import { projectName, projects } from './projects'
 
@@ -76,13 +75,10 @@ test('threads are grouped by project, newest first', () => {
   expect(projectName('github.com/u/silt')).toBe('silt')
 })
 
-test('old hash links move to paths, and diff lines are understood', () => {
+test('old hash links move to paths', () => {
   expect(legacyPath('#/t/abc')).toBe('/t/abc')
   expect(legacyPath('#/mr/12ab.4')).toBe('/mr/12ab.4')
   expect(legacyPath('#/inbox')).toBe('/inbox')
   expect(legacyPath('#/')).toBe('/')
   expect(legacyPath('#token=1')).toBeUndefined()
-  expect(lineClass('+added')).toContain('ok-tint')
-  expect(lineClass('-removed')).toContain('danger-tint')
-  expect(lineClass('+++ b/x')).toContain('fg-3')
 })

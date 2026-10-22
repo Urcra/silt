@@ -166,7 +166,7 @@ async function startInNewThread(page: Page, agent: string) {
   await page.goto(live.alice)
   await page.getByRole('main').getByRole('link', { name: 'New thread' }).click()
   await page.getByLabel('agent to start').selectOption({ label: agent })
-  await page.getByRole('button', { name: 'Start' }).click()
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
 }
 
@@ -447,7 +447,7 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
     await hosted.reload()
     await expect(seen).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 20_000 })
-  await expect(hosted.getByText('+fn acp() {}').first()).toBeVisible()
+  await expect(hosted.getByText('+ fn acp() {}').first()).toBeVisible()
   await expect(hosted.getByTestId('seen-count')).toHaveText('0/1 seen')
   const marked = hosted.waitForResponse((response) => response.url().endsWith('/seen'))
   await seen.click()
@@ -592,7 +592,7 @@ test('a read-only link opens the conversation without signing in, until revoked'
   const links = owner.getByRole('region', { name: 'read-only links' })
   await links.getByLabel('link lasts').selectOption('1')
   await links.getByRole('button', { name: 'Make a link' }).click()
-  const url = (await links.getByTestId('new-link').textContent()) ?? ''
+  const url = await links.getByTestId('new-link').inputValue()
   expect(url).toContain('/r/')
 
   const anyone = await (await browser.newContext()).newPage()
@@ -696,8 +696,7 @@ test('a thread started in the background from a branch plans its first prompt an
   await form.getByLabel('permissions').selectOption('ask_for_everything')
   await form.getByLabel('visibility').selectOption('private')
   await form.getByLabel('Plan first').check()
-  await form.getByLabel('Start in the background').check()
-  await form.getByRole('button', { name: 'Start' }).click()
+  await form.getByRole('button', { name: 'Start in background' }).click()
 
   await expect(page.getByText('Fake agent started in a new thread')).toBeVisible()
   await expect(form.getByLabel('first prompt')).toHaveValue('')
@@ -781,7 +780,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await page.getByRole('button', { name: 'Changes', exact: true }).click()
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByRole('tab', { name: 'Last turn' }).click()
-  await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
+  await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
   await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
   await page.getByLabel('code comment').fill('give it a better name')
   await page.getByRole('button', { name: 'Add', exact: true }).click()
@@ -794,7 +793,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   ).toBeVisible()
 
   await page.getByRole('tab', { name: 'Against main' }).click()
-  await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
+  await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
 })
 
 /** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */
@@ -806,8 +805,7 @@ async function startInBackground(page: Page, project: RegExp, prompt: string) {
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('ask_for_everything')
-  await form.getByLabel('Start in the background').check()
-  await form.getByRole('button', { name: 'Start' }).click()
+  await form.getByRole('button', { name: 'Start in background' }).click()
   await expect(form.getByLabel('first prompt')).toHaveValue('')
 }
 
@@ -991,7 +989,7 @@ test('the owner shares a thread from its page: who sees it, and who may write in
   await page.goto(live.alice)
   await page.getByRole('link', { name: live.thread }).click()
   await page.getByRole('button', { name: 'Share' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Share this thread' })
+  const dialog = page.getByRole('dialog', { name: /^Share / })
   const collaborators = dialog.getByRole('list', { name: 'collaborators' })
   await expect(collaborators).toContainText('bob')
 
@@ -1001,10 +999,11 @@ test('the owner shares a thread from its page: who sees it, and who may write in
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(collaborators).toContainText('bob')
 
-  await dialog.getByLabel('who sees it').selectOption('private')
-  await expect(dialog.getByLabel('who sees it')).toHaveValue('private')
-  await dialog.getByLabel('who sees it').selectOption('org')
-  await expect(dialog.getByLabel('who sees it')).toHaveValue('org')
+  const who = dialog.getByRole('group', { name: 'who sees it' })
+  await who.getByRole('radio', { name: /^Only alice/ }).check()
+  await expect(who.getByRole('radio', { name: /^Only alice/ })).toBeChecked()
+  await who.getByRole('radio', { name: /^Everyone in the org/ }).check()
+  await expect(who.getByRole('radio', { name: /^Everyone in the org/ })).toBeChecked()
 
   await dialog.getByLabel('person to add').fill('nobody-by-that-name')
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
@@ -1044,14 +1043,14 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
 
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /history graph$/ }).first().click()
   // A test above settles threads, which the graph leaves out unless asked.
-  await page.getByLabel('Settled too').check()
+  await page.getByLabel('Settled threads').check()
   const graph = page.getByRole('list', { name: 'graph' })
   await expect(graph.getByRole('button', { name: /^commit Add the farewell/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^fork forked from/ }).first()).toBeVisible()
   await expect(graph.getByRole('button', { name: /^request Fork work/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^merge / }).first()).toBeVisible()
 
-  await page.getByLabel('what to show').selectOption({ label: 'Commits' })
+  await page.getByLabel('Turns', { exact: true }).uncheck()
   await expect(graph.getByRole('button', { name: /^turn/ })).toHaveCount(0)
   await graph.getByRole('button', { name: /^commit Add the farewell/ }).click()
   const details = page.getByRole('complementary', { name: 'details' })
@@ -1075,7 +1074,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   const projects = form.getByLabel('project')
   await projects.selectOption((await projects.locator('option').filter({ hasText: /tools/ }).getAttribute('value')) ?? '')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByRole('button', { name: 'Start' }).click()
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Stop agent' }).click()

@@ -215,6 +215,8 @@ pub struct Core {
     pub(crate) web: Option<crate::web::WebInfo>,
     /// What recovery forks this daemon made, for `silt auth status`.
     pub(crate) recoveries: Vec<String>,
+    /// The same, by thread, for the web UI's reconcile page.
+    pub(crate) recovered: Vec<silt_proto::view::RecoveryView>,
     /// Blobs this daemon already sent the server, so a retried push doesn't
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
@@ -403,6 +405,7 @@ impl Core {
             positions: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
+            recovered: Vec::new(),
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
             resident,
@@ -518,6 +521,7 @@ impl Core {
                     .collect(),
                 recovered: self.recoveries.clone(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                recoveries: self.recovered.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
             Request::Fork { thread, cwd, here, agent, private, turn } => {

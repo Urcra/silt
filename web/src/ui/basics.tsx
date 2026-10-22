@@ -44,7 +44,7 @@ export function IconButton({
   )
 }
 
-const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3'
+const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3 max-md:min-h-11 max-md:text-base'
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(FIELD, className)} {...props} />

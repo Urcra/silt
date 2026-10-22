@@ -21,13 +21,14 @@ test('lists threads and searches across compaction', async ({ page }) => {
   await page.getByLabel('search', { exact: true }).fill('farewell')
   await page.getByRole('button', { name: 'Search' }).click()
   const results = page.getByTestId('search-results')
-  await expect(results).toContainText('[farewell]')
+  // The index brackets each match, which the page marks.
+  await expect(results.locator('mark').first()).toHaveText('farewell')
   // Hits group under their thread, and what came before the compaction says so.
   const inThread = results.getByRole('region', { name: 'hits in Add a farewell' })
   await expect(inThread.getByRole('link', { name: 'Add a farewell' })).toBeVisible()
   await expect(inThread.getByText('before compaction').first()).toBeVisible()
 
-  await page.getByRole('button', { name: 'merged' }).click()
+  await page.getByRole('button', { name: 'merged', exact: true }).click()
   await expect(page.getByRole('button', { name: 'clear status' })).toBeVisible()
   await page.getByRole('button', { name: 'clear status' }).click()
   await expect(page.getByRole('button', { name: 'clear status' })).toHaveCount(0)
@@ -48,12 +49,12 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await page.keyboard.press('Escape')
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()
-  await expect(page.getByTestId('diff')).toContainText('+fn farewell() {}')
+  await expect(page.getByTestId('diff')).toContainText('+ fn farewell() {}')
   await page.getByRole('button', { name: 'Changes', exact: true }).click()
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByRole('tab', { name: 'Other…' }).click()
   await page.getByLabel('diff base').selectOption('last-commit')
-  await expect(changes.getByTestId('diff')).toContainText('+fn farewell() {}')
+  await expect(changes.getByTestId('diff')).toContainText('+ fn farewell() {}')
 
   await page.getByText('Please add a farewell line to main').hover()
   await page.getByRole('button', { name: 'comment on entry 0' }).click()
@@ -117,8 +118,10 @@ test('reviews and approves a merge request', async ({ page }) => {
   await page.getByRole('link', { name: 'Merge requests' }).click()
   await page.getByRole('link', { name: 'Add forked' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('open')
-  await expect(page.getByTestId('diff')).toContainText('+fn forked() {}')
+  await expect(page.getByTestId('diff')).toContainText('+ fn forked() {}')
+  await page.getByRole('tab', { name: /^The fork’s conversation/ }).click()
   await expect(page.getByRole('main').getByText('Continuing in a fork')).toBeVisible()
+  await page.getByRole('tab', { name: /^Changes/ }).click()
 
   await page.getByLabel('reason').fill('add a test first')
   await page.getByRole('button', { name: 'Request changes' }).click()

@@ -26,7 +26,9 @@ const ROW = {
   context: '',
 }
 
-const SIGN = { add: '+', del: '-', context: ' ' }
+const SIGN = { add: '+ ', del: '- ', context: '  ' }
+
+const GUTTER = { add: 'text-ok', del: 'text-danger', context: 'text-fg-2' }
 
 function Tokens({ tokens, text }: { tokens: Token[] | undefined; text: string }) {
   if (!tokens) return <>{text || ' '}</>
@@ -83,8 +85,8 @@ function LineComment({
   )
 }
 
-function Gutter({ line, children }: { line: number | null; children?: ReactNode }) {
-  return <span className="px-1.5 text-right text-[10px] leading-5 text-fg-2 select-none">{children ?? line ?? ''}</span>
+function Gutter({ line, kind = 'context', children }: { line: number | null; kind?: CodeLine['kind']; children?: ReactNode }) {
+  return <span className={cx('px-1.5 text-right text-[10px] leading-5 select-none', GUTTER[kind])}>{children ?? line ?? ''}</span>
 }
 
 function HunkView({
@@ -114,7 +116,7 @@ function HunkView({
       <button
         type="button"
         aria-label={`comment on ${file.path} line ${line.newLine}`}
-        className="hover:text-accent-fg"
+        className="hover:text-accent-fg pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5"
         onClick={(event) => {
           const here = line.newLine!
           const extend = event.shiftKey && picking !== null
@@ -164,8 +166,10 @@ function HunkView({
         ? hunk.lines.map((line, index) => (
             <div key={index}>
               <div className={cx('grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line) && 'ring-1 ring-accent ring-inset')}>
-                <Gutter line={line.oldLine} />
-                <Gutter line={line.newLine}>{numberOf(line)}</Gutter>
+                <Gutter line={line.oldLine} kind={line.kind} />
+                <Gutter line={line.newLine} kind={line.kind}>
+                  {numberOf(line)}
+                </Gutter>
                 {codeCell(line)}
               </div>
               {after(line)}
@@ -174,11 +178,13 @@ function HunkView({
         : splitRows(hunk).map((row, index) => (
             <div key={index}>
               <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
-                <Gutter line={row.left?.oldLine ?? null} />
+                <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'} />
                 <span className={cx('flex min-w-0 border-r border-line-subtle', row.left && row.left.kind !== 'context' && ROW.del)}>
                   {codeCell(row.left && row.left.kind !== 'add' ? row.left : null)}
                 </span>
-                <Gutter line={row.right?.newLine ?? null}>{row.right && numberOf(row.right)}</Gutter>
+                <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
+                  {row.right && numberOf(row.right)}
+                </Gutter>
                 <span className={cx('flex min-w-0', row.right && row.right.kind === 'add' && ROW.add, row.right && picked(row.right) && 'ring-1 ring-accent ring-inset')}>
                   {codeCell(row.right && row.right.kind !== 'del' ? row.right : null)}
                 </span>
@@ -236,8 +242,12 @@ export function DiffView({
             <>
               <Counts added={file.added} removed={file.removed} />
               {viewFiles && (
-                <a className="font-sans text-accent-fg hover:text-fg-1" href={appHref(filePath(viewFiles, file.path))}>
-                  view file
+                <a
+                  aria-label="view file"
+                  className="font-sans text-accent-fg hover:text-fg-1 max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                  href={appHref(filePath(viewFiles, file.path))}
+                >
+                  View file
                 </a>
               )}
               {actions?.(file)}

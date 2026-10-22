@@ -908,6 +908,7 @@ mod tests {
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),
             DaemonStatus::decl(&config),
+            silt_proto::view::RecoveryView::decl(&config),
             silt_proto::view::SignIn::decl(&config),
             DeviceAgent::decl(&config),
             DeviceChange::decl(&config),

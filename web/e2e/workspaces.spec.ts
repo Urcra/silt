@@ -37,7 +37,7 @@ async function startIn(page: Page, project: RegExp, prompt: string) {
   await projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByRole('button', { name: 'Start' }).click()
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   await page.getByRole('button', { name: 'Stop agent' }).click()
 }

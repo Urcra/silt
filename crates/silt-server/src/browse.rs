@@ -378,7 +378,12 @@ async fn graph(
                 .entry(thread)
                 .or_insert_with(|| agent_of(&log.iter().filter(|delta| delta.thread == thread).collect::<Vec<_>>()))
                 .clone();
+            let commit = match &item.event {
+                GraphEvent::Commit { commit, .. } => Some(commit.to_string()),
+                _ => None,
+            };
             rows.push(GraphRow {
+                commit,
                 id: item.delta.to_string(),
                 kind: kind.to_owned(),
                 thread: thread.to_string(),

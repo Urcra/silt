@@ -76,6 +76,11 @@ impl Core {
             warn!("{note}");
             self.notify(recovery, format!("Silt: {note}.")).await;
             self.recoveries.push(note);
+            self.recovered.push(silt_proto::view::RecoveryView {
+                thread: thread.to_string(),
+                recovery: recovery.to_string(),
+                time_ms: crate::core::now_ms(),
+            });
         }
         Ok(())
     }

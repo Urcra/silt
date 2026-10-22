@@ -14,6 +14,7 @@ import { NewThread } from './NewThread'
 import { Orgs } from './Orgs'
 import { Page } from './Page'
 import { Projects } from './Projects'
+import { Reconcile } from './Reconcile'
 import { Search } from './Search'
 import { ThreadList } from './ThreadList'
 import { ThreadView } from './ThreadView'
@@ -27,16 +28,16 @@ function Plain({ view: View }: { view: ComponentType }) {
 }
 
 export const HomeRoute = ThreadList
-export const NewThreadRoute = () => <Plain view={NewThread} />
+export const NewThreadRoute = NewThread
 export const ProjectsRoute = () => <Plain view={Projects} />
 export const OrgsRoute = () => <Plain view={Orgs} />
 export const DevicesRoute = () => <Plain view={Devices} />
 export const NeedsYouRoute = () => <Plain view={NeedsYou} />
-export const GraphRoute = () => <Plain view={Graph} />
-export const SearchRoute = () => <Plain view={Search} />
+export const GraphRoute = Graph
+export const SearchRoute = Search
 export const FileRoute = () => <Plain view={FilePage} />
-export const MergeRequestsRoute = () => <Plain view={MergeRequests} />
-export const InboxRoute = () => <Plain view={Inbox} />
+export const MergeRequestsRoute = MergeRequests
+export const InboxRoute = Inbox
 
 export function ThreadRoute() {
   const { id } = useParams({ from: '/t/$id' })
@@ -44,12 +45,9 @@ export function ThreadRoute() {
 }
 
 export const LiveRoute = LivePage
+export const ReconcileRoute = Reconcile
 
 export function MergeRequestRoute() {
   const { id } = useParams({ from: '/mr/$id' })
-  return (
-    <Page width="wide">
-      <MergeRequest id={id} />
-    </Page>
-  )
+  return <MergeRequest key={id} id={id} />
 }

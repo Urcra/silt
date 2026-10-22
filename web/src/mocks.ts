@@ -5,6 +5,12 @@
 export const MOCKS = {
   'thread.handoff-before': 'The device a thread was on before its last handoff, and when it moved.',
   'thread.synced': 'Whether every entry of the thread has reached its server.',
+  'new.device': 'Choosing which of your devices a new thread starts on.',
+  'graph.device': 'The device a turn ran on.',
+  'search.saved': 'Searches the person saved, to run again with one click.',
+  'reconcile.checkout': 'Which checkout followed the recovery thread when the work moved.',
+  'reconcile.agent': "Whether the agent's session moved with the recovery thread.",
+  'share.link-opens': 'How often a read-only link was opened.',
   'live.agent-editing': 'The agent editing the file open in the live editor.',
   'live.sync-devices': 'How many devices hold the live replica in sync.',
 } as const satisfies Record<string, string>

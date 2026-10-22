@@ -179,7 +179,11 @@ status: string | null, owner: string, agent: string | null,
 /**
  * Its thread is settled for the person.
  */
-settled: boolean, };
+settled: boolean, 
+/**
+ * A commit's id, beside its subject in `text`.
+ */
+commit: string | null, };
 
 export type DaemonStatus = { 
 /**
@@ -202,7 +206,22 @@ recovered: Array<string>,
 /**
  * The daemon's own version, as the web UI's status bar shows it.
  */
-version: string, };
+version: string, 
+/**
+ * The recovery forks behind `recovered`, by thread, for the web UI's
+ * reconcile page.
+ */
+recoveries: Array<RecoveryView>, };
+
+export type RecoveryView = { 
+/**
+ * The thread, now as the server has it.
+ */
+thread: string, 
+/**
+ * The fork of it holding this machine's work.
+ */
+recovery: string, time_ms: number, };
 
 export type SignIn = { url: string, user: string, device: string, 
 /**

@@ -129,6 +129,68 @@ test('a live session', async ({ page }) => {
   })
 })
 
+test('sharing a thread', async ({ page }) => {
+  await open(page, `/t/${world.thread}`)
+  await shoot(page, 'share', async (shown) => {
+    if ((await shown.getByRole('dialog', { name: /^Share / }).count()) === 0) {
+      await shown.getByRole('button', { name: 'Share' }).click()
+    }
+    await expect(shown.getByRole('dialog', { name: /^Share / }).getByRole('list', { name: 'collaborators' })).toBeVisible()
+  })
+})
+
+test('reconciling a diverged thread', async ({ page }) => {
+  // A real divergence needs a restored backup; the page only reads which
+  // thread recovered into which, so the daemon's status names the fork.
+  await page.route('**/api/status', async (route) => {
+    const response = await route.fetch()
+    const status = (await response.json()) as Record<string, unknown>
+    const threads = (await (await route.fetch({ url: route.request().url().replace(/status$/, 'threads') })).json()) as { id: string }[]
+    const full = (short: string) => threads.find((thread) => thread.id.endsWith(short))?.id ?? short
+    status.recoveries = [{ thread: full(world.thread), recovery: full(world.fork), time_ms: Date.now() - 3_600_000 }]
+    await route.fulfill({ response, json: status })
+  })
+  await open(page, `/t/${world.fork}/reconcile`)
+  await shoot(page, 'reconcile', async (shown) => {
+    await expect(shown.getByRole('heading', { name: /differed from the server’s/ })).toBeVisible()
+  })
+})
+
+test('a new thread', async ({ page }) => {
+  await open(page, '/new')
+  await shoot(page, 'new-thread', async (shown) => {
+    await expect(shown.getByRole('form', { name: 'new thread' })).toBeVisible()
+  })
+})
+
+test('search', async ({ page }) => {
+  await open(page, '/search?q=farewell')
+  await shoot(page, 'search', async (shown) => {
+    await expect(shown.getByTestId('search-results')).toBeVisible()
+  })
+})
+
+test('the inbox', async ({ page }) => {
+  await open(page, '/inbox')
+  await shoot(page, 'inbox', async (shown) => {
+    await expect(shown.getByRole('tablist', { name: 'inbox filter' })).toBeVisible()
+  })
+})
+
+test('the history graph', async ({ page }) => {
+  await open(page, '/graph')
+  await shoot(page, 'graph', async (shown) => {
+    await expect(shown.getByRole('list', { name: 'graph' })).toBeVisible()
+  })
+})
+
+test('merge requests', async ({ page }) => {
+  await open(page, '/mrs')
+  await shoot(page, 'merge-requests', async (shown) => {
+    await expect(shown.getByTestId('merge-requests')).toBeVisible()
+  })
+})
+
 test('a merge request', async ({ page }) => {
   await open(page, '/mrs')
   await page.getByRole('link', { name: 'Retry blob uploads on 5xx' }).first().click()

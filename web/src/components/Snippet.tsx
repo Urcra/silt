@@ -4,7 +4,7 @@ export function Snippet({ text }: { text: string }) {
     <>
       {text.split(/\[([^\]]*)\]/).map((part, index) =>
         index % 2 === 1 ? (
-          <mark key={index} className="rounded-sm bg-accent-tint text-fg-1">
+          <mark key={index} className="rounded-sm border-b border-accent bg-accent-tint text-fg-1">
             {part}
           </mark>
         ) : (
