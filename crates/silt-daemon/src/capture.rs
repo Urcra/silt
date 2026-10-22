@@ -17,7 +17,7 @@ use silt_log::TurnMark;
 use silt_store::Store;
 
 use crate::capture_lock::{CaptureLock, Turn};
-use crate::core::{Core, CoreError};
+use crate::core::{Ahead, Core, CoreError};
 use crate::protocol::HookReply;
 
 /// How long a hook waits for its turn at writing before it gives up, so a
@@ -53,7 +53,9 @@ pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value
     };
     let thread = record.thread.to_string();
     let actor = crate::server::load_actor(data_dir)?;
-    let mut core = Core::for_session(store, actor, data_dir, record).await?;
+    let scan = scan_for(event, &parsed);
+    let ahead = Ahead { compares: scan == Scan::Checkout, records: scan != Scan::Nothing };
+    let mut core = Core::for_session(store, actor, data_dir, record, ahead).await?;
     core.capture_spooled().await?;
     let reply = core.capture(event, &parsed).await?;
     // A long family takes a while to free, and the agent is waiting on the

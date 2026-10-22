@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 use silt_crdt::{CausalGraph, FileTree, InodeId};
 use silt_types::{DeltaId, ThreadId};
 
-use super::{Family, FileState, ThreadState, Turns};
+use super::{Family, FileState, Log, ReadCovered, ThreadState, Turns};
 use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]; a snapshot in another one is
 /// replayed instead of read.
-pub const SNAPSHOT_FORMAT: i64 = 3;
+pub const SNAPSHOT_FORMAT: i64 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -23,25 +23,89 @@ pub enum SnapshotError {
     Mismatch,
 }
 
+/// What a snapshot holds besides the file tree and the files, which are
+/// encoded apart so they decode at once on threads of their own: they are
+/// most of a long family's snapshot (ADR 0034).
 #[derive(Serialize)]
 struct Written<'a> {
     graph: &'a CausalGraph,
-    tree: &'a FileTree,
-    files: &'a HashMap<InodeId, FileState>,
     threads: &'a BTreeMap<ThreadId, ThreadState>,
     turns: &'a HashMap<SessionRef, Turns>,
+    session_cwds: &'a HashMap<SessionRef, String>,
     log: Vec<Logged>,
 }
 
 /// [`Written`], read back: postcard keeps fields in order.
 #[derive(Deserialize)]
-struct Read {
+struct Rest {
     graph: CausalGraph,
-    tree: FileTree,
-    files: HashMap<InodeId, FileState>,
     threads: BTreeMap<ThreadId, ThreadState>,
     turns: HashMap<SessionRef, Turns>,
+    session_cwds: HashMap<SessionRef, String>,
     log: Vec<Logged>,
+}
+
+/// A snapshot, decoded.
+struct Read {
+    tree: FileTree,
+    files: HashMap<InodeId, FileState>,
+    rest: Rest,
+}
+
+impl Read {
+    /// `snapshot`'s three parts: the tree, the files and the rest, each
+    /// after its length.
+    fn decode(snapshot: &[u8]) -> Result<Self, SnapshotError> {
+        let (tree, after) = framed(snapshot)?;
+        let (files, rest) = framed(after)?;
+        let (tree, files, rest) = decode_apart(tree, files, rest);
+        Ok(Self { tree: tree?, files: files?, rest: rest? })
+    }
+
+    fn encode(tree: &FileTree, files: &HashMap<InodeId, FileState>, rest: &Written<'_>) -> Result<Vec<u8>, postcard::Error> {
+        let mut encoded = Vec::new();
+        for part in [postcard::to_allocvec(tree)?, postcard::to_allocvec(files)?] {
+            encoded.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            encoded.extend_from_slice(&part);
+        }
+        postcard::to_extend(rest, encoded)
+    }
+}
+
+type Decoded<T> = Result<T, postcard::Error>;
+
+/// The part at the start of `bytes`, after its length, and what follows it.
+fn framed(bytes: &[u8]) -> Result<(&[u8], &[u8]), postcard::Error> {
+    let (length, rest) = bytes.split_first_chunk::<8>().ok_or(postcard::Error::DeserializeUnexpectedEnd)?;
+    let length = usize::try_from(u64::from_le_bytes(*length)).map_err(|_| postcard::Error::DeserializeBadEncoding)?;
+    if rest.len() < length {
+        return Err(postcard::Error::DeserializeUnexpectedEnd);
+    }
+    Ok(rest.split_at(length))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_apart(
+    tree: &[u8],
+    files: &[u8],
+    rest: &[u8],
+) -> (Decoded<FileTree>, Decoded<HashMap<InodeId, FileState>>, Decoded<Rest>) {
+    std::thread::scope(|scope| {
+        let tree = scope.spawn(|| postcard::from_bytes(tree));
+        let files = scope.spawn(|| postcard::from_bytes(files));
+        let rest = postcard::from_bytes(rest);
+        (tree.join().expect("decoding doesn't panic"), files.join().expect("decoding doesn't panic"), rest)
+    })
+}
+
+/// A browser's replica has no threads to decode on.
+#[cfg(target_arch = "wasm32")]
+fn decode_apart(
+    tree: &[u8],
+    files: &[u8],
+    rest: &[u8],
+) -> (Decoded<FileTree>, Decoded<HashMap<InodeId, FileState>>, Decoded<Rest>) {
+    (postcard::from_bytes(tree), postcard::from_bytes(files), postcard::from_bytes(rest))
 }
 
 /// A delta of the log, told apart from a different one stored under the
@@ -71,28 +135,32 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 impl Family {
     pub fn snapshot(&mut self) -> Result<Vec<u8>, postcard::Error> {
         let mut encoded = Vec::new();
-        for delta in &self.log[self.fingerprints.len()..] {
+        for delta in &self.log.all()[self.fingerprints.len()..] {
             encoded.clear();
             encoded = postcard::to_extend(delta, encoded)?;
             self.fingerprints.push(fingerprint(&encoded));
         }
-        let log =
-            self.log.iter().zip(&self.fingerprints).map(|(delta, &fingerprint)| Logged { id: delta.span.first(), fingerprint });
-        postcard::to_allocvec(&Written {
+        let log = self
+            .log
+            .all()
+            .iter()
+            .zip(&self.fingerprints)
+            .map(|(delta, &fingerprint)| Logged { id: delta.span.first(), fingerprint });
+        let rest = Written {
             graph: &self.graph,
-            tree: &self.tree,
-            files: &self.files,
             threads: &self.threads,
             turns: &self.turns,
+            session_cwds: &self.session_cwds,
             log: log.collect(),
-        })
+        };
+        Read::encode(&self.tree, &self.files, &rest)
     }
 
     /// The family `snapshot` was taken of, given every delta stored for it.
     /// Takes the deltas it holds out of `stored`, leaving those after them,
     /// still to be applied; on an error, `stored` is left as it was.
     pub fn from_snapshot(snapshot: &[u8], stored: &mut Vec<Delta>) -> Result<Self, SnapshotError> {
-        let read: Read = postcard::from_bytes(snapshot)?;
+        let read = Read::decode(snapshot)?;
         // Only deltas stored under one id need their contents told apart;
         // the store never holds two.
         let mut ids = HashSet::with_capacity(stored.len());
@@ -101,8 +169,8 @@ impl Family {
             delta.span.first() == logged.id && (unique || Logged::of(delta).is_ok_and(|found| found == *logged))
         };
         let mut next = 0;
-        let mut held = Vec::with_capacity(read.log.len());
-        for logged in &read.log {
+        let mut held = Vec::with_capacity(read.rest.log.len());
+        for logged in &read.rest.log {
             // Stored deltas in between were refused or already known when the
             // snapshot was taken, as a replay would find them again.
             let found = stored[next..].iter().position(|delta| is(delta, logged)).ok_or(SnapshotError::Mismatch)?;
@@ -111,22 +179,41 @@ impl Family {
         }
         let rest = stored.split_off(next);
         let mut held = held.into_iter().peekable();
-        let log = std::mem::replace(stored, rest)
+        let log: Vec<Delta> = std::mem::replace(stored, rest)
             .into_iter()
             .enumerate()
             .filter_map(|(index, delta)| held.next_if_eq(&index).map(|_| delta))
             .collect();
-        let family = Self {
-            graph: read.graph,
-            tree: read.tree,
-            files: read.files,
-            threads: read.threads,
-            turns: read.turns,
+        Ok(Self::restored(read, Log::from(log)))
+    }
+
+    /// The family `snapshot` was taken of, when the first `stored` deltas
+    /// stored for it are those it covers, every one of them, ending with
+    /// `last`. They're read with `read` only when something reads the log,
+    /// and those stored after them are still to be applied.
+    pub fn from_snapshot_unread(snapshot: &[u8], stored: usize, last: DeltaId, read: ReadCovered) -> Result<Self, SnapshotError> {
+        let snapshot = Read::decode(snapshot)?;
+        let log = &snapshot.rest.log;
+        if log.len() != stored || log.last().map(|logged| logged.id) != Some(last) {
+            return Err(SnapshotError::Mismatch);
+        }
+        let covered = log.len();
+        Ok(Self::restored(snapshot, Log::unread(covered, read)))
+    }
+
+    fn restored(read: Read, log: Log) -> Self {
+        let Read { tree, files, rest } = read;
+        Self {
+            graph: rest.graph,
+            tree,
+            files,
+            threads: rest.threads,
+            turns: rest.turns,
+            session_cwds: rest.session_cwds,
             log,
-            fingerprints: read.log.iter().map(|logged| logged.fingerprint).collect(),
+            fingerprints: rest.log.iter().map(|logged| logged.fingerprint).collect(),
             ..Self::default()
-        };
-        Ok(family)
+        }
     }
 }
 
@@ -149,7 +236,7 @@ mod tests {
     }
 
     fn logged(snapshot: &[u8]) -> Vec<Logged> {
-        postcard::from_bytes::<Read>(snapshot).expect("decodes").log
+        Read::decode(snapshot).expect("decodes").rest.log
     }
 
     #[test]
@@ -167,5 +254,32 @@ mod tests {
             restored.apply(delta, &mut HashMap::new()).expect("applies");
         }
         assert_eq!(logged(&restored.snapshot().expect("encodes")), fresh, "fingerprints read with a snapshot are kept");
+    }
+
+    #[test]
+    fn a_family_read_from_its_snapshot_unread_is_the_one_replayed_once_its_log_is_read() {
+        let mut family = Family::new();
+        let mut stored: Vec<Delta> = ["one", "two"].iter().map(|text| say(&mut family, text)).collect();
+        let snapshot = family.snapshot().expect("encodes");
+        let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
+        let started =
+            Op::Conv(ConvOp::SessionStarted { session: session.clone(), cwd: "/repo/sub".into(), checkout_root: "/repo".into() });
+        let after = family.delta(ActorId(1), ThreadId(1), Author::User, 0, family.thread_head(ThreadId(1)), started);
+        family.apply(after.clone(), &mut HashMap::new()).expect("applies");
+        let covered = stored.clone();
+        stored.push(after.clone());
+
+        let last = covered[1].span.first();
+        let mut unread =
+            Family::from_snapshot_unread(&snapshot, 2, last, Box::new(move || covered)).expect("the snapshot covers them");
+        unread.apply(after, &mut HashMap::new()).expect("applies");
+        assert_eq!(unread.log_len(), 3);
+        assert_eq!(unread.session_cwd(&session), Some("/repo/sub"), "where the session started is in the projection");
+        assert_eq!(unread.log(), stored);
+        assert_eq!(unread.log(), family.log());
+
+        let other = say(&mut Family::new(), "elsewhere").span.first();
+        assert!(Family::from_snapshot_unread(&snapshot, 2, other, Box::new(Vec::new)).is_err(), "another last delta");
+        assert!(Family::from_snapshot_unread(&snapshot, 3, last, Box::new(Vec::new)).is_err(), "more stored than covered");
     }
 }

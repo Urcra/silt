@@ -29,7 +29,7 @@ impl Core {
     /// the family's log grows, as the web UI reads a long history a page at
     /// a time and each page would otherwise read the whole of it.
     pub(crate) fn history_entries(&self, thread: ThreadId) -> HistoryEntries {
-        let length = self.local_log(self.threads[&thread].family).len();
+        let length = self.local_log_len(self.threads[&thread].family);
         let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((cached, entries)) = cache.get(&thread)
             && *cached == length

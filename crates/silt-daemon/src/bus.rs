@@ -29,7 +29,7 @@ impl Core {
         if !self.heard() {
             return;
         }
-        let length = self.local_log(family).len();
+        let length = self.local_log_len(family);
         for thread in self.threads.values().filter(|thread| thread.family == family) {
             self.announce(BusEvent::Thread { thread: thread.id.to_string(), deltas: length });
         }

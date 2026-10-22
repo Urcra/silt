@@ -33,6 +33,14 @@ impl Core {
         log_of(&self.families, &self.raw, family)
     }
 
+    /// How long [`Self::local_log`] is, without reading what a snapshot covers.
+    pub(crate) fn local_log_len(&self, family: FamilyId) -> usize {
+        match self.families.get(&family) {
+            Some(family) => family.log_len(),
+            None => self.raw.get(&family).map_or(0, Vec::len),
+        }
+    }
+
     pub(crate) fn family_ids(&self) -> Vec<FamilyId> {
         let mut ids: Vec<FamilyId> = self.families.keys().chain(self.raw.keys()).copied().collect();
         ids.sort();
@@ -240,7 +248,7 @@ impl Core {
     /// sync. A delta that needs a git blob this clone lacks stops the batch;
     /// its index is returned so the pull can come back to it.
     async fn apply_remote(&mut self, family_id: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
-        let at = self.local_log(family_id).len() as u64;
+        let at = self.local_log_len(family_id) as u64;
         let mut fresh = Vec::new();
         let mut stopped = None;
         let mut heads_before = HashMap::new();

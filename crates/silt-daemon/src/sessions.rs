@@ -161,15 +161,18 @@ pub(crate) fn transcript_grew(session: &Session) -> bool {
 /// Feeds `sessions` what `deltas` recorded of them, as their transcripts'
 /// readers would have read it. Readers that read each line on its own
 /// aren't shown them, which matters for a hook reading a long session.
+/// Whether the session's agent needs the lines recorded so far to read the
+/// next ones, or to know what it recorded.
+fn reads_recorded(session: &Session) -> bool {
+    session.agent.capture() == Capture::Snapshot || session.agent.reader().remembers()
+}
+
 pub(crate) fn read_recorded(sessions: &mut [Session], deltas: &[silt_log::Delta]) {
     let by_reference: HashMap<SessionRef, usize> =
         sessions.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
     // Most agents' readers keep nothing between lines, and a long session's
     // lines would each be looked at for nothing.
-    let wanted: Vec<bool> = sessions
-        .iter()
-        .map(|session| session.agent.capture() == Capture::Snapshot || session.agent.reader().remembers())
-        .collect();
+    let wanted: Vec<bool> = sessions.iter().map(reads_recorded).collect();
     for delta in deltas {
         match &delta.op {
             Op::Conv(ConvOp::Native { session, file, line }) => {
@@ -533,7 +536,20 @@ impl Core {
         }
         let families: HashSet<FamilyId> = loaded.iter().map(|session| session.family).collect();
         for family in families {
-            read_recorded(&mut loaded, self.local_log(family));
+            // A projection knows where each session started, so its log is
+            // read only for readers that need what came before.
+            let projected = self.families.get(&family);
+            let reads = loaded.iter().any(|session| session.family == family && reads_recorded(session));
+            if reads || projected.is_none() {
+                read_recorded(&mut loaded, self.local_log(family));
+            }
+            if let Some(projected) = projected {
+                for session in loaded.iter_mut().filter(|session| session.family == family) {
+                    if let Some(cwd) = projected.session_cwd(&session.reference()) {
+                        session.agent_cwd = PathBuf::from(cwd);
+                    }
+                }
+            }
         }
         self.sessions.extend(loaded);
         Ok(())

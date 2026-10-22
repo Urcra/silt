@@ -11,9 +11,12 @@ use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitO
 
 use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op, SessionRef, TurnMark};
 
+mod log;
 mod snapshot;
 mod turns;
 
+use log::Log;
+pub use log::ReadCovered;
 pub use snapshot::{SNAPSHOT_FORMAT, SnapshotError};
 use turns::Turns;
 
@@ -333,7 +336,9 @@ pub struct Family {
     files: HashMap<InodeId, FileState>,
     threads: BTreeMap<ThreadId, ThreadState>,
     turns: HashMap<SessionRef, Turns>,
-    log: Vec<Delta>,
+    /// Where each session last started.
+    session_cwds: HashMap<SessionRef, String>,
+    log: Log,
     shapes: Shapes,
     /// The fingerprints snapshots took of the log's first deltas. The log
     /// only grows, so each delta is fingerprinted once rather than by every
@@ -355,9 +360,20 @@ impl Family {
         &self.tree
     }
 
-    /// Every delta, in an order where each comes after its parents.
+    /// Every delta, in an order where each comes after its parents. A family
+    /// loaded from a snapshot reads the deltas it covers the first time.
     pub fn log(&self) -> &[Delta] {
-        &self.log
+        self.log.all()
+    }
+
+    /// How many deltas the log holds, without reading those a snapshot covers.
+    pub fn log_len(&self) -> usize {
+        self.log.len()
+    }
+
+    /// Where the session last started, as its agent reported it.
+    pub fn session_cwd(&self, session: &SessionRef) -> Option<&str> {
+        self.session_cwds.get(session).map(String::as_str)
     }
 
     pub fn thread(&self, thread: ThreadId) -> Option<&ThreadState> {
@@ -424,7 +440,7 @@ impl Family {
         let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
         own.sort_unstable();
         for index in own {
-            let delta = &self.log[index];
+            let delta = &self.log.all()[index];
             if let Op::Merge { from, mr: None } = delta.op {
                 let merged = self.graph.version_vector(&delta.parents);
                 let (upstream, upstream_whole) = self.history_within(from, expansion);
@@ -451,7 +467,7 @@ impl Family {
     /// The comments on `thread`, oldest first by causal order, so every
     /// replica lists them alike whatever order the deltas arrived in.
     pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
-        comments_in(&self.log, thread)
+        comments_in(self.log.all(), thread)
     }
 
     /// The file's text document, turning a git-lazy file into one first, as
@@ -464,7 +480,7 @@ impl Family {
     /// decisions are taken in causal order, so the first decision wins on
     /// every replica whatever order the deltas arrived in.
     pub fn merge_requests(&self) -> Vec<MergeRequest> {
-        merge_requests_in(&self.log)
+        merge_requests_in(self.log.all())
     }
 }
 
@@ -682,7 +698,7 @@ pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
 
 impl Family {
     pub fn conversation(&self, thread: ThreadId) -> impl DoubleEndedIterator<Item = &Delta> {
-        self.threads.get(&thread).into_iter().flat_map(|state| state.conversation.iter().map(|index| &self.log[*index]))
+        self.threads.get(&thread).into_iter().flat_map(|state| state.conversation.iter().map(|index| &self.log.all()[*index]))
     }
 
     pub fn file(&self, inode: InodeId) -> Option<FileView> {
@@ -944,6 +960,9 @@ impl Family {
         }
         if let Op::Conv(crate::delta::ConvOp::Turn { session, mark }) = &delta.op {
             self.turns.entry(session.clone()).or_default().record(mark);
+        }
+        if let Op::Conv(crate::delta::ConvOp::SessionStarted { session, cwd, .. }) = &delta.op {
+            self.session_cwds.insert(session.clone(), cwd.clone());
         }
         self.log.push(delta);
     }

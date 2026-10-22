@@ -250,7 +250,13 @@ pub struct Core {
     /// were read at.
     pub(crate) history_cache: Mutex<HashMap<ThreadId, (usize, crate::history::HistoryEntries)>>,
     watchers: Arc<Watchers>,
+    /// A listing of a checkout's whole worktree taken while the hook that
+    /// will compare it loads, for that comparison to take.
+    prelisted: Option<(CheckoutId, Prelisting)>,
 }
+
+/// A worktree's listing, being taken on a thread of its own.
+type Prelisting = std::thread::JoinHandle<Result<Vec<ListedFile>, silt_git::GitError>>;
 
 /// How long a vanished file waits for the file it was renamed to.
 const RENAME_WAIT: Duration = Duration::from_millis(1000);
@@ -331,12 +337,15 @@ impl Core {
     }
 
     /// A core holding only `record`'s session, its checkout and its family:
-    /// what a hook capturing without the daemon needs (ADR 0018).
+    /// what a hook capturing without the daemon needs (ADR 0018). What the
+    /// hook will do with the checkout, `ahead`, starts on other threads
+    /// meanwhile.
     pub(crate) async fn for_session(
         store: Store,
         actor: ActorId,
         data_dir: &Path,
         record: SessionRecord,
+        ahead: Ahead,
     ) -> Result<Self, CoreError> {
         let mut core = Self::visiting(store, actor, data_dir).await?;
         let Some(thread) = core.threads.get(&record.thread).cloned() else {
@@ -354,10 +363,31 @@ impl Core {
             .into_iter()
             .chain((!thread.repo_root.as_os_str().is_empty()).then_some(thread.repo_root))
             .find_map(|path| Repo::discover(&path).ok());
-        core.take_loaded(thread.family, load::family(&core.store, thread.family, repo.as_ref()).await?);
-        if let Some(checkout) = checkout {
-            let entries = stored_entries(&core.store, checkout.id).await?;
+        if let Some(checkout) = checkout.as_ref().filter(|_| ahead.compares) {
+            let (id, root) = (checkout.id, checkout.path.clone());
+            let listing = std::thread::spawn(move || Repo::discover(&root)?.worktree_listing_under(""));
+            core.prelisted = Some((id, listing));
+        }
+        let filters = checkout.as_ref().filter(|_| ahead.records).map(|checkout| {
+            let root = checkout.path.clone();
+            std::thread::spawn(move || Repo::needs_git_cli_filters(&root))
+        });
+        // The database reads the checkout's entries while the family's
+        // snapshot is decoded here.
+        let entries = async {
+            match &checkout {
+                Some(checkout) => stored_entries(&core.store, checkout.id).await.map(Some),
+                None => Ok(None),
+            }
+        };
+        let (loaded, entries) = tokio::join!(load::family_unread(&core.store, thread.family, repo.as_ref()), entries);
+        core.take_loaded(thread.family, loaded?);
+        if let (Some(checkout), Some(entries)) = (checkout, entries?) {
+            let id = checkout.id;
             core.hold_checkout(checkout, entries)?;
+            if let Some(Ok(Ok(check))) = filters.map(std::thread::JoinHandle::join) {
+                core.checkout(id)?.repo.knows_git_cli_filters(check);
+            }
         }
         core.take_sessions(vec![record]).await?;
         Ok(core)
@@ -429,6 +459,7 @@ impl Core {
             draining: HashSet::new(),
             history_cache: Mutex::default(),
             watchers: Watchers::new(),
+            prelisted: None,
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -947,7 +978,11 @@ impl Core {
         held
     }
 
-    fn files_under(&self, checkout: CheckoutId, relative: &str) -> Result<Vec<ListedFile>, CoreError> {
+    fn files_under(&mut self, checkout: CheckoutId, relative: &str) -> Result<Vec<ListedFile>, CoreError> {
+        let prelisted = self.prelisted.take_if(|(listed, _)| *listed == checkout && relative.is_empty());
+        if let Some(Ok(files)) = prelisted.map(|(_, listing)| listing.join()) {
+            return Ok(files?);
+        }
         let files = self.checkout(checkout)?.repo.worktree_listing_under(relative)?;
         let prefix = format!("{relative}/");
         Ok(files
@@ -1349,7 +1384,7 @@ impl Core {
             return;
         };
         let covered = self.snapshotted.get(&family_id).copied().unwrap_or_default();
-        if family.log().len() < covered + load::SNAPSHOT_EVERY {
+        if family.log_len() < covered + load::SNAPSHOT_EVERY {
             return;
         }
         match load::save_snapshot(&self.store, family_id, family).await {
@@ -1941,6 +1976,16 @@ fn moved_threads(deltas: &[Delta], device: DeviceId, holder: impl Fn(ThreadId) -
     leased.dedup();
     leased.retain(|thread| holder(*thread).is_some_and(|holder| holder != device));
     leased
+}
+
+/// What a hook capturing in its own process will do with its checkout, to
+/// start on other threads while its family loads (ADR 0034).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Ahead {
+    /// Compare the whole checkout, which lists its worktree.
+    pub(crate) compares: bool,
+    /// Record changed files, which needs to know how their filters work.
+    pub(crate) records: bool,
 }
 
 /// What the store says a checkout's files on disk were last recorded as.

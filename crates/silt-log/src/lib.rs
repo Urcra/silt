@@ -11,8 +11,8 @@ pub use delta::{
 };
 pub use family::{
     Applied, BaseText, ChangesRequested, Comment, Family, FileView, HistoryItem, HistorySource, LogError, MergeRequest, MrStatus,
-    Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, merge_requests_in, rewound_in, thread_head_in,
-    turn_end_by, turn_point, turn_point_by,
+    ReadCovered, Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, merge_requests_in, rewound_in,
+    thread_head_in, turn_end_by, turn_point, turn_point_by,
 };
 pub use graph::{GraphEvent, GraphItem, graph_of};
 pub use purge::kept_after_purge;

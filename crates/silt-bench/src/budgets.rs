@@ -68,7 +68,7 @@ pub const BUDGETS: &[Budget] = &[
     Budget {
         name: RECORD_HOOK_DAEMONLESS,
         measures: "the hook that finds no daemon and captures in process before starting one, p95 of the slowest event, at 100k deltas and 20k files",
-        limit: Limit::Time(Duration::from_millis(200)),
+        limit: Limit::Time(Duration::from_millis(50)),
         status: Status::Enforced,
     },
     Budget {

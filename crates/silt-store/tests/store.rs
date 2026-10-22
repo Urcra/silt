@@ -74,6 +74,12 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
         assert_eq!(store.deltas_after(FAMILY, after).await.expect("loads"), appended[from..], "after {after}");
     }
 
+    let stored = store.stored_deltas(FAMILY).await.expect("reads");
+    assert_eq!(stored.len(), appended.len());
+    for range in [0..0, 0..1, 998..1_002, 999..1_000, 1_999..2_001, 2_400..2_500, 0..2_500] {
+        assert_eq!(stored.decode(range.clone()).expect("decodes"), appended[range.clone()], "{range:?}");
+    }
+
     store.replace_deltas(FAMILY, &appended[..10]).await.expect("replaces");
     assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended[..10], "chunks of the replaced deltas are gone");
 }

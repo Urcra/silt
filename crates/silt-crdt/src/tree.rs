@@ -272,12 +272,7 @@ impl FileTree {
     fn collect_paths(&self, dir: Parent, prefix: &str, paths: &mut BTreeMap<String, InodeId>) {
         let mut children: Children = HashMap::new();
         for (inode, placement) in &self.placements {
-            children
-                .entry(placement.parent)
-                .or_default()
-                .entry(placement.name.as_str())
-                .or_default()
-                .push((placement.placed_by, *inode));
+            children.entry(placement.parent).or_default().push((placement.name.as_str(), placement.placed_by, *inode));
         }
         self.collect_under(&mut children, &[dir], prefix, paths);
     }
@@ -286,25 +281,54 @@ impl FileTree {
     /// under one name in one place, concurrently, hold their creators' files
     /// together rather than one of them being renamed.
     fn collect_under(&self, children: &mut Children<'_>, dirs: &[Parent], prefix: &str, paths: &mut BTreeMap<String, InodeId>) {
-        let mut by_name: BTreeMap<&str, Vec<(Stamp, InodeId)>> = BTreeMap::new();
+        let mut listed: Vec<(&str, Stamp, InodeId)> = Vec::new();
         for dir in dirs {
-            for (name, claimants) in children.remove(dir).unwrap_or_default() {
-                by_name.entry(name).or_default().extend(claimants);
-            }
+            listed.extend(children.remove(dir).unwrap_or_default());
         }
-        let mut taken: HashSet<String> = by_name.keys().map(|name| (*name).to_owned()).collect();
-        for (name, claimants) in by_name {
-            for (rank, entry) in entries(claimants, &self.kinds).into_iter().enumerate() {
-                let first = entry[0];
-                let name = if rank == 0 { name.to_owned() } else { conflict_name(name, first, &mut taken) };
-                let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
-                if self.kinds.get(&first) == Some(&InodeKind::Dir) {
-                    let merged: Vec<Parent> = entry.iter().map(|inode| Parent::Dir(*inode)).collect();
-                    self.collect_under(children, &merged, &path, paths);
+        // By name, and each name's claimants earliest first.
+        listed.sort_unstable();
+        // Names claimed more than once are rare, and only they need the
+        // names already taken.
+        let mut taken: Option<HashSet<String>> = None;
+        let mut start = 0;
+        while start < listed.len() {
+            let name = listed[start].0;
+            let end = start + listed[start..].iter().take_while(|(claimed, ..)| *claimed == name).count();
+            if end == start + 1 {
+                self.collect_entry(children, prefix, name.to_owned(), &[listed[start].2], paths);
+            } else {
+                let claimants = listed[start..end].iter().map(|(_, stamp, inode)| (*stamp, *inode)).collect();
+                for (rank, entry) in entries(claimants, &self.kinds).into_iter().enumerate() {
+                    let name = if rank == 0 {
+                        name.to_owned()
+                    } else {
+                        let taken = taken.get_or_insert_with(|| listed.iter().map(|(name, ..)| (*name).to_owned()).collect());
+                        conflict_name(name, entry[0], taken)
+                    };
+                    self.collect_entry(children, prefix, name, &entry, paths);
                 }
-                paths.insert(path, first);
             }
+            start = end;
         }
+    }
+
+    /// Lists one entry of a directory: a file, or directories holding their
+    /// files together, under `name`.
+    fn collect_entry(
+        &self,
+        children: &mut Children<'_>,
+        prefix: &str,
+        name: String,
+        entry: &[InodeId],
+        paths: &mut BTreeMap<String, InodeId>,
+    ) {
+        let first = entry[0];
+        let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        if self.kinds.get(&first) == Some(&InodeKind::Dir) {
+            let merged: Vec<Parent> = entry.iter().map(|inode| Parent::Dir(*inode)).collect();
+            self.collect_under(children, &merged, &path, paths);
+        }
+        paths.insert(path, first);
     }
 }
 
@@ -344,8 +368,8 @@ fn conflict_name(name: &str, inode: InodeId, taken: &mut HashSet<String>) -> Str
     candidate
 }
 
-/// Each directory's entries by name, with every inode claiming the name.
-type Children<'a> = HashMap<Parent, BTreeMap<&'a str, Vec<(Stamp, InodeId)>>>;
+/// Each directory's entries: their names, and the inodes claiming them.
+type Children<'a> = HashMap<Parent, Vec<(&'a str, Stamp, InodeId)>>;
 
 /// Whether `name` may name a file or directory: no separators, no `.` or
 /// `..`, nothing git would treat as its own directory.

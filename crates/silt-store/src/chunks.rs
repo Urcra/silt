@@ -40,10 +40,10 @@ pub(crate) fn compress_each(chunks: &[[(i64, &[u8]); CHUNK_ROWS]]) -> Result<Vec
 }
 
 /// A stored chunk's packing, decompressed if `codec` says so.
-pub(crate) fn decode(codec: i64, data: Vec<u8>) -> Result<Vec<u8>, StoreError> {
+pub(crate) fn decode(codec: i64, data: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, StoreError> {
     match codec {
-        PLAIN => Ok(data),
-        ZSTD => zstd::stream::decode_all(data.as_slice()).map_err(StoreError::Chunk),
+        PLAIN => Ok(std::borrow::Cow::Borrowed(data)),
+        ZSTD => zstd::stream::decode_all(data).map(std::borrow::Cow::Owned).map_err(StoreError::Chunk),
         codec => Err(StoreError::UnknownCodec(codec)),
     }
 }
@@ -91,8 +91,8 @@ mod tests {
         let compressed = compress(rows.iter().map(|(format, data)| (*format, data.as_slice()))).expect("compresses");
         let packed = pack(rows.iter().map(|(format, data)| (*format, data.as_slice())));
         assert!(compressed.len() < packed.len());
-        assert_eq!(decode(ZSTD, compressed).expect("decompresses"), packed);
-        assert_eq!(decode(PLAIN, packed.clone()).expect("as it is"), packed);
-        assert!(decode(2, packed).is_err(), "an unknown codec");
+        assert_eq!(*decode(ZSTD, &compressed).expect("decompresses"), *packed);
+        assert_eq!(*decode(PLAIN, &packed).expect("as it is"), *packed);
+        assert!(decode(2, &packed).is_err(), "an unknown codec");
     }
 }

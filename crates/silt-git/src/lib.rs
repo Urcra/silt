@@ -268,7 +268,7 @@ impl Repo {
     /// [`Repo::attributes_changed`] when one of them changes.
     pub fn filters(&self) -> Result<Filters<'_>, GitError> {
         // Not a worktree file, so no rescan sees it change.
-        let info = std::fs::metadata(self.repo.git_dir().join("info").join("attributes")).and_then(|info| info.modified()).ok();
+        let info = self.attributes_info();
         let use_git_cli = match self.needs_git_cli_filters.get() {
             Some((known, seen)) if seen == info => known,
             _ => {
@@ -282,6 +282,25 @@ impl Repo {
 
     pub fn attributes_changed(&self) {
         self.needs_git_cli_filters.set(None);
+    }
+
+    /// Whether the repository's attributes need git's own filters rather
+    /// than gix's, as [`Self::filters`] finds out: a walk of the worktree, so
+    /// a caller can find it out on another thread meanwhile.
+    pub fn needs_git_cli_filters(root: &Path) -> Result<FiltersCheck, GitError> {
+        let repo = Self::discover(root)?;
+        let info = repo.attributes_info();
+        Ok(FiltersCheck { needed: filters::uses_attributes_gix_gets_wrong(&repo.root, repo.repo.git_dir()), info })
+    }
+
+    /// Takes what [`Self::needs_git_cli_filters`] found.
+    pub fn knows_git_cli_filters(&self, check: FiltersCheck) {
+        self.needs_git_cli_filters.set(Some((check.needed, check.info)));
+    }
+
+    /// When the repository's own attributes file last changed.
+    fn attributes_info(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.repo.git_dir().join("info").join("attributes")).and_then(|info| info.modified()).ok()
     }
 
     /// Runs `git` in the worktree, failing on a non-zero exit.
@@ -367,6 +386,14 @@ fn finish(child: std::process::Child, args: &[&str]) -> Result<Vec<u8>, GitError
 /// See [`Repo::head_stamp`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeadStamp([Option<std::time::SystemTime>; 3]);
+
+/// What [`Repo::needs_git_cli_filters`] found, with the repository's own
+/// attributes file as it was then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FiltersCheck {
+    needed: bool,
+    info: Option<std::time::SystemTime>,
+}
 
 /// A file in the worktree, as `Repo::worktree_listing_under` found it.
 #[derive(Debug, Clone, PartialEq, Eq)]

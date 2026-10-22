@@ -2,7 +2,7 @@ mod blobs;
 mod chunks;
 mod queue;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -195,6 +195,74 @@ pub fn checkpoint_in_background(pool: SqlitePool) {
     });
 }
 
+/// A family's deltas as the store holds them: chunks still compressed, and
+/// the rows after them (ADR 0035). Decoding is what takes the time, so a
+/// caller decodes only the positions it needs.
+#[derive(Debug, Clone)]
+pub struct StoredDeltas {
+    /// Only deltas stored after this `seq` are held.
+    after: i64,
+    chunks: Vec<StoredChunk>,
+    rows: Vec<(i64, Vec<u8>)>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredChunk {
+    first: i64,
+    last: i64,
+    codec: i64,
+    data: Vec<u8>,
+}
+
+impl StoredChunk {
+    /// How many deltas held from this chunk: those stored after `after`.
+    fn held(&self, after: i64) -> usize {
+        usize::try_from(self.last - self.first.max(after + 1) + 1).unwrap_or(0)
+    }
+}
+
+impl StoredDeltas {
+    pub fn len(&self) -> usize {
+        self.chunks.iter().map(|chunk| chunk.held(self.after)).sum::<usize>() + self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The deltas at `positions`, in order, decoding only the chunks that
+    /// hold them.
+    pub fn decode(&self, positions: std::ops::Range<usize>) -> Result<Vec<Delta>, StoreError> {
+        let mut deltas = Vec::with_capacity(positions.len());
+        let mut at = 0;
+        for chunk in &self.chunks {
+            let held = chunk.held(self.after);
+            let span = at..at + held;
+            at += held;
+            if span.end <= positions.start || positions.end <= span.start {
+                continue;
+            }
+            let packed = chunks::decode(chunk.codec, &chunk.data)?;
+            let rows = chunks::unpack(&packed)?;
+            if i64::try_from(rows.len()).ok() != Some(chunk.last - chunk.first + 1) {
+                return Err(StoreError::Corrupt { what: "delta chunk" });
+            }
+            let skipped = rows.len() - held;
+            for (position, (format, data)) in (span.start..).zip(&rows[skipped..]) {
+                if positions.contains(&position) {
+                    deltas.push(silt_log::decode_stored(*format, data)?);
+                }
+            }
+        }
+        for (position, (format, data)) in (at..).zip(&self.rows) {
+            if positions.contains(&position) {
+                deltas.push(silt_log::decode_stored(*format, data)?);
+            }
+        }
+        Ok(deltas)
+    }
+}
+
 /// The local database and blob store.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -287,6 +355,17 @@ impl Store {
     /// The family's deltas stored after position `after`, in order: those
     /// in chunks, then the rows after the last chunk (ADR 0035).
     pub async fn deltas_after(&self, family: FamilyId, after: i64) -> Result<Vec<Delta>, StoreError> {
+        let stored = self.stored_deltas_after(family, after).await?;
+        stored.decode(0..stored.len())
+    }
+
+    /// The family's deltas as the store holds them, read but not decoded,
+    /// for a caller that needs only some of them decoded.
+    pub async fn stored_deltas(&self, family: FamilyId) -> Result<StoredDeltas, StoreError> {
+        self.stored_deltas_after(family, -1).await
+    }
+
+    async fn stored_deltas_after(&self, family: FamilyId, after: i64) -> Result<StoredDeltas, StoreError> {
         let family = id_bytes(family.0);
         let chunks = sqlx::query!(
             "SELECT first_seq, last_seq, codec, data FROM delta_chunks WHERE family_id = ? AND last_seq > ? ORDER BY first_seq",
@@ -300,24 +379,14 @@ impl Store {
             sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, rows_after)
                 .fetch_all(&self.pool)
                 .await?;
-        let mut deltas = Vec::new();
-        for chunk in chunks {
-            let (first, last) = (chunk.first_seq, chunk.last_seq);
-            let packed = chunks::decode(chunk.codec, chunk.data)?;
-            let held = chunks::unpack(&packed)?;
-            if i64::try_from(held.len()).ok() != Some(last - first + 1) {
-                return Err(StoreError::Corrupt { what: "delta chunk" });
-            }
-            for (seq, (format, data)) in (first..).zip(held) {
-                if seq > after {
-                    deltas.push(silt_log::decode_stored(format, data)?);
-                }
-            }
-        }
-        for row in rows {
-            deltas.push(silt_log::decode_stored(row.format, &row.data)?);
-        }
-        Ok(deltas)
+        Ok(StoredDeltas {
+            after,
+            chunks: chunks
+                .into_iter()
+                .map(|chunk| StoredChunk { first: chunk.first_seq, last: chunk.last_seq, codec: chunk.codec, data: chunk.data })
+                .collect(),
+            rows: rows.into_iter().map(|row| (row.format, row.data)).collect(),
+        })
     }
 
     pub fn blobs(&self) -> &BlobStore {
@@ -788,7 +857,7 @@ impl Store {
             .collect()
     }
 
-    pub async fn disk_files(&self, checkout: CheckoutId) -> Result<HashMap<String, DiskFile>, StoreError> {
+    pub async fn disk_files(&self, checkout: CheckoutId) -> Result<BTreeMap<String, DiskFile>, StoreError> {
         let checkout = checkout.0;
         // As one row: a large checkout's rows one by one take a hook capturing
         // on its own a quarter of its budget (ADR 0018).
@@ -799,19 +868,25 @@ impl Store {
         )
         .fetch_one(&self.pool)
         .await?;
-        let rows: Vec<(String, String, String, i64, i64, String)> =
+        // Hex has nothing to unescape, so it's read in place.
+        let rows: Vec<(String, &str, &str, i64, i64, &str)> =
             serde_json::from_str(&rows).map_err(|_| StoreError::Corrupt { what: "disk state" })?;
+        let mut buffer = Vec::new();
         rows.into_iter()
             .map(|(path, inode, hash, size, mtime_ns, version)| {
-                let hash = unhex(&hash)?;
+                let mut hash_bytes = [0; 32];
+                if hash.len() != 64 {
+                    return Err(StoreError::Corrupt { what: "hash" });
+                }
+                unhex_into(hash, &mut hash_bytes)?;
                 Ok((
                     path,
                     DiskFile {
-                        inode: postcard::from_bytes(&unhex(&inode)?)?,
-                        hash: BlobHash(hash.as_slice().try_into().map_err(|_| StoreError::Corrupt { what: "hash" })?),
+                        inode: postcard::from_bytes(unhex_reused(inode, &mut buffer)?)?,
+                        hash: BlobHash(hash_bytes),
                         size: u64::try_from(size).unwrap_or_default(),
                         mtime_ns,
-                        version: postcard::from_bytes(&unhex(&version)?)?,
+                        version: postcard::from_bytes(unhex_reused(version, &mut buffer)?)?,
                     },
                 ))
             })
@@ -1111,15 +1186,26 @@ fn fts_query(text: &str) -> String {
 }
 
 /// Bytes from SQLite's `hex()`.
-fn unhex(text: &str) -> Result<Vec<u8>, StoreError> {
+/// `text`'s bytes in `out`, which is exactly half its length.
+fn unhex_into(text: &str, out: &mut [u8]) -> Result<(), StoreError> {
     let digit = |byte: u8| char::from(byte).to_digit(16).ok_or(StoreError::Corrupt { what: "hex" });
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| match pair {
-            [high, low] => Ok(u8::try_from(digit(*high)? << 4 | digit(*low)?).expect("two hex digits")),
-            _ => Err(StoreError::Corrupt { what: "hex" }),
-        })
-        .collect()
+    for (pair, byte) in text.as_bytes().chunks(2).zip(out.iter_mut()) {
+        let [high, low] = pair else {
+            return Err(StoreError::Corrupt { what: "hex" });
+        };
+        *byte = u8::try_from(digit(*high)? << 4 | digit(*low)?).expect("two hex digits");
+    }
+    Ok(())
+}
+
+/// `text`'s bytes, decoded into `buffer`, which is reused between calls.
+fn unhex_reused<'a>(text: &str, buffer: &'a mut Vec<u8>) -> Result<&'a [u8], StoreError> {
+    if !text.len().is_multiple_of(2) {
+        return Err(StoreError::Corrupt { what: "hex" });
+    }
+    buffer.resize(text.len() / 2, 0);
+    unhex_into(text, buffer)?;
+    Ok(buffer)
 }
 
 fn id_bytes(id: u128) -> Vec<u8> {

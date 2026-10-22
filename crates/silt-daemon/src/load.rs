@@ -1,9 +1,11 @@
 //! Loading one family from the store and nothing else, as a hook capturing
 //! without the daemon does (ADR 0018), and saving its snapshots.
 
+use std::sync::Arc;
+
 use silt_git::Repo;
-use silt_log::{BaseText, Delta, Family, SNAPSHOT_FORMAT};
-use silt_store::{Snapshot, Store};
+use silt_log::{BaseText, Delta, Family, ReadCovered, SNAPSHOT_FORMAT};
+use silt_store::{Snapshot, Store, StoredDeltas};
 use silt_types::FamilyId;
 use tracing::warn;
 
@@ -28,6 +30,48 @@ pub(crate) async fn family(store: &Store, family_id: FamilyId, repo: Option<&Rep
     let snapshot = store.snapshot(family_id).await?;
     let (family, covered) = replay(snapshot.as_ref(), deltas, &mut RepoBases(repo));
     Ok(Loaded::Projected { family: Box::new(family), covered })
+}
+
+/// [`family`] for a hook capturing in its own process: the deltas its
+/// snapshot covers are decoded only if something reads the log, which a
+/// capture doesn't. Decoding them was most of a long family's load.
+pub(crate) async fn family_unread(store: &Store, family_id: FamilyId, repo: Option<&Repo>) -> Result<Loaded, CoreError> {
+    let Some(repo) = repo else {
+        return family(store, family_id, None).await;
+    };
+    let snapshot = store.snapshot(family_id).await?;
+    let stored = Arc::new(store.stored_deltas(family_id).await?);
+    if let Some(snapshot) = snapshot.as_ref().filter(|snapshot| snapshot.format == SNAPSHOT_FORMAT)
+        && let Some(loaded) = unread(snapshot, &stored, repo)?
+    {
+        return Ok(loaded);
+    }
+    let (family, covered) = replay(snapshot.as_ref(), stored.decode(0..stored.len())?, &mut RepoBases(repo));
+    Ok(Loaded::Projected { family: Box::new(family), covered })
+}
+
+/// The family `snapshot` was taken of, with the deltas it covers left
+/// unread, when they're the first of those stored, every one of them.
+fn unread(snapshot: &Snapshot, stored: &Arc<StoredDeltas>, repo: &Repo) -> Result<Option<Loaded>, CoreError> {
+    let covered = usize::try_from(snapshot.covers).unwrap_or(usize::MAX);
+    if covered == 0 || covered > stored.len() {
+        return Ok(None);
+    }
+    let Some(last) = stored.decode(covered - 1..covered)?.first().map(|delta| delta.span.first()) else {
+        return Ok(None);
+    };
+    let reading = Arc::clone(stored);
+    let read: ReadCovered =
+        Box::new(move || reading.decode(0..covered).expect("deltas that were read from the store decode again"));
+    let Ok(mut family) = Family::from_snapshot_unread(&snapshot.data, covered, last, read) else {
+        return Ok(None);
+    };
+    for delta in stored.decode(covered..stored.len())? {
+        if let Err(error) = family.apply(delta, &mut RepoBases(repo)) {
+            warn!(%error, "skipping a delta that no longer applies");
+        }
+    }
+    Ok(Some(Loaded::Projected { family: Box::new(family), covered }))
 }
 
 /// Saves the family's projection; returns how much of its log it covers.
