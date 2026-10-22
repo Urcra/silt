@@ -65,7 +65,8 @@ const PAGES: Record<string, string> = {
 function Crumbs() {
   const threadPage = useMatch({ from: '/t/$id', shouldThrow: false })
   const filePage = useMatch({ from: '/t/$id/files/$', shouldThrow: false })
-  const thread = threadPage ?? filePage
+  const livePage = useMatch({ from: '/t/$id/live', shouldThrow: false })
+  const thread = threadPage ?? filePage ?? livePage
   const mr = useMatch({ from: '/mr/$id', shouldThrow: false })
   const path = useRouterState({ select: (state) => state.location.pathname })
   const chosen = useWorkspace()
@@ -77,6 +78,7 @@ function Crumbs() {
     ? [
         { text: shown ? projectName(shown.repo || 'no remote') : '', mono: true },
         { text: shown?.title ?? short(thread.params.id) },
+        { text: livePage ? 'Live' : '' },
       ]
     : mr
       ? [{ text: 'Merge requests' }, { text: short(mr.params.id), mono: true }]
@@ -130,7 +132,9 @@ function AppStatus() {
   const connected = useBusConnected()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const working = (threads.data ?? []).filter((thread) => thread.agent_state === 'working').length
+  const running = (threads.data ?? []).filter((thread) =>
+    ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? ''),
+  ).length
   const waiting = (threads.data ?? []).filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
   const sync = status.data?.sync_error
   return (
@@ -145,7 +149,7 @@ function AppStatus() {
           sync failing
         </span>
       )}
-      <span>{working === 1 ? '1 agent working' : `${working} agents working`}</span>
+      <span>{running === 1 ? '1 agent running' : `${running} agents running`}</span>
       {waiting > 0 && <span className="text-accent-fg">{waiting} waiting on you</span>}
       {status.data?.version && <span className="ml-auto">silt {status.data.version}</span>}
     </StatusBar>

@@ -95,12 +95,13 @@ export function Chip({
   )
 }
 
-/** A key to press; `onAccent` inside a primary button. */
+/** A key to press, a hint for the eye only; `onAccent` inside a primary button. */
 export function Kbd({ children, onAccent = false }: { children: ReactNode; onAccent?: boolean }) {
   return (
     <kbd
+      aria-hidden="true"
       className={cx(
-        'inline-flex min-w-[18px] justify-center rounded-sm border border-b-2 px-1 font-mono text-2xs',
+        'inline-flex min-w-[18px] justify-center rounded-sm border border-b-2 px-1 font-mono text-2xs pointer-coarse:hidden',
         onAccent ? 'border-on-accent/30 bg-transparent text-on-accent' : 'border-line bg-surface-1 text-fg-2',
       )}
     >

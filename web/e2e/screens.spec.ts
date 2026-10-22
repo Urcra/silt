@@ -104,6 +104,31 @@ test('a thread', async ({ page }) => {
   })
 })
 
+test("a thread's changes", async ({ page }) => {
+  await open(page, `/t/${world.thread}`)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByRole('button', { name: 'Changes', exact: true }).click()
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+    await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+    await expect(page).toHaveScreenshot(`thread-changes-desktop-${colorScheme}.png`, {
+      mask: [page.locator('[data-volatile]')],
+      animations: 'disabled',
+      caret: 'hide',
+      maxDiffPixelRatio: 0.01,
+    })
+  }
+})
+
+test('a live session', async ({ page }) => {
+  await open(page, `/t/${world.thread}/live`)
+  await shoot(page, 'live', async (shown) => {
+    const file = shown.getByRole('button', { name: /^src\/main\.rs/ })
+    if ((await file.getAttribute('aria-current')) !== 'true') await file.click()
+    await expect(shown.getByTestId('editor')).toContainText('fn farewell() {}')
+  })
+})
+
 test('a merge request', async ({ page }) => {
   await open(page, '/mrs')
   await page.getByRole('link', { name: 'Retry blob uploads on 5xx' }).first().click()

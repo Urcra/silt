@@ -48,10 +48,11 @@
   --accent-hover: light-dark(var(--amber-600), var(--amber-300));
   --accent-tint: light-dark(rgb(217 136 58 / 0.1), rgb(223 160 85 / 0.14));
   --accent-fg: light-dark(var(--amber-700), var(--amber-300));
-  --ok: light-dark(var(--olive-600), var(--olive-500));
+  /* In dark, a step lighter than the design's 500s, which fail 4.5:1 as text. */
+  --ok: light-dark(var(--olive-600), #8a9a4c);
   --warn: var(--honey-500);
-  --danger: light-dark(var(--rust-600), var(--rust-500));
-  --info: light-dark(var(--slate-600), var(--slate-500));
+  --danger: light-dark(var(--rust-600), #d97a59);
+  --info: light-dark(var(--slate-600), #7b98a8);
   --ok-tint: light-dark(rgb(122 138 63 / 0.12), rgb(122 138 63 / 0.18));
   --warn-tint: light-dark(rgb(201 152 46 / 0.14), rgb(201 152 46 / 0.18));
   --danger-tint: light-dark(rgb(194 90 58 / 0.12), rgb(194 90 58 / 0.18));

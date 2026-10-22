@@ -31,10 +31,16 @@ test.afterAll(() => {
   rmSync(live.work, { recursive: true, force: true })
 })
 
-async function openFile(page: Page, url: string) {
+/** Opens the thread's Live page. */
+async function goLive(page: Page, url: string) {
   await page.goto(url)
   await page.getByRole('link', { name: live.thread }).click()
-  await page.getByRole('button', { name: 'src/main.rs' }).click()
+  await page.getByRole('link', { name: /^Join live/ }).click()
+}
+
+async function openFile(page: Page, url: string) {
+  await goLive(page, url)
+  await page.getByRole('button', { name: /^src\/main\.rs/ }).click()
   await expect(page.getByTestId('editor')).toContainText('fn farewell() {}')
 }
 
@@ -44,8 +50,8 @@ test('two people edit one thread live, see each other and their drafts', async (
   await openFile(alice, live.alice)
   await openFile(bob, live.bob)
 
-  await expect(alice.getByTestId('presence')).toContainText('bob is here viewing src/main.rs')
-  await expect(bob.getByTestId('presence')).toContainText('alice is here viewing src/main.rs')
+  await expect(alice.getByTestId('presence')).toContainText('bob main.rs')
+  await expect(bob.getByTestId('presence')).toContainText('alice main.rs')
 
   await alice.getByTestId('editor').locator('.cm-content').click()
   await alice.keyboard.press('ControlOrMeta+Home')
@@ -62,7 +68,8 @@ test('two people edit one thread live, see each other and their drafts', async (
     .toBe('// alice was here\nfn main() {}\nfn farewell() {}\nfn bob() {}\n')
 
   await bob.getByLabel('draft').fill('now add tests for bob')
-  await expect(alice.getByTestId('presence')).toContainText('and drafting: now add tests for bob')
+  await expect(alice.getByRole('region', { name: 'next prompt' })).toContainText('bob is drafting')
+  await expect(alice.getByRole('region', { name: 'next prompt' })).toContainText('now add tests for bob')
   await alice.context().close()
   await bob.context().close()
 })
@@ -70,8 +77,7 @@ test('two people edit one thread live, see each other and their drafts', async (
 test('following a co-viewer shows their file and line', async ({ browser }) => {
   const alice = await (await browser.newContext()).newPage()
   const bob = await (await browser.newContext()).newPage()
-  await alice.goto(live.alice)
-  await alice.getByRole('link', { name: live.thread }).click()
+  await goLive(alice, live.alice)
   await openFile(bob, live.bob)
 
   const code = bob.getByTestId('editor').locator('.cm-content')
@@ -79,7 +85,7 @@ test('following a co-viewer shows their file and line', async ({ browser }) => {
   await bob.keyboard.press('ControlOrMeta+Home')
   await bob.keyboard.press('ArrowDown')
   await bob.keyboard.press('ArrowDown')
-  await expect(alice.getByTestId('presence')).toContainText('bob is here viewing src/main.rs at line 3')
+  await expect(alice.getByTestId('presence')).toContainText('bob main.rs:3')
 
   await alice.getByRole('button', { name: 'Follow bob' }).click()
   await expect(alice.getByTestId('editor').locator('.cm-activeLine')).toHaveText('fn farewell() {}')
@@ -95,10 +101,12 @@ test('following a co-viewer shows their file and line', async ({ browser }) => {
 test('an agent started from the web UI takes everyone\'s drafts and asks before editing', async ({ browser }) => {
   const alice = await (await browser.newContext()).newPage()
   const bob = await (await browser.newContext()).newPage()
-  await openFile(alice, live.alice)
+  // Alice runs the agent from the thread's page; Bob edits on its Live page.
+  await alice.goto(live.alice)
+  await alice.getByRole('link', { name: live.thread }).click()
   await openFile(bob, live.bob)
   await bob.getByLabel('draft').fill('mind the tests')
-  await expect(alice.getByTestId('presence')).toContainText('drafting: mind the tests')
+  await expect(alice.getByTestId('drafts')).toContainText('bob is drafting: mind the tests')
 
   await alice.getByLabel('permissions').selectOption('ask_for_everything')
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
@@ -115,11 +123,11 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await asked.getByRole('button', { name: 'Allow' }).click()
 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
-  const reply = alice.getByText(/^Done: You are continuing a conversation/)
+  // Replies are Markdown, a paragraph each, so the whole entry holds what the agent said.
+  const reply = alice.getByTestId('entry').filter({ hasText: /^Done: You are continuing a conversation[\s\S]*add acp/ })
   await expect(reply).toContainText('add acp')
   await expect(reply).toContainText('bob: mind the tests')
-  await expect(bob.getByText('› add acp')).toBeVisible()
-  await expect(bob.getByText('bob: mind the tests').first()).toBeVisible()
+  await expect(alice.getByText('› add acp')).toBeVisible()
   await expect(bob.getByLabel('draft')).toHaveValue('')
   await expect(bob.getByTestId('editor')).toContainText('fn acp() {}', { timeout: 15_000 })
 
@@ -185,7 +193,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
 
   // The browser has no daemon: what it asks goes through the server to the machine.
   await waiting.getByRole('link').first().click()
-  const there = hosted.getByRole('region', { name: 'live' })
+  const there = hosted.getByRole('main')
   await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
   await there.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -222,7 +230,7 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await hosted.getByLabel('User').fill('alice')
   await hosted.getByLabel('Password').fill('correct horse battery')
   await hosted.getByRole('button', { name: 'Sign in' }).click()
-  const there = hosted.getByRole('region', { name: 'live' })
+  const there = hosted.getByRole('main')
   await there.getByLabel('device to continue on').selectOption({ label: 'alice' })
   await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
   await there.getByRole('button', { name: 'Continue there' }).click()
@@ -399,7 +407,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await expect(machine.getByText(/^Done: [\s\S]*paired phone$/)).toBeVisible()
 
   await phone.goto(`${live.server}/app/t/${thread}`)
-  const there = phone.getByRole('region', { name: 'live' })
+  const there = phone.getByRole('main')
   await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
   await there.getByLabel('draft').fill('may I?')
   await there.getByRole('button', { name: 'Send' }).tap()
@@ -496,7 +504,7 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   expect(await edits()).toBe(2)
 
   await page.getByRole('button', { name: 'revert to turn 1' }).click()
-  await page.getByRole('button', { name: 'revert', exact: true }).click()
+  await page.getByRole('button', { name: 'Revert', exact: true }).click()
   await expect(page.getByText(/^Reverted to turn 1/)).toBeVisible()
   await expect.poll(edits).toBe(1)
   const history = page.getByTestId('history')
@@ -551,7 +559,7 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   await page.goto(here(comment))
   await expect(said).toHaveAttribute('data-highlighted', 'true')
 
-  await page.getByRole('button', { name: 'Show changes' }).click()
+  await page.getByRole('button', { name: 'Changes', exact: true }).click()
   await page.getByRole('region', { name: 'changes' }).getByRole('link', { name: 'view file' }).first().click()
   const file = page.getByTestId('file')
   await expect(file).toContainText('fn acp() {}')
@@ -760,7 +768,8 @@ test("an agent that takes no images is told a text file's content in the prompt,
   await page.getByRole('button', { name: 'remove shot.png' }).click()
   await page.getByLabel('attach files').setInputFiles([NOTES])
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(page.getByText(/^Done: see this\s+notes\.txt:\s+```\s+hello\s+```$/)).toBeVisible()
+  // The message is Markdown: the file's content shows as a code block.
+  await expect(page.getByText(/^Done: see this\s*notes\.txt:\s*hello$/)).toBeVisible()
 })
 
 test("comments on the agent's last turn go back to it as a prompt", async ({ page }) => {
@@ -769,7 +778,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: add a function')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Show changes' }).click()
+  await page.getByRole('button', { name: 'Changes', exact: true }).click()
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByRole('tab', { name: 'Last turn' }).click()
   await expect(changes.getByTestId('diff')).toContainText('+fn acp() {}')
@@ -781,7 +790,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()
   await expect(page.getByText('Sent to the agent')).toBeVisible()
   await expect(
-    page.getByText(/^Done: Please address these review comments:\s+- src\/main\.rs:\d+ \(alice\): give it a better name$/),
+    page.getByTestId('entry').filter({ hasText: /Done: Please address these review comments:\s*src\/main\.rs:\d+ \(alice\): give it a better name/ }),
   ).toBeVisible()
 
   await page.getByRole('tab', { name: 'Against main' }).click()
@@ -1013,7 +1022,7 @@ test("a thread's page lists its commits with the turns they came in", async ({ p
     await expect(commits).toContainText('Add the farewell', { timeout: 2_000 })
   }).toPass({ timeout: 20_000 })
   // Tests above prompted in this thread too, so which turn depends on them.
-  await expect(commits.getByRole('link', { name: /^turn \d+$/ }).last()).toBeVisible()
+  await expect(commits.getByRole('link', { name: /^made in turn \d+$/ }).last()).toBeVisible()
 })
 
 test('the graph shows turns, commits, forks, requests and merges, and opens a turn from its details', async ({ page }) => {

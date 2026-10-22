@@ -7,6 +7,7 @@ import { Devices } from './Devices'
 import { FilePage } from './FilePage'
 import { Graph } from './Graph'
 import { Inbox } from './Inbox'
+import { LivePage } from './Live'
 import { MergeRequest, MergeRequests } from './MergeRequests'
 import { NeedsYou } from './NeedsYou'
 import { NewThread } from './NewThread'
@@ -39,12 +40,10 @@ export const InboxRoute = () => <Plain view={Inbox} />
 
 export function ThreadRoute() {
   const { id } = useParams({ from: '/t/$id' })
-  return (
-    <Page width="wide">
-      <ThreadView id={id} />
-    </Page>
-  )
+  return <ThreadView key={id} id={id} />
 }
+
+export const LiveRoute = LivePage
 
 export function MergeRequestRoute() {
   const { id } = useParams({ from: '/mr/$id' })

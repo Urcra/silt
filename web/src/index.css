@@ -39,6 +39,57 @@
   --shadow-overlay: var(--shadow-2);
 }
 
+/* Code, highlighted by Lezer's class highlighter (src/highlight.ts), in
+   Nous's colours: amber keywords, olive strings, slate numbers, quiet comments. */
+@layer components {
+  .tok-keyword,
+  .tok-operatorKeyword,
+  .tok-modifier {
+    color: var(--accent-fg);
+  }
+  .tok-string,
+  .tok-string2,
+  .tok-regexp {
+    color: var(--ok);
+  }
+  .tok-number,
+  .tok-bool,
+  .tok-atom,
+  .tok-literal {
+    color: var(--danger);
+  }
+  .tok-comment {
+    color: var(--fg-3);
+    font-style: italic;
+  }
+  .tok-typeName,
+  .tok-className,
+  .tok-namespace,
+  .tok-macroName {
+    color: var(--info);
+  }
+  .tok-definition,
+  .tok-function,
+  .tok-heading {
+    font-weight: 500;
+  }
+  .tok-meta,
+  .tok-punctuation,
+  .tok-operator {
+    color: var(--fg-2);
+  }
+  .tok-link,
+  .tok-url {
+    text-decoration: underline;
+  }
+  .tok-emphasis {
+    font-style: italic;
+  }
+  .tok-strong {
+    font-weight: 600;
+  }
+}
+
 /* Nous's type scale: 13 px is the UI's base, 11 px its metadata. The fonts
    and easing repeat nous.css's, which Tailwind's own variables would shadow. */
 @theme {

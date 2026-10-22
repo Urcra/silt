@@ -16,6 +16,8 @@ export function Page({
   width = 'full',
   label,
   flush = false,
+  inspectorWide = false,
+  sheet,
 }: {
   title?: ReactNode
   meta?: ReactNode
@@ -28,6 +30,10 @@ export function Page({
   label?: string
   /** The body sets its own padding, such as a list running edge to edge. */
   flush?: boolean
+  /** The inspector takes more room, such as for a diff. */
+  inspectorWide?: boolean
+  /** Below the desktop width, the inspector opens over the page as a sheet, only while `open`. */
+  sheet?: { open: boolean; onClose: () => void }
 }) {
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
   return (
@@ -45,8 +51,23 @@ export function Page({
       {inspector && (
         <aside
           aria-label={inspectorLabel}
-          className="flex w-full shrink-0 flex-col border-t border-line lg:sticky lg:top-0 lg:h-[calc(100dvh-64px)] lg:w-[380px] lg:overflow-y-auto lg:border-t-0 lg:border-l"
+          className={cx(
+            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-[calc(100dvh-64px)] lg:overflow-y-auto lg:border-l',
+            inspectorWide ? 'lg:w-[min(42vw,640px)]' : 'lg:w-[360px]',
+            sheet
+              ? sheet.open
+                ? 'fixed inset-x-0 top-10 bottom-0 z-30 overflow-y-auto bg-bg lg:static lg:z-auto'
+                : 'hidden lg:flex'
+              : 'border-t lg:border-t-0',
+          )}
         >
+          {sheet?.open && (
+            <div className="flex justify-end border-b border-line px-2 lg:hidden">
+              <button type="button" onClick={sheet.onClose} className="inline-flex min-h-11 items-center gap-1.5 px-3 text-sm text-fg-2">
+                Close
+              </button>
+            </div>
+          )}
           {inspector}
         </aside>
       )}

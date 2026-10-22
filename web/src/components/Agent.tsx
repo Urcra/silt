@@ -1,22 +1,25 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { rememberModes } from '../agentModes'
-import { api, type AgentStatus, type Presence, type Preset, type PromptAttachment } from '../api'
+import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
 import { APPROVED, PRESETS, STATE_PHRASE, running } from '../agentState'
+import { useNow } from '../now'
 import { keys, message } from '../query'
 import { hosted } from '../served'
-import { useActions } from '../shortcuts'
+import { formatKeys, useActions, useShortcut } from '../shortcuts'
+import { Button, Dot, type DotTone, Icon, type IconName, Kbd, cx } from '../ui'
+import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
 
-export function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
+export function AgentPicker({ value, onChange, className }: { value: string; onChange: (agent: string) => void; className?: string }) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
   return (
     <select
       aria-label="agent to start"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="rounded border border-line px-2 py-1 text-sm"
+      className={className ?? 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1'}
     >
       <option value="">pick an agent…</option>
       {(choices.data?.agents ?? []).map((agent) => (
@@ -28,27 +31,42 @@ export function AgentPicker({ value, onChange }: { value: string; onChange: (age
   )
 }
 
-/** Which of the agent's permission requests the daemon answers by itself (ADR 0022). */
-function PresetPicker({ thread, preset, onPreset }: { thread: string; preset: Preset; onPreset: (preset: Preset) => void }) {
+const CHIP =
+  'inline-flex items-center gap-1.5 rounded-sm border border-line bg-elevated px-2 py-0.5 text-xs text-fg-1 hover:bg-surface-2 max-md:min-h-11'
+
+/** A choice in the composer's row, drawn as a chip: `prefix` then the chosen option. */
+function ChipSelect({
+  label,
+  prefix,
+  icon,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  prefix?: string
+  icon?: IconName
+  value: string
+  onChange: (value: string) => void
+  options: { id: string; name: string; description?: string | null }[]
+}) {
   return (
-    <label className="flex items-center gap-2 text-xs text-fg-2">
-      Permissions
+    <label className={cx(CHIP, 'relative cursor-pointer pr-1')}>
+      {icon && <Icon name={icon} className="h-3 w-3" />}
+      {prefix && <span className="text-fg-2">{prefix}</span>}
       <select
-        aria-label="permissions"
-        value={preset}
-        onChange={(event) => {
-          const chosen = event.target.value as Preset
-          void api.setPreset(thread, chosen).then(() => onPreset(chosen))
-        }}
-        className="rounded-sm border border-line bg-elevated px-1.5 py-0.5 text-xs text-fg-1"
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="cursor-pointer appearance-none bg-transparent pr-4 text-xs text-fg-1 focus:outline-none"
       >
-        {PRESETS.map((choice) => (
-          <option key={choice.id} value={choice.id}>
-            {choice.label}
+        {options.map((option) => (
+          <option key={option.id} value={option.id} title={option.description ?? undefined}>
+            {option.name}
           </option>
         ))}
       </select>
-      {preset === 'full_access' && <span className="text-warn">nothing asks; the agent's own sandbox is all that limits it</span>}
+      <Icon name="chevronDown" className="pointer-events-none absolute right-1 h-3 w-3 text-fg-2" />
     </label>
   )
 }
@@ -58,46 +76,76 @@ function ready(status: AgentStatus): boolean {
   return status.state === 'idle' || status.state === 'awaiting_input'
 }
 
-const SELECT ='rounded-sm border border-line bg-elevated px-1.5 py-0.5 text-xs text-fg-1'
+/** Whether a turn is under way. */
+function working(status: AgentStatus | null): boolean {
+  return status?.state === 'working' || status?.state === 'awaiting_permission'
+}
 
-/** The agent's own modes and settings, such as its model, as it offers them. */
-function AgentChoices({ thread, status, act }: { thread: string; status: AgentStatus; act: (action: Promise<unknown>) => void }) {
+/** A permission the agent asks for, answered in place: ⏎ allows, Esc dismisses (ADR 0022). */
+export function PermissionCard({ thread, asked, agent, first }: { thread: string; asked: PermissionAsked; agent: string; first: boolean }) {
+  const [error, setError] = useState<string>()
+  const answer = (option: string | null) => {
+    setError(undefined)
+    api.answer(thread, asked.id, option).catch((failure: unknown) => setError(message(failure)))
+  }
+  const [allow] = asked.options
+  useShortcut('enter', 'Allow what the agent asks', () => {
+    if (first && allow && !document.querySelector('dialog[open]')) answer(allow[0])
+  })
+  useShortcut('escape', 'Dismiss what the agent asks', () => {
+    if (first && !document.querySelector('dialog[open]')) answer(null)
+  })
   return (
-    <div className="flex flex-wrap items-center gap-3 text-xs text-fg-2">
-      {status.modes && (
-        <label className="flex items-center gap-2">
-          Mode
-          <select
-            aria-label="mode"
-            value={status.modes.current}
-            onChange={(event) => act(api.setMode(thread, event.target.value))}
-            className={SELECT}
-          >
-            {status.modes.available.map((mode) => (
-              <option key={mode.id} value={mode.id} title={mode.description ?? undefined}>
-                {mode.name}
-              </option>
-            ))}
-          </select>
-        </label>
+    <div role="group" aria-label="permission" className="flex flex-col gap-2 rounded-md border border-warn bg-warn-tint px-3.5 py-3">
+      <span className="text-sm font-medium">
+        {agent} wants to: <code className="font-mono text-xs">{asked.title}</code>
+      </span>
+      <span className="flex flex-wrap gap-1.5">
+        {asked.options.map(([option, label], index) => (
+          <Button key={option} variant={index === 0 ? 'primary' : 'secondary'} onClick={() => answer(option)}>
+            {label}
+            {index === 0 && first && <Kbd onAccent>⏎</Kbd>}
+          </Button>
+        ))}
+        <Button variant="ghost" onClick={() => answer(null)}>
+          Dismiss {first && <Kbd>Esc</Kbd>}
+        </Button>
+      </span>
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/** The agent's plan, waiting for a yes or a change. */
+export function PlanCard({ thread }: { thread: string }) {
+  const [error, setError] = useState<string>()
+  return (
+    <div role="group" aria-label="plan" className="flex flex-wrap items-center gap-2 rounded-md border border-accent bg-accent-tint px-3.5 py-3">
+      <span className="text-sm">Approve the plan, or send a prompt to change it.</span>
+      <Button
+        variant="primary"
+        className="ml-auto"
+        onClick={() => api.prompt(thread, APPROVED).catch((failure: unknown) => setError(message(failure)))}
+      >
+        Approve plan
+      </Button>
+      {error && <span className="w-full text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/** What the agent is doing now, before it is recorded: its words, its thinking, the tool's output. */
+export function AgentTail({ status, toolOutput }: { status: AgentStatus; toolOutput: string }) {
+  if (!working(status) && !status.streaming) return null
+  return (
+    <div className="flex flex-col gap-2" aria-live="polite">
+      {status.thinking && <p className="text-xs text-fg-2 italic">{status.thinking}</p>}
+      {status.streaming && <Markdown text={status.streaming} />}
+      {toolOutput && (
+        <pre data-testid="tool-output" className="max-h-48 overflow-auto rounded-sm border border-line-subtle bg-surface-1 p-2 font-mono text-xs">
+          {toolOutput}
+        </pre>
       )}
-      {status.settings.map((setting) => (
-        <label key={setting.id} className="flex items-center gap-2">
-          {setting.name}
-          <select
-            aria-label={setting.name.toLowerCase()}
-            value={setting.current}
-            onChange={(event) => act(api.setSetting(thread, setting.id, event.target.value))}
-            className={SELECT}
-          >
-            {setting.choices.map((choice) => (
-              <option key={choice.id} value={choice.id} title={choice.description ?? undefined}>
-                {choice.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ))}
     </div>
   )
 }
@@ -114,65 +162,74 @@ function ContinueOn({ thread, act }: { thread: string; act: (action: Promise<unk
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span>Continue on</span>
-      <select
-        aria-label="device to continue on"
+      <ChipSelect
+        label="device to continue on"
+        icon="laptop"
         value={chosen.id}
-        onChange={(event) => setDevice(event.target.value)}
-        className="rounded border border-line px-2 py-1"
-      >
-        {online.map((candidate) => (
-          <option key={candidate.id} value={candidate.id}>
-            {candidate.name}
-          </option>
-        ))}
-      </select>
+        onChange={setDevice}
+        options={online.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+      />
       <span>with</span>
-      <select
-        aria-label="agent to continue with"
+      <ChipSelect
+        label="agent to continue with"
         value={chosenAgent.id}
-        onChange={(event) => setAgent(event.target.value)}
-        className="rounded border border-line px-2 py-1"
-      >
-        {chosen.startable.map((candidate) => (
-          <option key={candidate.id} value={candidate.id}>
-            {candidate.name}
-          </option>
-        ))}
-      </select>
-      <button
-        className="rounded bg-accent px-2 py-1 text-on-accent"
-        onClick={() => act(api.continueOn(thread, chosen.id, chosenAgent.id))}
-      >
+        onChange={setAgent}
+        options={chosen.startable.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+      />
+      <Button variant="primary" onClick={() => act(api.continueOn(thread, chosen.id, chosenAgent.id))}>
         Continue there
-      </button>
+      </Button>
     </div>
   )
 }
 
+/** How long the turn under way has run, as `0:42`. */
+function useTurnClock(status: AgentStatus | null): string | null {
+  const now = useNow(1000)
+  const [started, setStarted] = useState<number | null>(null)
+  const turning = working(status)
+  if (turning && started === null) setStarted(now)
+  if (!turning && started !== null) setStarted(null)
+  if (started === null) return null
+  const seconds = Math.max(0, Math.floor((now - started) / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+const STATE_TONE: Record<AgentStatus['state'], DotTone> = {
+  starting: 'idle',
+  idle: 'idle',
+  working: 'ok',
+  awaiting_permission: 'warn',
+  awaiting_input: 'warn',
+  error: 'danger',
+  stopped: 'idle',
+}
+
 /**
- * The agent working in the thread from the web UI (ADR 0014): starting it,
- * sending everyone's drafts as the prompt, answering its permission requests.
+ * The agent working in the thread, docked under its conversation (ADR 0014,
+ * the Workspace board): how it stands, what's queued for it, and the
+ * composer, whose draft everyone here sees and sends together.
  */
-export function AgentPanel({
+export function AgentDock({
   thread,
   status,
-  toolOutput,
   preset,
   onPreset,
   draft,
-  onSent,
+  onDraft,
   people,
+  turn,
 }: {
   thread: string
   status: AgentStatus | null
-  /** What the running tool printed so far. */
-  toolOutput: string
   preset: Preset
   onPreset: (preset: Preset) => void
   draft: string
-  onSent: () => void
+  onDraft: (draft: string) => void
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
+  /** The turn under way, when there is one. */
+  turn: number | null
 }) {
   const [agent, setAgent] = useState('')
   const [planFirst, setPlanFirst] = useState(false)
@@ -186,138 +243,186 @@ export function AgentPanel({
   const elsewhere = people.find((person) => person.agent)
   const modes = status?.modes?.available
   const agentName = status?.agent
+  const clock = useTurnClock(status)
+  const narrow = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
+  const signedIn = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
+  const device = signedIn.data?.servers?.[0]?.name
   useEffect(() => {
     if (agentName && modes) rememberModes(agentName, modes)
   }, [agentName, modes])
-  const working = status?.state === 'working' || status?.state === 'awaiting_permission'
+  const turning = working(status)
   useActions([
     ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
-    ...(working ? [{ id: 'cancel', label: 'Cancel the turn', run: () => act(api.cancelTurn(thread)) }] : []),
+    ...(turning ? [{ id: 'cancel', label: 'Cancel the turn', run: () => act(api.cancelTurn(thread)) }] : []),
     ...(status?.state === 'awaiting_input'
       ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }]
       : []),
   ])
+  const sendable = live && draft.trim() !== '' && !(attached.length > 0 && !ready(status))
+  const send = () => {
+    if (!live || !sendable) return
+    act(api.prompt(thread, draft, planFirst && ready(status), attached), () => {
+      setPlanFirst(false)
+      setAttached([])
+      onDraft('')
+    })
+  }
+
+  let statusLine: ReactNode = null
+  if (live) {
+    statusLine = (
+      <>
+        <Dot tone={STATE_TONE[status.state]} />
+        <span data-testid="agent-state" className="text-xs font-medium">
+          {status.agent} {STATE_PHRASE[status.state]}
+        </span>
+        <span className="font-mono text-2xs text-fg-2">
+          {[turn !== null && turning && `turn ${turn}`, !hosted() && device && `running on ${device}`].filter(Boolean).join(' · ')}
+        </span>
+      </>
+    )
+  } else if (elsewhere?.agent) {
+    statusLine = (
+      <>
+        <Dot tone={STATE_TONE[elsewhere.agent.state]} />
+        <span data-testid="agent-state" className="text-xs font-medium">
+          {elsewhere.user}&apos;s {elsewhere.agent.name} {STATE_PHRASE[elsewhere.agent.state]}
+        </span>
+      </>
+    )
+  }
 
   return (
-    <section aria-label="agent at work" className="mt-3 rounded border border-line p-3 text-sm">
-      {!live && elsewhere?.agent && (
-        <div className="space-y-2">
-          <p data-testid="agent-state">
-            {elsewhere.user}&apos;s <span className="font-medium">{elsewhere.agent.name}</span>{' '}
-            {STATE_PHRASE[elsewhere.agent.state]}
-          </p>
-          {elsewhere.agent.streaming && <p className="whitespace-pre-wrap">{elsewhere.agent.streaming}</p>}
-          <p className="text-xs text-fg-3">Your draft goes along with {elsewhere.user}&apos;s next prompt.</p>
-        </div>
-      )}
-      {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
-      {!live && !elsewhere && !hosted() && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span>Run an agent here:</span>
-          <AgentPicker value={agent} onChange={setAgent} />
-          <button
-            disabled={!agent}
-            className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
-            onClick={() => act(api.startAgent(agent, { thread }))}
-          >
-            Start agent
-          </button>
-          {status?.error && <p className="w-full text-danger">{status.agent} stopped: {status.error}</p>}
-        </div>
-      )}
-      {live && (
-        <div className="space-y-2">
-          <p data-testid="agent-state">
-            <span className="font-medium">{status.agent}</span> {STATE_PHRASE[status.state]}
-          </p>
-          {status.thinking && <p className="text-xs italic text-fg-3">{status.thinking}</p>}
-          {status.streaming && <p className="whitespace-pre-wrap">{status.streaming}</p>}
-          {toolOutput && (
-            <pre data-testid="tool-output" className="max-h-48 overflow-auto rounded bg-surface-1 p-2 text-xs">
-              {toolOutput}
-            </pre>
-          )}
-          {status.permissions.map((asked) => (
-            <div key={asked.id} className="rounded bg-warn-tint p-2" role="group" aria-label="permission">
-              <p>The agent asks to run: {asked.title}</p>
-              <div className="mt-1 flex gap-2">
-                {asked.options.map(([option, label]) => (
-                  <button
-                    key={option}
-                    className="rounded border border-line-strong px-2 py-0.5"
-                    onClick={() => act(api.answer(thread, asked.id, option))}
-                  >
-                    {label}
-                  </button>
-                ))}
-                <button className="text-fg-3" onClick={() => act(api.answer(thread, asked.id, null))}>
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ))}
-          {status.state === 'awaiting_input' && (
-            <div className="flex items-center gap-2 rounded bg-accent-tint p-2" role="group" aria-label="plan">
-              <span>Approve the plan, or send a draft to change it.</span>
-              <button
-                className="rounded bg-accent px-2 py-0.5 text-on-accent"
-                onClick={() => act(api.prompt(thread, APPROVED))}
-              >
-                Approve plan
-              </button>
-            </div>
-          )}
-          <AgentChoices thread={thread} status={status} act={act} />
-          {attached.length > 0 && (
-            <ul aria-label="attached files" className="flex flex-wrap gap-2 text-xs">
-              {attached.map((file, index) => (
-                <li key={`${file.name}-${index}`} className="flex items-center gap-1 rounded-sm bg-surface-2 px-1.5 py-0.5">
-                  {file.name}
-                  <button
-                    aria-label={`remove ${file.name}`}
-                    className="text-fg-3 hover:text-fg-1"
-                    onClick={() => setAttached(attached.filter((_, kept) => kept !== index))}
-                  >
-                    ×
-                  </button>
+    <section aria-label="agent at work" className="flex flex-col gap-2">
+      {!hosted() && <PromptQueue thread={thread} />}
+      <div className="flex flex-col rounded-md border border-line-strong bg-elevated">
+        {statusLine && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-3 py-1.5">
+            {statusLine}
+            {live && (
+              <span className="ml-auto flex gap-1">
+                {turning && (
+                  <Button variant="ghost" size="sm" onClick={() => act(api.cancelTurn(thread))}>
+                    Cancel turn
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" icon="stop" onClick={() => act(api.stopAgent(thread))}>
+                  Stop agent
+                </Button>
+              </span>
+            )}
+          </div>
+        )}
+        {elsewhere?.agent && !live && (
+          <div className="border-b border-line-subtle px-3 py-2 text-xs text-fg-2">
+            {elsewhere.agent.streaming && <Markdown text={elsewhere.agent.streaming} className="mb-1 text-fg-1" />}
+            Your draft goes along with {elsewhere.user}&apos;s next prompt.
+          </div>
+        )}
+        {people.some((person) => person.draft.trim()) && (
+          <ul data-testid="drafts" aria-label="what others here are writing" className="flex flex-col gap-1 border-b border-line-subtle px-3 py-2 text-xs">
+            {people
+              .filter((person) => person.draft.trim())
+              .map((person) => (
+                <li key={person.device}>
+                  <span className="font-mono text-2xs text-fg-2">{person.user} is drafting:</span> {person.draft}
                 </li>
               ))}
-            </ul>
+          </ul>
+        )}
+        <label htmlFor={`draft-${thread}`} className="sr-only">
+          draft
+        </label>
+        <textarea
+          id={`draft-${thread}`}
+          aria-label="draft"
+          rows={narrow ? 1 : 3}
+          value={draft}
+          onChange={(event) => onDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              send()
+            }
+          }}
+          placeholder={live ? `Ask ${status.agent}, or attach files for context` : 'Draft the next prompt; everyone here sees it'}
+          className="resize-none border-0 bg-transparent px-3 py-2.5 text-sm leading-normal text-fg-1 placeholder:text-fg-2 focus:outline-none"
+        />
+        {attached.length > 0 && (
+          <ul aria-label="attached files" className="flex flex-wrap gap-1.5 px-3 pb-2 text-xs">
+            {attached.map((file, index) => (
+              <li key={`${file.name}-${index}`} className="flex items-center gap-1 rounded-sm bg-surface-2 px-1.5 py-0.5">
+                <Icon name="file" className="h-3 w-3" />
+                {file.name}
+                <button
+                  type="button"
+                  aria-label={`remove ${file.name}`}
+                  className="text-fg-2 hover:text-fg-1"
+                  onClick={() => setAttached(attached.filter((_, kept) => kept !== index))}
+                >
+                  <Icon name="x" className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center gap-1.5 border-t border-line-subtle px-2 py-1.5 max-md:overflow-x-auto md:flex-wrap [&>*]:shrink-0">
+          {live && <span className={cx(CHIP, 'font-mono')}>{status.agent}</span>}
+          {!live && !elsewhere && !hosted() && (
+            <>
+              <span className="text-xs text-fg-2">Run an agent here:</span>
+              <AgentPicker value={agent} onChange={setAgent} className={cx(CHIP, 'pr-2')} />
+              <Button variant="primary" disabled={!agent} onClick={() => act(api.startAgent(agent, { thread }))}>
+                Start agent
+              </Button>
+            </>
           )}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              disabled={!draft.trim() || (attached.length > 0 && !ready(status))}
-              className="rounded bg-accent px-2 py-1 text-on-accent disabled:opacity-40"
-              onClick={() => act(api.prompt(thread, draft, planFirst && ready(status), attached), () => {
-                setPlanFirst(false)
-                setAttached([])
-                onSent()
-              })}
-              title={
-                ready(status)
-                  ? "Sends your draft together with everyone else's"
-                  : attached.length > 0
-                    ? 'Attached files go with a prompt the agent takes now'
-                    : 'Queues your draft for when the agent is ready'
-              }
-            >
-              {ready(status) ? 'Send' : 'Queue'}
-            </button>
-            {ready(status) && (
-              <label
-                className="flex items-center gap-1 text-xs text-fg-2"
-                title="The agent writes a plan for you to approve before it edits anything"
-              >
-                <input type="checkbox" checked={planFirst} onChange={(event) => setPlanFirst(event.target.checked)} />
-                Plan first
-              </label>
-            )}
+          {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
+          {live && status.modes && (
+            <ChipSelect
+              label="mode"
+              prefix="Mode:"
+              value={status.modes.current}
+              onChange={(mode) => act(api.setMode(thread, mode))}
+              options={status.modes.available.map((mode) => ({ id: mode.id, name: mode.name, description: mode.description }))}
+            />
+          )}
+          {live &&
+            status.settings.map((setting) => (
+              <ChipSelect
+                key={setting.id}
+                label={setting.name.toLowerCase()}
+                prefix={`${setting.name}:`}
+                value={setting.current}
+                onChange={(value) => act(api.setSetting(thread, setting.id, value))}
+                options={setting.choices}
+              />
+            ))}
+          {(live || !hosted()) && (
+            <ChipSelect
+              label="permissions"
+              icon="lock"
+              value={preset}
+              onChange={(chosen) => {
+                const picked = chosen as Preset
+                void api.setPreset(thread, picked).then(() => onPreset(picked))
+              }}
+              options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label }))}
+            />
+          )}
+          {live && ready(status) && (
+            <label className={cx(CHIP, 'cursor-pointer')} title="The agent writes a plan for you to approve before it edits anything">
+              <input type="checkbox" checked={planFirst} onChange={(event) => setPlanFirst(event.target.checked)} className="accent-[var(--accent)]" />
+              Plan first
+            </label>
+          )}
+          {live && !hosted() && (
             <label
-              hidden={hosted()}
-              className="cursor-pointer rounded border border-line px-2 py-1 text-xs"
+              className={cx(CHIP, 'cursor-pointer')}
               title={status.takes_images ? 'Attach images or files' : `Attach text files; ${status.agent} takes no images`}
             >
-              Attach
+              <Icon name="plus" className="h-3 w-3" />
+              Context
               <input
                 type="file"
                 multiple
@@ -331,35 +436,45 @@ export function AgentPanel({
                 }}
               />
             </label>
-            {(status.state === 'working' || status.state === 'awaiting_permission') && (
-              <button
-                disabled={!draft.trim()}
-                className="rounded border border-line px-2 py-1 disabled:opacity-40"
-                onClick={() => act(api.steer(thread, draft), onSent)}
-                title="Interrupts the agent's turn to tell it your draft"
+          )}
+          {live && (
+            <span className="ml-auto flex items-center gap-1.5">
+              {clock && <span className="font-mono text-2xs text-fg-2">turn running · {clock}</span>}
+              {turning && (
+                <Button
+                  disabled={!draft.trim()}
+                  onClick={() => act(api.steer(thread, draft), () => onDraft(''))}
+                  title="Interrupts the agent's turn to tell it your draft"
+                >
+                  Steer now
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                disabled={!sendable}
+                onClick={send}
+                title={
+                  ready(status)
+                    ? "Sends your draft together with everyone else's"
+                    : attached.length > 0
+                      ? 'Attached files go with a prompt the agent takes now'
+                      : 'Queues your draft for when the agent is ready'
+                }
               >
-                Steer now
-              </button>
-            )}
-            {(status.state === 'working' || status.state === 'awaiting_permission') && (
-              <button className="rounded border border-line px-2 py-1" onClick={() => act(api.cancelTurn(thread))}>
-                Cancel turn
-              </button>
-            )}
-            <button className="rounded border border-line px-2 py-1" onClick={() => act(api.stopAgent(thread))}>
-              Stop agent
-            </button>
-          </div>
-          {status.error && <p className="text-danger">{status.error}</p>}
+                {ready(status) ? 'Send' : 'Queue'}
+                <Kbd onAccent>{formatKeys('mod+⏎')}</Kbd>
+              </Button>
+            </span>
+          )}
         </div>
+      </div>
+      {preset === 'full_access' && (
+        <p className="text-xs text-fg-2">
+          <Icon name="alert" className="mr-1 inline h-3 w-3 text-warn" />
+          Full access: nothing asks; the agent&apos;s own sandbox is all that limits it.
+        </p>
       )}
-      {error && <p className="text-danger">{error}</p>}
-      {(live || !hosted()) && (
-        <div className="mt-2">
-          <PresetPicker thread={thread} preset={preset} onPreset={onPreset} />
-        </div>
-      )}
-      {!hosted() && <PromptQueue thread={thread} />}
+      {(status?.error || error) && <p className="text-sm text-danger">{status?.error ?? error}</p>}
     </section>
   )
 }

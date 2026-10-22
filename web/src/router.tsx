@@ -29,6 +29,7 @@ export const router = createRouter({
     }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: routes.ThreadRoute }),
     createRoute({ getParentRoute: () => root, path: '/t/$id/files/$', component: routes.FileRoute }),
+    createRoute({ getParentRoute: () => root, path: '/t/$id/live', component: routes.LiveRoute }),
     createRoute({ getParentRoute: () => root, path: '/mrs', component: routes.MergeRequestsRoute }),
     createRoute({ getParentRoute: () => root, path: '/mr/$id', component: routes.MergeRequestRoute }),
     createRoute({ getParentRoute: () => root, path: '/inbox', component: routes.InboxRoute }),
