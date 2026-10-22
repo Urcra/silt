@@ -1,6 +1,9 @@
 //! Silt's docs site: the guide, self-hosting and the command-line reference
 //! from `docs/`, rendered to static HTML that needs no service to host.
 
+pub mod check;
+
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,8 +11,22 @@ use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd, 
 
 /// The site's pages, in the order the sidebar lists them, by their path
 /// under `docs/`.
-pub const PAGES: &[&str] =
-    &["guide/index.md", "guide/handoff.md", "guide/servers.md", "live-and-agents.md", "self-hosting.md", "reference/cli.md"];
+pub const PAGES: &[&str] = &[
+    "guide/index.md",
+    "guide/handoff.md",
+    "guide/forks-and-merge-requests.md",
+    "guide/history-and-search.md",
+    "guide/agents.md",
+    "guide/web-ui.md",
+    "live-and-agents.md",
+    "guide/sharing.md",
+    "guide/hosted-app-and-phones.md",
+    "guide/servers.md",
+    "self-hosting.md",
+    "reference/cli.md",
+    "architecture.md",
+    "contributing.md",
+];
 
 /// The landing page, rendered as the site's `index.html` (ADR 0033).
 pub const LANDING: &str = "landing.md";
@@ -25,7 +42,20 @@ pub enum SiteError {
     Write { path: PathBuf, source: std::io::Error },
     #[error("{page} links to {target}, which isn't in docs/")]
     BrokenLink { page: String, target: String },
+    #[error("{page} is in docs/guide but not in the site's PAGES")]
+    NotAPage { page: String },
+    #[error("{page} isn't reached by following links from {GUIDE}")]
+    Unreachable { page: String },
+    #[error("{page} names `silt {command}`, which isn't in the command-line reference")]
+    UnknownCommand { page: String, command: String },
 }
+
+/// Where the guide starts, and the page every other one is reached from.
+pub const GUIDE: &str = "guide/index.md";
+
+/// The generated command-line reference, which the commands the docs name
+/// are checked against.
+pub const REFERENCE: &str = "reference/cli.md";
 
 /// A page rendered: its title, its body as HTML, and the docs it links to,
 /// relative to `docs/`.
@@ -134,19 +164,30 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// Builds the site from `docs` into `out`, failing on a link to a page the
-/// site doesn't have. Returns the files written.
+/// Builds the site from `docs` into `out`. It fails on a link to a doc that
+/// isn't there, a guide page the site leaves out or can't reach, and a
+/// `silt` command the reference doesn't have. Returns the files written.
 pub fn build(docs: &Path, out: &Path) -> Result<Vec<PathBuf>, SiteError> {
     let mut pages = Vec::new();
+    let mut markdowns = Vec::new();
     for page in PAGES {
-        let path = docs.join(page);
-        let markdown = fs::read_to_string(&path).map_err(|source| SiteError::Read { path: path.clone(), source })?;
+        let markdown = read(&docs.join(page))?;
         pages.push((*page, render(page, &markdown)));
+        markdowns.push((*page, markdown));
     }
     for (page, rendered) in &pages {
         if let Some(target) = rendered.links.iter().find(|target| !docs.join(target).is_file()) {
             return Err(SiteError::BrokenLink { page: (*page).to_owned(), target: target.clone() });
         }
+    }
+    check_guide_is_in_the_site(docs)?;
+    let links: Vec<(&str, &[String])> = pages.iter().map(|(page, rendered)| (*page, &rendered.links[..])).collect();
+    if let Some(page) = check::unreachable(&links, GUIDE).first() {
+        return Err(SiteError::Unreachable { page: (*page).to_owned() });
+    }
+    let known = check::reference_commands(&read(&docs.join(REFERENCE))?);
+    for (page, markdown) in markdowns.iter().filter(|(page, _)| *page != REFERENCE) {
+        check_commands(page, markdown, &known)?;
     }
     let titles: Vec<(String, String)> =
         pages.iter().map(|(page, rendered)| ((*page).to_owned(), rendered.title.clone())).collect();
@@ -156,8 +197,8 @@ pub fn build(docs: &Path, out: &Path) -> Result<Vec<PathBuf>, SiteError> {
         write(&path, &document(page, rendered, &titles))?;
         written.push(path);
     }
-    let path = docs.join(LANDING);
-    let markdown = fs::read_to_string(&path).map_err(|source| SiteError::Read { path: path.clone(), source })?;
+    let markdown = read(&docs.join(LANDING))?;
+    check_commands(LANDING, &markdown, &known)?;
     let landing = render(LANDING, &markdown);
     if let Some(target) = landing.links.iter().find(|target| !docs.join(target).is_file()) {
         return Err(SiteError::BrokenLink { page: LANDING.to_owned(), target: target.clone() });
@@ -179,6 +220,33 @@ pub fn landing_document(rendered: &Rendered) -> String {
         title = escape(&rendered.title),
         body = rendered.body,
     )
+}
+
+/// Fails on the first `silt` command `markdown`, the doc at `page`, names
+/// that isn't among the `known` commands of the reference.
+pub fn check_commands(page: &str, markdown: &str, known: &BTreeSet<Vec<String>>) -> Result<(), SiteError> {
+    match check::named_commands(markdown).into_iter().find(|words| !check::is_documented(words, known)) {
+        Some(words) => Err(SiteError::UnknownCommand { page: page.to_owned(), command: words.join(" ") }),
+        None => Ok(()),
+    }
+}
+
+fn check_guide_is_in_the_site(docs: &Path) -> Result<(), SiteError> {
+    let guide = docs.join("guide");
+    let entries = fs::read_dir(&guide).map_err(|source| SiteError::Read { path: guide.clone(), source })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| SiteError::Read { path: guide.clone(), source })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let page = format!("guide/{name}");
+        if name.ends_with(".md") && !PAGES.contains(&page.as_str()) {
+            return Err(SiteError::NotAPage { page });
+        }
+    }
+    Ok(())
+}
+
+fn read(path: &Path) -> Result<String, SiteError> {
+    fs::read_to_string(path).map_err(|source| SiteError::Read { path: path.to_owned(), source })
 }
 
 fn write(path: &Path, text: &str) -> Result<(), SiteError> {
@@ -248,5 +316,52 @@ mod tests {
         let landing = fs::read_to_string(out.path().join("index.html")).expect("read");
         assert!(landing.contains("class=\"landing\"") && landing.contains("href=\"guide/index.html\""), "{landing}");
         assert!(landing.contains("href=\"guide/handoff.html\""), "the landing page reaches the guide");
+    }
+
+    #[test]
+    fn the_repositorys_own_docs_name_only_commands_the_reference_has() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let known = check::reference_commands(&fs::read_to_string(root.join("docs").join(REFERENCE)).expect("read"));
+        for doc in ["README.md", "CONTRIBUTING.md", "CLAUDE.md"] {
+            let markdown = fs::read_to_string(root.join(doc)).expect("read");
+            check_commands(doc, &markdown, &known).expect("every command is in the reference");
+        }
+    }
+
+    #[test]
+    fn a_guide_page_left_out_of_the_site_fails_the_build() {
+        let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let copy = tempfile::tempdir().expect("temp dir");
+        copy_dir(&docs, copy.path());
+        fs::write(copy.path().join("guide/lost.md"), "# Lost\n").expect("write");
+        let out = tempfile::tempdir().expect("temp dir");
+        let error = build(copy.path(), out.path()).expect_err("the build fails");
+        assert!(matches!(error, SiteError::NotAPage { ref page } if page == "guide/lost.md"), "{error}");
+    }
+
+    #[test]
+    fn a_command_the_reference_lacks_fails_the_build() {
+        let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let copy = tempfile::tempdir().expect("temp dir");
+        copy_dir(&docs, copy.path());
+        let handoff = copy.path().join("guide/handoff.md");
+        let text = fs::read_to_string(&handoff).expect("read");
+        fs::write(&handoff, format!("{text}\nThen `silt frobnicate --now`.\n")).expect("write");
+        let out = tempfile::tempdir().expect("temp dir");
+        let error = build(copy.path(), out.path()).expect_err("the build fails");
+        assert_eq!(error.to_string(), "guide/handoff.md names `silt frobnicate`, which isn't in the command-line reference");
+    }
+
+    fn copy_dir(from: &Path, to: &Path) {
+        for entry in fs::read_dir(from).expect("read dir") {
+            let entry = entry.expect("entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("type").is_dir() {
+                fs::create_dir_all(&target).expect("mkdir");
+                copy_dir(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).expect("copy");
+            }
+        }
     }
 }
