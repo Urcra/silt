@@ -76,6 +76,7 @@ const PATHS = {
   ),
   laptop: <path d="M3.5 3.5h9v6.5h-9zM1.5 12.5h13" />,
   phone: <path d="M5 1.5h6v13H5zM7.5 12.5h1" />,
+  cloud: <path d="M4.5 12.5h7.25a2.75 2.75 0 0 0 .4-5.47A4 4 0 0 0 4.4 6.6 3 3 0 0 0 4.5 12.5z" />,
   clock: (
     <>
       <circle cx="8" cy="8" r="5.5" />

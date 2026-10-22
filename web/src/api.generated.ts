@@ -101,6 +101,20 @@ export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<str
 
 export type CloneInfo = { repo: string, path: string, };
 
+export type CloudLaunch = { 
+/**
+ * As claude.ai names it.
+ */
+id: string, url: string, repo: string, task: string, started_ms: number, 
+/**
+ * What claude warned about while starting it.
+ */
+warnings: Array<string>, 
+/**
+ * The thread recording it, once one does.
+ */
+thread: string | null, };
+
 export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, } | { "at": "unknown" };
 
 export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, };
@@ -578,7 +592,12 @@ server: string | null,
 /**
  * It stays on this machine only, by its project's choice.
  */
-local_only: boolean, };
+local_only: boolean, 
+/**
+ * The Claude Code cloud session it records, as claude.ai names it
+ * (ADR 0040). A fork doesn't inherit it.
+ */
+cloud: string | null, };
 
 export type TurnInfo = { 
 /**

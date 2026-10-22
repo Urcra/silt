@@ -54,6 +54,18 @@ pub struct ThreadSummary {
     /// It stays on this machine only, by its project's choice.
     #[serde(default)]
     pub local_only: bool,
+    /// The Claude Code cloud session it records, as claude.ai names it
+    /// (ADR 0040). A fork doesn't inherit it.
+    #[serde(default)]
+    pub cloud: Option<String>,
+}
+
+/// The cloud session among a thread's own deltas.
+pub fn cloud_session<'a>(own: impl IntoIterator<Item = &'a silt_log::Delta>) -> Option<String> {
+    own.into_iter().find_map(|delta| match &delta.op {
+        silt_log::Op::Conv(silt_log::ConvOp::CloudSession { id, .. }) => Some(id.to_string()),
+        _ => None,
+    })
 }
 
 /// What this person keeps about a thread for themselves (ADR 0024).

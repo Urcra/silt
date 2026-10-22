@@ -13,7 +13,7 @@ use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
 use silt_log::{Author, ConvOp, Delta, Family, Op, SessionFile, SessionRef, TurnMark};
 use silt_store::{CheckoutId, SearchRow, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
-use silt_types::{ActorId, FamilyId, ThreadId};
+use silt_types::{ActorId, CloudSessionId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::attribution;
@@ -291,6 +291,32 @@ impl Core {
             checkout: created.checkout,
             agent_cwd: created.agent_cwd,
         })
+    }
+
+    /// Records that the session runs in the cloud, once per thread.
+    pub(crate) async fn mark_cloud(
+        &mut self,
+        started: SessionStarted,
+        agent: &str,
+        id: CloudSessionId,
+    ) -> Result<SessionStarted, CoreError> {
+        let (Some(session_id), Ok(thread)) = (&started.session_id, started.thread.parse::<ThreadId>()) else {
+            return Ok(started);
+        };
+        let Some(family) = self.threads.get(&thread).map(|record| record.family) else {
+            return Ok(started);
+        };
+        if self
+            .families
+            .get(&family)
+            .and_then(|family| family.thread(thread))
+            .is_some_and(|state| state.cloud_session().is_some())
+        {
+            return Ok(started);
+        }
+        let session = SessionRef { agent: resolve_agent(agent)?.id().to_owned(), id: session_id.clone() };
+        self.append_conv(family, thread, agent_author(&session), ConvOp::CloudSession { session, id }).await?;
+        Ok(started)
     }
 
     /// A new thread for the clone at `cwd`: its family imported from the

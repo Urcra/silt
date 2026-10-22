@@ -27,6 +27,7 @@ function thread(id: string, server: string | null, repo: string, local_only = fa
     visibility: null,
     server,
     local_only,
+    cloud: null,
   }
 }
 

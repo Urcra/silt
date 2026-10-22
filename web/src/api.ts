@@ -7,6 +7,7 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  CloudLaunch,
   CommentOn,
   CommentView,
   CommitView,
@@ -156,6 +157,10 @@ export const api = {
   agents: () => request<AgentChoices>('GET', '/api/agents'),
   startAgent: (agent: string, where: { thread: string } | { clone: string }, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  // Claude Code cloud sessions, through the person's own `claude` (ADR 0040).
+  cloudStart: (clone: string, task: string) => request<CloudLaunch>('POST', '/api/cloud', { clone, task }),
+  cloudLaunches: () => request<CloudLaunch[]>('GET', '/api/cloud'),
+  cloudSend: (thread: string, text: string) => request<null>('POST', `/api/threads/${thread}/cloud/send`, { text }),
   branches: (clone: string) => request<string[]>('GET', `/api/clones/branches?path=${encodeURIComponent(clone)}`),
   projects: () => request<Project[]>('GET', '/api/projects'),
   // Orgs, devices and notification settings are each server's own: the

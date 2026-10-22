@@ -26,6 +26,9 @@ pub enum Request {
         /// be its edits rather than where it started.
         #[serde(default)]
         existing: bool,
+        /// The Claude Code cloud session it runs as, from the container.
+        #[serde(default)]
+        cloud: Option<silt_types::CloudSessionId>,
     },
     /// An agent hook fired; the input is what the agent passed to the hook.
     Hook {
@@ -314,6 +317,23 @@ pub enum Request {
     /// The branches a new thread of `clone` can start from.
     Branches {
         clone: PathBuf,
+    },
+    /// Starts a Claude Code cloud session for `clone` with `task` as its
+    /// first message (ADR 0040).
+    CloudStart {
+        clone: PathBuf,
+        task: String,
+    },
+    /// A cloud session this daemon started; sent by the start itself.
+    CloudLaunched {
+        launch: CloudLaunch,
+    },
+    /// The cloud sessions this daemon started.
+    CloudLaunches,
+    /// Queues `text` into the cloud session the thread records.
+    CloudSend {
+        thread: String,
+        text: String,
     },
     /// The projects the person works in, here and on the server.
     Projects,
@@ -812,6 +832,22 @@ pub struct CloneInfo {
     pub path: PathBuf,
 }
 
+/// A cloud session this daemon started (ADR 0040).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct CloudLaunch {
+    /// As claude.ai names it.
+    pub id: String,
+    pub url: String,
+    pub repo: String,
+    pub task: String,
+    pub started_ms: i64,
+    /// What claude warned about while starting it.
+    pub warnings: Vec<String>,
+    /// The thread recording it, once one does.
+    pub thread: Option<String>,
+}
+
 /// What changed, for the browsers listening on `/api/events` (ADR 0021).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -922,6 +958,7 @@ mod tests {
             BusEvent::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
+            CloudLaunch::decl(&config),
             CommentLocation::decl(&config),
             CommentOn::decl(&config),
             CommentView::decl(&config),
