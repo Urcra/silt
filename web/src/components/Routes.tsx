@@ -33,7 +33,7 @@ export const ProjectsRoute = Projects
 export const AddProjectRoute = AddProjectPage
 export const OrgsRoute = () => <Plain view={Orgs} />
 export const DevicesRoute = Devices
-export const NeedsYouRoute = () => <Plain view={NeedsYou} />
+export const NeedsYouRoute = NeedsYou
 export const GraphRoute = Graph
 export const SearchRoute = Search
 export const FileRoute = () => <Plain view={FilePage} />

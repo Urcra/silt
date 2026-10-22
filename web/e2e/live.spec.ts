@@ -501,7 +501,7 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
       })
       return ((await response.json()) as string).split('+fn acp() {}').length - 1
     }, thread)
-  expect(await edits()).toBe(2)
+  await expect.poll(edits).toBe(2)
 
   await page.getByRole('button', { name: 'revert to turn 1' }).click()
   await page.getByRole('button', { name: 'Revert', exact: true }).click()
@@ -785,7 +785,7 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
   await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
   await page.getByLabel('code comment').fill('give it a better name')
-  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await page.getByRole('button', { name: 'Comment', exact: true }).click()
   await expect(changes.getByText('alice: give it a better name')).toBeVisible()
 
   await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()

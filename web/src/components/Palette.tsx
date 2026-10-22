@@ -34,7 +34,7 @@ export function Palette() {
         type="button"
         aria-label="command palette"
         onClick={() => setOpen(true)}
-        className={cx(buttonClass('secondary'), 'justify-between text-fg-2 md:min-w-[220px]')}
+        className={cx(buttonClass('secondary'), 'justify-between text-fg-2 max-md:min-w-11 max-md:justify-center max-md:border-transparent max-md:bg-transparent md:min-w-[220px]')}
       >
         <span className="inline-flex items-center gap-1.5">
           <Icon name="search" />

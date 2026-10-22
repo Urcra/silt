@@ -163,6 +163,13 @@ test('a new thread', async ({ page }) => {
   })
 })
 
+test('needs you', async ({ page }) => {
+  await open(page, '/needs-you')
+  await shoot(page, 'needs-you', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'waiting on you' }).getByRole('group').first()).toBeVisible()
+  })
+})
+
 test('devices and pairing a phone', async ({ page }) => {
   await open(page, '/devices')
   await shoot(page, 'devices', async (shown) => {

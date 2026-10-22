@@ -13,7 +13,7 @@ import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Input, Ske
 import { CommentThread } from './CommentThread'
 import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
-import { type DiffLayout, DiffView } from './DiffView'
+import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { Page } from './Page'
 
@@ -236,6 +236,79 @@ function Approval({
 
 type MrTab = 'changes' | 'conversation' | 'review'
 
+/** A merge request's files one at a time, as a phone reviews them (the Phone — review a diff board). */
+function PhoneFiles({
+  id,
+  files,
+  at,
+  onAt,
+  seenNow,
+  onSeen,
+  diff,
+  counts,
+  commenting,
+  target,
+}: {
+  id: string
+  files: MrFile[]
+  at: number
+  onAt: (at: number) => void
+  seenNow: (file: MrFile) => boolean
+  onSeen: (path: string, seen: boolean) => void
+  diff: string
+  counts: Map<string, { added: number; removed: number }>
+  commenting: Commenting
+  target: string
+}) {
+  const file = files[at]
+  const seen = files.filter(seenNow).length
+  const stats = counts.get(file.path)
+  const base = (path: string) => path.split('/').pop() ?? path
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center gap-2 border-b border-line bg-surface-1 px-4 py-1">
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-mono text-xs">{file.path}</span>
+          <span className="flex items-center gap-2 font-mono text-2xs text-fg-2">
+            <span>
+              file {at + 1} of {files.length} · <span data-testid="seen-count">{seen}/{files.length} seen</span>
+            </span>
+            <CopyLink path={`/mr/${id}#file-${file.path}`} thread={target} label="Copy link" name="link" className="-my-2 inline-flex min-h-11 items-center text-accent-fg" />
+          </span>
+        </span>
+        {stats && <Counts added={stats.added} removed={stats.removed} />}
+        <label className="flex min-h-11 items-center gap-1.5 text-xs">
+          <input
+            type="checkbox"
+            aria-label={`seen ${file.path}`}
+            checked={seenNow(file)}
+            onChange={(event) => onSeen(file.path, event.target.checked)}
+            className="h-5 w-5 accent-[var(--accent)]"
+          />
+          Seen
+        </label>
+      </div>
+      <DiffView text={diff} only={file.path} commenting={commenting} bare />
+      {files.length > 1 && (
+        <nav aria-label="files" className="flex items-center justify-between gap-2 border-t border-line px-2 py-1">
+          {at > 0 ? (
+            <Button variant="ghost" onClick={() => onAt(at - 1)}>
+              ← {base(files[at - 1].path)}
+            </Button>
+          ) : (
+            <span />
+          )}
+          {at < files.length - 1 && (
+            <Button variant="ghost" onClick={() => onAt(at + 1)}>
+              {base(files[at + 1].path)} →
+            </Button>
+          )}
+        </nav>
+      )}
+    </div>
+  )
+}
+
 export function MergeRequest({ id }: { id: string }) {
   useTopic('mrs')
   const now = useNow()
@@ -247,6 +320,8 @@ export function MergeRequest({ id }: { id: string }) {
   const [tab, setTab] = useState<MrTab>('changes')
   const [layout, setLayout] = useState<DiffLayout>('unified')
   const wide = useMedia(WIDE)
+  const phone = useMedia('(max-width: 767px)')
+  const [fileAt, setFileAt] = useState(0)
   const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
   const picked = /^file-(.+)$/.exec(safeDecode(hash))?.[1]
   const fork = details.data?.mr.fork
@@ -316,11 +391,11 @@ export function MergeRequest({ id }: { id: string }) {
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-2">
             {forkThread?.owner && <Avatar name={forkThread.owner} size={18} />}
             <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'Merge fork'}</span>
-            <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: mr.fork }}>
+            <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.fork }}>
               {short(mr.fork)}
             </Link>
             <span>into</span>
-            <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: mr.target }}>
+            <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.target }}>
               {short(mr.target)}
             </Link>
             <span>
@@ -373,7 +448,31 @@ export function MergeRequest({ id }: { id: string }) {
           </span>
         )}
       </div>
-      {tab === 'changes' && (
+      {tab === 'changes' && phone && files.length > 0 && (
+        <PhoneFiles
+          id={id}
+          files={files}
+          at={Math.min(fileAt, files.length - 1)}
+          onAt={setFileAt}
+          seenNow={seenNow}
+          onSeen={markSeen}
+          diff={diff}
+          counts={counts}
+          commenting={{
+            thread: mr.fork,
+            comments: comments.data ?? [],
+            agent: "the fork's agent",
+            onChanged: reloadComments,
+            onComment: async (at, text, send) => {
+              const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
+              await reloadComments()
+              if (send) await toFork(reviewPrompt([made]))
+            },
+          }}
+          target={mr.target}
+        />
+      )}
+      {tab === 'changes' && !(phone && files.length > 0) && (
         <div className="flex flex-col md:flex-row">
           {files.length > 0 && (
             <nav aria-label="files" className="flex shrink-0 flex-col gap-0.5 border-b border-line p-3 md:w-64 md:border-r md:border-b-0">

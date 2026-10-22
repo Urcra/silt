@@ -90,7 +90,7 @@ function Crumbs() {
   return (
     <ol aria-label="breadcrumbs" className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
       <li>
-        <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
+        <Link to="/" className="inline-flex items-center text-[15px] font-medium tracking-[-0.04em] text-fg-1 max-md:min-h-11 max-md:px-1">
           silt
         </Link>
       </li>
@@ -205,13 +205,13 @@ function useSidebarWidth() {
   return { width, drag, key }
 }
 
-function Tab({ to, icon, children, exact = false }: { to: string; icon: 'alert' | 'thread' | 'merge' | 'search'; children: ReactNode; exact?: boolean }) {
+function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'thread' | 'merge' | 'search'; children: ReactNode; at: (path: string) => boolean }) {
+  const current = at(useRouterState({ select: (state) => state.location.pathname }))
   return (
     <Link
       to={to}
-      activeOptions={{ exact }}
-      className="flex min-h-14 flex-col items-center justify-center gap-0.5 text-2xs text-fg-2"
-      activeProps={{ className: 'text-accent-fg' }}
+      aria-current={current ? 'page' : undefined}
+      className={cx('flex min-h-14 flex-col items-center justify-center gap-0.5 text-2xs', current ? 'text-accent-fg' : 'text-fg-2')}
     >
       <Icon name={icon} className="h-5 w-5" />
       <span>{children}</span>
@@ -229,17 +229,17 @@ function TabBar() {
       aria-label="tabs"
       className="grid grid-cols-4 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden"
     >
-      <Tab to="/needs-you" icon="alert">
+      <Tab to="/needs-you" icon="inbox" at={(path) => path === '/needs-you'}>
         Needs you
         {waiting > 0 && <span className="ml-1 rounded-full bg-accent px-1 text-on-accent">{waiting}</span>}
       </Tab>
-      <Tab to="/" icon="thread" exact>
+      <Tab to="/" icon="thread" at={(path) => path === '/' || path.startsWith('/t/')}>
         Threads
       </Tab>
-      <Tab to="/mrs" icon="merge">
+      <Tab to="/mrs" icon="merge" at={(path) => path === '/mrs' || path.startsWith('/mr/')}>
         Reviews
       </Tab>
-      <Tab to="/search" icon="search">
+      <Tab to="/search" icon="search" at={(path) => path === '/search'}>
         Search
       </Tab>
     </nav>
