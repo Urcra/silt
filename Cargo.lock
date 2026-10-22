@@ -4911,7 +4911,6 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "exn",
- "rustix",
  "serde",
  "serde_json",
  "silt-agents",

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
@@ -21,7 +22,7 @@ use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
 use crate::remote::{self, Remote};
 use crate::sessions::{self, PendingSession, Session};
-use crate::watch::{self, Watcher};
+use crate::watch::{Watched, Watchers};
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
@@ -146,7 +147,7 @@ pub(crate) struct Checkout {
     pub(crate) family: FamilyId,
     pub(crate) repo: Repo,
     pub(crate) bridge: Bridge,
-    pub(crate) _watcher: Option<Watcher>,
+    pub(crate) _watched: Option<Watched>,
 }
 
 pub struct Core {
@@ -212,6 +213,8 @@ pub struct Core {
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
     pub(crate) heads: HashMap<CheckoutId, GitOid>,
+    /// What each checkout's HEAD files looked like then.
+    pub(crate) head_stamps: HashMap<CheckoutId, silt_git::HeadStamp>,
     /// How much of each family's log its stored snapshot covers.
     pub(crate) snapshotted: HashMap<FamilyId, usize>,
     /// The position of each family's last stored delta this daemon holds.
@@ -243,6 +246,7 @@ pub struct Core {
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
     /// Sessions with a backlog whose next chunk is queued.
     pub(crate) draining: HashSet<String>,
+    watchers: Arc<Watchers>,
 }
 
 /// How long a vanished file waits for the file it was renamed to.
@@ -405,6 +409,7 @@ impl Core {
             last_listings: HashMap::new(),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
+            head_stamps: HashMap::new(),
             snapshotted: HashMap::new(),
             positions: HashMap::new(),
             web: None,
@@ -419,6 +424,7 @@ impl Core {
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
             draining: HashSet::new(),
+            watchers: Watchers::new(),
         };
         for thread in core.store.threads().await? {
             core.threads.insert(thread.id, thread);
@@ -703,6 +709,16 @@ impl Core {
         }
     }
 
+    /// Whether nothing needs the tick soon: no agent running or awaited, no
+    /// backlog draining and no server whose long polls the tick keeps going.
+    pub(crate) fn idle(&self) -> bool {
+        self.remotes.is_empty()
+            && self.pending.is_empty()
+            && self.acp.is_empty()
+            && self.draining.is_empty()
+            && !self.sessions.iter().any(|session| session.live)
+    }
+
     /// Whether a wrapper records the thread on its own, so its changes and
     /// transcripts are left to it.
     fn recorded_elsewhere(&self, thread: ThreadId) -> bool {
@@ -720,10 +736,10 @@ impl Core {
             return Ok(());
         }
         let events = self.events.clone();
-        let watcher = watch::watch(&path, move |paths| {
+        let watched = self.watchers.watch(&path, move |paths| {
             let _ = events.send(Event::Changed { checkout: id, paths, noticed: Instant::now(), settled: false });
         })?;
-        self.checkouts.get_mut(&id).expect("just held")._watcher = Some(watcher);
+        self.checkouts.get_mut(&id).expect("just held")._watched = Some(watched);
         Ok(())
     }
 
@@ -741,7 +757,7 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid("checkout of an unknown thread".into()))?;
         let repo = Repo::discover(&record.path)?;
         let bridge = Bridge::new(record.actor, record.thread, entries);
-        self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watcher: None });
+        self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watched: None });
         Ok(())
     }
 
@@ -1422,6 +1438,11 @@ impl Core {
     /// is retried next time.
     async fn check_commit(&mut self, id: CheckoutId) -> Result<(), CoreError> {
         let checkout = &self.checkouts[&id];
+        // Taken first, so a commit made while HEAD is read changes it.
+        let stamp = checkout.repo.head_stamp();
+        if self.heads.contains_key(&id) && self.head_stamps.get(&id) == Some(&stamp) {
+            return Ok(());
+        }
         let Some(head) = checkout.repo.head_commit()? else {
             return Ok(());
         };
@@ -1432,6 +1453,7 @@ impl Core {
         };
         if known == Some(head) {
             self.heads.insert(id, head);
+            self.head_stamps.insert(id, stamp);
             return Ok(());
         }
         let branch = checkout.repo.head_branch()?;
@@ -1445,6 +1467,7 @@ impl Core {
         repo.protect(&thread.to_string(), head)?;
         self.record_bundle(family_id, thread, &repo, head, known.as_slice()).await?;
         self.heads.insert(id, head);
+        self.head_stamps.insert(id, stamp);
         Ok(())
     }
 

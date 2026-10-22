@@ -87,6 +87,19 @@ impl Repo {
         }
     }
 
+    /// When what `head_commit` reads last changed: `HEAD`, the branch it
+    /// names and the packed refs. Unchanged, HEAD is the same commit, which
+    /// a few `stat`s tell more cheaply than resolving it.
+    pub fn head_stamp(&self) -> HeadStamp {
+        let modified = |path: &Path| std::fs::symlink_metadata(path).and_then(|metadata| metadata.modified()).ok();
+        let head = self.repo.git_dir().join("HEAD");
+        let branch = std::fs::read_to_string(&head).ok().and_then(|text| {
+            let name = text.trim().strip_prefix("ref: ")?.to_owned();
+            modified(&self.repo.common_dir().join(name))
+        });
+        HeadStamp([modified(&head), branch, modified(&self.repo.common_dir().join("packed-refs"))])
+    }
+
     pub fn head_branch(&self) -> Result<Option<String>, GitError> {
         let name = self.repo.head_name().map_err(GitError::gix)?;
         Ok(name.map(|name| name.shorten().to_str_lossy().into_owned()))
@@ -350,6 +363,10 @@ fn finish(child: std::process::Child, args: &[&str]) -> Result<Vec<u8>, GitError
     }
     Ok(output.stdout)
 }
+
+/// See [`Repo::head_stamp`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadStamp([Option<std::time::SystemTime>; 3]);
 
 /// A file in the worktree, as `Repo::worktree_listing_under` found it.
 #[derive(Debug, Clone, PartialEq, Eq)]

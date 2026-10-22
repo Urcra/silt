@@ -212,23 +212,27 @@ fn idle(daemon: &Daemon) -> Result<f64, Exn<BenchError>> {
 }
 
 fn cpu_share(pid: u32, over: Duration) -> Result<f64, Exn<BenchError>> {
-    let before = cpu_ticks(pid)?;
+    let before = cpu_ns(pid)?;
     std::thread::sleep(over);
-    let used = cpu_ticks(pid)? - before;
-    #[expect(clippy::cast_precision_loss, reason = "clock ticks over a few seconds")]
-    let seconds = used as f64 / rustix::param::clock_ticks_per_second() as f64;
+    let used = cpu_ns(pid)?.saturating_sub(before);
+    #[expect(clippy::cast_precision_loss, reason = "nanoseconds over a few seconds")]
+    let seconds = used as f64 / 1e9;
     Ok(seconds / over.as_secs_f64())
 }
 
-/// CPU time of the process and the children it waited for, such as git.
-fn cpu_ticks(pid: u32) -> Result<u64, Exn<BenchError>> {
-    let stat =
-        fs::read_to_string(format!("/proc/{pid}/stat")).or_raise(|| BenchError("cannot read the daemon's CPU time".into()))?;
-    // The command name, in parentheses, may hold spaces.
-    let fields: Vec<&str> = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or_default().split_whitespace().collect();
-    // utime, stime, cutime and cstime: fields 14 to 17 of proc(5), counted
-    // from the state, field 3.
-    fields.get(11..15).ok_or_else(|| fail("the daemon's stat is unreadable"))?.iter().try_fold(0, |total, field| {
-        field.parse::<u64>().map(|ticks| total + ticks).or_raise(|| BenchError("the daemon's stat is unreadable".into()))
-    })
+/// CPU time the process's threads have run, in nanoseconds. Clock ticks of
+/// `/proc/<pid>/stat` are 10 ms, a tenth of the whole budget over its
+/// window, so each thread's `schedstat` is summed instead.
+fn cpu_ns(pid: u32) -> Result<u64, Exn<BenchError>> {
+    let failed = || BenchError("cannot read the daemon's CPU time".into());
+    let mut total = 0;
+    for task in fs::read_dir(format!("/proc/{pid}/task")).or_raise(failed)? {
+        // A thread that ended meanwhile has nothing to add.
+        let Ok(schedstat) = fs::read_to_string(task.or_raise(failed)?.path().join("schedstat")) else {
+            continue;
+        };
+        let ran = schedstat.split_whitespace().next().ok_or_else(|| fail("the daemon's schedstat is unreadable"))?;
+        total += ran.parse::<u64>().or_raise(|| BenchError("the daemon's schedstat is unreadable".into()))?;
+    }
+    Ok(total)
 }

@@ -43,6 +43,9 @@ struct Cli {
     /// Measure only these budgets
     #[arg(long, global = true)]
     only: Vec<String>,
+    /// Leave each scenario's data dir and checkouts in /tmp, to look into
+    #[arg(long, global = true)]
+    keep: bool,
 }
 
 #[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
@@ -102,15 +105,19 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     let wanted: Vec<&str> = selected.iter().map(|budget| budget.name).collect();
     let mut measured: HashMap<&str, Measured> = HashMap::new();
     for scenario in &scenarios {
-        measured.extend(scenario.run(&silt, &fixtures, &wanted).await?);
+        measured.extend(scenario.run(&silt, &fixtures, &wanted, cli.keep).await?);
     }
     if cli.mode == Mode::Check {
         // ADR 0034: one more run before an enforced budget fails, for the
-        // noise of a busy machine.
+        // noise of a busy machine. Other work on the machine only ever adds
+        // to a measurement, so the better of the two stands.
         for scenario in &scenarios {
             if scenario.budgets().iter().any(|name| over(&selected, &measured, name)) {
                 eprintln!("silt-bench: over budget; measuring {scenario:?} again");
-                measured.extend(scenario.run(&silt, &fixtures, &wanted).await?);
+                for (name, again) in scenario.run(&silt, &fixtures, &wanted, cli.keep).await? {
+                    let better = measured.get(name).map_or(again, |first| budgets::better(*first, again));
+                    measured.insert(name, better);
+                }
             }
         }
     }

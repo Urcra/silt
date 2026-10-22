@@ -87,7 +87,7 @@ pub const BUDGETS: &[Budget] = &[
         name: DAEMON_IDLE,
         measures: "CPU of a daemon with nothing to do, over 10 s",
         limit: Limit::CoreShare(0.001),
-        status: Status::Pending("M18-08"),
+        status: Status::Enforced,
     },
     Budget {
         name: "web.thread",
@@ -154,6 +154,17 @@ impl fmt::Display for Status {
             Self::Pending(task) => write!(f, "pending, {task}"),
             Self::Elsewhere(place) => write!(f, "measured by {place}"),
         }
+    }
+}
+
+/// The smaller of two measurements of one budget, all of which are better
+/// smaller; `again` when they're of different kinds.
+pub fn better(first: Measured, again: Measured) -> Measured {
+    match (first, again) {
+        (Measured::Time(first), Measured::Time(again)) => Measured::Time(first.min(again)),
+        (Measured::Ratio(first), Measured::Ratio(again)) => Measured::Ratio(first.min(again)),
+        (Measured::CoreShare(first), Measured::CoreShare(again)) => Measured::CoreShare(first.min(again)),
+        _ => again,
     }
 }
 
@@ -257,6 +268,14 @@ mod tests {
         assert_eq!(Measured::Ratio(2.04).to_string(), "2.04×");
         assert_eq!(Measured::CoreShare(0.0123).to_string(), "1.23 % of a core");
         assert_eq!(Limit::CoreShare(0.001).to_string(), "≤ 0.10 % of a core");
+    }
+
+    #[test]
+    fn the_better_of_two_runs_stands() {
+        let (fast, slow) = (Duration::from_millis(18), Duration::from_millis(21));
+        assert_eq!(better(Measured::Time(slow), Measured::Time(fast)), Measured::Time(fast));
+        assert_eq!(better(Measured::Time(fast), Measured::Time(slow)), Measured::Time(fast));
+        assert_eq!(better(Measured::CoreShare(0.002), Measured::CoreShare(0.0005)), Measured::CoreShare(0.0005));
     }
 
     #[test]

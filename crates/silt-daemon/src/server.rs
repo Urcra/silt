@@ -2,6 +2,8 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use silt_store::Store;
@@ -17,6 +19,10 @@ use crate::core::{Core, CoreError, Event};
 use crate::protocol::{Request, Response};
 
 const TAIL_INTERVAL: Duration = Duration::from_millis(300);
+/// How often a daemon with nothing going on looks for new commits and for
+/// what was recorded without it: often enough to be soon, rare enough to
+/// cost nothing.
+const IDLE_TICK: Duration = Duration::from_secs(2);
 const SHUTDOWN_REPLY_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
@@ -103,10 +109,12 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
     });
     let tick_events = events.clone();
+    let idle = Arc::new(AtomicBool::new(false));
+    let ticking_idle = Arc::clone(&idle);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(TAIL_INTERVAL);
         loop {
-            interval.tick().await;
+            let wait = if ticking_idle.load(Ordering::Relaxed) { IDLE_TICK } else { TAIL_INTERVAL };
+            tokio::time::sleep(wait).await;
             if tick_events.send(Event::Tick).is_err() {
                 break;
             }
@@ -114,6 +122,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     });
 
     while let Some(event) = inbox.recv().await {
+        idle.store(core.idle(), Ordering::Relaxed);
         let _turn = capture_lock.turn().await?;
         if let Err(error) = core.catch_up_with_store().await {
             warn!(%error, "could not take in what was recorded without the daemon");
