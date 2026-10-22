@@ -3,6 +3,7 @@
 //! a file inside a tool call.
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -537,6 +538,50 @@ fn track_attaches_to_a_session_started_without_silt() {
     let thread = env.thread();
     assert!(eventually(|| env.stdout(&["show", &thread]).contains("> Please add a farewell line to main")));
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+}
+
+/// What a cloud session's `SessionStart` hook does, where Claude Code starts
+/// without Silt: run again on resume, it records into the same thread.
+#[test]
+fn track_from_hook_records_the_hooks_session_once() {
+    let env = Env::new();
+    let session = "11111111-2222-4333-8444-777777777777";
+    let ran = Command::new(&env.fake)
+        .args(["--session-id", session])
+        .current_dir(&env.repo)
+        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+        .env("SILT_HOME", &env.silt_home)
+        .output()
+        .expect("fake claude runs");
+    assert!(ran.status.success());
+
+    let input = serde_json::json!({
+        "session_id": session,
+        "cwd": env.repo,
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    });
+    for _ in 0..2 {
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+            .args(["track", "--from-hook"])
+            .current_dir("/")
+            .env("SILT_HOME", &env.silt_home)
+            .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("silt runs");
+        hook.stdin.take().expect("stdin").write_all(input.to_string().as_bytes()).expect("write the hook input");
+        let output = hook.wait_with_output().expect("silt exits");
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("recording this session in thread"), "{stderr}");
+    }
+
+    assert_eq!(env.stdout(&["log"]).lines().count(), 1, "{}", env.stdout(&["log"]));
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["show", &thread]).contains("> Please add a farewell line to main")));
 }
 
 /// A session longer than one read is taken in whole, each line once.

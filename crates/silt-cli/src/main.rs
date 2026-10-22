@@ -42,6 +42,14 @@ enum Command {
     Track {
         #[arg(long, default_value = "claude")]
         agent: String,
+        /// Record this session rather than the most recent one
+        #[arg(long, conflicts_with = "from_hook")]
+        session: Option<String>,
+        /// Record the session whose hook input is on stdin, and capture that
+        /// hook; for a `SessionStart` hook in an environment that starts the
+        /// agent itself, such as a cloud session
+        #[arg(long)]
+        from_hook: bool,
     },
     /// Continue a thread here: its code, its conversation and its agent session
     Resume {
@@ -608,7 +616,17 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
         Command::Opencode(run) => commands::run_agent("opencode", run.isolated, &run.args),
         Command::Copilot(run) => commands::run_agent("copilot", run.isolated, &run.args),
-        Command::Track { agent } => commands::track(&agent),
+        Command::Track { agent, session, from_hook } => {
+            if from_hook {
+                // A failed hook must not stop the agent's session.
+                if let Err(error) = commands::track_from_hook(&agent) {
+                    eprintln!("silt: could not record this session: {}", render::safe(&explain(&error)));
+                }
+                Ok(())
+            } else {
+                commands::track(&agent, session.as_deref())
+            }
+        }
         Command::Resume { thread, continued } => {
             commands::resume(&thread, continued.here, continued.agent.as_deref(), &continued.args)
         }

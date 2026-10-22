@@ -8,8 +8,15 @@ use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd, 
 
 /// The site's pages, in the order the sidebar lists them, by their path
 /// under `docs/`.
-pub const PAGES: &[&str] =
-    &["guide/index.md", "guide/handoff.md", "guide/servers.md", "live-and-agents.md", "self-hosting.md", "reference/cli.md"];
+pub const PAGES: &[&str] = &[
+    "guide/index.md",
+    "guide/handoff.md",
+    "guide/servers.md",
+    "guide/cloud.md",
+    "live-and-agents.md",
+    "self-hosting.md",
+    "reference/cli.md",
+];
 
 /// The landing page, rendered as the site's `index.html` (ADR 0033).
 pub const LANDING: &str = "landing.md";
