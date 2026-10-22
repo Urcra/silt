@@ -66,12 +66,27 @@ fn unread(snapshot: &Snapshot, stored: &Arc<StoredDeltas>, repo: &Repo) -> Resul
     let Ok(mut family) = Family::from_snapshot_unread(&snapshot.data, covered, last, read) else {
         return Ok(None);
     };
-    for delta in stored.decode(covered..stored.len())? {
-        if let Err(error) = family.apply(delta, &mut RepoBases(repo)) {
-            warn!(%error, "skipping a delta that no longer applies");
+    apply_stored(&mut family, stored.decode(covered..stored.len())?, &mut RepoBases(repo));
+    Ok(Some(Loaded::Projected { family: Box::new(family), covered }))
+}
+
+/// Applies deltas read from the store, skipping those that no longer apply.
+/// One lost delta leaves every later one built on it without a parent, so
+/// what was skipped is told once, not for each of thousands.
+pub(crate) fn apply_stored(family: &mut Family, stored: Vec<Delta>, bases: &mut dyn BaseText) {
+    let mut skipped = 0;
+    let mut first = None;
+    for delta in stored {
+        let id = delta.span.first();
+        if let Err(error) = family.apply(delta, bases) {
+            tracing::debug!(%error, %id, "skipping a delta that no longer applies");
+            skipped += 1;
+            first.get_or_insert((id, error));
         }
     }
-    Ok(Some(Loaded::Projected { family: Box::new(family), covered }))
+    if let Some((id, error)) = first {
+        warn!(skipped, first = %id, %error, "skipping stored deltas that no longer apply");
+    }
 }
 
 /// Saves the family's projection; returns how much of its log it covers.
@@ -91,12 +106,8 @@ pub(crate) fn replay(snapshot: Option<&Snapshot>, mut stored: Vec<Delta>, bases:
             .ok()
     });
     let mut family = restored.unwrap_or_default();
-    let covered = family.log().len();
-    for delta in stored {
-        if let Err(error) = family.apply(delta, bases) {
-            warn!(%error, "skipping a delta that no longer applies");
-        }
-    }
+    let covered = family.log_len();
+    apply_stored(&mut family, stored, bases);
     (family, covered)
 }
 

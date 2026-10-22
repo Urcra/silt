@@ -170,11 +170,7 @@ impl Core {
                     continue;
                 };
                 let mut projected = Family::new();
-                for delta in kept {
-                    if let Err(error) = projected.apply(delta, &mut RepoBases(&repo)) {
-                        warn!(%error, "skipping a delta that no longer applies");
-                    }
-                }
+                crate::load::apply_stored(&mut projected, kept, &mut RepoBases(&repo));
                 self.families.insert(family, projected);
             } else {
                 self.raw.insert(family, kept);

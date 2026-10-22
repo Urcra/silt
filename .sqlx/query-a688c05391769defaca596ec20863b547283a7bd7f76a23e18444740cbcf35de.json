@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE delta_chunks SET codec = ?, data = ? WHERE family_id = ? AND first_seq = ? AND codec = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "a688c05391769defaca596ec20863b547283a7bd7f76a23e18444740cbcf35de"
+}

@@ -446,6 +446,9 @@ pub enum Request {
     AcpStop {
         thread: String,
     },
+    /// Compresses chunks stored uncompressed and gives the space deleted
+    /// rows left back to the disk, holding the store meanwhile.
+    Compact,
     Shutdown,
 }
 
@@ -486,6 +489,15 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
         cause = source.source();
     }
     message
+}
+
+/// What compacting the store gave back: the database file's size before and
+/// after, and how many chunks it compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Compaction {
+    pub before: u64,
+    pub after: u64,
+    pub recompressed: usize,
 }
 
 /// A page of a diff's files: `limit` of them from the `offset`th.

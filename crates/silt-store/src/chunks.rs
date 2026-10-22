@@ -27,6 +27,18 @@ pub(crate) fn compress<'a>(rows: impl IntoIterator<Item = (i64, &'a [u8])>) -> R
     zstd::bulk::compress(&pack(rows), ZSTD_LEVEL).map_err(StoreError::Chunk)
 }
 
+/// Chunks stored as `PLAIN` packings, compressed as a new chunk is, on
+/// threads of their own.
+pub(crate) fn compress_packed_each(packed: &[&[u8]]) -> Result<Vec<Vec<u8>>, StoreError> {
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = packed
+            .iter()
+            .map(|packed| scope.spawn(|| zstd::bulk::compress(packed, ZSTD_LEVEL).map_err(StoreError::Chunk)))
+            .collect();
+        workers.into_iter().map(|worker| worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+    })
+}
+
 /// Each chunk's rows compressed, on threads of their own when there are
 /// several, as importing a long session completes many at once.
 pub(crate) fn compress_each(chunks: &[[(i64, &[u8]); CHUNK_ROWS]]) -> Result<Vec<Vec<u8>>, StoreError> {

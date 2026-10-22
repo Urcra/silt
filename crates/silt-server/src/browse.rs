@@ -23,7 +23,7 @@ use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 use crate::app::Browser;
 use crate::index::Conversation;
-use crate::{ApiError, Caller, Server, UserId, bad_request, id_from, not_found, now_ms};
+use crate::{ApiError, Caller, Server, UserId, Viewer, bad_request, id_from, not_found, now_ms};
 
 pub(crate) fn routes() -> Router<Server> {
     Router::new()
@@ -100,6 +100,19 @@ impl Browsed {
 impl Readable {
     async fn load(server: &Server, user: UserId) -> Result<Self, ApiError> {
         let viewer = server.viewer(user).await?;
+        let mut readable = Self::rows(server, user, &viewer).await?;
+        for family in readable.rows.iter().map(|row| row.family).collect::<BTreeSet<_>>() {
+            let Some(mut slot) = server.room(family).await else {
+                continue;
+            };
+            readable.deltas.insert(family, slot.browsed(family, &viewer));
+        }
+        Ok(readable)
+    }
+
+    /// The threads the person sees, without their families' deltas, for
+    /// what the index answers.
+    async fn rows(server: &Server, user: UserId, viewer: &Viewer) -> Result<Self, ApiError> {
         let rows = sqlx::query!(
             r#"SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner
              FROM threads t JOIN users u ON u.id = t.owner_id
@@ -119,16 +132,9 @@ impl Readable {
             })
             .filter(|row| viewer.sees_thread(row.id))
             .collect();
-        let mut deltas = HashMap::new();
-        for family in rows.iter().map(|row| row.family).collect::<BTreeSet<_>>() {
-            let Some(mut slot) = server.room(family).await else {
-                continue;
-            };
-            deltas.insert(family, slot.browsed(family, &viewer));
-        }
         let collaborators = crate::collab::collaborators(server.db()).await?;
         let me = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", user).fetch_one(server.db()).await?;
-        Ok(Self { rows, deltas, collaborators, me })
+        Ok(Self { rows, deltas: HashMap::new(), collaborators, me })
     }
 
     fn row(&self, selector: &str) -> Result<&Row, ApiError> {
@@ -142,11 +148,6 @@ impl Readable {
 
     fn of(&self, row: &Row) -> &[Delta] {
         self.deltas.get(&row.family).map_or(&[], |browsed| browsed.log.as_slice())
-    }
-
-    /// The thread's own history entries, each with the delta it came from.
-    fn entries(&self, row: &Row) -> ThreadEntries {
-        self.deltas.get(&row.family).map_or_else(ThreadEntries::default, |browsed| browsed.entries(row.id))
     }
 
     fn requests(&self) -> Vec<(FamilyId, MergeRequest)> {
@@ -169,23 +170,9 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
                     SessionFile::Main => "main".to_owned(),
                     SessionFile::Subagent(name) => format!("subagent:{name}"),
                 };
-                transcripts
-                    .entries(&session.agent, &session.id, &file, line)
-                    .into_iter()
-                    .filter_map(|entry| match entry {
-                        Entry::Other { .. } => None,
-                        Entry::ToolCall { name, input, .. } => Some(("tool_call".to_owned(), format!("{name} {input}"))),
-                        Entry::Compaction { summary } => Some((
-                            "compaction".to_owned(),
-                            summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
-                        )),
-                        other => Some((other.kind().to_owned(), other.searchable_text().unwrap_or_default())),
-                    })
-                    .collect()
+                transcripts.entries(&session.agent, &session.id, &file, line).into_iter().filter_map(entry_text).collect()
             }
-            Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
-                vec![("merge".to_owned(), format!("merged \"{title}\" from fork {from}: {summary}"))]
-            }
+            Op::Conv(ConvOp::Merged { from, title, summary, .. }) => vec![merged_text(*from, title, summary)],
             _ => Vec::new(),
         };
         for (kind, text) in texts {
@@ -205,6 +192,24 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
         }
     }
     out
+}
+
+/// The kind and text a history shows for one entry of a transcript, if any.
+pub(crate) fn entry_text(entry: Entry) -> Option<(String, String)> {
+    match entry {
+        Entry::Other { .. } => None,
+        Entry::ToolCall { name, input, .. } => Some(("tool_call".to_owned(), format!("{name} {input}"))),
+        Entry::Compaction { summary } => Some((
+            "compaction".to_owned(),
+            summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
+        )),
+        other => Some((other.kind().to_owned(), other.into_searchable_text().unwrap_or_default())),
+    }
+}
+
+/// The entry a history shows for a merge into the thread.
+pub(crate) fn merged_text(from: ThreadId, title: &str, summary: &str) -> (String, String) {
+    ("merge".to_owned(), format!("merged \"{title}\" from fork {from}: {summary}"))
 }
 
 /// The title it was given, or else the first line of its first prompt.
@@ -314,13 +319,28 @@ async fn history(
     Path(id): Path<String>,
     Query(page): Query<Page>,
 ) -> Result<Json<HistoryPage>, ApiError> {
-    let readable = Readable::load(&server, browser.user).await?;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
-    let all = readable.entries(row);
-    let total = all.len();
+    let index = server.shared.index.lock().await;
+    let Some(history) = index.history(row.id) else {
+        return Ok(Json(HistoryPage { thread: row.id.to_string(), total: 0, entries: Vec::new() }));
+    };
+    let total = history.entries.len();
     let offset = page.offset.unwrap_or(0).min(total);
     let limit = page.limit.unwrap_or(total);
-    let entries = all.iter().skip(offset).take(limit).map(|(_, entry)| entry.clone()).collect();
+    let entries = (offset..)
+        .zip(history.entries.iter().skip(offset).take(limit))
+        .map(|(index, (delta, kind, text, time_ms))| HistoryEntry {
+            index,
+            thread: row.id.to_string(),
+            origin: "own".into(),
+            kind: kind.clone(),
+            text: text.clone(),
+            time_ms: *time_ms,
+            rewound: history.rewound.contains(delta),
+        })
+        .collect();
     Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
 }
 
@@ -329,9 +349,24 @@ async fn turns(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<TurnInfo>>, ApiError> {
-    let readable = Readable::load(&server, browser.user).await?;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
-    Ok(Json(turn_infos(readable.of(row), row.id, &readable.entries(row))))
+    let index = server.shared.index.lock().await;
+    Ok(Json(index.history(row.id).map(indexed_turns).unwrap_or_default()))
+}
+
+/// [`turn_infos`], from what the index keeps of the thread.
+fn indexed_turns(history: &crate::index::History) -> Vec<TurnInfo> {
+    let entries = &history.entries;
+    (1..)
+        .zip(&history.prompts)
+        .map(|(number, &began)| {
+            // The latest prompt said at or before the mark.
+            let prompt = entries.iter().rposition(|(_, kind, _, time_ms)| kind == "user" && *time_ms <= began);
+            TurnInfo { number, entry: prompt, prompt: prompt.map(|at| entries[at].2.clone()).unwrap_or_default() }
+        })
+        .collect()
 }
 
 fn turn_infos(log: &[Delta], thread: ThreadId, history: &[(DeltaId, HistoryEntry)]) -> Vec<TurnInfo> {
@@ -773,6 +808,58 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_index_keeps_a_threads_history_and_turns_as_reading_its_log_finds_them() {
+        let thread = ThreadId(1);
+        let mut family = silt_log::Family::new();
+        let session = silt_log::SessionRef { agent: "claude".into(), id: "s".into() };
+        let mut log = Vec::new();
+        let mut add = |family: &mut silt_log::Family, time_ms: i64, op: ConvOp| {
+            let delta = family.delta(
+                silt_types::ActorId(1),
+                thread,
+                silt_log::Author::User,
+                time_ms,
+                family.thread_head(thread),
+                Op::Conv(op),
+            );
+            family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+            log.push(delta.clone());
+            delta
+        };
+        let line = |text: &str| ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: text.into() };
+        let mark = |mark| ConvOp::Turn { session: session.clone(), mark };
+        add(&mut family, 1, mark(TurnMark::PromptSubmitted));
+        let first = add(&mut family, 2, line(r#"{"type":"user","message":{"role":"user","content":"first"}}"#));
+        add(
+            &mut family,
+            3,
+            line(r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#),
+        );
+        add(&mut family, 4, mark(TurnMark::PromptSubmitted));
+        add(&mut family, 5, line(r#"{"type":"user","message":{"role":"user","content":"second"}}"#));
+        add(&mut family, 6, ConvOp::Rewound { to: first.span.first() });
+
+        let mut index = crate::index::Index::default();
+        for delta in &log {
+            index.observe(FamilyId(1), delta);
+        }
+        let history = index.history(thread).expect("kept");
+        let read = entries(&log, thread);
+        let kept: Vec<_> = history
+            .entries
+            .iter()
+            .map(|(delta, kind, text, time_ms)| (*delta, kind.clone(), text.clone(), *time_ms, history.rewound.contains(delta)))
+            .collect();
+        let expected: Vec<_> = read
+            .iter()
+            .map(|(delta, entry)| (*delta, entry.kind.clone(), entry.text.clone(), entry.time_ms, entry.rewound))
+            .collect();
+        assert_eq!(kept, expected);
+        assert!(expected.iter().any(|(.., rewound)| *rewound), "the revert rewound what came after the first prompt");
+        assert_eq!(indexed_turns(history), turn_infos(&log, thread, &read));
+    }
 
     #[test]
     fn ids_are_shortened_as_a_daemon_shortens_them() {

@@ -171,6 +171,18 @@ pub fn daemon_status() -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn daemon_compact() -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let compacted: silt_daemon::protocol::Compaction = call(&Request::Compact)?;
+    println!(
+        "compacted the store: {} MB, from {} MB; {} chunks compressed",
+        compacted.after / 1_000_000,
+        compacted.before / 1_000_000,
+        compacted.recompressed
+    );
+    Ok(())
+}
+
 fn find_agent(name: &str) -> Result<&'static dyn Agent, Exn<CliError>> {
     silt_agents::agent(name).ok_or_else(|| {
         let known: Vec<&str> = silt_agents::AGENTS.iter().map(|agent| agent.command()).collect();

@@ -255,6 +255,20 @@ fn an_edit_without_a_record_of_the_disk_does_not_take_in_a_forks_work() {
 }
 
 #[test]
+fn an_edit_whose_recorded_version_was_never_stored_builds_on_the_thread() {
+    let mut family = imported_family();
+    let mut checkout = Checkout::new(1, &family);
+    // A version a write that failed left behind: nothing in the family has it.
+    let entry = checkout.bridge.entries()["README.md"].clone();
+    let lost = silt_types::Frontier::from(silt_types::DeltaId::new(ActorId(9), silt_types::Lamport(42)));
+    checkout.bridge.record_written("README.md", DiskEntry { version: lost, ..entry });
+
+    let edits = checkout.edit(&mut family, "README.md", Some("# readme\nafter a lost write\n"));
+    assert!(!edits.is_empty());
+    assert_eq!(family_text(&family, "README.md"), "# readme\nafter a lost write\n");
+}
+
+#[test]
 fn a_binary_file_moved_elsewhere_is_written_before_it_leaves_its_old_path() {
     let mut family = Family::new();
     let logo = ImportFile { path: "logo.png".into(), oid: oid(3), executable: false };

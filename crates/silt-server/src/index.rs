@@ -2,11 +2,11 @@
 //! queries (ADR 0011). It has no git blobs, so it can't project file text;
 //! paths come from tree operations alone, later stamps winning.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, Parent};
-use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op};
+use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op, TurnMark};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
 use sqlx::{QueryBuilder, Sqlite, Transaction};
 
@@ -41,6 +41,47 @@ pub(crate) struct Index {
     reply_roots: HashMap<DeltaId, DeltaId>,
     /// What a thread listing shows of each thread's own conversation.
     conversations: HashMap<ThreadId, Conversation>,
+    /// Each thread's own history, as the hosted app pages through it.
+    histories: HashMap<ThreadId, History>,
+}
+
+/// A thread's own history entries, its turns and what reverts rewound,
+/// kept as its deltas come in rather than read from all of them for each
+/// page the hosted app shows (ADR 0034).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct History {
+    /// Each entry's delta, kind, text and time, in order.
+    pub(crate) entries: Vec<(DeltaId, String, String, i64)>,
+    /// When each of the thread's turns began.
+    pub(crate) prompts: Vec<i64>,
+    /// The thread's own conversation, in order, where reverts find the
+    /// turn they go back to.
+    conversation: Vec<DeltaId>,
+    positions: HashMap<DeltaId, usize>,
+    pub(crate) rewound: HashSet<DeltaId>,
+}
+
+impl History {
+    fn take(&mut self, delta: &Delta, conv: &ConvOp) {
+        let id = delta.span.first();
+        self.positions.insert(id, self.conversation.len());
+        self.conversation.push(id);
+        match conv {
+            ConvOp::Merged { from, title, summary, .. } => {
+                let (kind, text) = crate::browse::merged_text(*from, title, summary);
+                self.entries.push((id, kind, text, delta.time_ms));
+            }
+            ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. } => self.prompts.push(delta.time_ms),
+            // As `silt_log::rewound_in` finds them.
+            ConvOp::Rewound { to } => {
+                if let Some(from) = self.positions.get(to).copied() {
+                    let at = self.conversation.len() - 1;
+                    self.rewound.extend(self.conversation[from + 1..at].iter().copied());
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// What a thread listing shows of a thread's conversation, kept as its
@@ -84,6 +125,9 @@ impl Index {
             self.blobs.entry(blob).or_default().push((family, delta.span.first()));
         }
         let thread = delta.thread;
+        if let Op::Conv(conv) = &delta.op {
+            self.histories.entry(thread).or_default().take(delta, conv);
+        }
         let time_ms = delta.time_ms;
         let mut rows = vec![Row::Activity { thread, time_ms, branch: None }];
         let stamp = (delta.span.first().lamport, delta.span.actor);
@@ -114,6 +158,9 @@ impl Index {
                     self.conversations.entry(thread).or_default().take(&entry);
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
                         rows.push(Row::Text { thread, kind: entry.kind().to_owned(), body, time_ms });
+                    }
+                    if let Some((kind, text)) = crate::browse::entry_text(entry) {
+                        self.histories.entry(thread).or_default().entries.push((delta.span.first(), kind, text, time_ms));
                     }
                 }
                 None
@@ -170,6 +217,10 @@ impl Index {
     pub(crate) fn comment_people(&self, parent: DeltaId) -> Vec<String> {
         let root = self.reply_roots.get(&parent).copied().unwrap_or(parent);
         self.comment_people.get(&root).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn history(&self, thread: ThreadId) -> Option<&History> {
+        self.histories.get(&thread)
     }
 
     pub(crate) fn conversation(&self, thread: ThreadId) -> Conversation {

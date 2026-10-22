@@ -85,6 +85,38 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 }
 
 #[tokio::test]
+async fn compacting_compresses_the_chunks_stored_plain_and_reads_back_the_same() {
+    let (dir, store) = store_with_thread().await;
+    let appended = titles(2_500);
+    store.append_deltas(FAMILY, &appended).await.expect("appends");
+    // A chunk as stores before ADR 0035 kept it: packed, not compressed.
+    let raw =
+        sqlx::SqlitePool::connect(&format!("sqlite://{}", dir.path().join("silt.sqlite").display())).await.expect("connects");
+    let (first, data): (i64, Vec<u8>) = sqlx::query_as("SELECT first_seq, data FROM delta_chunks ORDER BY first_seq LIMIT 1")
+        .fetch_one(&raw)
+        .await
+        .expect("a chunk");
+    let packed = zstd::stream::decode_all(data.as_slice()).expect("decompresses");
+    sqlx::query("UPDATE delta_chunks SET codec = 0, data = ? WHERE first_seq = ?")
+        .bind(&packed)
+        .bind(first)
+        .execute(&raw)
+        .await
+        .expect("stores it plain");
+    raw.close().await;
+    let before = store.reclaimable().await.expect("measures");
+    assert_eq!(before.plain_chunks, 1);
+    assert!(before.is_worth_it());
+
+    let compacted = store.compact().await.expect("compacts");
+    assert_eq!(compacted.recompressed, 1);
+    assert!(compacted.after <= compacted.before);
+    assert_eq!(store.reclaimable().await.expect("measures").plain_chunks, 0);
+    assert!(!store.reclaimable().await.expect("measures").is_worth_it());
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
+}
+
+#[tokio::test]
 async fn deltas_appended_one_by_one_or_all_at_once_read_the_same() {
     let appended = titles(2_100);
     let (_dir, one_by_one) = store_with_thread().await;

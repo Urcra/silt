@@ -143,10 +143,13 @@ impl Bridge {
                 return Err(BridgeError::DirectoryConflict(path.to_owned()));
             }
             Some(inode) => {
+                // A version naming deltas the family lacks, as one a lost
+                // write left behind, would make every later edit unappliable.
+                let known = |version: &Frontier| version.ids().iter().all(|id| writer.family.graph().contains(*id));
                 let version = self
                     .entries
                     .get(path)
-                    .filter(|entry| entry.inode == inode)
+                    .filter(|entry| entry.inode == inode && known(&entry.version))
                     .map_or_else(|| writer.family.thread_head(self.thread), |entry| entry.version.clone());
                 writer.update(self.actor, inode, &disk, version)?;
                 inode

@@ -138,18 +138,20 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(alice.getByText('I was not allowed to edit.')).toBeVisible()
 
-  const changed = await alice.evaluate(async (thread) => {
-    const get = async (path: string) =>
-      (
-        await fetch(`/api/threads/${thread}/${path}`, {
-          headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}` },
-        })
-      ).json()
-    const turns = (await get('turns')) as { number: number; prompt: string }[]
-    const turn = turns.find((candidate) => candidate.prompt.startsWith('once more'))
-    return turn ? ((await get(`diff?turn=${turn.number}`)) as string) : 'no such turn'
-  }, live.thread)
-  expect(changed).toContain('+fn acp() {}')
+  const changed = () =>
+    alice.evaluate(async (thread) => {
+      const get = async (path: string) =>
+        (
+          await fetch(`/api/threads/${thread}/${path}`, {
+            headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}` },
+          })
+        ).json()
+      const turns = (await get('turns')) as { number: number; prompt: string }[]
+      const turn = turns.find((candidate) => candidate.prompt.startsWith('once more'))
+      return turn ? ((await get(`diff?turn=${turn.number}`)) as string) : 'no such turn'
+    }, live.thread)
+  // The agent's reply can come before the daemon records its edit.
+  await expect.poll(changed, { timeout: 15_000 }).toContain('+fn acp() {}')
   await alice.context().close()
   await bob.context().close()
 })
@@ -380,7 +382,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await phone.getByRole('button', { name: 'Sign in' }).click()
   await expect(phone).toHaveURL(`${live.server}/app/needs-you`)
   await desk.getByRole('button', { name: "It's paired" }).click()
-  await expect(desk.getByRole('region', { name: 'Phone' })).toContainText('phone')
+  await expect(desk.getByRole('region', { name: 'Phone', exact: true })).toContainText('phone')
 
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
@@ -493,12 +495,13 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
       })
       return ((await response.json()) as string).split('+fn acp() {}').length - 1
     }, thread)
-  expect(await edits()).toBe(2)
+  // The agent's reply can come before the daemon records its edit.
+  await expect.poll(edits, { timeout: 15_000 }).toBe(2)
 
   await page.getByRole('button', { name: 'revert to turn 1' }).click()
   await page.getByRole('button', { name: 'revert', exact: true }).click()
   await expect(page.getByText(/^Reverted to turn 1/)).toBeVisible()
-  await expect.poll(edits).toBe(1)
+  await expect.poll(edits, { timeout: 15_000 }).toBe(1)
   const history = page.getByTestId('history')
   await expect(history.getByTestId('entry').filter({ hasText: '› revert drops this' })).toHaveAttribute('data-rewound', 'true')
   await expect(history.getByTestId('entry').filter({ hasText: '› revert keeps this' })).not.toHaveAttribute('data-rewound')
@@ -1037,11 +1040,12 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   // A test above settles threads, which the graph leaves out unless asked.
   await page.getByLabel('Settled too').check()
   const graph = page.getByRole('list', { name: 'graph' })
-  await expect(graph.getByRole('button', { name: /^commit Add the farewell/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^fork forked from/ }).first()).toBeVisible()
   await expect(graph.getByRole('button', { name: /^request Fork work/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^merge / }).first()).toBeVisible()
 
+  // The fixture's commit is among the oldest rows, which the turns of the
+  // tests above can push past the first page until only commits are shown.
   await page.getByLabel('what to show').selectOption({ label: 'Commits' })
   await expect(graph.getByRole('button', { name: /^turn/ })).toHaveCount(0)
   await graph.getByRole('button', { name: /^commit Add the farewell/ }).click()

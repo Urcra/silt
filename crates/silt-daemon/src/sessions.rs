@@ -1092,6 +1092,12 @@ impl Core {
                 TurnMark::Stopped
             }
         };
+        // As a hook does when a tool or turn ends (ADR 0018): what changed
+        // was made by it, however late a busy machine's watcher would tell.
+        let checkout = session.record.checkout_id;
+        if matches!(mark, TurnMark::ToolFinished { .. } | TurnMark::Stopped) && self.checkouts.contains_key(&checkout) {
+            self.rescan(checkout).await?;
+        }
         self.record_turn(session_id, mark).await
     }
 

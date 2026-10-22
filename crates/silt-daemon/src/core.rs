@@ -73,6 +73,8 @@ pub enum Event {
     Drain {
         session_id: String,
     },
+    /// Compact the store if it's worth it, once after starting.
+    Compact,
     Acp {
         thread: ThreadId,
         run: u64,
@@ -500,6 +502,7 @@ impl Core {
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Ping => Response::ok("pong"),
+            Request::Compact => to_response(self.compact().await),
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
@@ -1375,6 +1378,27 @@ impl Core {
     /// snapshot, and not while one of its sessions' backlog drains, which
     /// takes one when done. A snapshot that can't be saved only makes the
     /// next load slower.
+    /// Compacts the store, holding it meanwhile.
+    pub(crate) async fn compact(&self) -> Result<crate::protocol::Compaction, CoreError> {
+        let silt_store::Compacted { before, after, recompressed } = self.store.compact().await?;
+        tracing::info!(before, after, recompressed, "compacted the store");
+        Ok(crate::protocol::Compaction { before, after, recompressed })
+    }
+
+    /// Compacts the store when that gives back enough to be worth holding it
+    /// for: a store from before ADR 0035, once.
+    pub(crate) async fn compact_if_worth_it(&self) {
+        match self.store.reclaimable().await {
+            Ok(reclaimable) if reclaimable.is_worth_it() => {
+                if let Err(error) = self.compact().await {
+                    warn!(%error, "could not compact the store");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => warn!(%error, "could not tell whether the store needs compacting"),
+        }
+    }
+
     pub(crate) async fn snapshot_if_due(&mut self, family_id: FamilyId) {
         let draining = |session: &&crate::sessions::Session| self.draining.contains(&session.record.session_id);
         if self.sessions.iter().filter(draining).any(|session| session.family == family_id) {

@@ -260,6 +260,9 @@ enum DaemonCommand {
     Stop,
     /// Show whether the daemon is running
     Status,
+    /// Give back the space a store from an older Silt holds: compress its
+    /// old chunks and shrink the file. The daemon does it once by itself.
+    Compact,
 }
 
 #[derive(Debug, Subcommand)]
@@ -724,6 +727,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),
             DaemonCommand::Stop => commands::daemon_stop(),
             DaemonCommand::Status => commands::daemon_status(),
+            DaemonCommand::Compact => commands::daemon_compact(),
         },
         Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
         Command::Reference => {

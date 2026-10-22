@@ -195,6 +195,38 @@ pub fn checkpoint_in_background(pool: SqlitePool) {
     });
 }
 
+/// Plain chunks compressed in one transaction while compacting.
+const COMPACT_CHUNKS: i64 = 64;
+
+/// What [`Store::compact`] would give back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reclaimable {
+    pub file_bytes: u64,
+    /// Space deleted rows left in the file, which SQLite reuses but never
+    /// gives back.
+    pub free_bytes: u64,
+    /// Chunks stored uncompressed, as chunks were before ADR 0035.
+    pub plain_chunks: usize,
+}
+
+impl Reclaimable {
+    /// Whether compacting would give back enough to be worth holding the
+    /// database while it rewrites the file: chunks to compress, or a
+    /// quarter of the file and at least 64 MB free.
+    pub fn is_worth_it(&self) -> bool {
+        self.plain_chunks > 0 || (self.free_bytes >= 64 << 20 && self.free_bytes * 4 >= self.file_bytes)
+    }
+}
+
+/// What [`Store::compact`] did: the database file's size before and after,
+/// and how many chunks it compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Compacted {
+    pub before: u64,
+    pub after: u64,
+    pub recompressed: usize,
+}
+
 /// A family's deltas as the store holds them: chunks still compressed, and
 /// the rows after them (ADR 0035). Decoding is what takes the time, so a
 /// caller decodes only the positions it needs.
@@ -322,6 +354,66 @@ impl Store {
         }
         let watch = Watch { connection: sqlx::ConnectOptions::connect(&options).await?, seen: None };
         Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")), watch: Arc::new(tokio::sync::Mutex::new(watch)) })
+    }
+
+    /// What compacting the store would give back: the space deleted rows
+    /// left, which SQLite only reuses, and chunks stored uncompressed, as
+    /// chunks were before ADR 0035.
+    pub async fn reclaimable(&self) -> Result<Reclaimable, StoreError> {
+        let plain =
+            sqlx::query_scalar!("SELECT COUNT(*) FROM delta_chunks WHERE codec = ?", chunks::PLAIN).fetch_one(&self.pool).await?;
+        // Pragmas, which sqlx's macros can't describe.
+        let free: i64 = sqlx::query_scalar("PRAGMA freelist_count").fetch_one(&self.pool).await?;
+        let pages: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(&self.pool).await?;
+        let page: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(&self.pool).await?;
+        let bytes = |pages: i64| u64::try_from(pages * page).unwrap_or_default();
+        Ok(Reclaimable {
+            file_bytes: bytes(pages),
+            free_bytes: bytes(free),
+            plain_chunks: usize::try_from(plain).unwrap_or_default(),
+        })
+    }
+
+    /// Compresses the chunks stored uncompressed and gives the space deleted
+    /// rows left back to the disk. It holds the database for as long as
+    /// rewriting it takes: seconds for a few hundred megabytes.
+    pub async fn compact(&self) -> Result<Compacted, StoreError> {
+        let before = self.reclaimable().await?;
+        let mut recompressed = 0;
+        loop {
+            let plain = sqlx::query!(
+                "SELECT family_id, first_seq, data FROM delta_chunks WHERE codec = ? LIMIT ?",
+                chunks::PLAIN,
+                COMPACT_CHUNKS
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            if plain.is_empty() {
+                break;
+            }
+            let packed: Vec<&[u8]> = plain.iter().map(|chunk| chunk.data.as_slice()).collect();
+            let compressed = chunks::compress_packed_each(&packed)?;
+            let mut tx = self.write_transaction().await?;
+            for (chunk, data) in plain.iter().zip(compressed) {
+                sqlx::query!(
+                    "UPDATE delta_chunks SET codec = ?, data = ? WHERE family_id = ? AND first_seq = ? AND codec = ?",
+                    chunks::ZSTD,
+                    data,
+                    chunk.family_id,
+                    chunk.first_seq,
+                    chunks::PLAIN
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            recompressed += plain.len();
+        }
+        // A statement sqlx's macros can't describe.
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        self.checkpoint().await?;
+        let after = self.reclaimable().await?;
+        Ok(Compacted { before: before.file_bytes, after: after.file_bytes, recompressed })
     }
 
     /// Copies the whole WAL into the database and empties it, so the store

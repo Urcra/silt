@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, first_seq, data FROM delta_chunks WHERE codec = ? LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "first_seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "first_seq"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ec7455931a3558a6752c1ea4645f1dba5116d508c2dd50332cbdbde6503a1e66"
+}

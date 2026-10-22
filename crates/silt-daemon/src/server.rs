@@ -116,6 +116,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             return Err(error.into());
         }
     };
+    // After the requests that came during the load.
+    let _ = events.send(Event::Compact);
     let tick_events = events.clone();
     let idle = Arc::new(AtomicBool::new(false));
     let ticking_idle = Arc::clone(&idle);
@@ -155,6 +157,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Drain { session_id } => core.drain(&session_id).await,
+            Event::Compact => core.compact_if_worth_it().await,
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
             Event::Pushed { family, epoch, generation, outcome, error } => {
                 core.pushed(family, epoch, generation, outcome, error).await
