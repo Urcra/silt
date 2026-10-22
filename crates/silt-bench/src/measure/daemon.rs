@@ -14,7 +14,7 @@ use silt_agents::claude;
 use silt_daemon::protocol::{MrSummary, Request, Resumed};
 use silt_store::Store;
 
-use crate::budgets::{DAEMON_IDLE, DAEMON_STARTUP, Measured, RECORD_IMPORT, STORE_SIZE, median};
+use crate::budgets::{DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, Measured, RECORD_IMPORT, STORE_SIZE, median};
 use crate::daemon::{Daemon, Home};
 use crate::fixtures::{Fixtures, SESSION_ID, clone_repo, small_transcript, write_repo};
 use crate::{BenchError, fail};
@@ -48,7 +48,7 @@ pub async fn measure(
     #[expect(clippy::cast_precision_loss, reason = "a ratio of sizes")]
     let ratio = stored_bytes(&home.data)? as f64 / bytes as f64;
     measured.push((STORE_SIZE, Measured::Ratio(ratio)));
-    if !wanted.iter().any(|name| [DAEMON_STARTUP, DAEMON_IDLE].contains(name)) {
+    if !wanted.iter().any(|name| [DAEMON_STARTUP, DAEMON_READY, DAEMON_IDLE].contains(name)) {
         return Ok(measured);
     }
 
@@ -57,7 +57,7 @@ pub async fn measure(
     big_checkout(&home, root, fixtures).await?;
     daemon.stop()?;
 
-    let mut times = Vec::new();
+    let (mut answered, mut listed) = (Vec::new(), Vec::new());
     let mut last = None;
     for _ in 0..STARTS {
         if let Some(daemon) = last.take() {
@@ -66,10 +66,13 @@ pub async fn measure(
         let start = Instant::now();
         let mut daemon = home.spawn()?;
         daemon.ready()?;
-        times.push(start.elapsed());
+        answered.push(start.elapsed());
+        home.request(&Request::Threads)?;
+        listed.push(start.elapsed());
         last = Some(daemon);
     }
-    measured.push((DAEMON_STARTUP, Measured::Time(median(times).expect("measured"))));
+    measured.push((DAEMON_STARTUP, Measured::Time(median(answered).expect("measured"))));
+    measured.push((DAEMON_READY, Measured::Time(median(listed).expect("measured"))));
     let daemon = last.expect("started");
     measured.push((DAEMON_IDLE, Measured::CoreShare(idle(&daemon)?)));
     daemon.stop()?;

@@ -86,10 +86,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
     let capture_lock = CaptureLock::open(data_dir)?;
-    // Without a turn, so hooks capturing meanwhile don't wait on a long
-    // load; what they store is taken in at the first turn.
-    let mut core = Core::load(store, actor, data_dir, events.clone()).await?;
 
+    // Taking requests before everything is loaded: they wait in the queue
+    // for the load, and come before the rescans it queues (ADR 0034).
     if socket.exists() {
         fs::remove_file(socket)?;
     }
@@ -108,6 +107,15 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
         }
     });
+    // Without a turn, so hooks capturing meanwhile don't wait on a long
+    // load; what they store is taken in at the first turn.
+    let mut core = match Core::load(store, actor, data_dir, events.clone()).await {
+        Ok(core) => core,
+        Err(error) => {
+            let _ = fs::remove_file(socket);
+            return Err(error.into());
+        }
+    };
     let tick_events = events.clone();
     let idle = Arc::new(AtomicBool::new(false));
     let ticking_idle = Arc::clone(&idle);
@@ -172,6 +180,9 @@ async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>, answere
         let request = serde_json::from_str::<Request>(&line);
         let shutdown = matches!(request, Ok(Request::Shutdown));
         let response = match request {
+            // Asks only whether the daemon is there, so it is answered even
+            // while the daemon loads or works through a long event.
+            Ok(Request::Ping) => Response::ok("pong"),
             Ok(request) => {
                 let (reply, response) = oneshot::channel();
                 if events.send(Event::Request(request, reply)).is_err() {

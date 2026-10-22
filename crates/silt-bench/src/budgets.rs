@@ -43,6 +43,7 @@ pub const RECORD_HOOK: &str = "record.hook";
 pub const RECORD_HOOK_DAEMONLESS: &str = "record.hook_daemonless";
 pub const STORE_SIZE: &str = "store.size";
 pub const DAEMON_STARTUP: &str = "daemon.startup";
+pub const DAEMON_READY: &str = "daemon.ready";
 pub const CHECKOUT_RESCAN: &str = "checkout.rescan";
 pub const DAEMON_IDLE: &str = "daemon.idle";
 
@@ -75,7 +76,13 @@ pub const BUDGETS: &[Budget] = &[
         name: DAEMON_STARTUP,
         measures: "spawning the daemon to its first answer, holding every fixture",
         limit: Limit::Time(Duration::from_millis(100)),
-        status: Status::Pending("M18-05"),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: DAEMON_READY,
+        measures: "spawning the daemon to its first thread listing, holding every fixture (100 MB of transcript), at 100 MB/s",
+        limit: Limit::Time(Duration::from_secs(1)),
+        status: Status::Enforced,
     },
     Budget {
         name: CHECKOUT_RESCAN,
