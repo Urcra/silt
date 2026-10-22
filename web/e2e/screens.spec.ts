@@ -163,6 +163,35 @@ test('a new thread', async ({ page }) => {
   })
 })
 
+test('devices and pairing a phone', async ({ page }) => {
+  await open(page, '/devices')
+  await shoot(page, 'devices', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'pair a phone' })).toBeVisible()
+    await expect(shown.getByText('this device', { exact: true })).toBeVisible()
+  })
+})
+
+test('projects', async ({ page }) => {
+  await open(page, '/projects')
+  await shoot(page, 'projects', async (shown) => {
+    await expect(shown.getByTestId('projects')).toBeVisible()
+  })
+})
+
+test('adding a project', async ({ page }) => {
+  await open(page, '/projects/add')
+  await shoot(page, 'add-project', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'add a project' })).toBeVisible()
+  })
+})
+
+test("the server's sign-in page", async ({ page }) => {
+  await page.goto(`${world.server}/login`)
+  await shoot(page, 'sign-in', async (shown) => {
+    await expect(shown.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  })
+})
+
 test('search', async ({ page }) => {
   await open(page, '/search?q=farewell')
   await shoot(page, 'search', async (shown) => {

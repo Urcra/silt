@@ -286,8 +286,7 @@ export function Sidebar() {
         className="mt-1"
         aside={
           <Link
-            to="/projects"
-            hash="add"
+            to="/projects/add"
             className="inline-flex items-center font-sans text-2xs tracking-normal text-accent-fg normal-case hover:text-fg-1 max-md:min-h-11 max-md:px-2"
           >
             + Add

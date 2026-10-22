@@ -3,6 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short, type GraphQuery, type GraphRow, type ThreadSummary } from '../api'
 import { parseFiles } from '../diffParse'
+import { useTopic } from '../bus'
 import { layout } from '../lanes'
 import { useMedia } from '../media'
 import { plain } from '../plain'
@@ -203,6 +204,8 @@ type Which = 'all' | 'mine' | 'family'
 
 /** Every thread's turns, commits, forks and merges, newest first, in lanes (the History graph board). */
 export function Graph() {
+  useTopic('threads')
+  useTopic('mrs')
   const now = useNow()
   const [which, setWhich] = useState<Which>('all')
   const [turns, setTurns] = useState(true)

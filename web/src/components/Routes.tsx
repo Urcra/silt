@@ -13,7 +13,7 @@ import { NeedsYou } from './NeedsYou'
 import { NewThread } from './NewThread'
 import { Orgs } from './Orgs'
 import { Page } from './Page'
-import { Projects } from './Projects'
+import { AddProjectPage, Projects } from './Projects'
 import { Reconcile } from './Reconcile'
 import { Search } from './Search'
 import { ThreadList } from './ThreadList'
@@ -29,9 +29,10 @@ function Plain({ view: View }: { view: ComponentType }) {
 
 export const HomeRoute = ThreadList
 export const NewThreadRoute = NewThread
-export const ProjectsRoute = () => <Plain view={Projects} />
+export const ProjectsRoute = Projects
+export const AddProjectRoute = AddProjectPage
 export const OrgsRoute = () => <Plain view={Orgs} />
-export const DevicesRoute = () => <Plain view={Devices} />
+export const DevicesRoute = Devices
 export const NeedsYouRoute = () => <Plain view={NeedsYou} />
 export const GraphRoute = Graph
 export const SearchRoute = Search

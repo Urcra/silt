@@ -128,9 +128,11 @@ export function useBusInvalidation() {
       case 'threads':
         void queries.invalidateQueries({ queryKey: keys.threads })
         void queries.invalidateQueries({ queryKey: keys.projects })
+        void queries.invalidateQueries({ queryKey: ['graph'] })
         break
       case 'thread':
         void queries.invalidateQueries({ queryKey: keys.thread(event.thread) })
+        void queries.invalidateQueries({ queryKey: ['graph'] })
         break
       case 'queue':
         void queries.invalidateQueries({ queryKey: keys.queue(event.thread) })
@@ -141,6 +143,7 @@ export function useBusInvalidation() {
       case 'mrs':
         void queries.invalidateQueries({ queryKey: keys.mrs })
         void queries.invalidateQueries({ queryKey: keys.projects })
+        void queries.invalidateQueries({ queryKey: ['graph'] })
         break
       case 'lagged':
         void queries.invalidateQueries()

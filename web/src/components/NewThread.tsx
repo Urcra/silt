@@ -97,11 +97,11 @@ export function NewThread() {
     return (
       <Page width="narrow">
         <EmptyState title="Add a project to start threads in it">
-          Add a clone on the{' '}
-          <Link to="/projects" hash="add" className="text-accent-fg">
-            Projects
-          </Link>{' '}
-          page, or run <code>silt open</code> in one.
+          Add one from{' '}
+          <Link to="/projects/add" className="text-accent-fg">
+            Add a project
+          </Link>
+          , or run <code>silt open</code> in a clone.
         </EmptyState>
       </Page>
     )
@@ -144,7 +144,7 @@ export function NewThread() {
   return (
     <Page flush label="new thread">
       <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6 px-4 py-8 md:px-8">
-        <h1 className="text-xl font-medium">What should the agent work on?</h1>
+        <h1 className="pt-6 text-center text-2xl font-medium tracking-[-0.01em] md:pt-12">What should the agent work on?</h1>
         <form
           aria-label="new thread"
           className="flex flex-col gap-3"
@@ -166,10 +166,10 @@ export function NewThread() {
               <ChipSelect
                 label="base branch"
                 prefix="From"
-                mono
+                mono={base !== ''}
                 value={base}
                 onChange={setBase}
-                options={[{ id: '', name: 'what my clone has out' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
+                options={[{ id: '', name: 'current checkout' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
               />
             )}
             <div role="radiogroup" aria-label="works in" className="inline-flex overflow-hidden rounded-sm border border-line">
@@ -183,13 +183,13 @@ export function NewThread() {
                   role="radio"
                   aria-checked={here === value}
                   onClick={() => setHere(value as boolean)}
-                  className={cx('px-2.5 py-0.5 text-xs max-md:min-h-11', here === value ? 'bg-surface-3 text-fg-1' : 'bg-elevated text-fg-2 hover:bg-surface-2')}
+                  className={cx('px-2.5 py-0.5 text-xs max-md:min-h-11', here === value ? 'bg-accent-tint text-accent-fg' : 'bg-elevated text-fg-2 hover:bg-surface-2')}
                 >
                   {label as string}
                 </button>
               ))}
             </div>
-            <span className={CHIP}>
+            <span className={cx(CHIP, 'md:ml-auto')}>
               <Icon name="laptop" className="h-3 w-3" />
               <span className="text-fg-2">On</span>
               <Mock id="new.device">{device}</Mock>
@@ -234,8 +234,8 @@ export function NewThread() {
                 />
               )}
               <label
-                className={cx(CHIP, 'cursor-pointer', !prompt.trim() && 'opacity-40')}
-                title="The agent writes a plan for you to approve before it edits anything"
+                className={cx(CHIP, 'cursor-pointer', !prompt.trim() && 'cursor-not-allowed text-fg-2', plan && 'border-accent bg-accent-tint text-accent-fg')}
+                title={prompt.trim() ? 'The agent writes a plan for you to approve before it edits anything' : 'Write a first prompt for the agent to plan'}
               >
                 <input
                   type="checkbox"
@@ -256,12 +256,12 @@ export function NewThread() {
               {status.data?.server && (
                 <ChipSelect
                   label="visibility"
-                  prefix="Visible to"
+                  prefix="Visible"
                   value={visibility}
                   onChange={setVisibility}
                   options={[
-                    { id: '', name: 'as the project says' },
-                    { id: 'private', name: 'me and those I share it with' },
+                    { id: '', name: 'project default' },
+                    { id: 'private', name: 'only me' },
                     { id: 'org', name: 'my org' },
                   ]}
                 />

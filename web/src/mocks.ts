@@ -5,6 +5,12 @@
 export const MOCKS = {
   'thread.handoff-before': 'The device a thread was on before its last handoff, and when it moved.',
   'thread.synced': 'Whether every entry of the thread has reached its server.',
+  'add.discovered': "Clones found on this machine that aren't projects yet.",
+  'add.visibility': "Who sees a project's threads, set per project.",
+  'add.prepare': "Whether a project's repository has a prepare script new checkouts run.",
+  'devices.checkouts': 'How many checkouts a device holds.',
+  'devices.version': "A device's daemon version, and whether it is synced.",
+  'devices.pair-capabilities': 'Choosing what a phone may do before it is paired.',
   'new.device': 'Choosing which of your devices a new thread starts on.',
   'graph.device': 'The device a turn ran on.',
   'search.saved': 'Searches the person saved, to run again with one click.',

@@ -17,6 +17,7 @@ export const router = createRouter({
         typeof search.prompt === 'string' ? { prompt: search.prompt } : {},
     }),
     createRoute({ getParentRoute: () => root, path: '/projects', component: routes.ProjectsRoute }),
+    createRoute({ getParentRoute: () => root, path: '/projects/add', component: routes.AddProjectRoute }),
     createRoute({ getParentRoute: () => root, path: '/orgs', component: routes.OrgsRoute }),
     createRoute({ getParentRoute: () => root, path: '/devices', component: routes.DevicesRoute }),
     createRoute({ getParentRoute: () => root, path: '/needs-you', component: routes.NeedsYouRoute }),

@@ -1,9 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { Link } from '@tanstack/react-router'
+import { type ReactNode, useState } from 'react'
+import { PRESETS } from '../agentState'
 import { api, type Project } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
-import { Button, EmptyState, Input, Select, Skeleton, Tabs, Tag, toast } from '../ui'
+import { Button, EmptyState, Input, Select, Skeleton, Tag, buttonClass, toast } from '../ui'
+import { useWorkspace } from '../workspace'
+import { Mock } from './Mock'
+import { Page } from './Page'
 
 /** Where a clone of `project` might go: next to this machine's other clones. */
 function suggestedPath(project: Project, projects: Project[]): string {
@@ -30,9 +35,9 @@ function ProjectHome({ project }: { project: Project }) {
       (failure: unknown) => toast(message(failure), 'danger'),
     )
   return (
-    <label className="flex items-center gap-2 text-xs text-fg-2">
+    <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
       New threads sync with
-      <Select aria-label={`where ${project.name} syncs`} value={chosen} onChange={(event) => void choose(event.target.value)}>
+      <Select aria-label={`where ${project.name} syncs`} value={chosen} onChange={(event) => void choose(event.target.value)} className="text-xs">
         {servers.map((server, index) => (
           <option key={server.url} value={server.url}>
             {server.url}
@@ -50,7 +55,7 @@ function CloneHere({ project, projects }: { project: Project; projects: Project[
   const [path, setPath] = useState(() => suggestedPath(project, projects))
   const [cloning, setCloning] = useState(false)
   const [error, setError] = useState<string>()
-  if (!project.origin_url) return <span className="text-xs text-fg-3">No one has said where to clone it from yet</span>
+  if (!project.origin_url) return <span className="text-xs text-fg-2">No one has said where to clone it from yet</span>
   return (
     <form
       className="flex flex-wrap items-center gap-2"
@@ -70,7 +75,7 @@ function CloneHere({ project, projects }: { project: Project; projects: Project[
           .finally(() => setCloning(false))
       }}
     >
-      <Input aria-label={`where to clone ${project.name}`} className="w-72 font-mono text-xs" placeholder="/home/me/src/app" value={path} onChange={(event) => setPath(event.target.value)} />
+      <Input aria-label={`where to clone ${project.name}`} className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={path} onChange={(event) => setPath(event.target.value)} />
       <Button type="submit" disabled={!path.trim() || cloning}>
         {cloning ? 'Cloning…' : 'Clone here'}
       </Button>
@@ -79,83 +84,257 @@ function CloneHere({ project, projects }: { project: Project; projects: Project[
   )
 }
 
-/** Adds a clone already on this machine, or clones a remote URL. */
-function AddProject() {
+function Section({ title, children }: { title: ReactNode; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+const ROW = 'flex flex-wrap items-center gap-3 rounded-md border border-line bg-elevated px-3 py-2.5'
+
+/** A project's defaults for its new threads: agent and permissions, and who sees them (ADR 0023). */
+function Defaults({ projects }: { projects: Project[] }) {
   const queries = useQueryClient()
-  const [how, setHow] = useState<'existing' | 'url'>('existing')
+  const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents })
+  const owned = projects.filter((project) => project.clone && project.server)
+  const [repo, setRepo] = useState('')
+  const project = owned.find((candidate) => candidate.repo === repo) ?? owned[0]
+  if (!project) return null
+  const save = (change: { default_agent?: string | null; default_preset?: string | null }) =>
+    api
+      .orgChange({
+        change: 'project_settings',
+        repo: project.repo,
+        name: null,
+        default_agent: change.default_agent !== undefined ? change.default_agent : project.default_agent,
+        default_preset: change.default_preset !== undefined ? change.default_preset : project.default_preset,
+      })
+      .then(
+        () => {
+          toast(`Saved ${project.name}'s defaults`, 'ok')
+          return queries.invalidateQueries({ queryKey: keys.projects })
+        },
+        (failure: unknown) => toast(message(failure), 'danger'),
+      )
+  return (
+    <Section
+      title={
+        <>
+          Defaults for <span className="normal-case">{project.name}</span>
+        </>
+      }
+    >
+      <div className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-md border border-line bg-elevated p-3 text-xs">
+        {owned.length > 1 && (
+          <>
+            <label htmlFor="defaults-project" className="text-fg-2">
+              Project
+            </label>
+            <Select id="defaults-project" value={project.repo} onChange={(event) => setRepo(event.target.value)} className="text-xs">
+              {owned.map((candidate) => (
+                <option key={candidate.repo} value={candidate.repo}>
+                  {candidate.name}
+                </option>
+              ))}
+            </Select>
+          </>
+        )}
+        <label htmlFor="defaults-visibility" className="text-fg-2">
+          Visible to
+        </label>
+        <Mock id="add.visibility">
+          <Select id="defaults-visibility" disabled className="text-xs" defaultValue="org">
+            <option value="org">Everyone in {project.org ?? 'the org'} (org default)</option>
+          </Select>
+        </Mock>
+        <label htmlFor="defaults-agent" className="text-fg-2">
+          Default agent
+        </label>
+        <Select id="defaults-agent" value={project.default_agent ?? ''} onChange={(event) => void save({ default_agent: event.target.value || null })} className="text-xs">
+          <option value="">None; pick each time</option>
+          {(agents.data?.agents ?? []).map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </Select>
+        <label htmlFor="defaults-preset" className="text-fg-2">
+          Permissions
+        </label>
+        <Select id="defaults-preset" value={project.default_preset ?? ''} onChange={(event) => void save({ default_preset: event.target.value || null })} className="text-xs">
+          <option value="">Ask before commands (Silt's default)</option>
+          {PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.label}
+            </option>
+          ))}
+        </Select>
+        <span className="text-fg-2">New checkouts</span>
+        <Mock id="add.prepare">
+          <span>
+            run <code className="font-mono">.agents/prepare</code>, found in the repository
+          </span>
+        </Mock>
+      </div>
+      <p className="text-2xs text-fg-2">Changing them takes an owner of its org or the server's admin.</p>
+    </Section>
+  )
+}
+
+/** Adding a project to the workspace: a clone here, one of the org's, or a URL (the Add a project board). */
+export function AddProjectPage() {
+  const queries = useQueryClient()
+  const workspace = useWorkspace()
+  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status })
   const [path, setPath] = useState('')
   const [url, setUrl] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const done = (repo: string) => {
+  const [into, setInto] = useState('')
+  const [busy, setBusy] = useState<'path' | 'url' | null>(null)
+  const [error, setError] = useState<{ path?: string; url?: string }>({})
+  const all = projects.data ?? []
+  const here = all.filter((project) => project.clone)
+  const elsewhere = all.filter((project) => !project.clone)
+  const device = status.data?.servers?.[0]?.name ?? 'this machine'
+  const where = workspace.kind === 'server' ? (workspace.org ?? serverName(workspace.server)) : 'your workspace'
+  const added = (repo: string) => {
     toast(`Added ${repo}`, 'ok')
     setPath('')
     setUrl('')
+    setInto('')
     return queries.invalidateQueries({ queryKey: keys.projects })
   }
+  if (hosted())
+    return (
+      <Page width="narrow">
+        <EmptyState title="Projects are added from a machine">Open Silt on the machine that has the clone, with `silt open`.</EmptyState>
+      </Page>
+    )
   return (
-    <section aria-label="add a project" className="rounded-md border border-line p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-medium">Add a project</h3>
-        <Tabs
-          label="how to add it"
-          value={how}
-          onChange={setHow}
-          tabs={[
-            { id: 'existing', label: 'A clone on this machine' },
-            { id: 'url', label: 'Clone a URL' },
-          ]}
-        />
-      </div>
-      <form
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault()
-          setError(undefined)
-          setBusy(true)
-          const adding = how === 'existing' ? api.addClone(path) : api.cloneProject(url, path)
-          adding.then(done, (failure: unknown) => setError(message(failure))).finally(() => setBusy(false))
-        }}
-      >
-        {how === 'url' && (
-          <Input aria-label="remote URL" className="w-80 font-mono text-xs" placeholder="git@github.com:acme/app.git" value={url} onChange={(event) => setUrl(event.target.value)} />
+    <Page title={`Add a project to ${where}`} width="narrow" actions={<Link to="/projects" className={buttonClass('ghost')}>Done</Link>}>
+      <section aria-label="add a project" className="flex flex-col gap-6">
+        <Section title={`Clones on ${device}`}>
+          <div className="overflow-hidden rounded-md border border-line bg-elevated [&>*]:border-b [&>*]:border-line-subtle [&>*:last-child]:border-b-0">
+            <Mock id="add.discovered">
+              <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="font-mono text-xs">~/code/scratch</span>
+                  <span className="text-2xs text-fg-2">no remote · its threads can only stay on this machine</span>
+                </span>
+                <Button disabled>Add here only</Button>
+              </div>
+            </Mock>
+            {here.map((project) => (
+              <div key={`${project.server ?? ''}:${project.repo}`} className="flex items-center gap-3 px-3 py-2.5 text-fg-2">
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate font-mono text-xs">{project.clone}</span>
+                  <span className="text-2xs">{project.org ? `in ${project.org}` : project.repo}</span>
+                </span>
+                <span className="text-2xs">added</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+        <Section title="Or a path on this machine">
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setError({})
+              setBusy('path')
+              api
+                .addClone(path)
+                .then(added, (failure: unknown) => setError({ path: message(failure) }))
+                .finally(() => setBusy(null))
+            }}
+          >
+            <Input aria-label="clone path" className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={path} onChange={(event) => setPath(event.target.value)} />
+            <Button type="submit" variant="primary" disabled={busy !== null || !path.trim()}>
+              {busy === 'path' ? 'Adding…' : 'Add'}
+            </Button>
+            {error.path && <p className="w-full text-xs text-danger">{error.path}</p>}
+          </form>
+        </Section>
+        {elsewhere.length > 0 && (
+          <Section title={`In ${where}, not on this machine`}>
+            {elsewhere.map((project) => (
+              <div key={`${project.server ?? ''}:${project.repo}`} className={ROW}>
+                <span className="flex min-w-0 flex-col">
+                  <span className="font-mono text-xs">{project.repo}</span>
+                  <span className="text-2xs text-fg-2">
+                    {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
+                  </span>
+                </span>
+                <span className="min-w-60 flex-1">
+                  <CloneHere project={project} projects={all} />
+                </span>
+              </div>
+            ))}
+          </Section>
         )}
-        <Input
-          aria-label={how === 'existing' ? 'clone path' : 'where to clone it'}
-          className="w-72 font-mono text-xs"
-          placeholder="/home/me/src/app"
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-        />
-        <Button type="submit" variant="primary" disabled={busy || !path.trim() || (how === 'url' && !url.trim())}>
-          {busy ? 'Adding…' : 'Add'}
-        </Button>
-        {error && <p className="w-full text-xs text-danger">{error}</p>}
-      </form>
-    </section>
+        <Section title="Or a remote URL">
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setError({})
+              setBusy('url')
+              api
+                .cloneProject(url, into)
+                .then(added, (failure: unknown) => setError({ url: message(failure) }))
+                .finally(() => setBusy(null))
+            }}
+          >
+            <Input aria-label="remote URL" className="min-w-60 flex-1 font-mono text-xs" placeholder="git@github.com:acme/app.git" value={url} onChange={(event) => setUrl(event.target.value)} />
+            <Input aria-label="where to clone it" className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={into} onChange={(event) => setInto(event.target.value)} />
+            <Button type="submit" disabled={busy !== null || !url.trim() || !into.trim()}>
+              {busy === 'url' ? 'Cloning…' : 'Clone'}
+            </Button>
+            {error.url && <p className="w-full text-xs text-danger">{error.url}</p>}
+          </form>
+        </Section>
+        <Defaults projects={all} />
+      </section>
+    </Page>
   )
 }
 
 /** The projects the person works in, with this machine's clone of each (ADR 0023). */
 export function Projects() {
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
+  const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const several = (status.data?.servers.length ?? 0) > 1
+  const several = (status.data?.servers?.length ?? 0) > 1
   const all = projects.data ?? []
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h2 className="text-lg font-semibold">Projects</h2>
+    <Page
+      title="Projects"
+      meta={`${all.length} ${all.length === 1 ? 'project' : 'projects'}`}
+      width="wide"
+      actions={
+        !hosted() && (
+          <Link to="/projects/add" className={buttonClass('primary')}>
+            Add a project
+          </Link>
+        )
+      }
+    >
       {projects.isPending && <Skeleton className="h-16 w-full" />}
       {projects.error && <p className="text-sm text-danger">{message(projects.error)}</p>}
       {projects.isSuccess && all.length === 0 && (
-        <EmptyState title="No projects yet">Add a clone below, or run `silt open` in one.</EmptyState>
+        <EmptyState title="Add a clone to start threads in it">
+          From <Link to="/projects/add" className="text-accent-fg">Add a project</Link>, or run <code>silt open</code> in one.
+        </EmptyState>
       )}
-      <ul data-testid="projects" className="divide-y divide-line-subtle rounded-md border border-line">
+      <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated">
         {all.map((project) => (
-          <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="space-y-1 px-3 py-2 text-sm">
+          <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="flex flex-col gap-1.5 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{project.name}</span>
-              <span className="font-mono text-xs text-fg-3">{project.repo}</span>
+              <span className="font-mono font-medium">{project.name}</span>
+              <span className="font-mono text-2xs text-fg-2">{project.repo}</span>
               {project.org && <Tag>{project.org}</Tag>}
               {several && project.server && <Tag>{serverName(project.server)}</Tag>}
               <span className="ml-auto text-xs text-fg-2">
@@ -164,20 +343,25 @@ export function Projects() {
               </span>
             </div>
             {project.clone ? (
-              <p className="font-mono text-xs text-fg-2">Here at {project.clone}</p>
+              <p className="font-mono text-2xs text-fg-2">Here at {project.clone}</p>
             ) : (
               !hosted() && <CloneHere project={project} projects={all} />
             )}
             {!hosted() && project.clone && <ProjectHome project={project} />}
             {(project.default_agent || project.default_preset) && (
-              <p className="text-xs text-fg-3">
-                New threads start with {[project.default_agent, project.default_preset?.replaceAll('_', ' ')].filter(Boolean).join(', ')}
+              <p className="text-xs text-fg-2">
+                New threads start with{' '}
+                {[
+                  project.default_agent && (agents.data?.agents.find((agent) => agent.id === project.default_agent)?.name ?? project.default_agent),
+                  project.default_preset && (PRESETS.find((preset) => preset.id === project.default_preset)?.label.toLowerCase() ?? project.default_preset),
+                ]
+                  .filter(Boolean)
+                  .join(', ')}
               </p>
             )}
           </li>
         ))}
       </ul>
-      {!hosted() && <AddProject />}
-    </div>
+    </Page>
   )
 }
