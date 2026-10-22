@@ -229,6 +229,7 @@ impl Server {
                 (Some(room), Some(slot)) => {
                     slot.room = room;
                     slot.views.clear();
+                    slot.browsed.clear();
                 }
                 (Some(_), None) => {}
                 (None, slot) => {

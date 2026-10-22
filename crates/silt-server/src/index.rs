@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use silt_agents::Transcripts;
+use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
@@ -39,6 +39,33 @@ pub(crate) struct Index {
     comment_people: HashMap<DeltaId, Vec<String>>,
     /// Each reply's comment.
     reply_roots: HashMap<DeltaId, DeltaId>,
+    /// What a thread listing shows of each thread's own conversation.
+    conversations: HashMap<ThreadId, Conversation>,
+}
+
+/// What a thread listing shows of a thread's conversation, kept as its
+/// lines come in rather than read from them for each listing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Conversation {
+    /// Prompts and replies.
+    pub(crate) messages: usize,
+    /// The text of the first prompt.
+    pub(crate) first_prompt: Option<String>,
+}
+
+impl Conversation {
+    fn take(&mut self, entry: &Entry) {
+        match entry {
+            Entry::User { .. } => {
+                self.messages += 1;
+                if self.first_prompt.is_none() {
+                    self.first_prompt = Some(entry.searchable_text().unwrap_or_default());
+                }
+            }
+            Entry::Assistant { .. } => self.messages += 1,
+            _ => {}
+        }
+    }
 }
 
 /// A row to write for a delta.
@@ -84,6 +111,7 @@ impl Index {
                     silt_log::SessionFile::Subagent(name) => format!("subagent:{name}"),
                 };
                 for entry in self.transcripts.entries(&session.agent, &session.id, &file, line) {
+                    self.conversations.entry(thread).or_default().take(&entry);
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
                         rows.push(Row::Text { thread, kind: entry.kind().to_owned(), body, time_ms });
                     }
@@ -142,6 +170,10 @@ impl Index {
     pub(crate) fn comment_people(&self, parent: DeltaId) -> Vec<String> {
         let root = self.reply_roots.get(&parent).copied().unwrap_or(parent);
         self.comment_people.get(&root).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn conversation(&self, thread: ThreadId) -> Conversation {
+        self.conversations.get(&thread).cloned().unwrap_or_default()
     }
 
     /// The fork a merge request came from.
@@ -298,6 +330,28 @@ mod tests {
                 (two, Activity { last_ms: 0, branch: None, merged: true }),
             ])
         );
+    }
+
+    #[test]
+    fn a_threads_conversation_is_counted_as_its_lines_come_in() {
+        let family = Family::new();
+        let mut index = Index::default();
+        let session = silt_log::SessionRef { agent: "claude".into(), id: "s".into() };
+        let lines = [
+            r#"{"type":"user","message":{"role":"user","content":"fix the parser\nthen test it"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Read","input":{}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"thanks"}}"#,
+        ];
+        for line in lines {
+            let op = Op::Conv(ConvOp::Native { session: session.clone(), file: silt_log::SessionFile::Main, line: line.into() });
+            let delta = family.delta(ActorId(1), ThreadId(1), Author::User, 5, family.thread_head(ThreadId(1)), op);
+            index.observe(FamilyId(1), &delta);
+        }
+        let conversation = index.conversation(ThreadId(1));
+        assert_eq!(conversation.messages, 3, "two prompts and a reply; the tool call isn't a message");
+        assert_eq!(conversation.first_prompt.as_deref(), Some("fix the parser\nthen test it"));
+        assert_eq!(index.conversation(ThreadId(2)), Conversation::default());
     }
 
     #[test]

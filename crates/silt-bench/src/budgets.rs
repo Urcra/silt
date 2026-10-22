@@ -49,6 +49,8 @@ pub const CHECKOUT_RESCAN: &str = "checkout.rescan";
 pub const DAEMON_IDLE: &str = "daemon.idle";
 pub const SYNC_PUSH: &str = "sync.push";
 pub const SYNC_PULL: &str = "sync.pull";
+pub const APP_THREADS: &str = "app.threads";
+pub const APP_HISTORY: &str = "app.history";
 
 pub const BUDGETS: &[Budget] = &[
     Budget {
@@ -115,6 +117,18 @@ pub const BUDGETS: &[Budget] = &[
         name: SYNC_PULL,
         measures: "`silt resume` pulling that family onto another machine and restoring its session, at 100 MB/s",
         limit: Limit::Time(Duration::from_secs(1)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: APP_THREADS,
+        measures: "the server's hosted app listing threads, holding that family",
+        limit: Limit::Time(Duration::from_millis(100)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: APP_HISTORY,
+        measures: "the hosted app's first page of that family's 100 MB session, the first time it's opened",
+        limit: Limit::Time(Duration::from_millis(100)),
         status: Status::Enforced,
     },
 ];

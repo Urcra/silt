@@ -120,6 +120,9 @@ pub(crate) struct RoomSlot {
     /// Listing views by viewer serial, with the `seq` they were worked
     /// out at: clients list every few seconds, and a view reads every delta.
     pub(crate) views: HashMap<u64, (u64, u64)>,
+    /// What the hosted app reads of the family, by which deltas a reader
+    /// may read, with the `seq` it was taken at.
+    pub(crate) browsed: Vec<(u64, Vec<bool>, Arc<browse::Browsed>)>,
 }
 
 /// How far everything visibility is worked out from has changed: the
@@ -132,10 +135,31 @@ struct VisibilityAt {
 
 /// Views kept per room before they are dropped together.
 const VIEWS_KEPT: usize = 64;
+/// Copies of a family the hosted app reads, each for readers who may read
+/// the same deltas, kept per room.
+const BROWSED_KEPT: usize = 4;
 
 impl RoomSlot {
     fn new(room: Room) -> Self {
-        Self { room, retired: false, views: HashMap::new() }
+        Self { room, retired: false, views: HashMap::new(), browsed: Vec::new() }
+    }
+
+    /// The deltas `viewer` may read, kept for whoever may read the same
+    /// ones until the room changes.
+    pub(crate) fn browsed(&mut self, family: FamilyId, viewer: &Viewer) -> Arc<browse::Browsed> {
+        let seq = self.room.seq();
+        self.browsed.retain(|(at, _, _)| *at == seq);
+        let readable = viewer.readable(family.0, &self.room);
+        if let Some((_, _, browsed)) = self.browsed.iter().find(|(_, kept, _)| *kept == readable) {
+            return Arc::clone(browsed);
+        }
+        let log = self.room.deltas().iter().zip(&readable).filter(|(_, readable)| **readable).map(|(delta, _)| delta.clone());
+        let browsed = Arc::new(browse::Browsed::new(log.collect()));
+        if self.browsed.len() >= BROWSED_KEPT {
+            self.browsed.remove(0);
+        }
+        self.browsed.push((seq, readable, Arc::clone(&browsed)));
+        browsed
     }
 
     fn view(&mut self, family: FamilyId, viewer: &Viewer) -> u64 {
@@ -751,7 +775,7 @@ async fn push(
         PushError::Invalid { reason, .. } => bad_request(reason),
     })?;
     let stored: Vec<Delta> = prepared.fresh().to_vec();
-    let mut tx = server.shared.db.begin().await?;
+    let mut tx = server.write_transaction().await?;
     collab::claim_actors(&mut tx, caller.user, &claims).await?;
     let family_id = id_bytes(family.0);
     // Numbered after what is stored rather than by the room, which may have
@@ -1135,11 +1159,18 @@ impl Server {
         drop(self.shared.indexing.lock().await);
     }
 
+    /// A transaction that holds the write lock from its start. One that
+    /// reads first fails, rather than waits, when another writer commits
+    /// before it writes; a push's index is written while the next push is.
+    async fn write_transaction(&self) -> Result<Transaction<'static, Sqlite>, sqlx::Error> {
+        self.shared.db.begin_with("BEGIN IMMEDIATE").await
+    }
+
     /// Writes index rows. The index is rebuilt from the deltas at every
     /// start, so a failed write only leaves search short until then.
     async fn write_index(&self, rows: &[index::Row]) {
         let written = async {
-            let mut tx = self.shared.db.begin().await?;
+            let mut tx = self.write_transaction().await?;
             index::write(&mut tx, rows).await?;
             tx.commit().await
         };

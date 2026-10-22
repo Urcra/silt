@@ -293,7 +293,7 @@ async fn shown(server: &Server, token: &str) -> Result<Option<String>, sqlx::Err
 fn render(log: &[Delta], thread: ThreadId, owner: &str, frozen_at: Option<i64>) -> String {
     let entries = crate::browse::entries(log, thread);
     let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == thread).collect();
-    let title = crate::browse::title(&own, &entries).unwrap_or_else(|| "A Silt thread".into());
+    let title = crate::browse::title(&own, crate::browse::first_prompt(&entries)).unwrap_or_else(|| "A Silt thread".into());
     let forked = own.iter().any(|delta| matches!(delta.op, silt_log::Op::Fork { .. }));
     let mut body = format!("<h1>{}</h1><p class=\"meta\">by {}", escape(&title), escape(owner));
     if let Some(at) = frozen_at {

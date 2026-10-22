@@ -1,6 +1,8 @@
 //! `sync.push` and `sync.pull`: handing a long session to another machine
 //! through a server. One machine pushes the family holding the 100 MB
 //! transcript with `silt sync --once`; another pulls it with `silt resume`.
+//! Then `app.threads` and `app.history`: the server's hosted app listing
+//! threads and opening that session, as a browser signed in to it does.
 
 use std::fs;
 use std::net::TcpListener;
@@ -12,7 +14,7 @@ use std::time::{Duration, Instant};
 use exn::{Exn, ResultExt};
 use silt_daemon::protocol::{Request, ThreadSummary};
 
-use crate::budgets::{Measured, SYNC_PULL, SYNC_PUSH};
+use crate::budgets::{APP_HISTORY, APP_THREADS, Measured, SYNC_PULL, SYNC_PUSH};
 use crate::daemon::Home;
 use crate::fixtures::{Fixtures, SESSION_ID};
 use crate::measure::daemon::{place, recorded, session_transcript};
@@ -20,6 +22,7 @@ use crate::{BenchError, fail};
 
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(30);
 const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
+const BROWSER_PASSWORD: &str = "correct horse battery staple";
 
 pub async fn measure(silt: &Path, root: &Path, fixtures: &Fixtures) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
     let transcript = fixtures.transcript().or_raise(|| BenchError("cannot write the transcript".into()))?;
@@ -58,7 +61,45 @@ pub async fn measure(silt: &Path, root: &Path, fixtures: &Fixtures) -> Result<Ve
         return Err(fail(format!("silt resume failed: {}", String::from_utf8_lossy(&resumed.stderr).trim())));
     }
     daemon.stop()?;
-    Ok(vec![(SYNC_PUSH, Measured::Time(pushed)), (SYNC_PULL, Measured::Time(pulled))])
+
+    let app = server.browser("owner").await?;
+    let start = Instant::now();
+    let threads: Vec<ThreadSummary> = app.get("/app/api/threads").await?;
+    let app_threads = start.elapsed();
+    let id = threads
+        .iter()
+        .find(|summary| summary.id.ends_with(&thread))
+        .ok_or_else(|| fail(format!("the hosted app doesn't list thread {thread}")))?
+        .id
+        .clone();
+    let start = Instant::now();
+    app.get::<serde_json::Value>(&format!("/app/api/threads/{id}/history?offset=0&limit=50")).await?;
+    let app_history = start.elapsed();
+    Ok(vec![
+        (SYNC_PUSH, Measured::Time(pushed)),
+        (SYNC_PULL, Measured::Time(pulled)),
+        (APP_THREADS, Measured::Time(app_threads)),
+        (APP_HISTORY, Measured::Time(app_history)),
+    ])
+}
+
+/// The hosted app as a browser signed in to it uses it.
+struct Browser {
+    client: reqwest::Client,
+    url: String,
+    cookie: String,
+}
+
+impl Browser {
+    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Exn<BenchError>> {
+        let failed = || BenchError(format!("the hosted app didn't answer {path}"));
+        let response =
+            self.client.get(format!("{}{path}", self.url)).header("cookie", &self.cookie).send().await.or_raise(failed)?;
+        if !response.status().is_success() {
+            return Err(fail(format!("the hosted app refused {path}: {}", response.status())));
+        }
+        response.json().await.or_raise(failed)
+    }
 }
 
 /// Waits until `home` lists `thread`, which its daemon learns from the
@@ -109,6 +150,40 @@ impl Server {
             std::thread::sleep(Duration::from_millis(20));
         }
         Err(fail(format!("the server never listened: {}", fs::read_to_string(&log_path).unwrap_or_default())))
+    }
+
+    /// Signs a browser in to the hosted app as `user`, with a password set
+    /// for it here.
+    async fn browser(&self, user: &str) -> Result<Browser, Exn<BenchError>> {
+        let failed = || BenchError("cannot sign in to the hosted app".into());
+        let mut passwd = Command::new(&self.silt)
+            .args(["server", "user", "passwd", user, "--password-stdin", "--data"])
+            .arg(&self.data)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .or_raise(failed)?;
+        std::io::Write::write_all(&mut passwd.stdin.take().expect("piped"), format!("{BROWSER_PASSWORD}\n").as_bytes())
+            .or_raise(failed)?;
+        if !passwd.wait().or_raise(failed)?.success() {
+            return Err(fail(format!("cannot set {user}'s password")));
+        }
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().or_raise(failed)?;
+        let signed_in = client
+            .post(format!("{}/login", self.url))
+            .form(&[("user", user), ("password", BROWSER_PASSWORD), ("next", "/app/")])
+            .send()
+            .await
+            .or_raise(failed)?;
+        let cookie = signed_in
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok()?.split(';').next())
+            .find(|cookie| cookie.starts_with("silt_session="))
+            .ok_or_else(|| fail(format!("signing in as {user} started no session")))?
+            .to_owned();
+        Ok(Browser { client, url: self.url.clone(), cookie })
     }
 
     /// Signs `home` in to this server as its owner, under device `name`.

@@ -4,6 +4,7 @@
 //! and stay with the daemons.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::{Extension, Path, Query, State};
 use axum::routing::{get, patch, post};
@@ -21,6 +22,7 @@ use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 use crate::app::Browser;
+use crate::index::Conversation;
 use crate::{ApiError, Caller, Server, UserId, bad_request, id_from, not_found, now_ms};
 
 pub(crate) fn routes() -> Router<Server> {
@@ -62,9 +64,37 @@ struct Row {
 /// What the person may read: their threads, and each family's readable deltas.
 struct Readable {
     rows: Vec<Row>,
-    deltas: HashMap<FamilyId, Vec<Delta>>,
+    deltas: HashMap<FamilyId, Arc<Browsed>>,
     collaborators: HashMap<ThreadId, Vec<String>>,
     me: String,
+}
+
+/// The deltas of a family that a reader may read, and what is worked out
+/// from them. Its room keeps it until the room changes, for every reader
+/// who may read the same deltas: each page of the app would otherwise copy
+/// and read the whole family again.
+pub(crate) struct Browsed {
+    log: Vec<Delta>,
+    requests: OnceLock<Vec<MergeRequest>>,
+    entries: std::sync::Mutex<HashMap<ThreadId, ThreadEntries>>,
+}
+
+type ThreadEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
+
+impl Browsed {
+    pub(crate) fn new(log: Vec<Delta>) -> Self {
+        Self { log, requests: OnceLock::new(), entries: std::sync::Mutex::default() }
+    }
+
+    fn requests(&self) -> &[MergeRequest] {
+        self.requests.get_or_init(|| merge_requests_in(&self.log))
+    }
+
+    /// `thread`'s own history entries, each with the delta it came from.
+    fn entries(&self, thread: ThreadId) -> ThreadEntries {
+        let mut kept = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(kept.entry(thread).or_insert_with(|| Arc::new(entries(&self.log, thread))))
+    }
 }
 
 impl Readable {
@@ -91,12 +121,10 @@ impl Readable {
             .collect();
         let mut deltas = HashMap::new();
         for family in rows.iter().map(|row| row.family).collect::<BTreeSet<_>>() {
-            let Some(slot) = server.room(family).await else {
+            let Some(mut slot) = server.room(family).await else {
                 continue;
             };
-            let readable = viewer.readable(family.0, &slot.room);
-            let kept = slot.room.deltas().iter().zip(readable).filter(|(_, readable)| *readable).map(|(delta, _)| delta.clone());
-            deltas.insert(family, kept.collect());
+            deltas.insert(family, slot.browsed(family, &viewer));
         }
         let collaborators = crate::collab::collaborators(server.db()).await?;
         let me = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", user).fetch_one(server.db()).await?;
@@ -113,13 +141,18 @@ impl Readable {
     }
 
     fn of(&self, row: &Row) -> &[Delta] {
-        self.deltas.get(&row.family).map_or(&[], Vec::as_slice)
+        self.deltas.get(&row.family).map_or(&[], |browsed| browsed.log.as_slice())
+    }
+
+    /// The thread's own history entries, each with the delta it came from.
+    fn entries(&self, row: &Row) -> ThreadEntries {
+        self.deltas.get(&row.family).map_or_else(ThreadEntries::default, |browsed| browsed.entries(row.id))
     }
 
     fn requests(&self) -> Vec<(FamilyId, MergeRequest)> {
         self.deltas
             .iter()
-            .flat_map(|(family, log)| merge_requests_in(log).into_iter().map(|request| (*family, request)))
+            .flat_map(|(family, browsed)| browsed.requests().iter().map(|request| (*family, request.clone())))
             .collect()
     }
 }
@@ -175,29 +208,30 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
 }
 
 /// The title it was given, or else the first line of its first prompt.
-pub(crate) fn title(own: &[&Delta], history: &[(DeltaId, HistoryEntry)]) -> Option<String> {
+pub(crate) fn title(own: &[&Delta], first_prompt: Option<&str>) -> Option<String> {
     let given = own.iter().rev().find_map(|delta| match &delta.op {
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
     });
-    given.or_else(|| {
-        history
-            .iter()
-            .find(|(_, entry)| entry.kind == "user")
-            .map(|(_, entry)| entry.text.lines().next().unwrap_or_default().chars().take(80).collect())
-    })
+    given.or_else(|| first_prompt.map(|prompt| prompt.lines().next().unwrap_or_default().chars().take(80).collect()))
+}
+
+/// The text of the first prompt among `history`'s entries.
+pub(crate) fn first_prompt(history: &[(DeltaId, HistoryEntry)]) -> Option<&str> {
+    history.iter().find(|(_, entry)| entry.kind == "user").map(|(_, entry)| entry.text.as_str())
 }
 
 /// The titles of the threads the person sees, as their thread list shows them.
 pub(crate) async fn titles(server: &Server, user: UserId) -> Result<HashMap<ThreadId, Option<String>>, ApiError> {
     let readable = Readable::load(server, user).await?;
+    let conversations = conversations(server, &readable).await;
     Ok(readable
         .rows
         .iter()
         .map(|row| {
             let log = readable.of(row);
             let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
-            (row.id, title(&own, &entries(log, row.id)))
+            (row.id, title(&own, conversations[&row.id].first_prompt.as_deref()))
         })
         .collect())
 }
@@ -205,21 +239,21 @@ pub(crate) async fn titles(server: &Server, user: UserId) -> Result<HashMap<Thre
 fn summary(
     readable: &Readable,
     row: &Row,
+    conversation: &Conversation,
     requests: &[(FamilyId, MergeRequest)],
     states: &HashMap<ThreadId, ThreadState>,
     running: &HashMap<ThreadId, (DeviceId, AgentReport)>,
 ) -> ThreadSummary {
     let log = readable.of(row);
     let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
-    let history = entries(log, row.id);
     let collaborators = readable.collaborators.get(&row.id).cloned().unwrap_or_default();
     ThreadSummary {
         id: row.id.to_string(),
         repo: row.repo.clone(),
-        title: title(&own, &history),
+        title: title(&own, conversation.first_prompt.as_deref()),
         agent: agent_of(&own),
         created_ms: row.created_ms,
-        messages: history.iter().filter(|(_, entry)| entry.kind == "user" || entry.kind == "assistant").count(),
+        messages: conversation.messages,
         edits: own.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
         location: "remote".into(),
         forked_from: own.iter().find_map(|delta| match delta.op {
@@ -254,7 +288,16 @@ async fn threads(
     let requests = readable.requests();
     let states = states(&server, browser).await?;
     let running = server.shared.control.running().await;
-    Ok(Json(readable.rows.iter().map(|row| summary(&readable, row, &requests, &states, &running)).collect()))
+    let conversations = conversations(&server, &readable).await;
+    Ok(Json(
+        readable.rows.iter().map(|row| summary(&readable, row, &conversations[&row.id], &requests, &states, &running)).collect(),
+    ))
+}
+
+/// What the listing shows of each thread's conversation, as the index keeps it.
+async fn conversations(server: &Server, readable: &Readable) -> HashMap<ThreadId, Conversation> {
+    let index = server.shared.index.lock().await;
+    readable.rows.iter().map(|row| (row.id, index.conversation(row.id))).collect()
 }
 
 #[derive(Deserialize)]
@@ -273,11 +316,12 @@ async fn history(
 ) -> Result<Json<HistoryPage>, ApiError> {
     let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
-    let all: Vec<HistoryEntry> = entries(readable.of(row), row.id).into_iter().map(|(_, entry)| entry).collect();
+    let all = readable.entries(row);
     let total = all.len();
     let offset = page.offset.unwrap_or(0).min(total);
     let limit = page.limit.unwrap_or(total);
-    Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries: all.into_iter().skip(offset).take(limit).collect() }))
+    let entries = all.iter().skip(offset).take(limit).map(|(_, entry)| entry.clone()).collect();
+    Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
 }
 
 async fn turns(
@@ -287,11 +331,10 @@ async fn turns(
 ) -> Result<Json<Vec<TurnInfo>>, ApiError> {
     let readable = Readable::load(&server, browser.user).await?;
     let row = readable.row(&id)?;
-    Ok(Json(turn_infos(readable.of(row), row.id)))
+    Ok(Json(turn_infos(readable.of(row), row.id, &readable.entries(row))))
 }
 
-fn turn_infos(log: &[Delta], thread: ThreadId) -> Vec<TurnInfo> {
-    let history = entries(log, thread);
+fn turn_infos(log: &[Delta], thread: ThreadId, history: &[(DeltaId, HistoryEntry)]) -> Vec<TurnInfo> {
     let mut turns = Vec::new();
     for delta in log.iter().filter(|delta| delta.thread == thread) {
         if let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = delta.op {
@@ -326,11 +369,12 @@ async fn graph(
     let readable = Readable::load(&server, browser.user).await?;
     let states = states(&server, browser).await?;
     let mut rows = Vec::new();
-    for (family, log) in &readable.deltas {
+    for (family, browsed) in &readable.deltas {
         if query.family.as_ref().is_some_and(|wanted| *wanted != family.to_string()) {
             continue;
         }
-        let requests = merge_requests_in(log);
+        let log = browsed.log.as_slice();
+        let requests = browsed.requests();
         let threads: HashMap<ThreadId, &Row> =
             readable.rows.iter().filter(|row| row.family == *family).map(|row| (row.id, row)).collect();
         let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
@@ -351,7 +395,7 @@ async fn graph(
             }
             let (kind, turn, text, other, status) = match &item.event {
                 GraphEvent::Turn { number, .. } => {
-                    let turns = turns.entry(thread).or_insert_with(|| turn_infos(log, thread));
+                    let turns = turns.entry(thread).or_insert_with(|| turn_infos(log, thread, &browsed.entries(thread)));
                     let prompt = turns
                         .get(number - 1)
                         .map(|turn| turn.prompt.lines().next().unwrap_or_default().chars().take(120).collect());
@@ -573,7 +617,7 @@ async fn merge_requests(
     let readable = Readable::load(&server, browser.user).await?;
     let mut requests = readable.requests();
     requests.sort_by_key(|(_, request)| request.opened_ms);
-    Ok(Json(requests.iter().map(|(family, request)| mr_summary(&readable.deltas[family], request)).collect()))
+    Ok(Json(requests.iter().map(|(family, request)| mr_summary(&readable.deltas[family].log, request)).collect()))
 }
 
 pub(crate) async fn merge_request(
@@ -587,11 +631,14 @@ pub(crate) async fn merge_request(
         .into_iter()
         .find(|(_, request)| short(request.id) == id || request.id.to_string() == id)
         .ok_or_else(not_found)?;
-    let log = &readable.deltas[&family];
-    let conversation =
-        entries(log, request.fork).into_iter().map(|(_, entry)| ShowLine::Entry { kind: entry.kind, text: entry.text }).collect();
+    let browsed = &readable.deltas[&family];
+    let conversation = browsed
+        .entries(request.fork)
+        .iter()
+        .map(|(_, entry)| ShowLine::Entry { kind: entry.kind.clone(), text: entry.text.clone() })
+        .collect();
     Ok(Json(MrDetails {
-        mr: mr_summary(log, &request),
+        mr: mr_summary(&browsed.log, &request),
         diff: String::new(),
         conflicts: Vec::new(),
         conversation,
