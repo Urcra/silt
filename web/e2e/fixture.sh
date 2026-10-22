@@ -3,7 +3,7 @@
 # from the fork and starts the web UI. Prints the details as one JSON line.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
-silt="$root/target/debug/silt"
+silt="${SILT:-$root/target/debug/silt}"
 work=$(mktemp -d /tmp/silt-web-XXXXXX)
 export SILT_HOME="$work/silt"
 export CLAUDE_CONFIG_DIR="$work/claude"

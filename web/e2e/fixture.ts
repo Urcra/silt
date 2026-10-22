@@ -11,7 +11,9 @@ export interface Fixture {
 }
 
 const FILE = join(import.meta.dirname, '.fixture.json')
-const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
+/** The `silt` the fixture runs: `$SILT`, as the performance budgets are timed
+ * on an optimized build, else the debug build. */
+export const SILT = process.env.SILT ?? join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
 export function createFixture(): void {
   const output = execFileSync(join(import.meta.dirname, 'fixture.sh'), { encoding: 'utf8' })
