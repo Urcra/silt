@@ -164,12 +164,19 @@ pub(crate) fn transcript_grew(session: &Session) -> bool {
 pub(crate) fn read_recorded(sessions: &mut [Session], deltas: &[silt_log::Delta]) {
     let by_reference: HashMap<SessionRef, usize> =
         sessions.iter().enumerate().map(|(index, session)| (session.reference(), index)).collect();
+    // Most agents' readers keep nothing between lines, and a long session's
+    // lines would each be looked at for nothing.
+    let wanted: Vec<bool> = sessions
+        .iter()
+        .map(|session| session.agent.capture() == Capture::Snapshot || session.agent.reader().remembers())
+        .collect();
     for delta in deltas {
         match &delta.op {
             Op::Conv(ConvOp::Native { session, file, line }) => {
-                let Some(found) = by_reference.get(session).map(|index| &mut sessions[*index]) else {
+                let Some(index) = by_reference.get(session).copied().filter(|index| wanted[*index]) else {
                     continue;
                 };
+                let found = &mut sessions[index];
                 let agent = found.agent;
                 let reader = found.readers.entry(file_key(file)).or_insert_with(|| agent.reader());
                 if reader.remembers() {
