@@ -588,6 +588,85 @@ fn track_from_hook_records_the_hooks_session_once() {
     assert_eq!(threads[0]["cloud"], "session_01CloudSessionOfTheHook", "{threads}");
 }
 
+/// A `claude` that also plays `--cloud` and `-p --cloud`: it names a cloud
+/// session after a moment and then stays, as the real one does, and takes a
+/// follow-up on stdin.
+fn fake_cloud_claude() -> String {
+    let cloud = r#"#!/bin/sh
+set -eu
+case "${1:-}" in
+    --cloud=*)
+        { printf '%s\n' "$1"; [ -t 0 ] && echo tty; } > "$CLAUDE_CONFIG_DIR/cloud-started"
+        printf '\033[2J\033[1;1HStarting a cloud session\r\n'
+        sleep 0.2
+        printf 'Branch topic is not on GitHub; starting from main\r\n'
+        printf 'View: \033[4mhttps://claude.ai/code/session_01FakeCloud\033[0m?from=cli\r\n'
+        sleep 30
+        exit 0 ;;
+    -p)
+        printf '%s\n' "$*" > "$CLAUDE_CONFIG_DIR/cloud-sent"
+        cat >> "$CLAUDE_CONFIG_DIR/cloud-sent"
+        echo '{"ok":true,"session_id":"session_01FakeCloud","url":"https://claude.ai/code/session_01FakeCloud"}'
+        exit 0 ;;
+esac
+"#;
+    format!("{cloud}{}", FAKE_CLAUDE.trim_start_matches("#!/bin/sh\nset -eu\n"))
+}
+
+/// The web UI starts a cloud session through the person's own `claude`,
+/// lists it until the thread recording it arrives, and sends that thread's
+/// session a follow-up.
+#[test]
+fn the_web_ui_starts_and_steers_a_cloud_session_through_claude() {
+    let env = Env::with_claude(&fake_cloud_claude());
+    git(&env.repo, &["remote", "add", "origin", "https://github.com/example/app"]);
+    let api = Api::open(&env);
+    let started = std::time::Instant::now();
+    let launch = api.ok("POST", "/api/cloud", Some(serde_json::json!({ "clone": env.repo, "task": "-p fix the tests" })));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "stopped once the session was named");
+    assert_eq!(launch["id"], "session_01FakeCloud", "{launch}");
+    assert_eq!(launch["url"], "https://claude.ai/code/session_01FakeCloud");
+    assert_eq!(launch["warnings"][0], "Branch topic is not on GitHub; starting from main", "{launch}");
+    let ran = fs::read_to_string(env.claude_dir.join("cloud-started")).expect("claude --cloud ran");
+    assert_eq!(ran, "--cloud=-p fix the tests\ntty\n", "the task as one argument, in a terminal");
+    let elsewhere = tempfile::tempdir().expect("temp dir");
+    let (ok, refused) = api.call("POST", "/api/cloud", Some(serde_json::json!({ "clone": elsewhere.path(), "task": "x" })));
+    assert!(!ok, "only a known clone: {refused}");
+
+    let launches = api.ok("GET", "/api/cloud", None);
+    assert_eq!(launches[0]["thread"], serde_json::Value::Null, "{launches}");
+
+    let session = "11111111-2222-4333-8444-888888888888";
+    let ran = Command::new(&env.fake)
+        .args(["--session-id", session])
+        .current_dir(&env.repo)
+        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+        .env("SILT_HOME", &env.silt_home)
+        .output()
+        .expect("fake claude runs");
+    assert!(ran.status.success());
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["track", "--from-hook"])
+        .current_dir(&env.repo)
+        .env("SILT_HOME", &env.silt_home)
+        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+        .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01FakeCloud")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("silt runs");
+    let input = serde_json::json!({ "session_id": session, "cwd": env.repo, "hook_event_name": "SessionStart" });
+    hook.stdin.take().expect("stdin").write_all(input.to_string().as_bytes()).expect("write the hook input");
+    assert!(hook.wait().expect("silt exits").success());
+    let thread = env.thread();
+    let launches = api.ok("GET", "/api/cloud", None);
+    assert!(launches[0]["thread"].as_str().is_some_and(|recording| recording.ends_with(&thread)), "{launches}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/cloud/send"), Some(serde_json::json!({ "text": "--and the docs" })));
+    let sent = fs::read_to_string(env.claude_dir.join("cloud-sent")).expect("claude -p --cloud ran");
+    assert_eq!(sent, "-p --output-format json --cloud session_01FakeCloud\n--and the docs", "the message on stdin");
+}
+
 /// A session longer than one read is taken in whole, each line once.
 #[test]
 fn track_takes_in_a_long_session_whole() {

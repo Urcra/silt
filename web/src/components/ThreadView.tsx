@@ -3,6 +3,7 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { type ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { parseFiles } from '../diffParse'
 import { appHref, filePath } from '../permalink'
@@ -504,6 +505,7 @@ function ThreadHeader({
           </Link>
         </p>
       )}
+      {summary && <CloudSession thread={summary} />}
       <div className="mt-1 flex flex-wrap items-center gap-2">
         {/* A terminal's commands mean nothing on a phone. */}
         <span className="flex items-center gap-2 max-md:hidden">

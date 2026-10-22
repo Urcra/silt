@@ -11,6 +11,8 @@ export const queryClient = new QueryClient({
 /** Query keys, nested so that one event invalidates everything under it (ADR 0021). */
 export const keys = {
   threads: ['threads'] as const,
+  // Under `threads`, so a launch's thread arriving fetches them again.
+  cloudLaunches: ['threads', 'cloud'] as const,
   thread: (id: string) => ['thread', id] as const,
   history: (id: string) => ['thread', id, 'history'] as const,
   turns: (id: string) => ['thread', id, 'turns'] as const,

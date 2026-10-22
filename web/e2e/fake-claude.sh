@@ -2,6 +2,20 @@
 # A scripted stand-in for Claude Code, shared with the Rust end-to-end
 # tests (crates/silt-cli/tests/common/mod.rs), plus a compaction.
 set -eu
+# A cloud session: named after a moment, then claude stays, as the real one
+# does; a follow-up comes on stdin.
+case "${1:-}" in
+    --cloud=*)
+        printf '\033[2J\033[1;1HStarting a cloud session\r\n'
+        sleep 0.2
+        printf 'View: https://claude.ai/code/session_01FakeCloud\r\n'
+        sleep 30
+        exit 0 ;;
+    -p)
+        cat > /dev/null
+        echo '{"ok":true,"session_id":"session_01FakeCloud","url":"https://claude.ai/code/session_01FakeCloud"}'
+        exit 0 ;;
+esac
 session=""
 resume=""
 while [ $# -gt 0 ]; do
