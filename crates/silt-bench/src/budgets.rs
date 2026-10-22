@@ -50,7 +50,7 @@ pub const BUDGETS: &[Budget] = &[
         name: RECORD_IMPORT,
         measures: "tracking a 100 MB transcript, the daemon already running",
         limit: Limit::Time(Duration::from_secs(1)),
-        status: Status::Pending("M18-03"),
+        status: Status::Enforced,
     },
     Budget {
         name: RECORD_HOOK,
@@ -62,7 +62,7 @@ pub const BUDGETS: &[Budget] = &[
         name: STORE_SIZE,
         measures: "the data dir over the transcript bytes it records",
         limit: Limit::Ratio(1.5),
-        status: Status::Pending("M18-04"),
+        status: Status::Enforced,
     },
     Budget {
         name: DAEMON_STARTUP,

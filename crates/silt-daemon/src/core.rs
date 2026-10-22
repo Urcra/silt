@@ -1324,9 +1324,14 @@ impl Core {
     }
 
     /// Saves the family's projection once enough was recorded since its last
-    /// snapshot. A snapshot that can't be saved only makes the next load
-    /// slower.
-    async fn snapshot_if_due(&mut self, family_id: FamilyId) {
+    /// snapshot, and not while one of its sessions' backlog drains, which
+    /// takes one when done. A snapshot that can't be saved only makes the
+    /// next load slower.
+    pub(crate) async fn snapshot_if_due(&mut self, family_id: FamilyId) {
+        let draining = |session: &&crate::sessions::Session| self.draining.contains(&session.record.session_id);
+        if self.sessions.iter().filter(draining).any(|session| session.family == family_id) {
+            return;
+        }
         let Some(family) = self.families.get_mut(&family_id) else {
             return;
         };

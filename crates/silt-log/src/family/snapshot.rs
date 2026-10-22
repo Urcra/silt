@@ -13,7 +13,7 @@ use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]; a snapshot in another one is
 /// replayed instead of read.
-pub const SNAPSHOT_FORMAT: i64 = 2;
+pub const SNAPSHOT_FORMAT: i64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -54,19 +54,27 @@ struct Logged {
 
 impl Logged {
     fn of(delta: &Delta) -> Result<Self, postcard::Error> {
-        Ok(Self { id: delta.span.first(), fingerprint: fnv1a(&postcard::to_allocvec(delta)?) })
+        Ok(Self { id: delta.span.first(), fingerprint: fingerprint(&postcard::to_allocvec(delta)?) })
     }
 }
 
-/// Stable across builds, unlike the standard library's hashers.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3))
+/// FNV-1a over eight bytes at a time: stable across builds, unlike the
+/// standard library's hashers, and fast enough for a long session's log.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let (words, rest) = bytes.as_chunks::<8>();
+    let hash = words.iter().fold(0xcbf2_9ce4_8422_2325, |hash, word| (hash ^ u64::from_le_bytes(*word)).wrapping_mul(PRIME));
+    let hash = rest.iter().fold(hash, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(PRIME));
+    (hash ^ bytes.len() as u64).wrapping_mul(PRIME)
 }
 
 impl Family {
     pub fn snapshot(&mut self) -> Result<Vec<u8>, postcard::Error> {
+        let mut encoded = Vec::new();
         for delta in &self.log[self.fingerprints.len()..] {
-            self.fingerprints.push(Logged::of(delta)?.fingerprint);
+            encoded.clear();
+            encoded = postcard::to_extend(delta, encoded)?;
+            self.fingerprints.push(fingerprint(&encoded));
         }
         let log =
             self.log.iter().zip(&self.fingerprints).map(|(delta, &fingerprint)| Logged { id: delta.span.first(), fingerprint });

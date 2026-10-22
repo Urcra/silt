@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE deltas SET data = x'' WHERE family_id = ? AND seq > ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e90b2c38cb914fdaf297a69d4d1061be0083a140f82d5726c08fd23f1a05d620"
+}

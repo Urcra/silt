@@ -282,29 +282,68 @@ fn skills_plugin(scratch: &Path, skills: &[PathBuf]) -> io::Result<PathBuf> {
 }
 /// The conversation steps recorded in one transcript line.
 pub fn normalize(line: &str) -> Vec<Entry> {
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return vec![Entry::unparseable()];
-    };
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or("unknown");
-    match kind {
-        "user" if value.get("isCompactSummary").and_then(Value::as_bool) == Some(true) => {
-            vec![Entry::Compaction { summary: Some(message_text(&value)) }]
+    // Only the fields read, so the large structured tool results beside
+    // them aren't built; a line of another shape is read whole.
+    if let Ok(fields) = serde_json::from_str::<Fields>(line) {
+        return entries(&fields);
+    }
+    match serde_json::from_str::<Value>(line) {
+        Ok(value) => entries(&Fields::of(&value)),
+        Err(_) => vec![Entry::unparseable()],
+    }
+}
+
+/// The parts of a transcript line `normalize` reads.
+#[derive(Deserialize)]
+struct Fields {
+    #[serde(rename = "type")]
+    kind: Option<Value>,
+    #[serde(rename = "isCompactSummary")]
+    compact_summary: Option<Value>,
+    #[serde(rename = "isMeta")]
+    meta: Option<Value>,
+    subtype: Option<Value>,
+    message: Option<Message>,
+}
+
+#[derive(Deserialize)]
+struct Message {
+    content: Option<Value>,
+}
+
+impl Fields {
+    fn of(value: &Value) -> Self {
+        Self {
+            kind: value.get("type").cloned(),
+            compact_summary: value.get("isCompactSummary").cloned(),
+            meta: value.get("isMeta").cloned(),
+            subtype: value.get("subtype").cloned(),
+            message: value.get("message").map(|message| Message { content: message.get("content").cloned() }),
         }
-        "system" if value.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
+    }
+
+    fn content(&self) -> Option<&Value> {
+        self.message.as_ref()?.content.as_ref()
+    }
+}
+
+fn entries(fields: &Fields) -> Vec<Entry> {
+    let flag = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool) == Some(true);
+    let kind = fields.kind.as_ref().and_then(Value::as_str).unwrap_or("unknown");
+    match kind {
+        "user" if flag(&fields.compact_summary) => vec![Entry::Compaction { summary: Some(block_text(fields.content())) }],
+        "system" if fields.subtype.as_ref().and_then(Value::as_str) == Some("compact_boundary") => {
             vec![Entry::Compaction { summary: None }]
         }
         // What Claude Code adds as the user's turn, such as a skill's text,
         // hook feedback or a note on an image, which nobody typed.
-        "user" if value.get("isMeta").and_then(Value::as_bool) == Some(true) => {
-            vec![Entry::Other { kind: "meta".into() }]
-        }
-        "user" | "assistant" => message_entries(kind, &value),
+        "user" if flag(&fields.meta) => vec![Entry::Other { kind: "meta".into() }],
+        "user" | "assistant" => message_entries(kind, fields.content()),
         other => vec![Entry::Other { kind: other.to_owned() }],
     }
 }
 
-fn message_entries(role: &str, value: &Value) -> Vec<Entry> {
-    let content = value.pointer("/message/content");
+fn message_entries(role: &str, content: Option<&Value>) -> Vec<Entry> {
     let blocks = match content {
         Some(Value::String(text)) => return vec![text_entry(role, text.clone())],
         Some(Value::Array(blocks)) => blocks,
@@ -333,10 +372,6 @@ fn message_entries(role: &str, value: &Value) -> Vec<Entry> {
 
 fn text_entry(role: &str, text: String) -> Entry {
     if role == "user" { Entry::User { text } } else { Entry::Assistant { text } }
-}
-
-fn message_text(value: &Value) -> String {
-    block_text(value.pointer("/message/content"))
 }
 
 fn block_text(content: Option<&Value>) -> String {
@@ -444,6 +479,17 @@ mod tests {
             r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"We were fixing the lexer."}}"#;
         assert_eq!(normalize(summary), vec![Entry::Compaction { summary: Some("We were fixing the lexer.".into()) }]);
         assert_eq!(normalize(r#"{"type":"file-history-snapshot"}"#), vec![Entry::Other { kind: "file-history-snapshot".into() }]);
+
+        // Lines of other shapes than Claude Code's own read as they always did.
+        assert_eq!(normalize(r#"{"type":"user","message":"not an object"}"#), Vec::new());
+        assert_eq!(
+            normalize(r#"{"type":"user","isCompactSummary":"yes","message":{"content":"x"}}"#),
+            vec![Entry::User { text: "x".into() }]
+        );
+        assert_eq!(normalize(r#"{"type":7}"#), vec![Entry::Other { kind: "unknown".into() }]);
+        assert_eq!(normalize("not json"), vec![Entry::unparseable()]);
+        let beside = r#"{"type":"user","message":{"content":"hi","usage":{"x":1}},"toolUseResult":{"file":{"content":"big"}}}"#;
+        assert_eq!(normalize(beside), vec![Entry::User { text: "hi".into() }]);
     }
 
     #[test]

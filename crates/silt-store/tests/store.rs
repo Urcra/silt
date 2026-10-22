@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
 use silt_store::{
-    AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRecord, Snapshot, Store, ThreadRecord,
+    AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRead, SessionRecord, Snapshot, Store,
+    ThreadRecord,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
@@ -62,23 +63,96 @@ async fn deltas_round_trip_in_order_across_reopen() {
 #[tokio::test]
 async fn a_long_family_reads_the_same_once_packed_into_chunks() {
     let (_dir, store) = store_with_thread().await;
-    let mut family = Family::new();
-    let mut appended = Vec::new();
-    for index in 0..2_500 {
-        let op = Op::Conv(silt_log::ConvOp::Title(format!("title {index}")));
-        let delta = family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op);
-        family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
-        appended.push(delta);
-    }
+    let appended = titles(2_500);
     // Unevenly, so packing happens partway through a batch.
     for batch in appended.chunks(700) {
         store.append_deltas(FAMILY, batch).await.expect("appends");
     }
     assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
-    assert_eq!(store.deltas_after(FAMILY, 2_400).await.expect("loads"), appended[2_401..]);
+    for after in [0, 998, 999, 1_000, 1_500, 1_999, 2_000, 2_400, 2_499] {
+        let from = usize::try_from(after + 1).expect("a position");
+        assert_eq!(store.deltas_after(FAMILY, after).await.expect("loads"), appended[from..], "after {after}");
+    }
 
     store.replace_deltas(FAMILY, &appended[..10]).await.expect("replaces");
     assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended[..10], "chunks of the replaced deltas are gone");
+}
+
+#[tokio::test]
+async fn deltas_appended_one_by_one_or_all_at_once_read_the_same() {
+    let appended = titles(2_100);
+    let (_dir, one_by_one) = store_with_thread().await;
+    for delta in &appended {
+        one_by_one.append_deltas(FAMILY, std::slice::from_ref(delta)).await.expect("appends");
+    }
+    let (_other, at_once) = store_with_thread().await;
+    at_once.append_deltas(FAMILY, &appended).await.expect("appends");
+    for store in [&one_by_one, &at_once] {
+        assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
+        assert_eq!(store.deltas_after(FAMILY, 1_500).await.expect("loads"), appended[1_501..]);
+        assert_eq!(store.position(FAMILY).await.expect("position"), Some(2_099));
+    }
+}
+
+#[tokio::test]
+async fn a_failed_append_stores_none_of_its_deltas_rows_or_progress() {
+    let (_dir, store) = store_with_thread().await;
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    let session =
+        SessionRecord { agent: "claude-code".into(), session_id: "abc".into(), thread: THREAD, checkout_id: checkout.id };
+    store.add_session(&session, 1).await.expect("session");
+    let appended = titles(1_500);
+    store.append_deltas(FAMILY, &appended[..10]).await.expect("appends");
+
+    // The last delta is one stored already, which the store refuses.
+    let mut batch = appended[10..].to_vec();
+    batch.push(appended[0].clone());
+    let rows: Vec<SearchRow> = batch
+        .iter()
+        .map(|delta| SearchRow { thread: THREAD, delta: delta.span.first(), kind: "user".into(), body: "unindexed".into() })
+        .collect();
+    let offset = SessionFileOffset { file: "main".into(), path: PathBuf::from("/t.jsonl"), offset: 99 };
+    let read = SessionRead { agent: "claude-code", session_id: "abc", offset: &offset };
+    assert!(store.append_deltas_with(FAMILY, &batch, &rows, Some(read)).await.is_err());
+
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended[..10]);
+    assert!(store.search("unindexed", 10).await.expect("search").is_empty());
+    assert!(store.session_offsets("claude-code", "abc").await.expect("offsets").is_empty());
+    store.append_deltas(FAMILY, &appended[10..]).await.expect("appends what's left");
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), appended);
+}
+
+#[tokio::test]
+async fn search_rows_appended_in_bulk_are_found_and_go_with_their_family() {
+    let (_dir, store) = store_with_thread().await;
+    let appended = titles(1_200);
+    let rows: Vec<SearchRow> = appended
+        .iter()
+        .enumerate()
+        .map(|(index, delta)| SearchRow {
+            thread: THREAD,
+            delta: delta.span.first(),
+            kind: "user".into(),
+            body: format!("marker{index} text"),
+        })
+        .collect();
+    store.append_deltas_with(FAMILY, &appended, &rows, None).await.expect("appends");
+    let hits = store.search("marker1199", 10).await.expect("search");
+    assert_eq!(hits.iter().map(|hit| hit.delta).collect::<Vec<_>>(), [appended[1_199].span.first()]);
+    store.replace_deltas(FAMILY, &[]).await.expect("replaces");
+    assert!(store.search("marker0", 10).await.expect("search").is_empty());
+}
+
+fn titles(count: usize) -> Vec<silt_log::Delta> {
+    let mut family = Family::new();
+    (0..count)
+        .map(|index| {
+            let op = Op::Conv(silt_log::ConvOp::Title(format!("title {index}")));
+            let delta = family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op);
+            family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
+            delta
+        })
+        .collect()
 }
 
 #[tokio::test]

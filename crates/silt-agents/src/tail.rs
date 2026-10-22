@@ -10,7 +10,7 @@ pub fn complete_lines(buffer: &[u8]) -> (Vec<String>, usize) {
 pub fn complete_lines_ending(buffer: &[u8]) -> (Vec<(String, usize)>, usize) {
     let mut lines = Vec::new();
     let mut consumed = 0;
-    while let Some(end) = buffer[consumed..].iter().position(|byte| *byte == b'\n') {
+    while let Some(end) = memchr::memchr(b'\n', &buffer[consumed..]) {
         let line = &buffer[consumed..consumed + end];
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         consumed += end + 1;

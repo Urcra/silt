@@ -847,11 +847,17 @@ impl Core {
 
     /// Records the next chunk of a session's backlog.
     pub(crate) async fn drain(&mut self, session_id: &str) {
+        let more = self.tail_session_up_to(session_id, BACKLOG_CHUNK).await;
+        if let Ok(true) = more {
+            let _ = self.events.send(Event::Drain { session_id: session_id.to_owned() });
+            return;
+        }
         self.draining.remove(session_id);
-        match self.tail_session_up_to(session_id, BACKLOG_CHUNK).await {
-            Ok(true) => self.drain_later(session_id),
-            Ok(false) => {}
-            Err(error) => warn!(%error, session = session_id, "could not read the session transcript"),
+        if let Err(error) = more {
+            warn!(%error, session = session_id, "could not read the session transcript");
+        }
+        if let Some(family) = self.session(session_id).map(|session| session.family) {
+            self.snapshot_if_due(family).await;
         }
     }
 
