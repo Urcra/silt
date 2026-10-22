@@ -237,7 +237,8 @@ function PaletteList({ close }: { close: () => void }) {
             <div
               role="option"
               aria-selected={index === shown}
-              onMouseEnter={() => setChosen(index)}
+              // Moving, not entering: results that re-render under a resting pointer keep the choice.
+              onMouseMove={() => index !== shown && setChosen(index)}
               onClick={() => run(item)}
               className={cx(
                 'flex cursor-pointer items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-sm text-fg-1 max-md:min-h-11',
