@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Its own workspace, as it needs WebKitGTK (ADR 0041).
+exclude = ["crates/silt-desktop"]
 
 [workspace.package]
 version = "0.0.1"

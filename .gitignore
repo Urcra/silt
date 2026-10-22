@@ -7,3 +7,4 @@ node_modules/
 .silt/worktrees/
 .playwright-mcp/
 .claude/worktrees/
+/crates/silt-desktop/target

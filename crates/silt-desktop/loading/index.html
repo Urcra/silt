@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Silt</title>
+    <style>
+      :root {
+        --bg: #f6f7f8;
+        --fg: #1f2a37;
+        --muted: #5b6673;
+        --error: #b42318;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #11161d;
+          --fg: #e6eaee;
+          --muted: #9aa5b1;
+          --error: #f97066;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      main {
+        max-width: 32rem;
+        padding: 0 16px;
+        text-align: center;
+      }
+      p {
+        color: var(--muted);
+      }
+      p.error {
+        color: var(--error);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Silt</h1>
+      <p id="status" role="status">Finding the Silt daemon…</p>
+    </main>
+    <script>
+      // Called by the app when it can't reach the daemon.
+      function showError(message) {
+        const status = document.getElementById('status')
+        status.textContent = message
+        status.className = 'error'
+      }
+    </script>
+  </body>
+</html>

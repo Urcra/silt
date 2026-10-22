@@ -57,7 +57,17 @@ pnpm -C web install --frozen-lockfile
 step "Playwright's Chromium"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= pnpm -C web exec playwright install chromium
 
+# Tauri's system libraries, for the desktop app (ADR 0041).
+if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+    step "WebKitGTK for the desktop app"
+    sudo=
+    [ "$(id -u)" = 0 ] || sudo=sudo
+    $sudo apt-get update -q
+    DEBIAN_FRONTEND=noninteractive $sudo apt-get install -y -q pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+fi
+
 step "crates"
 cargo fetch --locked
+cargo fetch --locked --manifest-path crates/silt-desktop/Cargo.toml
 
 step "done"
