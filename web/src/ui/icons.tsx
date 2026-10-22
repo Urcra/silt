@@ -58,6 +58,50 @@ const PATHS = {
   monitor: <path d="M2.5 3h11v8h-11zM6 14h4M8 11v3" />,
   copy: <path d="M5.5 5.5h7v8h-7zM3.5 10.5v-8h7" />,
   more: <path d="M4 8h.01M8 8h.01M12 8h.01" />,
+  fork: (
+    <>
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="12" cy="3.5" r="1.5" />
+      <circle cx="8" cy="12.5" r="1.5" />
+      <path d="M4 5v1.5c0 1.5 1 2 4 2s4-.5 4-2V5M8 8.5V11" />
+    </>
+  ),
+  graph: (
+    <>
+      <circle cx="5" cy="3.5" r="1.5" />
+      <circle cx="5" cy="12.5" r="1.5" />
+      <circle cx="11" cy="6" r="1.5" />
+      <path d="M5 5v6M11 7.5c0 2.5-6 2-6 3.5" />
+    </>
+  ),
+  laptop: <path d="M3.5 3.5h9v6.5h-9zM1.5 12.5h13" />,
+  phone: <path d="M5 1.5h6v13H5zM7.5 12.5h1" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 5v3l2 1.5" />
+    </>
+  ),
+  lock: <path d="M3 7h10v7H3zM5 7V5a3 3 0 0 1 6 0v2" />,
+  handoff: <path d="M3 8h10M9 4l4 4-4 4" />,
+  link: <path d="M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />,
+  comment: <path d="M3 3.5h10v7H8l-3 2.5v-2.5H3z" />,
+  eye: (
+    <>
+      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </>
+  ),
+  revert: <path d="M5.5 3 2.5 6l3 3M2.5 6H10a3.5 3.5 0 0 1 0 7H7" />,
+  selector: <path d="M5 6l3-3 3 3M5 10l3 3 3-3" />,
+  settings: (
+    <>
+      <circle cx="8" cy="8" r="2" />
+      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+    </>
+  ),
+  file: <path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3" />,
+  bell: <path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3" />,
 } satisfies Record<string, ReactNode>
 
 export type IconName = keyof typeof PATHS

@@ -151,13 +151,30 @@ export function Menu({
   )
 }
 
-/** A button showing a panel next to it, such as a form or details. */
-export function Popover({ trigger, children, label }: { trigger: ReactNode; children: ReactNode; label: string }) {
+/** A button showing a panel next to it, such as a form or a list to pick from; `children` may take a way to close it. */
+export function Popover({
+  trigger,
+  children,
+  label,
+  triggerLabel,
+  triggerClassName,
+  panelClassName,
+  align = 'left',
+}: {
+  trigger: ReactNode
+  children: ReactNode | ((close: () => void) => ReactNode)
+  label: string
+  triggerLabel?: string
+  triggerClassName?: string
+  panelClassName?: string
+  align?: 'left' | 'right'
+}) {
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const id = useId()
-  useDismiss(open, () => setOpen(false), panel, button)
+  const close = () => setOpen(false)
+  useDismiss(open, close, panel, button)
   return (
     <div className="relative inline-block">
       <button
@@ -165,14 +182,21 @@ export function Popover({ trigger, children, label }: { trigger: ReactNode; chil
         type="button"
         aria-expanded={open}
         aria-controls={id}
+        aria-label={triggerLabel}
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-surface-2"
+        className={triggerClassName ?? 'inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-surface-2'}
       >
         {trigger}
       </button>
       {open && (
-        <div ref={panel} id={id} role="dialog" aria-label={label} className={cx(PANEL, 'w-72 p-3')}>
-          {children}
+        <div
+          ref={panel}
+          id={id}
+          role="dialog"
+          aria-label={label}
+          className={cx(PANEL, align === 'right' ? 'right-0' : 'left-0', panelClassName ?? 'w-72 p-3')}
+        >
+          {typeof children === 'function' ? children(close) : children}
         </div>
       )}
     </div>
@@ -204,7 +228,7 @@ export function Dialog({
       ref={dialog}
       aria-labelledby={heading}
       onClose={onClose}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-line bg-elevated p-0 text-fg-1 shadow-overlay backdrop:bg-black/40"
+      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-line bg-elevated p-0 text-fg-1 shadow-overlay backdrop:bg-backdrop"
     >
       {open && (
         <div className="p-4">

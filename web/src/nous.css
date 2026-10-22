@@ -1,0 +1,112 @@
+/* Nous (ADR 0035): warm neutrals and one amber accent, light and dark.
+   The one source of Silt's tokens: the web app imports it, and silt-server's
+   pages and silt-site include it. Each token names its light and dark value
+   once; `color-scheme` picks one, from the system or from `data-theme`. */
+
+:root {
+  --paper-50: #faf6ee;
+  --paper-100: #f6f1e8;
+  --paper-200: #efe8da;
+  --paper-300: #e6ddc9;
+  --paper-400: #d9cdb3;
+  --paper-500: #b8a98a;
+  --tobacco-300: #6b5e48;
+  --tobacco-500: #4a3f2e;
+  --tobacco-700: #2e2620;
+  --tobacco-800: #221c17;
+  --tobacco-900: #1a1714;
+  --amber-300: #e8b97a;
+  --amber-400: #dfa055;
+  --amber-500: #d9883a;
+  --amber-600: #b86e25;
+  --amber-700: #8e5418;
+  --olive-500: #7a8a3f;
+  --olive-600: #5f6e2d;
+  --rust-500: #c25a3a;
+  --rust-600: #9b4326;
+  --slate-500: #5b7a8a;
+  --slate-600: #3f5c6e;
+  --honey-500: #c9982e;
+
+  color-scheme: light dark;
+
+  --bg: light-dark(var(--paper-100), var(--tobacco-900));
+  --bg-elevated: light-dark(var(--paper-50), var(--tobacco-800));
+  --surface-1: light-dark(var(--paper-200), var(--tobacco-800));
+  --surface-2: light-dark(var(--paper-300), var(--tobacco-700));
+  --surface-3: light-dark(var(--paper-400), #3a3025);
+  --fg-1: light-dark(var(--tobacco-500), #efe6d6);
+  --fg-2: light-dark(var(--tobacco-300), #b8ac95);
+  /* Darker than the design's paper-500 (and lighter in dark), which fail 4.5:1 as text. */
+  --fg-3: light-dark(#786a51, #8e836f);
+  /* Cream on amber is too faint to read. */
+  --fg-on-accent: var(--tobacco-900);
+  --border: light-dark(var(--paper-400), #3a3127);
+  --border-strong: light-dark(var(--tobacco-300), #5c4f3d);
+  --border-subtle: light-dark(rgb(74 63 46 / 0.08), rgb(239 230 214 / 0.06));
+  --accent: light-dark(var(--amber-500), var(--amber-400));
+  --accent-hover: light-dark(var(--amber-600), var(--amber-300));
+  --accent-tint: light-dark(rgb(217 136 58 / 0.1), rgb(223 160 85 / 0.14));
+  --accent-fg: light-dark(var(--amber-700), var(--amber-300));
+  --ok: light-dark(var(--olive-600), var(--olive-500));
+  --warn: var(--honey-500);
+  --danger: light-dark(var(--rust-600), var(--rust-500));
+  --info: light-dark(var(--slate-600), var(--slate-500));
+  --ok-tint: light-dark(rgb(122 138 63 / 0.12), rgb(122 138 63 / 0.18));
+  --warn-tint: light-dark(rgb(201 152 46 / 0.14), rgb(201 152 46 / 0.18));
+  --danger-tint: light-dark(rgb(194 90 58 / 0.12), rgb(194 90 58 / 0.18));
+  --info-tint: light-dark(rgb(91 122 138 / 0.12), rgb(91 122 138 / 0.18));
+  --backdrop: rgb(20 14 8 / 0.4);
+  --shadow-1:
+    0 1px 2px light-dark(rgb(20 14 8 / 0.04), rgb(0 0 0 / 0.3)),
+    0 1px 1px light-dark(rgb(20 14 8 / 0.06), rgb(0 0 0 / 0.2));
+  --shadow-2:
+    0 8px 24px light-dark(rgb(20 14 8 / 0.1), rgb(0 0 0 / 0.4)),
+    0 2px 4px light-dark(rgb(20 14 8 / 0.06), rgb(0 0 0 / 0.25));
+
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--fg-1);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
