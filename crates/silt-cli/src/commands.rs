@@ -497,22 +497,49 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn track(agent: &str) -> Result<(), Exn<CliError>> {
+pub fn track(agent: &str, session: Option<&str>) -> Result<(), Exn<CliError>> {
     let agent = find_agent(agent)?;
-    ensure_daemon()?;
     let cwd = current_dir()?;
     let cwd = cwd.canonicalize().unwrap_or(cwd);
-    let found = agent
-        .discover(&cwd, 0, &[])
-        .ok_or_else(|| fail(format!("no {} session found for {}", agent.display_name(), cwd.display())))?;
-    let started: SessionStarted = call(&Request::StartSession {
-        cwd,
-        agent: agent.id().into(),
-        session_id: Some(found.id),
-        isolated: false,
-        existing: true,
-    })?;
-    println!("tracking session in thread {}", short(&started.thread));
+    let id = match session {
+        Some(id) => id.to_owned(),
+        None => {
+            agent
+                .discover(&cwd, 0, &[])
+                .ok_or_else(|| fail(format!("no {} session found for {}", agent.display_name(), cwd.display())))?
+                .id
+        }
+    };
+    let thread = start_tracking(agent, cwd, id)?;
+    println!("tracking session in thread {}", short(&thread));
+    Ok(())
+}
+
+fn start_tracking(agent: &dyn Agent, cwd: PathBuf, id: String) -> Result<String, Exn<CliError>> {
+    ensure_daemon()?;
+    let started: SessionStarted =
+        call(&Request::StartSession { cwd, agent: agent.id().into(), session_id: Some(id), isolated: false, existing: true })?;
+    Ok(started.thread)
+}
+
+/// Starts recording the session whose `SessionStart` hook input is on
+/// stdin, then captures that hook. Its stdout is the agent's context, so it
+/// prints only what the hook replies.
+pub fn track_from_hook(agent: &str) -> Result<(), Exn<CliError>> {
+    let agent = find_agent(agent)?;
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).or_raise(|| CliError("could not read the hook input".into()))?;
+    let input: serde_json::Value =
+        serde_json::from_str(&input).or_raise(|| CliError("the hook input on stdin isn't JSON".into()))?;
+    let (Some(id), Some(cwd)) = (input["session_id"].as_str(), input["cwd"].as_str()) else {
+        return Err(fail("the hook input names no session_id and cwd"));
+    };
+    let cwd = PathBuf::from(cwd);
+    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let thread = start_tracking(agent, cwd, id.to_owned())?;
+    eprintln!("silt: recording this session in thread {}", short(&thread));
+    let event = input["hook_event_name"].as_str().unwrap_or("SessionStart").to_owned();
+    hook_input(Some(agent.id()), &event, input);
     Ok(())
 }
 
@@ -524,9 +551,13 @@ pub fn hook(agent: Option<&str>, event: &str) {
     if io::stdin().read_to_string(&mut input).is_err() {
         return;
     }
-    let Ok(mut input) = serde_json::from_str::<serde_json::Value>(&input) else {
+    let Ok(input) = serde_json::from_str::<serde_json::Value>(&input) else {
         return;
     };
+    hook_input(agent, event, input);
+}
+
+fn hook_input(agent: Option<&str>, event: &str, mut input: serde_json::Value) {
     let copilot = agent == Some("copilot");
     if copilot {
         // Copilot names its fields in camelCase.

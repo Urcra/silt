@@ -243,6 +243,18 @@ impl Core {
         already_ran: bool,
     ) -> Result<SessionStarted, CoreError> {
         let agent = resolve_agent(agent)?;
+        // A `SessionStart` hook runs again when a session resumes or clears.
+        if let Some(session) = session_id.and_then(|id| self.session(id))
+            && already_ran
+        {
+            return Ok(SessionStarted {
+                thread: session.record.thread.to_string(),
+                session_id: Some(session.record.session_id.clone()),
+                mount: None,
+                checkout: self.checkout(session.record.checkout_id)?.record.path.clone(),
+                agent_cwd: session.agent_cwd.clone(),
+            });
+        }
         let created = self.create_thread(cwd, isolated, already_ran, None).await?;
         match session_id {
             Some(id) => {

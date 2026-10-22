@@ -22,6 +22,7 @@ pub const PAGES: &[&str] = &[
     "guide/sharing.md",
     "guide/hosted-app-and-phones.md",
     "guide/servers.md",
+    "guide/cloud.md",
     "self-hosting.md",
     "reference/cli.md",
     "architecture.md",

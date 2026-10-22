@@ -1478,7 +1478,7 @@ impl Core {
         }
     }
 
-    fn checkout(&self, id: CheckoutId) -> Result<&Checkout, CoreError> {
+    pub(crate) fn checkout(&self, id: CheckoutId) -> Result<&Checkout, CoreError> {
         self.checkouts.get(&id).ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
     }
 

@@ -151,6 +151,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 let _ = fs::remove_file(socket);
                 let _ = reply.send(Response::ok("shutting down"));
                 let _ = tokio::time::timeout(SHUTDOWN_REPLY_WAIT, answered_rx.recv()).await;
+                hold_until_exit(lock);
                 return Ok(());
             }
             Event::Request(request, reply) => core.request(request, reply).await,
@@ -181,7 +182,15 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
     }
     let _ = fs::remove_file(socket);
+    hold_until_exit(lock);
     Ok(())
+}
+
+/// Keeps the daemon's lock until the process exits. A free lock tells
+/// `silt daemon stop` the store is left alone, and the store's connections
+/// close on their own threads after `run` returns.
+fn hold_until_exit(lock: fs::File) {
+    std::mem::forget(lock);
 }
 
 /// Serves one connection. `answered` hears when a shutdown request has been
