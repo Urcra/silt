@@ -213,6 +213,25 @@ pub struct DaemonStatus {
     /// Recovery forks made since the daemon started.
     #[serde(default)]
     pub recovered: Vec<String>,
+    /// The daemon's own version, as the web UI's status bar shows it.
+    #[serde(default)]
+    pub version: String,
+    /// The recovery forks behind `recovered`, by thread, for the web UI's
+    /// reconcile page.
+    #[serde(default)]
+    pub recoveries: Vec<RecoveryView>,
+}
+
+/// A thread whose history here differed from its server's, and the
+/// recovery thread its work here moved to (ADR 0009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RecoveryView {
+    /// The thread, now as the server has it.
+    pub thread: String,
+    /// The fork of it holding this machine's work.
+    pub recovery: String,
+    pub time_ms: i64,
 }
 
 /// This machine's sign-in to a server, without its token.
@@ -472,6 +491,9 @@ pub struct GraphRow {
     pub agent: Option<String>,
     /// Its thread is settled for the person.
     pub settled: bool,
+    /// A commit's id, beside its subject in `text`.
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 /// Which rows of the graph to show.
@@ -607,6 +629,7 @@ mod tests {
             owner: "alice".into(),
             agent: None,
             settled,
+            commit: None,
         }
     }
 

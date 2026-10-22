@@ -22,19 +22,52 @@ pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
+/// Nous's tokens, the same file the web app styles itself with (ADR 0039).
+const NOUS: &str = include_str!("../../../web/src/nous.css");
+
+/// The pages' own rules, on Nous's tokens, as the Sign in board draws them.
+const STYLE: &str = r#"
+body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 48px; box-sizing: border-box; }
+main { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 20px; }
+.mark { font-weight: 500; font-size: 28px; letter-spacing: -0.04em; }
+h1 { font-size: 18px; font-weight: 500; margin: 0; }
+p { margin: 0; line-height: 1.5; }
+.lead { color: var(--fg-2); margin-top: -12px; }
+form { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg-2); }
+input { min-height: 40px; box-sizing: border-box; padding: 0 10px; font: 13px var(--font-sans); color: var(--fg-1); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 2px; }
+button, .button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; box-sizing: border-box; padding: 0 14px; font: 500 13px var(--font-sans); color: var(--fg-on-accent); background: var(--accent); border: 1px solid transparent; border-radius: 2px; text-decoration: none; cursor: pointer; }
+button:hover, .button:hover { background: var(--accent-hover); }
+.secondary { color: var(--fg-1); background: var(--surface-1); border-color: var(--border); }
+.secondary:hover { background: var(--surface-2); }
+.providers { display: flex; flex-direction: column; gap: 8px; }
+.providers p { display: contents; }
+.or { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-2); }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.note { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; font-size: 12px; color: var(--fg-2); background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; }
+.note b { color: var(--fg-1); font-weight: 500; }
+.error { padding: 10px 12px; color: var(--fg-1); background: var(--danger-tint); border-radius: 4px; }
+a { color: var(--accent-fg); }
+a:hover { color: var(--fg-1); }
+code { font-family: var(--font-mono); font-size: 0.95em; padding: 1px 5px; background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: 2px; }
+.code { font-family: var(--font-mono); font-size: 22px; letter-spacing: 0.12em; }
+.mono { font-family: var(--font-mono); }
+.note code { display: block; margin-top: 2px; padding: 6px 8px; word-break: break-all; }
+.small { font-size: 12px; color: var(--fg-2); }
+@media (max-width: 767px) { input, button, .button { min-height: 44px; } input { font-size: 16px; } }
+"#;
+
 pub(crate) fn page(title: &str, body: &str) -> Html<String> {
+    page_with_heading(title, &escape(title), body)
+}
+
+/// A page whose heading is `heading`, HTML the caller escaped, under the plain `title`.
+fn page_with_heading(title: &str, heading: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} · Silt</title>
-<style>
-body {{ font: 16px/1.5 system-ui, sans-serif; max-width: 26rem; margin: 3rem auto; padding: 0 1rem; color: #1f2328; background: #fff; }}
-h1 {{ font-size: 1.4rem; }} label {{ display: block; margin-top: .8rem; }}
-input {{ width: 100%; box-sizing: border-box; padding: .45rem; border: 1px solid #c9cdd2; border-radius: 6px; font: inherit; }}
-button, .button {{ display: inline-block; margin-top: 1rem; padding: .5rem 1rem; border: 1px solid #1f6feb; border-radius: 6px; background: #1f6feb; color: #fff; font: inherit; text-decoration: none; cursor: pointer; }}
-.secondary {{ background: #fff; color: #1f6feb; }} .error {{ color: #b42318; }} code {{ font-size: 1.2rem; letter-spacing: .1em; }}
-@media (prefers-color-scheme: dark) {{ body {{ background: #0d1117; color: #e6edf3; }} input {{ background: #161b22; color: #e6edf3; border-color: #30363d; }} .secondary {{ background: #0d1117; }} }}
-</style></head><body><h1>{title}</h1>{body}</body></html>"#,
+<style>{NOUS}{STYLE}</style></head><body><main><span class="mark" aria-hidden="true">silt</span><h1>{heading}</h1>{body}</main></body></html>"#,
         title = escape(title),
     ))
 }
@@ -223,22 +256,38 @@ pub(crate) async fn end_other_sessions(State(server): State<Server>, headers: He
 
 pub(crate) async fn login_page(State(server): State<Server>, Query(query): Query<NextQuery>) -> Response {
     let next = safe_next(query.next.as_deref());
-    let mut body = String::new();
+    let config = server.config();
+    let mut body =
+        String::from("<p class=\"lead\">Read threads, review merge requests and answer your agents from any browser.</p>");
     if let Some(error) = &query.error {
         body.push_str(&format!("<p class=\"error\">{}</p>", escape(error)));
     }
-    if server.config().auth.passwords {
+    let providers = provider_buttons(&server, &next, None);
+    if !providers.is_empty() {
+        body.push_str(&format!("<div class=\"providers\">{providers}</div>"));
+    }
+    if config.auth.passwords {
+        if !providers.is_empty() {
+            body.push_str("<div class=\"or\">or with a password</div>");
+        }
         body.push_str(&format!(
             r#"<form method="post" action="/login">
 <input type="hidden" name="next" value="{}">
-<label>User <input name="user" autocomplete="username" required autofocus></label>
+<label>User name <input name="user" autocomplete="username" required autofocus></label>
 <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
 <button>Sign in</button></form>"#,
             escape(&next)
         ));
     }
-    body.push_str(&provider_buttons(&server, &next, None));
-    page("Sign in to Silt", &body).into_response()
+    let url = config.public_url();
+    body.push_str(&format!(
+        "<div class=\"note\"><b>Connecting a machine?</b><span>Run this on it. It opens this page to approve the device.</span><code>silt auth login --server {}</code></div>",
+        escape(&url),
+    ));
+    body.push_str("<p class=\"small\">Have an invite link? Open it to create your account.</p>");
+    let host = url.split("://").nth(1).unwrap_or(&url);
+    page_with_heading("Sign in to Silt", &format!("Sign in to <span class=\"mono\">{}</span>", escape(host)), &body)
+        .into_response()
 }
 
 #[derive(Deserialize)]

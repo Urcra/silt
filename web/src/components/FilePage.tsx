@@ -5,6 +5,7 @@ import { api, short } from '../api'
 import { filePath, type LineRange, linesHash, parseLines } from '../permalink'
 import { keys, message } from '../query'
 import { CopyLink } from './CopyLink'
+import { Page } from './Page'
 
 /** A file of a thread at a version, with lines to link to (ADR 0031). */
 export function FilePage() {
@@ -74,5 +75,14 @@ export function FilePage() {
         </pre>
       )}
     </div>
+  )
+}
+
+/** FilePage in a plain page of the shell, until it's drawn as its board (ADR 0039). */
+export function FileRoute() {
+  return (
+    <Page width="wide">
+      <FilePage />
+    </Page>
   )
 }

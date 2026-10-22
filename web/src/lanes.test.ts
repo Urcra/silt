@@ -16,6 +16,7 @@ function row(id: string, thread: string, kind: string, overrides: Partial<GraphR
     owner: 'alice',
     agent: null,
     settled: false,
+    commit: null,
     ...overrides,
   }
 }

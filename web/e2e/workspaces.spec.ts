@@ -37,16 +37,23 @@ async function startIn(page: Page, project: RegExp, prompt: string) {
   await projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByRole('button', { name: 'Start' }).click()
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   await page.getByRole('button', { name: 'Stop agent' }).click()
 }
 
 test('each server is a workspace, and the sidebar shows only the threads of the one chosen', async ({ page }) => {
   await page.goto(fixture.ada)
-  const workspace = page.getByRole('combobox', { name: 'workspace', exact: true })
-  await expect(workspace.locator('optgroup')).toHaveCount(2)
-  await expect(workspace.locator('optgroup').first()).toHaveAttribute('label', host(fixture.work))
+  const switcher = page.getByRole('button', { name: /^workspace: / })
+  const choose = async (name: string | RegExp) => {
+    await switcher.click()
+    await page.getByRole('dialog', { name: 'Switch workspace' }).getByRole('button', { name }).click()
+  }
+  await switcher.click()
+  const workspaces = page.getByRole('dialog', { name: 'Switch workspace' })
+  await expect(workspaces.getByRole('region', { name: /^On / })).toHaveCount(2)
+  await expect(workspaces.getByRole('region', { name: /^On / }).first()).toHaveAccessibleName(`On ${host(fixture.work)}`)
+  await page.keyboard.press('Escape')
 
   // The tools project's threads go to the open-source server; the app's to work, the default.
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
@@ -59,21 +66,22 @@ test('each server is a workspace, and the sidebar shows only the threads of the 
   const sidebar = page.getByRole('navigation', { name: 'projects' })
   await expect(sidebar).toContainText('work on the app')
   await expect(sidebar).toContainText('work on the tools')
-  await workspace.selectOption({ label: `All of ${host(fixture.oss)}` })
+  await choose(new RegExp(`^All of ${host(fixture.oss)}`))
   await expect(sidebar).toContainText('work on the tools')
   await expect(sidebar).not.toContainText('work on the app')
-  await workspace.selectOption({ label: `All of ${host(fixture.work)}` })
+  await choose(new RegExp(`^All of ${host(fixture.work)}`))
   await expect(sidebar).toContainText('work on the app')
   await expect(sidebar).not.toContainText('work on the tools')
-  await workspace.selectOption({ label: 'This machine' })
+  await choose(/^This machine/)
   await expect(sidebar).not.toContainText('work on the')
 
   // The choice holds for the tab, across a reload.
   await page.reload()
-  await expect(workspace).toHaveValue('local')
-  await workspace.selectOption({ label: 'Everything' })
+  await expect(switcher).toHaveAccessibleName('workspace: this machine')
+  await choose(/^Everything/)
   await expect(sidebar).toContainText('work on the tools')
 
-  await workspace.selectOption({ label: 'Connect another server…' })
+  await switcher.click()
+  await page.getByRole('button', { name: 'Connect another server' }).click()
   await expect(page.getByRole('dialog', { name: 'Connect another server' })).toContainText('silt auth login --server')
 })

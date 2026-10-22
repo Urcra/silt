@@ -1,33 +1,20 @@
 // The small pieces every view is built of, in Nous.
 
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { type ButtonSize, type ButtonVariant, buttonClass } from './buttonClass'
 import { cx } from './cx'
 import { Icon, type IconName } from './icons'
 
-const BUTTON = {
-  primary: 'bg-accent text-on-accent hover:bg-accent-hover',
-  secondary: 'border-line bg-surface-1 text-fg-1 hover:bg-surface-2',
-  ghost: 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
-  danger: 'border-line bg-surface-1 text-danger hover:bg-danger-tint',
-}
-
 export function Button({
   variant = 'secondary',
+  size = 'md',
   icon,
   className,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: keyof typeof BUTTON; icon?: IconName }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize; icon?: IconName }) {
   return (
-    <button
-      type="button"
-      className={cx(
-        'inline-flex items-center gap-1.5 rounded-sm border border-transparent px-2.5 py-1 text-xs font-medium whitespace-nowrap transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40',
-        BUTTON[variant],
-        className,
-      )}
-      {...props}
-    >
+    <button type="button" className={cx(buttonClass(variant, size), className)} {...props}>
       {icon && <Icon name={icon} />}
       {children}
     </button>
@@ -46,7 +33,10 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      className={cx('inline-flex items-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1', className)}
+      className={cx(
+        'inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11',
+        className,
+      )}
       {...props}
     >
       <Icon name={icon} />
@@ -54,7 +44,7 @@ export function IconButton({
   )
 }
 
-const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3'
+const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3 max-md:min-h-11 max-md:text-base'
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(FIELD, className)} {...props} />
@@ -105,9 +95,16 @@ export function Chip({
   )
 }
 
-export function Kbd({ children }: { children: ReactNode }) {
+/** A key to press, a hint for the eye only; `onAccent` inside a primary button. */
+export function Kbd({ children, onAccent = false }: { children: ReactNode; onAccent?: boolean }) {
   return (
-    <kbd className="inline-flex min-w-[18px] justify-center rounded-sm border border-b-2 border-line bg-surface-1 px-1 font-mono text-[11px] text-fg-2">
+    <kbd
+      aria-hidden="true"
+      className={cx(
+        'inline-flex min-w-[18px] justify-center rounded-sm border px-1 font-mono text-2xs pointer-coarse:hidden',
+        onAccent ? 'border-on-accent/30 bg-transparent text-on-accent' : 'border-line bg-surface-1 text-fg-2',
+      )}
+    >
       {children}
     </kbd>
   )
@@ -158,7 +155,7 @@ export function Avatar({ name, size = 20 }: { name: string; size?: number }) {
       title={name}
       aria-label={name}
       role="img"
-      className="inline-flex shrink-0 items-center justify-center rounded-full bg-surface-3 font-mono font-semibold text-fg-1"
+      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--tobacco-300)] font-mono font-semibold text-[var(--paper-50)]"
       style={{ width: size, height: size, fontSize: size * 0.45 }}
     >
       {initials || '?'}

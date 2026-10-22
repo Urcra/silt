@@ -1,3 +1,90 @@
+/** A line of code in a hunk, without its `+`, `-` or space. */
+export interface CodeLine {
+  kind: 'context' | 'add' | 'del'
+  text: string
+  oldLine: number | null
+  newLine: number | null
+}
+
+export interface Hunk {
+  header: string
+  lines: CodeLine[]
+}
+
+/** One file of a diff, by its new path (its old one when deleted). */
+export interface DiffFile {
+  path: string
+  added: number
+  removed: number
+  hunks: Hunk[]
+  /** `new`, `deleted` or `renamed from …`, when git says so. */
+  note: string | null
+}
+
+/** A git-style unified diff, file by file and hunk by hunk. */
+export function parseFiles(text: string): DiffFile[] {
+  const files: DiffFile[] = []
+  let file: DiffFile | null = null
+  let hunk: Hunk | null = null
+  let old = 0
+  let next = 0
+  for (const line of text.replace(/\n$/, '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      file = { path: line.slice(line.lastIndexOf(' b/') + 3), added: 0, removed: 0, hunks: [], note: null }
+      files.push(file)
+      hunk = null
+      continue
+    }
+    if (!file) continue
+    if (line.startsWith('new file')) file.note = 'new'
+    else if (line.startsWith('deleted file')) file.note = 'deleted'
+    else if (line.startsWith('rename from ')) file.note = `renamed from ${line.slice('rename from '.length)}`
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (header) {
+      old = Number(header[1])
+      next = Number(header[2])
+      hunk = { header: line, lines: [] }
+      file.hunks.push(hunk)
+      continue
+    }
+    if (!hunk || line.startsWith('\\')) continue
+    if (line.startsWith('+')) {
+      hunk.lines.push({ kind: 'add', text: line.slice(1), oldLine: null, newLine: next++ })
+      file.added += 1
+    } else if (line.startsWith('-')) {
+      hunk.lines.push({ kind: 'del', text: line.slice(1), oldLine: old++, newLine: null })
+      file.removed += 1
+    } else {
+      hunk.lines.push({ kind: 'context', text: line.slice(1), oldLine: old++, newLine: next++ })
+    }
+  }
+  return files
+}
+
+/** A hunk side by side: removed lines on the left facing the lines that replaced them. */
+export function splitRows(hunk: Hunk): { left: CodeLine | null; right: CodeLine | null }[] {
+  const rows: { left: CodeLine | null; right: CodeLine | null }[] = []
+  let removed: CodeLine[] = []
+  let added: CodeLine[] = []
+  const flush = () => {
+    for (let index = 0; index < Math.max(removed.length, added.length); index++) {
+      rows.push({ left: removed[index] ?? null, right: added[index] ?? null })
+    }
+    removed = []
+    added = []
+  }
+  for (const line of hunk.lines) {
+    if (line.kind === 'del') removed.push(line)
+    else if (line.kind === 'add') added.push(line)
+    else {
+      flush()
+      rows.push({ left: line, right: line })
+    }
+  }
+  flush()
+  return rows
+}
+
 /** One line of a unified diff, with its line number in the new file when it has one. */
 export interface DiffLine {
   text: string

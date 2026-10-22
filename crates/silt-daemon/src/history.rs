@@ -325,7 +325,12 @@ impl Core {
                 if !query.shows(kind) {
                     continue;
                 }
+                let commit = match &item.event {
+                    GraphEvent::Commit { commit, .. } => Some(commit.to_string()),
+                    _ => None,
+                };
                 rows.push(GraphRow {
+                    commit,
                     id: item.delta.to_string(),
                     kind: kind.to_owned(),
                     thread: thread.to_string(),

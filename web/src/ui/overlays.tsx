@@ -10,6 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { cx } from './cx'
 import { Icon } from './icons'
 import { currentToasts, hearToasts, setToasts } from './toasts'
@@ -51,7 +52,7 @@ export function Tabs<T extends string>({
           onClick={() => onChange(tab.id)}
           onKeyDown={(event) => move(event, index)}
           className={cx(
-            'rounded-sm px-2.5 py-1 text-xs',
+            'inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs max-md:min-h-11',
             tab.id === value ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
           )}
         >
@@ -151,30 +152,79 @@ export function Menu({
   )
 }
 
-/** A button showing a panel next to it, such as a form or details. */
-export function Popover({ trigger, children, label }: { trigger: ReactNode; children: ReactNode; label: string }) {
-  const [open, setOpen] = useState(false)
+/** A button showing a panel next to it, such as a form or a list to pick from; `children` may take a way to close it. */
+export function Popover({
+  trigger,
+  children,
+  label,
+  triggerLabel,
+  triggerClassName,
+  panelClassName,
+  align = 'left',
+  className,
+}: {
+  trigger: ReactNode
+  children: ReactNode | ((close: () => void) => ReactNode)
+  label: string
+  triggerLabel?: string
+  triggerClassName?: string
+  panelClassName?: string
+  align?: 'left' | 'right'
+  /** The box around the trigger and panel; an inline block unless given. */
+  className?: string
+}) {
+  // Where the panel goes, measured from the trigger as it opens; it floats
+  // over the page so no scrolling box around the trigger clips it.
+  const [at, setAt] = useState<{ top: number; left?: number; right?: number } | null>(null)
   const button = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const id = useId()
-  useDismiss(open, () => setOpen(false), panel, button)
+  const open = at !== null
+  const close = () => setAt(null)
+  useDismiss(open, close, panel, button)
+  useEffect(() => {
+    if (!open) return
+    window.addEventListener('resize', close)
+    return () => window.removeEventListener('resize', close)
+  }, [open])
+  const toggle = () => {
+    if (open || !button.current) {
+      close()
+      return
+    }
+    const box = button.current.getBoundingClientRect()
+    setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+  }
   return (
-    <div className="relative inline-block">
+    <div className={className ?? 'relative inline-block'}>
       <button
         ref={button}
         type="button"
         aria-expanded={open}
         aria-controls={id}
-        onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-surface-2"
+        aria-label={triggerLabel}
+        onClick={toggle}
+        className={triggerClassName ?? 'inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-surface-2'}
       >
         {trigger}
       </button>
-      {open && (
-        <div ref={panel} id={id} role="dialog" aria-label={label} className={cx(PANEL, 'w-72 p-3')}>
-          {children}
-        </div>
-      )}
+      {at &&
+        createPortal(
+          <div
+            ref={panel}
+            id={id}
+            role="dialog"
+            aria-label={label}
+            style={{ top: at.top, left: at.left, right: at.right }}
+            className={cx(
+              'fixed z-40 max-h-[calc(100dvh-60px)] overflow-y-auto rounded-md border border-line bg-elevated text-fg-1 shadow-overlay',
+              panelClassName ?? 'w-72 p-3',
+            )}
+          >
+            {typeof children === 'function' ? children(close) : children}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -185,11 +235,16 @@ export function Dialog({
   onClose,
   title,
   children,
+  bare = false,
+  wide = false,
 }: {
   open: boolean
   onClose: () => void
   title: string
   children: ReactNode
+  /** No heading or padding, near the top, as the palette is. */
+  bare?: boolean
+  wide?: boolean
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const heading = useId()
@@ -204,19 +259,39 @@ export function Dialog({
       ref={dialog}
       aria-labelledby={heading}
       onClose={onClose}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-line bg-elevated p-0 text-fg-1 shadow-overlay backdrop:bg-black/40"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      className={cx(
+        'rounded-lg border border-line bg-elevated p-0 text-fg-1 shadow-overlay backdrop:bg-backdrop',
+        bare ? 'mx-auto mt-[14vh] w-[min(620px,calc(100vw-2rem))]' : 'm-auto',
+        !bare && (wide ? 'w-[min(44rem,calc(100vw-2rem))]' : 'w-[min(35rem,calc(100vw-2rem))]'),
+      )}
     >
-      {open && (
-        <div className="p-4">
-          <div className="mb-3 flex items-center">
-            <h2 id={heading} className="text-base font-medium">
+      {open && bare && (
+        <>
+          <h2 id={heading} className="sr-only">
+            {title}
+          </h2>
+          {children}
+        </>
+      )}
+      {open && !bare && (
+        <div>
+          <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+            <h2 id={heading} className="min-w-0 truncate text-[16px] font-medium">
               {title}
             </h2>
-            <button type="button" aria-label="close" onClick={onClose} className="ml-auto rounded-sm p-1 text-fg-2 hover:bg-surface-2">
+            <button
+              type="button"
+              aria-label="close"
+              onClick={onClose}
+              className="ml-auto inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 max-md:min-h-11 max-md:min-w-11"
+            >
               <Icon name="x" />
             </button>
           </div>
-          {children}
+          <div className="px-5 py-4">{children}</div>
         </div>
       )}
     </dialog>

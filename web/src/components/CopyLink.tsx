@@ -9,7 +9,20 @@ import { toast } from '../ui'
  * Copies a permalink to `path` within the app (ADR 0031): into the server
  * `thread` syncs with, or this machine's for one kept here (ADR 0032).
  */
-export function CopyLink({ path, thread, label = 'copy link' }: { path: string; thread?: string; label?: string }) {
+export function CopyLink({
+  path,
+  thread,
+  label = 'copy link',
+  name,
+  className,
+}: {
+  path: string
+  thread?: string
+  label?: string
+  /** What a screen reader calls it, when `label` alone doesn't say what it links. */
+  name?: string
+  className?: string
+}) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads, enabled: !hosted() && thread !== undefined })
   const summary = thread === undefined ? undefined : threads.data?.find((candidate) => candidate.id.endsWith(thread))
@@ -20,7 +33,7 @@ export function CopyLink({ path, thread, label = 'copy link' }: { path: string; 
     toast(`Link copied: ${url}`, 'ok')
   }
   return (
-    <button type="button" className="text-xs text-accent-fg" onClick={copy}>
+    <button type="button" aria-label={name} className={className ?? 'text-xs text-accent-fg'} onClick={copy}>
       {label}
     </button>
   )

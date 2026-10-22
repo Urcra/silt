@@ -27,8 +27,8 @@ function QueuedItem({ thread, item, index, count }: { thread: string; item: Queu
     )
   }
   return (
-    <li className="flex items-center gap-1 rounded-sm px-1 hover:bg-surface-1">
-      <span className="w-5 shrink-0 font-mono text-[11px] text-fg-3">{index + 1}</span>
+    <li className="flex items-center gap-1 rounded-sm px-1 hover:bg-surface-2">
+      <span className="w-5 shrink-0 font-mono text-2xs text-fg-2">{index + 1}</span>
       <button className="min-w-0 flex-1 truncate py-1 text-left" title="edit" onClick={() => setEditing(item.text)}>
         {item.text}
       </button>
@@ -45,7 +45,12 @@ function QueuedItem({ thread, item, index, count }: { thread: string; item: Queu
         disabled={index === count - 1}
         onClick={() => void act(api.moveQueued(thread, item.id, index + 1))}
       />
-      <IconButton icon="play" label={`send "${item.text}" now`} onClick={() => void act(api.sendQueued(thread, item.id))} />
+      <Button variant="ghost" size="sm" onClick={() => setEditing(item.text)}>
+        Edit
+      </Button>
+      <Button variant="ghost" size="sm" aria-label={`send "${item.text}" now`} onClick={() => void act(api.sendQueued(thread, item.id))}>
+        Send now
+      </Button>
       <IconButton icon="x" label={`remove "${item.text}"`} onClick={() => void act(api.removeQueued(thread, item.id))} />
     </li>
   )
@@ -57,9 +62,12 @@ export function PromptQueue({ thread }: { thread: string }) {
   const items = queue.data ?? []
   if (items.length === 0) return null
   return (
-    <section aria-label="queued prompts" className="mt-2">
-      <h4 className="font-mono text-[11px] tracking-wider text-fg-3 uppercase">Queued · {items.length}</h4>
-      <ol className="mt-1 space-y-0.5 text-sm">
+    <section aria-label="queued prompts" className="rounded-md border border-line bg-surface-1">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-2.5 py-1.5">
+        <h4 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Queued · {items.length}</h4>
+        <span className="text-2xs text-fg-2">sent in order when the turn ends, kept if anything restarts</span>
+      </div>
+      <ol className="space-y-0.5 px-1.5 py-1 text-xs">
         {items.map((item, index) => (
           <QueuedItem key={item.id} thread={thread} item={item} index={index} count={items.length} />
         ))}

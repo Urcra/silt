@@ -107,8 +107,9 @@ const onServer = (server?: string | null) => (server ? `?server=${encodeURICompo
 
 export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
-  history: (id: string, offset: number, limit: number) =>
-    request<HistoryPage>('GET', `${thread(id)}/history?offset=${offset}&limit=${limit}`),
+  /** A thread's history; with `limit`, only that many entries from the `offset`th. */
+  history: (id: string, offset?: number, limit?: number) =>
+    request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
   fileAt: (id: string, path: string, at?: string) =>

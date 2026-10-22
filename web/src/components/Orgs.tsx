@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api, type OrgChange, type OrgInfo } from '../api'
 import { keys, message } from '../query'
 import { Button, EmptyState, Input, Select, Skeleton, Tag, toast } from '../ui'
+import { Page } from './Page'
 
 /** Sends an org change and refreshes what depends on it. */
 function useOrgChange() {
@@ -218,5 +219,14 @@ export function Orgs() {
         </section>
       )}
     </div>
+  )
+}
+
+/** Orgs in a plain page of the shell, until it's drawn as its board (ADR 0039). */
+export function OrgsRoute() {
+  return (
+    <Page width="wide">
+      <Orgs />
+    </Page>
   )
 }
