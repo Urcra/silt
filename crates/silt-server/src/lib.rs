@@ -350,6 +350,7 @@ impl Server {
         let pages = Router::new()
             .route("/", get(pages::home))
             .route("/login", get(pages::login_page).post(pages::login))
+            .route("/fonts/{name}", get(app::font))
             .route("/logout", post(pages::logout))
             .route("/devices/revoke", post(pages::revoke_device))
             .route("/sessions/end-others", post(pages::end_other_sessions))

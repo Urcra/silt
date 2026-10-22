@@ -1,9 +1,9 @@
 import { defineConfig } from '@playwright/test'
 
-// Cloud sessions ship one Chromium, older than the one this Playwright
-// downloads, at a fixed path.
-const executablePath =
-  process.env.SILT_E2E_CHROMIUM ?? (process.env.CLAUDE_CODE_REMOTE === 'true' ? '/opt/pw-browsers/chromium' : undefined)
+// Playwright's own Chromium on every machine, so the screen references match
+// wherever they're taken; a cloud session's setup script installs it
+// (scripts/cloud-setup.sh). SILT_E2E_CHROMIUM picks another.
+const executablePath = process.env.SILT_E2E_CHROMIUM
 
 export default defineConfig({
   testDir: './e2e',

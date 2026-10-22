@@ -3,7 +3,7 @@
 //! cookie, and its browser API under `/app/api/`.
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -83,6 +83,27 @@ async fn page(State(server): State<Server>, headers: HeaderMap, uri: Uri) -> Res
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8".to_owned())], html).into_response()
         }
         None => (StatusCode::NOT_FOUND, "the web UI was not built; run `pnpm -C web build` and rebuild silt").into_response(),
+    }
+}
+
+/// A font of the app's, for the server's own pages, which anyone may load
+/// before signing in. `name` is the file's name without the hash the build
+/// gives it, as `ibm-plex-sans-latin-400-normal.woff2`.
+pub(crate) async fn font(UrlPath(name): UrlPath<String>) -> Response {
+    let Some(stem) = name.strip_suffix(".woff2").filter(|stem| stem.starts_with("ibm-plex-")) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let prefix = format!("assets/{stem}-");
+    let found = Assets::iter()
+        .find(|path| path.strip_prefix(&prefix).is_some_and(|hash| hash.ends_with(".woff2")))
+        .and_then(|path| Assets::get(&path));
+    match found {
+        Some(file) => (
+            [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=86400")],
+            Body::from(file.data.into_owned()),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -167,5 +188,19 @@ mod tests {
         assert!(hosted.contains(r#"<base href="/app/" />"#), "{hosted}");
         assert!(hosted.contains(r#"content="server""#), "{hosted}");
         assert!(hosted.contains(r#"src="./assets/a.js""#));
+    }
+
+    #[tokio::test]
+    async fn only_the_apps_fonts_are_served_before_signing_in() {
+        for name in [
+            "index.html",
+            "assets/index.js",
+            "ibm-plex-sans-latin-400-normal.woff",
+            "../ibm-plex-sans-latin-400-normal.woff2",
+            "ibm-plex-nonesuch.woff2",
+        ] {
+            let response = font(UrlPath(name.to_owned())).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{name}");
+        }
     }
 }
