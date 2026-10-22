@@ -321,8 +321,15 @@ async fn threads(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Threads).await
 }
 
-async fn history(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    let request = Request::HistoryRead { thread, offset: 0, limit: usize::MAX };
+/// A page of a thread's history; all of it unless asked for less.
+#[derive(Deserialize)]
+struct HistoryQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page): Query<HistoryQuery>) -> HttpResponse {
+    let request = Request::HistoryRead { thread, offset: page.offset.unwrap_or(0), limit: page.limit.unwrap_or(usize::MAX) };
     ask(&web, request).await
 }
 

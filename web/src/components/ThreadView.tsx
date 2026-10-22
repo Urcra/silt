@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
@@ -108,8 +108,10 @@ function TurnDiff({ thread, turn, rewound }: { thread: string; turn: TurnInfo; r
 type Anchor = { entry?: number; comment?: string }
 
 /** Follows the page's hash once what it names has loaded, scrolling there with `scrollTo` (a row of `entries`). */
+/** Scrolls to what the URL's hash names, once the history's size is known;
+ * an entry's row is its index. */
 function useAnchor(
-  entries: HistoryEntry[] | undefined,
+  total: number | undefined,
   turns: TurnInfo[] | undefined,
   comments: CommentView[] | undefined,
   scrollTo: (row: number) => void,
@@ -118,13 +120,32 @@ function useAnchor(
   const anchor = anchorOf(hash, turns, comments)
   const followed = useRef('')
   useEffect(() => {
-    if (!anchor || !entries || followed.current === hash) return
+    if (!anchor || total === undefined || followed.current === hash) return
     followed.current = hash
-    const row = anchor.entry === undefined ? -1 : entries.findIndex((candidate) => candidate.index === anchor.entry)
-    if (row >= 0) scrollTo(row)
+    if (anchor.entry !== undefined && anchor.entry < total) scrollTo(anchor.entry)
     else if (anchor.comment) document.getElementById(`comment-${anchor.comment}`)?.scrollIntoView({ block: 'center' })
-  }, [hash, anchor, entries, scrollTo])
+  }, [hash, anchor, total, scrollTo])
   return anchor ?? {}
+}
+
+/** Entries a page of history holds: enough to fill the screen, a small part
+ * of a long thread. */
+const PAGE = 50
+
+/** The thread's history a page at a time: the first and last pages, and those
+ * under `rows`, the rows on screen. Entries not loaded yet are `undefined`. */
+function useHistoryPages(id: string, rows: { index: number }[], total: number) {
+  const pages = new Set([0, Math.max(0, Math.ceil(total / PAGE) - 1)])
+  for (const row of rows) pages.add(Math.floor(row.index / PAGE))
+  const loaded = useQueries({
+    queries: [...pages].map((page) => ({
+      queryKey: [...keys.history(id), page],
+      queryFn: () => api.history(id, page * PAGE, PAGE),
+    })),
+  })
+  const entries: (HistoryEntry | undefined)[] = new Array(total)
+  for (const page of loaded) for (const entry of page.data?.entries ?? []) if (entry.index < total) entries[entry.index] = entry
+  return entries
 }
 
 /** What `hash` names, once what it names has loaded. */
@@ -310,7 +331,7 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
 
 export function ThreadView({ id }: { id: string }) {
   const queries = useQueryClient()
-  const history = useQuery({ queryKey: keys.history(id), queryFn: () => api.history(id) })
+  const history = useQuery({ queryKey: [...keys.history(id), 0], queryFn: () => api.history(id, 0, PAGE) })
   const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(id) })
@@ -325,19 +346,21 @@ export function ThreadView({ id }: { id: string }) {
   }, [fullId, unseen])
   useTopic('threads')
   useTopic(history.data ? `thread:${history.data.thread}` : null)
-  const entries = history.data?.entries ?? []
+  const total = history.data?.total ?? 0
   const list = useRef<HTMLDivElement>(null)
   const scroll = useContext(MainScroll)
   const rows = useVirtualizer({
-    count: entries.length,
+    count: total,
     getScrollElement: () => scroll.current,
     estimateSize: () => 28,
     overscan: 20,
     scrollMargin: list.current?.offsetTop ?? 0,
   })
+  const entries = useHistoryPages(id, rows.getVirtualItems(), total)
+  const lastPrompt = entries.findLast((entry) => entry?.kind === 'user')?.text
 
   const scrollTo = useCallback((row: number) => rows.scrollToIndex(row, { align: 'center' }), [rows])
-  const anchor = useAnchor(history.data?.entries, turns.data, comments.data, scrollTo)
+  const anchor = useAnchor(history.data?.total, turns.data, comments.data, scrollTo)
 
   const turnAt = new Map((turns.data ?? []).filter((turn) => turn.entry !== null).map((turn) => [turn.entry, turn]))
   const entryComments = (index: number) =>
@@ -389,25 +412,30 @@ export function ThreadView({ id }: { id: string }) {
         </div>
         <DiffPanel thread={id} comments={comments.data ?? []} onCommented={reloadComments} />
         {history.data?.thread && !hosted() && (
-          <LivePanel
-            thread={history.data.thread}
-            lastPrompt={history.data.entries.findLast((entry) => entry.kind === 'user')?.text}
-          />
+          <LivePanel thread={history.data.thread} lastPrompt={lastPrompt} />
         )}
         {history.data?.thread && hosted() && <HostedLivePanel thread={history.data.thread} />}
         {history.error && <p className="text-danger">{message(history.error)}</p>}
         <div ref={list} className="relative mt-4" style={{ height: rows.getTotalSize() }} data-testid="history">
           {rows.getVirtualItems().map((row) => {
             const entry = entries[row.index]
+            const placed = {
+              'data-index': row.index,
+              ref: rows.measureElement,
+              className: 'absolute left-0 w-full pb-1',
+              style: { transform: `translateY(${row.start - rows.options.scrollMargin}px)` },
+            }
+            if (!entry) {
+              return (
+                <div key={row.index} {...placed} aria-busy="true">
+                  <p className="text-sm text-fg-3">…</p>
+                </div>
+              )
+            }
+            const previous = entries[row.index - 1]
             return (
-              <div
-                key={entry.index}
-                data-index={row.index}
-                ref={rows.measureElement}
-                className="absolute left-0 w-full pb-1"
-                style={{ transform: `translateY(${row.start - rows.options.scrollMargin}px)` }}
-              >
-                {entry.origin !== 'own' && entries[row.index - 1]?.origin !== entry.origin && (
+              <div key={row.index} {...placed}>
+                {entry.origin !== 'own' && (row.index === 0 || (previous && previous.origin !== entry.origin)) && (
                   <h4 className="mt-4 text-xs font-semibold uppercase text-fg-3">
                     {entry.origin === 'inherited' ? 'from the source, before this fork' : 'upstream progress'} (thread{' '}
                     {short(entry.thread)})

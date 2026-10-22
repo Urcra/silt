@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
@@ -246,6 +246,9 @@ pub struct Core {
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
     /// Sessions with a backlog whose next chunk is queued.
     pub(crate) draining: HashSet<String>,
+    /// Threads' history entries, with the length of the family's log they
+    /// were read at.
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, (usize, crate::history::HistoryEntries)>>,
     watchers: Arc<Watchers>,
 }
 
@@ -424,6 +427,7 @@ impl Core {
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
             draining: HashSet::new(),
+            history_cache: Mutex::default(),
             watchers: Watchers::new(),
         };
         for thread in core.store.threads().await? {

@@ -3,6 +3,7 @@
 //! that history, which turns changed a file, and who else is changing it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, PoisonError};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
@@ -16,11 +17,34 @@ use crate::transcripts::native_entries;
 
 /// Longest text of one entry in a history page.
 const ENTRY_CHARS: usize = 4000;
+/// Threads whose history entries are kept at once.
+const HISTORIES_KEPT: usize = 16;
+
+/// A thread's numbered history entries, each with the delta it came from.
+pub(crate) type HistoryEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
 
 impl Core {
     /// The thread's history as numbered entries, with the delta each came
-    /// from. Works for threads only known from the server too.
-    pub(crate) fn history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
+    /// from. Works for threads only known from the server too. Kept until
+    /// the family's log grows, as the web UI reads a long history a page at
+    /// a time and each page would otherwise read the whole of it.
+    pub(crate) fn history_entries(&self, thread: ThreadId) -> HistoryEntries {
+        let length = self.local_log(self.threads[&thread].family).len();
+        let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((cached, entries)) = cache.get(&thread)
+            && *cached == length
+        {
+            return Arc::clone(entries);
+        }
+        let entries = Arc::new(self.read_history_entries(thread));
+        if cache.len() >= HISTORIES_KEPT {
+            cache.clear();
+        }
+        cache.insert(thread, (length, Arc::clone(&entries)));
+        entries
+    }
+
+    fn read_history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
         let family_id = self.threads[&thread].family;
         let items: Vec<(&Delta, HistorySource, bool)> = match self.families.get(&family_id) {
             Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source, item.rewound)).collect(),
@@ -68,10 +92,11 @@ impl Core {
             thread: thread.to_string(),
             total,
             entries: entries
-                .into_iter()
+                .iter()
                 .skip(offset)
                 .take(limit)
-                .map(|(_, mut entry)| {
+                .map(|(_, entry)| {
+                    let mut entry = entry.clone();
                     if entry.text.chars().count() > ENTRY_CHARS {
                         entry.text = entry.text.chars().take(ENTRY_CHARS).collect::<String>() + " …";
                     }
@@ -86,7 +111,7 @@ impl Core {
     pub(crate) async fn history_search(&self, thread: ThreadId, query: &str, limit: u32) -> Result<Vec<HistoryHit>, CoreError> {
         let entries = self.history_entries(thread);
         let mut by_delta: HashMap<DeltaId, Vec<usize>> = HashMap::new();
-        for (delta, entry) in &entries {
+        for (delta, entry) in entries.iter() {
             by_delta.entry(*delta).or_default().push(entry.index);
         }
         let lineage: HashSet<String> = entries.iter().map(|(_, entry)| entry.thread.clone()).collect();
@@ -459,7 +484,7 @@ fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<(String, Str
                     "compaction".to_owned(),
                     summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
                 )),
-                other => Some((other.kind().to_owned(), other.searchable_text().unwrap_or_default())),
+                other => Some((other.kind().to_owned(), other.into_searchable_text().unwrap_or_default())),
             })
             .collect(),
         Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {

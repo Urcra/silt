@@ -285,10 +285,10 @@ pub fn normalize(line: &str) -> Vec<Entry> {
     // Only the fields read, so the large structured tool results beside
     // them aren't built; a line of another shape is read whole.
     if let Ok(fields) = serde_json::from_str::<Fields>(line) {
-        return entries(&fields);
+        return entries(fields);
     }
     match serde_json::from_str::<Value>(line) {
-        Ok(value) => entries(&Fields::of(&value)),
+        Ok(value) => entries(Fields::of(&value)),
         Err(_) => vec![Entry::unparseable()],
     }
 }
@@ -321,51 +321,57 @@ impl Fields {
             message: value.get("message").map(|message| Message { content: message.get("content").cloned() }),
         }
     }
-
-    fn content(&self) -> Option<&Value> {
-        self.message.as_ref()?.content.as_ref()
-    }
 }
 
-fn entries(fields: &Fields) -> Vec<Entry> {
+/// The line's entries, its texts moved out of the parsed line rather than
+/// copied: a tool's output can be long.
+fn entries(fields: Fields) -> Vec<Entry> {
     let flag = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool) == Some(true);
-    let kind = fields.kind.as_ref().and_then(Value::as_str).unwrap_or("unknown");
-    match kind {
-        "user" if flag(&fields.compact_summary) => vec![Entry::Compaction { summary: Some(block_text(fields.content())) }],
+    let kind = fields.kind.as_ref().and_then(Value::as_str).unwrap_or("unknown").to_owned();
+    let content = fields.message.and_then(|message| message.content);
+    match kind.as_str() {
+        "user" if flag(&fields.compact_summary) => vec![Entry::Compaction { summary: Some(block_text(content)) }],
         "system" if fields.subtype.as_ref().and_then(Value::as_str) == Some("compact_boundary") => {
             vec![Entry::Compaction { summary: None }]
         }
         // What Claude Code adds as the user's turn, such as a skill's text,
         // hook feedback or a note on an image, which nobody typed.
         "user" if flag(&fields.meta) => vec![Entry::Other { kind: "meta".into() }],
-        "user" | "assistant" => message_entries(kind, fields.content()),
+        role @ ("user" | "assistant") => message_entries(role, content),
         other => vec![Entry::Other { kind: other.to_owned() }],
     }
 }
 
-fn message_entries(role: &str, content: Option<&Value>) -> Vec<Entry> {
+fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
     let blocks = match content {
-        Some(Value::String(text)) => return vec![text_entry(role, text.clone())],
+        Some(Value::String(text)) => return vec![text_entry(role, text)],
         Some(Value::Array(blocks)) => blocks,
         _ => return Vec::new(),
     };
     blocks
-        .iter()
-        .filter_map(|block| match block.get("type").and_then(Value::as_str)? {
-            "text" => Some(text_entry(role, string_field(block, "text"))),
-            "thinking" => Some(Entry::Thinking { text: string_field(block, "thinking") })
-                .filter(|entry| entry.searchable_text().is_some_and(|text| !text.is_empty())),
-            "tool_use" => Some(Entry::ToolCall {
-                id: string_field(block, "id"),
-                name: string_field(block, "name"),
-                input: block.get("input").cloned().unwrap_or(Value::Null),
-            }),
-            "tool_result" => Some(Entry::ToolResult {
-                tool_use_id: string_field(block, "tool_use_id"),
-                text: block_text(block.get("content")),
-                is_error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
-            }),
-            other => Some(Entry::Other { kind: format!("{role}_{other}") }),
+        .into_iter()
+        .filter_map(|block| {
+            let Value::Object(mut block) = block else {
+                return None;
+            };
+            let kind = block.get("type")?.as_str()?.to_owned();
+            match kind.as_str() {
+                "text" => Some(text_entry(role, take_string(&mut block, "text"))),
+                "thinking" => {
+                    Some(take_string(&mut block, "thinking")).filter(|text| !text.is_empty()).map(|text| Entry::Thinking { text })
+                }
+                "tool_use" => Some(Entry::ToolCall {
+                    id: take_string(&mut block, "id"),
+                    name: take_string(&mut block, "name"),
+                    input: block.remove("input").unwrap_or(Value::Null),
+                }),
+                "tool_result" => Some(Entry::ToolResult {
+                    tool_use_id: take_string(&mut block, "tool_use_id"),
+                    is_error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                    text: block_text(block.remove("content")),
+                }),
+                other => Some(Entry::Other { kind: format!("{role}_{other}") }),
+            }
         })
         .collect()
 }
@@ -374,9 +380,9 @@ fn text_entry(role: &str, text: String) -> Entry {
     if role == "user" { Entry::User { text } } else { Entry::Assistant { text } }
 }
 
-fn block_text(content: Option<&Value>) -> String {
+fn block_text(content: Option<Value>) -> String {
     match content {
-        Some(Value::String(text)) => text.clone(),
+        Some(Value::String(text)) => text,
         Some(Value::Array(blocks)) => {
             blocks.iter().filter_map(|block| block.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
         }
@@ -384,8 +390,12 @@ fn block_text(content: Option<&Value>) -> String {
     }
 }
 
-fn string_field(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+/// The string at `key`, empty when it's missing or not a string.
+fn take_string(block: &mut serde_json::Map<String, Value>, key: &str) -> String {
+    match block.remove(key) {
+        Some(Value::String(text)) => text,
+        _ => String::new(),
+    }
 }
 
 /// What Claude Code sends a hook on stdin.

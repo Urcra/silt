@@ -54,10 +54,24 @@ impl Entry {
     /// Text worth indexing for search, if any.
     pub fn searchable_text(&self) -> Option<String> {
         match self {
-            Self::User { text } | Self::Assistant { text } | Self::Thinking { text } => Some(text.clone()),
+            Self::User { text } | Self::Assistant { text } | Self::Thinking { text } | Self::ToolResult { text, .. } => {
+                Some(text.clone())
+            }
             Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
-            Self::ToolResult { text, .. } => Some(text.clone()),
             Self::Compaction { summary } => summary.clone(),
+            Self::Other { .. } => None,
+        }
+    }
+
+    /// `searchable_text`, taking the entry rather than copying its text,
+    /// which for a tool's output can be long.
+    pub fn into_searchable_text(self) -> Option<String> {
+        match self {
+            Self::User { text } | Self::Assistant { text } | Self::Thinking { text } | Self::ToolResult { text, .. } => {
+                Some(text)
+            }
+            Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
+            Self::Compaction { summary } => summary,
             Self::Other { .. } => None,
         }
     }
