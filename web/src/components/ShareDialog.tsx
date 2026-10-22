@@ -158,7 +158,7 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
         ) : (
           <div className="flex flex-col gap-4 text-sm">
             <fieldset aria-label="who sees it" className="flex flex-col gap-1.5">
-              <legend className="mb-1.5 font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Who can see it</legend>
+              <legend className="mb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Who can see it</legend>
               {own === null && (
                 <Who value="" chosen={choice === ''} title="As its project says" onChoose={() => setTeamOpen(false)}>
                   It follows its project’s or org’s default.
@@ -201,7 +201,7 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
               </form>
             )}
             <div className="flex flex-col gap-2">
-              <label htmlFor="share-person" className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">
+              <label htmlFor="share-person" className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
                 Who may also write into it
               </label>
               <ul aria-label="collaborators" className="flex flex-col gap-1">

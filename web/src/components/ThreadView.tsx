@@ -613,7 +613,7 @@ function Lineage({ summary, threads }: { summary: ThreadSummary; threads: Thread
 function InspectorSection({ title, label, aside, children }: { title: string; label?: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <section aria-label={label ?? title.toLowerCase()} className="flex flex-col gap-2">
-      <h2 className="flex items-center font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">
+      <h2 className="flex items-center font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
         {title}
         {aside && <span className="ml-auto font-sans text-xs tracking-normal normal-case">{aside}</span>}
       </h2>

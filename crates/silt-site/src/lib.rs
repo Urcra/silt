@@ -435,7 +435,7 @@ pub fn landing_document(landing: &Landing) -> String {
          <div class=\"ask\" aria-hidden=\"true\"><span class=\"label\"><span class=\"dot warn\"></span>Agent is asking</span><code>Edit src/retry.rs</code>\
          <span class=\"meta\">claude · Retry uploads · on workstation</span><span class=\"buttons\"><span class=\"button\">Allow</span><span class=\"button secondary\">Reject</span></span></div></section>\n\
          <section id=\"self-host\" class=\"band wrap split\"><!-- placeholder --><div><p class=\"eyebrow\">Self-host</p><h2>One binary, your server.</h2>\
-         <p>The sync server and your machine's daemon are the same binary. Run the server where your team can reach it; read <a href=\"self-hosting.html\">Self-hosting</a>.</p>{server}</div>\
+         <p>The sync server and your machine’s daemon are the same binary. Run the server where your team can reach it; read <a href=\"self-hosting.html\">Self-hosting</a>.</p>{server}</div>\
          <pre class=\"term\"><code>silt server init --data /var/lib/silt --public-url https://silt.example.com\nsilt server run --data /var/lib/silt</code></pre></section>\n\
          <section class=\"band wrap\"><!-- placeholder --><p class=\"eyebrow\">Where it is</p><h2>Early, and used every day.</h2><div class=\"status\">\
          <div><h3><span class=\"dot ok\"></span>Works today</h3>{today}</div><div><h3><span class=\"dot info\"></span>Next</h3>{next}</div>\
@@ -547,7 +547,7 @@ th{font-weight:500;border-bottom-color:var(--border-strong)}td:first-child{font-
 .hero .display+p+p a{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;font:500 14px var(--font-sans);text-decoration:none;border:1px solid var(--border);border-radius:2px;color:var(--fg-1);background:var(--surface-1)}
 .hero .display+p+p a:first-child{color:var(--fg-on-accent);background:var(--accent);border-color:transparent}
 .pill{display:flex;align-items:center;gap:10px;max-width:560px;padding:4px 4px 4px 14px;font-size:13px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:2px}
-.pill code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap}.pill .prompt{font-family:var(--font-mono);color:var(--accent-fg)}
+.pill code{flex:1;min-width:0;padding:6px 0;background:none;border:0;word-break:break-all}.pill .prompt{font-family:var(--font-mono);color:var(--accent-fg)}
 .pill .copy{color:var(--fg-2)}.pill .copy:hover{color:var(--fg-1);background:var(--surface-2)}
 .band{padding-top:96px;padding-bottom:96px;border-top:1px solid var(--border)}
 .band h2{max-width:18ch;font-size:clamp(28px,4vw,40px);font-weight:500;letter-spacing:-.02em;line-height:1.12;margin:0 0 40px}
@@ -555,6 +555,7 @@ th{font-weight:500;border-bottom-color:var(--border-strong)}td:first-child{font-
 .steps li{display:flex;flex-direction:column;gap:8px}
 .label{font-family:var(--font-mono);font-size:11px;color:var(--fg-2);letter-spacing:.04em}
 .steps h3,.feature h3,.status h3{font-size:17px;font-weight:500;margin:0}.steps p{margin:0 0 8px;color:var(--fg-2);font-size:14px;line-height:1.6}
+.steps pre,.term,.feature .codeblock pre{white-space:pre-wrap;word-break:break-word}
 .steps pre,.term{margin:auto 0 0;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.6}
 .agents{padding-bottom:64px}.agents .eyebrow{color:var(--fg-2)}.agents ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
 .agents li{font-family:var(--font-mono);font-size:13px;padding:6px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:2px}

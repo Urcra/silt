@@ -328,7 +328,7 @@ export function AgentDock({
             ))}
           </ul>
         )}
-        <div className="flex items-center gap-1.5 border-t border-line-subtle px-2 py-1.5 max-md:overflow-x-auto md:flex-wrap [&>*]:shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-line-subtle px-2 py-1.5 [&>*]:shrink-0">
           {live && <span className={cx(CHIP, 'font-mono')}>{status.agent}</span>}
           {!live && !elsewhere && !hosted() && (
             <>

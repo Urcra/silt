@@ -64,7 +64,7 @@ export function PromptQueue({ thread }: { thread: string }) {
   return (
     <section aria-label="queued prompts" className="rounded-md border border-line bg-surface-1">
       <div className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-2.5 py-1.5">
-        <h4 className="font-mono text-2xs font-medium tracking-[0.04em] text-fg-2 uppercase">Queued · {items.length}</h4>
+        <h4 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Queued · {items.length}</h4>
         <span className="text-2xs text-fg-2">sent in order when the turn ends, kept if anything restarts</span>
       </div>
       <ol className="space-y-0.5 px-1.5 py-1 text-xs">

@@ -281,7 +281,7 @@ pub(crate) async fn login_page(State(server): State<Server>, Query(query): Query
     }
     let url = config.public_url();
     body.push_str(&format!(
-        "<div class=\"note\"><b>Connecting a machine?</b><span>Run <code>silt auth login --server {}</code>. It opens this page to approve the device.</span></div>",
+        "<div class=\"note\"><b>Connecting a machine?</b><span>Run this on it. It opens this page to approve the device.</span><code>silt auth login --server {}</code></div>",
         escape(&url),
     ));
     body.push_str("<p class=\"small\">Have an invite link? Open it to create your account.</p>");

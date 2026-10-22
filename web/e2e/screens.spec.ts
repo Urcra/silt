@@ -51,20 +51,26 @@ async function open(page: Page, path: string) {
 }
 
 /**
- * Takes the screen in every variant. Ids, hashes and times differ on each
- * run, so what shows them is marked `data-volatile` and masked.
+ * Ids, hashes and times differ on each run, so what shows them is marked
+ * `data-volatile` and masked, as are the fixture's temporary paths and ports.
+ * The tolerance is tight enough that a changed word fails.
  */
+function shotOptions(page: Page) {
+  return {
+    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/)],
+    animations: 'disabled' as const,
+    caret: 'hide' as const,
+    maxDiffPixelRatio: 0.001,
+  }
+}
+
+/** Takes the screen in every variant. */
 async function shoot(page: Page, name: string, ready: (page: Page) => Promise<void>) {
   for (const variant of VARIANTS) {
     await page.setViewportSize({ width: variant.width, height: variant.height })
     await page.emulateMedia({ colorScheme: variant.colorScheme, reducedMotion: 'reduce' })
     await ready(page)
-    await expect(page).toHaveScreenshot(`${name}-${variant.name}.png`, {
-      mask: [page.locator('[data-volatile]')],
-      animations: 'disabled',
-      caret: 'hide',
-      maxDiffPixelRatio: 0.01,
-    })
+    await expect(page).toHaveScreenshot(`${name}-${variant.name}.png`, shotOptions(page))
   }
 }
 
@@ -111,12 +117,7 @@ test("a thread's changes", async ({ page }) => {
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
     await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
-    await expect(page).toHaveScreenshot(`thread-changes-desktop-${colorScheme}.png`, {
-      mask: [page.locator('[data-volatile]')],
-      animations: 'disabled',
-      caret: 'hide',
-      maxDiffPixelRatio: 0.01,
-    })
+    await expect(page).toHaveScreenshot(`thread-changes-desktop-${colorScheme}.png`, shotOptions(page))
   }
 })
 

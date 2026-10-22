@@ -331,7 +331,7 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
   const session = (
     <div className="flex flex-col gap-5 px-4 py-4">
       <section aria-label="here now" className="flex flex-col gap-2">
-        <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Here now</h2>
+        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Here now</h2>
         <ul data-testid="presence" className="flex flex-col gap-2 text-xs">
           {people.map((person) => (
             <li key={person.device} className="flex items-center gap-2">
@@ -362,7 +362,7 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
         </ul>
       </section>
       <section aria-label="agent" className="flex flex-col gap-2">
-        <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Agent</h2>
+        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Agent</h2>
         {running_ ? (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Dot tone={status.state === 'working' ? 'ok' : status.state.startsWith('awaiting') ? 'warn' : 'idle'} />
@@ -391,7 +391,7 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
         {status?.streaming && <Markdown text={status.streaming} className="text-xs text-fg-2" />}
       </section>
       <section aria-label="next prompt" className="flex flex-col gap-2">
-        <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Next prompt, drafted together</h2>
+        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Next prompt, drafted together</h2>
         {drafting.map((person) => (
           <div key={person.device} className="rounded-sm border border-line bg-elevated px-2.5 py-2 text-xs">
             <span className="font-mono text-2xs text-fg-2">{person.user} is drafting</span>

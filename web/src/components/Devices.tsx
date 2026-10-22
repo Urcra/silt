@@ -113,8 +113,11 @@ function Device({ device }: { device: DeviceView }) {
           ))}
         </ul>
       )}
-      <details className="text-xs">
-        <summary className="cursor-pointer text-fg-2 hover:text-fg-1 max-md:flex max-md:min-h-11 max-md:items-center">What it may do on your other devices</summary>
+      <details className="group/may text-xs">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
+          <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/may:rotate-90" />
+          What it may do on your other devices
+        </summary>
         <fieldset className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
           <legend className="sr-only">From this device you may, on your other devices:</legend>
           {CAPABILITIES.map((capability) => (
@@ -184,7 +187,7 @@ function PairPhone() {
         </div>
       )}
       <fieldset className="flex flex-col gap-1.5 text-xs">
-        <legend className="mb-1.5 font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">The phone may</legend>
+        <legend className="mb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">The phone may</legend>
         <Mock id="devices.pair-capabilities">
           {[
             ['Answer agents’ permission requests', true],

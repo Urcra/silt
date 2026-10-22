@@ -161,7 +161,7 @@ export function WorkspaceSwitcher() {
           <div className="flex flex-col gap-0.5">
             {groups.map((group, groupIndex) => (
               <section key={group.label} aria-label={group.label} className={cx(groupIndex > 0 && 'mt-1 border-t border-line-subtle pt-1')}>
-                <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-2xs font-medium tracking-[0.04em] text-fg-2 uppercase">{group.label}</h3>
+                <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{group.label}</h3>
                 {group.choices.map((choice) => {
                   const chosen = choice === current
                   const count = waiting(choice.workspace)

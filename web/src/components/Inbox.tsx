@@ -208,7 +208,7 @@ export function Inbox() {
             ([day, items]) =>
               items.length > 0 && (
                 <section key={day} aria-label={day.toLowerCase()} className="flex flex-col gap-1.5">
-                  <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">{day}</h2>
+                  <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{day}</h2>
                   <ul className="overflow-hidden rounded-md border border-line bg-elevated">
                     {items.map((notification) => (
                       <li

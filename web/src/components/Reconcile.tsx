@@ -86,7 +86,7 @@ export function Reconcile() {
           <h1 className="text-xl font-medium">This machine’s copy differed from the server’s</h1>
           <p className="max-w-[760px] text-sm leading-relaxed text-fg-1">
             Silt’s data on <b className="font-medium">{device}</b> no longer matched the server, as happens after restoring from an old backup. The
-            server’s version of <span className="font-mono">{short(found.thread)}</span> is kept. Nothing from this machine was lost: its work now
+            server’s version of <span className="font-mono" data-volatile>{short(found.thread)}</span> is kept. Nothing from this machine was lost: its work now
             continues in a recovery thread forked from the server’s version, made <span data-volatile>{ago(found.time_ms, now)}</span> ago.
           </p>
         </div>
@@ -98,7 +98,7 @@ export function Reconcile() {
                 Server’s version, kept
               </h2>
               <Link to="/t/$id" params={{ id: found.thread }} className="ml-auto font-mono text-2xs text-accent-fg">
-                {short(found.thread)}
+                <span data-volatile>{short(found.thread)}</span>
               </Link>
             </div>
             {original.isPending ? <Skeleton className="h-16" /> : <Entries entries={keptEntries} numbered="index" />}
@@ -128,7 +128,7 @@ export function Reconcile() {
                 Work only on {device}, moved to a recovery thread
               </h2>
               <Link to="/t/$id" params={{ id: found.recovery }} className="ml-auto font-mono text-2xs text-accent-fg">
-                {short(found.recovery)}
+                <span data-volatile>{short(found.recovery)}</span>
               </Link>
             </div>
             {moved.isPending ? <Skeleton className="h-16" /> : <Entries entries={movedEntries} numbered="added" />}
@@ -138,7 +138,7 @@ export function Reconcile() {
                 [
                   'Checkout',
                   <Mock key="checkout" id="reconcile.checkout">
-                    the clone on {device} now follows {short(found.recovery)}
+                    the clone on {device} now follows <span data-volatile>{short(found.recovery)}</span>
                   </Mock>,
                 ],
                 [
@@ -158,7 +158,7 @@ export function Reconcile() {
           )}
           <span className="flex flex-wrap gap-2">
             <Button variant="primary" icon="merge" onClick={() => (offering ? void offer() : setOffering(true))} disabled={offering && !title.trim()}>
-              Open merge request into {short(found.thread)}
+              Open merge request into <span data-volatile>{short(found.thread)}</span>
             </Button>
             <Link to="/t/$id" params={{ id: found.recovery }} className={buttonClass('secondary')}>
               Open recovery thread

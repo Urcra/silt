@@ -262,7 +262,7 @@ export function Search() {
           )}
         </div>
         <aside aria-label="saved searches" className="flex shrink-0 flex-col gap-1.5 lg:w-56">
-          <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Saved</h2>
+          <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Saved</h2>
           <Mock id="search.saved">
             {[
               { label: 'author:alice status:active', filters: { author: 'alice', status: 'active' } as SearchForm },

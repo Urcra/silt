@@ -51,7 +51,7 @@ export function MergeRequests() {
   const list = (title: string, items: MrSummary[]) =>
     items.length > 0 && (
       <section aria-label={title.toLowerCase()} className="flex flex-col gap-2">
-        <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">
+        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
           {title} · {items.length}
         </h2>
         <ul className="overflow-hidden rounded-md border border-line bg-elevated">
@@ -111,7 +111,7 @@ function ChangeGuide({
   return (
     <section aria-label="change guide" className="flex max-w-[720px] flex-col gap-2 rounded-md border border-line bg-surface-1 px-3.5 py-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Change guide</h2>
+        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Change guide</h2>
         {guide && <span className="text-2xs text-fg-2">written by {guide.by}</span>}
         <span className="ml-auto flex gap-1">
           <Button
@@ -392,11 +392,11 @@ export function MergeRequest({ id }: { id: string }) {
             {forkThread?.owner && <Avatar name={forkThread.owner} size={18} />}
             <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'Merge fork'}</span>
             <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.fork }}>
-              {short(mr.fork)}
+              <span data-volatile>{short(mr.fork)}</span>
             </Link>
             <span>into</span>
             <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.target }}>
-              {short(mr.target)}
+              <span data-volatile>{short(mr.target)}</span>
             </Link>
             <span>
               {targetThread?.title && `· ${targetThread.title} `}· opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>

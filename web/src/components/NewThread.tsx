@@ -296,7 +296,7 @@ export function NewThread() {
         </form>
         <div className="grid gap-6 md:grid-cols-2">
           <section aria-labelledby="stashed" className="flex flex-col gap-1.5">
-            <h2 id="stashed" className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">
+            <h2 id="stashed" className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
               Stashed prompts
             </h2>
             {stash.length === 0 && <p className="text-xs text-fg-2">Stash a prompt to start it later; it stays in this browser.</p>}
@@ -318,7 +318,7 @@ export function NewThread() {
             ))}
           </section>
           <section aria-labelledby="pickup" className="flex flex-col gap-1.5">
-            <h2 id="pickup" className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">
+            <h2 id="pickup" className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
               Or pick up
             </h2>
             {recent.map((thread) => (

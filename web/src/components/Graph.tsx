@@ -132,13 +132,13 @@ function Details({ row, thread }: { row: GraphRow; thread: ThreadSummary | undef
       />
       {row.kind === 'turn' && (
         <section className="flex flex-col gap-1.5">
-          <h3 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Prompt</h3>
+          <h3 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Prompt</h3>
           <Markdown text={row.text} className="text-xs" />
         </section>
       )}
       {row.turn !== null && (
         <section className="flex flex-col gap-1.5">
-          <h3 className="font-mono text-2xs font-medium tracking-[0.06em] text-fg-2 uppercase">Files</h3>
+          <h3 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Files</h3>
           {files === null && !hosted() && <Skeleton className="h-8" />}
           {files?.length === 0 && <p className="text-xs text-fg-2">No files changed.</p>}
           <ul className="flex flex-col gap-0.5 font-mono text-2xs">
