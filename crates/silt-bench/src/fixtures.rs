@@ -9,7 +9,7 @@ use std::process::Command;
 use serde_json::{Value, json};
 
 /// Bump when a generator changes, so no stale fixture is measured.
-const FIXTURE_VERSION: u32 = 1;
+const FIXTURE_VERSION: u32 = 2;
 
 pub const TRANSCRIPT_BYTES: u64 = 100_000_000;
 pub const REPO_FILES: usize = 50_000;
@@ -137,12 +137,20 @@ impl Transcript {
             let path = format!("{}/src/d{}/f{}.rs", self.cwd, self.index % 500, self.index);
             let call = json!([{ "type": "tool_use", "id": id, "name": "Read", "input": { "file_path": path, "limit": 200 } }]);
             lines.push(self.assistant(call));
-            let output = self.words.code(1 + self.index % 7);
+            // What the model is shown is a small part of the line; the
+            // structured result beside it, which isn't searched, is most of
+            // it, as in real sessions.
+            let output = self.words.code(1 + usize::from(self.index.is_multiple_of(4)));
+            let original = self.words.code(3 + self.index % 5);
             lines.push(self.entry(
                 "user",
                 json!({
                     "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": output }] },
-                    "toolUseResult": { "type": "text", "file": { "filePath": path, "content": output, "numLines": 40 } },
+                    "toolUseResult": {
+                        "type": "text",
+                        "file": { "filePath": path, "content": output, "numLines": 40 },
+                        "originalFile": original,
+                    },
                 }),
             ));
             for event in ["PreToolUse", "PostToolUse"] {
@@ -368,5 +376,20 @@ mod tests {
         let lines: Vec<String> = (0..50).flat_map(|_| transcript.prompt()).collect();
         let average = lines.iter().map(String::len).sum::<usize>() / lines.len();
         assert!((1_200..2_600).contains(&average), "{average} bytes a line");
+    }
+
+    /// Tool results shown to the model, which search indexes, are about 7%
+    /// of a real session's bytes.
+    #[test]
+    fn tool_results_take_as_much_as_in_a_real_session() {
+        let mut transcript = Transcript::new("/home/someone/project");
+        let lines: Vec<String> = (0..50).flat_map(|_| transcript.prompt()).collect();
+        let results: usize = lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|line| line["message"]["content"][0]["content"].as_str().map(str::len))
+            .sum();
+        let share = results as f64 / lines.iter().map(String::len).sum::<usize>() as f64;
+        assert!((0.05..0.10).contains(&share), "{share:.3} of the bytes");
     }
 }

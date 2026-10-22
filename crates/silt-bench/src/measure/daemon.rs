@@ -25,7 +25,13 @@ const IMPORT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
 const IDLE_WINDOW: Duration = Duration::from_secs(10);
 
-pub async fn measure(silt: &Path, root: &Path, fixtures: &Fixtures) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
+/// Measures the budgets `wanted` asks for, and those set up on the way.
+pub async fn measure(
+    silt: &Path,
+    root: &Path,
+    fixtures: &Fixtures,
+    wanted: &[&str],
+) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
     let home = Home::new(silt, root);
     let transcript = fixtures.transcript().or_raise(|| BenchError("cannot write the transcript".into()))?;
     let bytes = fs::metadata(&transcript).or_raise(|| BenchError("cannot read the transcript".into()))?.len();
@@ -42,6 +48,9 @@ pub async fn measure(silt: &Path, root: &Path, fixtures: &Fixtures) -> Result<Ve
     #[expect(clippy::cast_precision_loss, reason = "a ratio of sizes")]
     let ratio = stored_bytes(&home.data)? as f64 / bytes as f64;
     measured.push((STORE_SIZE, Measured::Ratio(ratio)));
+    if !wanted.iter().any(|name| [DAEMON_STARTUP, DAEMON_IDLE].contains(name)) {
+        return Ok(measured);
+    }
 
     let daemon = home.start()?;
     fork_family(&home, root).await?;

@@ -46,6 +46,14 @@ fn a_thread_continues_on_another_machine() {
         "the home machine sees the laptop's thread: {}",
         home.stdout(&["log"])
     );
+    // The laptop pushes its commits to the mirror in the background, apart
+    // from the bundle, and resuming asks the mirror only once.
+    let wip = git(&laptop.repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    assert!(
+        eventually(|| mirrored(&world.server.data).contains(&wip)),
+        "the unpushed commit is on the server's mirror: {}",
+        mirrored(&world.server.data)
+    );
     let resumed = home.silt(&["resume", &thread]);
     let checkout = checkout_from(&resumed.stderr);
     assert!(checkout.starts_with(&home.repo));
@@ -56,15 +64,6 @@ fn a_thread_continues_on_another_machine() {
         "pub fn wip() {}\n"
     );
     assert_eq!(fs::read_to_string(home.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
-    let wip = git(&laptop.repo, &["rev-parse", "HEAD"]).trim().to_owned();
-    let mirror = fs::read_dir(world.server.data.join("git"))
-        .expect("the server keeps a git mirror")
-        .flatten()
-        .next()
-        .expect("one repository per family")
-        .path();
-    let mirrored = git(&mirror, &["for-each-ref", "--format=%(objectname)", "refs/silt/threads/"]);
-    assert!(mirrored.contains(&wip), "the unpushed commit is on the server's mirror: {mirrored}");
     let fetched = git(&home.repo, &["for-each-ref", "--format=%(objectname)", "refs/silt/mirror/"]);
     assert!(fetched.contains(&wip), "the home machine fetched it from the mirror: {fetched}");
 
@@ -142,6 +141,15 @@ fn sync_recovers_from_server_restarts_and_rollbacks() {
         "after a rollback the clients push what the server lost: {}",
         machine.stdout(&["log"])
     );
+}
+
+/// The commits of every thread ref in the server's git mirror, a bare
+/// repository per family.
+fn mirrored(server_data: &Path) -> String {
+    let Some(mirror) = fs::read_dir(server_data.join("git")).ok().and_then(|mut dirs| dirs.next()).and_then(Result::ok) else {
+        return String::new();
+    };
+    git(&mirror.path(), &["for-each-ref", "--format=%(objectname)", "refs/silt/threads/"])
 }
 
 fn dir_contains(dir: &Path, needle: &[u8]) -> bool {

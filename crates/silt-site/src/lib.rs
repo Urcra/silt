@@ -1,6 +1,6 @@
 //! Silt's docs site: the guide, self-hosting and the command-line reference
 //! from `docs/`, rendered to static HTML that needs no service to host, in
-//! Nous as the Docs and Landing page boards draw it (ADR 0033, ADR 0035).
+//! Nous as the Docs and Landing page boards draw it (ADR 0033, ADR 0036).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -477,7 +477,7 @@ fn write(path: &Path, text: &str) -> Result<(), SiteError> {
     fs::write(path, text).map_err(|source| SiteError::Write { path: path.to_owned(), source })
 }
 
-/// Nous's tokens, the same file the web app styles itself with (ADR 0035).
+/// Nous's tokens, the same file the web app styles itself with (ADR 0036).
 const NOUS: &str = include_str!("../../../web/src/nous.css");
 
 /// The site's own rules, on Nous's tokens, as the Docs and Landing page boards draw them.

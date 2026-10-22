@@ -31,7 +31,7 @@ pub(crate) async fn family(store: &Store, family_id: FamilyId, repo: Option<&Rep
 }
 
 /// Saves the family's projection; returns how much of its log it covers.
-pub(crate) async fn save_snapshot(store: &Store, family_id: FamilyId, family: &Family) -> Result<usize, CoreError> {
+pub(crate) async fn save_snapshot(store: &Store, family_id: FamilyId, family: &mut Family) -> Result<usize, CoreError> {
     let covers = family.log().len();
     let data = family.snapshot().map_err(CoreError::Encode)?;
     store.put_snapshot(family_id, &Snapshot { format: SNAPSHOT_FORMAT, covers: covers as u64, data }).await?;
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn a_family_starts_from_its_snapshot_and_applies_what_came_after() {
         let stored = typed(20);
-        let (partway, _) = replay(None, stored[..12].to_vec(), &mut HashMap::new());
+        let (mut partway, _) = replay(None, stored[..12].to_vec(), &mut HashMap::new());
         let snapshot = Snapshot { format: SNAPSHOT_FORMAT, covers: 12, data: partway.snapshot().expect("encodes") };
         let (restored, covered) = replay(Some(&snapshot), stored.clone(), &mut HashMap::new());
         let (replayed, nothing) = replay(None, stored, &mut HashMap::new());
@@ -110,9 +110,9 @@ mod tests {
     #[test]
     fn a_snapshot_that_does_not_fit_is_replayed_instead() {
         let stored = typed(3);
-        let (other, _) = replay(None, typed(5), &mut HashMap::new());
+        let (mut other, _) = replay(None, typed(5), &mut HashMap::new());
         let foreign = Snapshot { format: SNAPSHOT_FORMAT, covers: 6, data: other.snapshot().expect("encodes") };
-        let (partway, _) = replay(None, stored[..2].to_vec(), &mut HashMap::new());
+        let (mut partway, _) = replay(None, stored[..2].to_vec(), &mut HashMap::new());
         let later_format = Snapshot { format: SNAPSHOT_FORMAT + 1, covers: 2, data: partway.snapshot().expect("encodes") };
         let garbage = Snapshot { format: SNAPSHOT_FORMAT, covers: 2, data: b"not a snapshot".to_vec() };
         for snapshot in [foreign, later_format, garbage] {

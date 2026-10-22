@@ -13,7 +13,7 @@ use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]; a snapshot in another one is
 /// replayed instead of read.
-pub const SNAPSHOT_FORMAT: i64 = 2;
+pub const SNAPSHOT_FORMAT: i64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -54,24 +54,37 @@ struct Logged {
 
 impl Logged {
     fn of(delta: &Delta) -> Result<Self, postcard::Error> {
-        Ok(Self { id: delta.span.first(), fingerprint: fnv1a(&postcard::to_allocvec(delta)?) })
+        Ok(Self { id: delta.span.first(), fingerprint: fingerprint(&postcard::to_allocvec(delta)?) })
     }
 }
 
-/// Stable across builds, unlike the standard library's hashers.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3))
+/// FNV-1a over eight bytes at a time: stable across builds, unlike the
+/// standard library's hashers, and fast enough for a long session's log.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let (words, rest) = bytes.as_chunks::<8>();
+    let hash = words.iter().fold(0xcbf2_9ce4_8422_2325, |hash, word| (hash ^ u64::from_le_bytes(*word)).wrapping_mul(PRIME));
+    let hash = rest.iter().fold(hash, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(PRIME));
+    (hash ^ bytes.len() as u64).wrapping_mul(PRIME)
 }
 
 impl Family {
-    pub fn snapshot(&self) -> Result<Vec<u8>, postcard::Error> {
+    pub fn snapshot(&mut self) -> Result<Vec<u8>, postcard::Error> {
+        let mut encoded = Vec::new();
+        for delta in &self.log[self.fingerprints.len()..] {
+            encoded.clear();
+            encoded = postcard::to_extend(delta, encoded)?;
+            self.fingerprints.push(fingerprint(&encoded));
+        }
+        let log =
+            self.log.iter().zip(&self.fingerprints).map(|(delta, &fingerprint)| Logged { id: delta.span.first(), fingerprint });
         postcard::to_allocvec(&Written {
             graph: &self.graph,
             tree: &self.tree,
             files: &self.files,
             threads: &self.threads,
             turns: &self.turns,
-            log: self.log.iter().map(Logged::of).collect::<Result<_, _>>()?,
+            log: log.collect(),
         })
     }
 
@@ -110,8 +123,49 @@ impl Family {
             threads: read.threads,
             turns: read.turns,
             log,
+            fingerprints: read.log.iter().map(|logged| logged.fingerprint).collect(),
             ..Self::default()
         };
         Ok(family)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use silt_types::ActorId;
+
+    use super::*;
+    use crate::delta::{Author, ConvOp, Op, SessionFile};
+
+    fn say(family: &mut Family, text: &str) -> Delta {
+        let thread = ThreadId(1);
+        let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
+        let op = Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: text.into() });
+        let delta = family.delta(ActorId(1), thread, Author::User, 0, family.thread_head(thread), op);
+        family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
+        delta
+    }
+
+    fn logged(snapshot: &[u8]) -> Vec<Logged> {
+        postcard::from_bytes::<Read>(snapshot).expect("decodes").log
+    }
+
+    #[test]
+    fn fingerprints_kept_between_snapshots_are_the_ones_taken_fresh() {
+        let mut family = Family::new();
+        let mut stored: Vec<Delta> = ["one", "two"].iter().map(|text| say(&mut family, text)).collect();
+        let first = family.snapshot().expect("encodes");
+        stored.push(say(&mut family, "three"));
+        let fresh: Vec<Logged> = family.log().iter().map(|delta| Logged::of(delta).expect("encodes")).collect();
+        assert_eq!(logged(&family.snapshot().expect("encodes")), fresh);
+
+        let mut rest = stored;
+        let mut restored = Family::from_snapshot(&first, &mut rest).expect("matches");
+        for delta in rest {
+            restored.apply(delta, &mut HashMap::new()).expect("applies");
+        }
+        assert_eq!(logged(&restored.snapshot().expect("encodes")), fresh, "fingerprints read with a snapshot are kept");
     }
 }

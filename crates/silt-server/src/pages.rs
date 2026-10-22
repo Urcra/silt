@@ -22,7 +22,7 @@ pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-/// Nous's tokens, the same file the web app styles itself with (ADR 0035).
+/// Nous's tokens, the same file the web app styles itself with (ADR 0036).
 const NOUS: &str = include_str!("../../../web/src/nous.css");
 
 /// The pages' own rules, on Nous's tokens, as the Sign in board draws them.

@@ -1,4 +1,4 @@
-/* Nous (ADR 0035): warm neutrals and one amber accent, light and dark.
+/* Nous (ADR 0036): warm neutrals and one amber accent, light and dark.
    The one source of Silt's tokens: the web app imports it, and silt-server's
    pages and silt-site include it. Each token names its light and dark value
    once; `color-scheme` picks one, from the system or from `data-theme`. */

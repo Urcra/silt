@@ -11,8 +11,8 @@ use std::time::{Duration, Instant, SystemTime};
 use silt_agents::{Agent, Capture, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
-use silt_log::{Author, ConvOp, Family, Op, SessionFile, SessionRef, TurnMark};
-use silt_store::{CheckoutId, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
+use silt_log::{Author, ConvOp, Delta, Family, Op, SessionFile, SessionRef, TurnMark};
+use silt_store::{CheckoutId, SearchRow, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, FamilyId, ThreadId};
 use tracing::warn;
 
@@ -34,8 +34,39 @@ const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
 const PENDING_TTL: Duration = Duration::from_secs(30 * 60);
 /// Most transcript bytes read per session and tick.
 const TAIL_CHUNK: u64 = 1 << 20;
+/// Most transcript bytes of a backlog read at once: big enough that a long
+/// session imports in a few writes, small enough that requests waiting
+/// behind it are answered soon.
+const BACKLOG_CHUNK: u64 = 8 << 20;
 /// Agents stamp a new session's file a little after starting.
 const DISCOVER_SLACK_MS: i64 = 5_000;
+
+/// A transcript record applied to its family in memory, not stored yet.
+struct StagedLine {
+    family: FamilyId,
+    delta: Delta,
+    rows: Vec<SearchRow>,
+    marks: Vec<Mark>,
+}
+
+/// Records staged from one session file, to store in one write.
+#[derive(Default)]
+struct Batch {
+    family: Option<FamilyId>,
+    deltas: Vec<Delta>,
+    rows: Vec<SearchRow>,
+    /// Where in the chunk read the last record staged ends.
+    read: usize,
+}
+
+impl Batch {
+    fn push(&mut self, family: FamilyId, delta: Delta, rows: Vec<SearchRow>, end: usize) {
+        self.family = Some(family);
+        self.deltas.push(delta);
+        self.rows.extend(rows);
+        self.read = end;
+    }
+}
 
 pub(crate) struct Session {
     pub(crate) record: SessionRecord,
@@ -782,7 +813,7 @@ impl Core {
             (agent.capture() == Capture::Snapshot).then_some((agent, found))
         });
         let Some((agent, found)) = snapshot else {
-            return self.tail_session_up_to(session_id, limit).await;
+            return self.tail_session_up_to(session_id, limit).await.map(|_| ());
         };
         let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found)).await?;
         if let Some(session) = self.session_mut(session_id) {
@@ -798,21 +829,49 @@ impl Core {
     }
 
     /// Records new lines of a session's transcripts, a chunk at a time so a
-    /// long backlog doesn't hold up the daemon; the next tick goes on.
+    /// long backlog doesn't hold up the daemon; the rest is drained in
+    /// bigger chunks, each its own event, so requests are answered between
+    /// them.
     pub(crate) async fn tail_session(&mut self, session_id: &str) -> Result<(), CoreError> {
-        self.tail_session_up_to(session_id, TAIL_CHUNK).await
+        if self.tail_session_up_to(session_id, TAIL_CHUNK).await? {
+            self.drain_later(session_id);
+        }
+        Ok(())
     }
 
-    async fn tail_session_up_to(&mut self, session_id: &str, limit: u64) -> Result<(), CoreError> {
+    fn drain_later(&mut self, session_id: &str) {
+        if self.draining.insert(session_id.to_owned()) {
+            let _ = self.events.send(Event::Drain { session_id: session_id.to_owned() });
+        }
+    }
+
+    /// Records the next chunk of a session's backlog.
+    pub(crate) async fn drain(&mut self, session_id: &str) {
+        let more = self.tail_session_up_to(session_id, BACKLOG_CHUNK).await;
+        if let Ok(true) = more {
+            let _ = self.events.send(Event::Drain { session_id: session_id.to_owned() });
+            return;
+        }
+        self.draining.remove(session_id);
+        if let Err(error) = more {
+            warn!(%error, session = session_id, "could not read the session transcript");
+        }
+        if let Some(family) = self.session(session_id).map(|session| session.family) {
+            self.snapshot_if_due(family).await;
+        }
+    }
+
+    /// Whether any of the session's transcripts has more to read.
+    async fn tail_session_up_to(&mut self, session_id: &str, limit: u64) -> Result<bool, CoreError> {
         let Some(session) = self.session(session_id) else {
-            return Ok(());
+            return Ok(false);
         };
         let agent = session.agent;
         let transcript = match &session.transcript {
             Some(transcript) => transcript.clone(),
             None => {
                 let Some(found) = agent.transcript(&session.agent_cwd, session_id) else {
-                    return Ok(());
+                    return Ok(false);
                 };
                 let offset = SessionFileOffset { file: "main".to_owned(), path: found.clone(), offset: 0 };
                 self.store.set_session_offset(agent.id(), session_id, &offset).await?;
@@ -828,24 +887,27 @@ impl Core {
             }
         };
         if agent.capture() == Capture::Snapshot {
-            return Ok(());
+            return Ok(false);
         }
         let mut files = vec![("main".to_owned(), transcript.clone())];
         files.extend(agent.side_transcripts(&transcript).into_iter().map(|(name, path)| (format!("subagent:{name}"), path)));
+        let mut more = false;
         for (key, path) in files {
-            self.tail_file(session_id, &key, &path, limit).await?;
+            more |= self.tail_file(session_id, &key, &path, limit).await?;
         }
-        self.attach_side_files(session_id, &transcript).await
+        self.attach_side_files(session_id, &transcript).await?;
+        Ok(more)
     }
 
     /// Records the transcript's new complete lines, at most about `limit`
-    /// bytes of them. The offset moves past each line as it is recorded, so
-    /// a failure part way never records a line twice.
-    async fn tail_file(&mut self, session_id: &str, key: &str, path: &Path, limit: u64) -> Result<(), CoreError> {
+    /// bytes of them, in one write with how far the file was read, so a
+    /// failure part way never records a line twice. Whether the file has
+    /// more to read.
+    async fn tail_file(&mut self, session_id: &str, key: &str, path: &Path, limit: u64) -> Result<bool, CoreError> {
         let session = self.session(session_id).expect("caller checked");
         let mut offset = session.offsets.get(key).map_or(0, |offset| offset.offset);
         let Ok(mut file) = fs::File::open(path) else {
-            return Ok(());
+            return Ok(false);
         };
         let length = file.metadata()?.len();
         if length < offset {
@@ -853,7 +915,7 @@ impl Core {
             offset = length;
         }
         if length <= offset {
-            return Ok(());
+            return Ok(false);
         }
         file.seek(SeekFrom::Start(offset))?;
         let mut buffer = Vec::new();
@@ -864,22 +926,37 @@ impl Core {
         }
         let (lines, consumed) = complete_lines_ending(&buffer);
         if consumed == 0 {
-            return Ok(());
+            return Ok(false);
         }
         let read_to = |end: usize| SessionFileOffset { file: key.to_owned(), path: path.to_owned(), offset: offset + end as u64 };
+        let mut batch = Batch::default();
         for (line, end) in lines {
-            self.record_line(session_id, key, line, Some(read_to(end))).await?;
+            let staged = match self.stage_line(session_id, key, line) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    let read = read_to(batch.read);
+                    self.store_batch(session_id, key, &mut batch, read).await?;
+                    return Err(error);
+                }
+            };
+            batch.push(staged.family, staged.delta, staged.rows, end);
+            if !staged.marks.is_empty() {
+                self.store_batch(session_id, key, &mut batch, read_to(end)).await?;
+                self.apply_marks(session_id, staged.marks).await?;
+            }
         }
         // Lines that recorded nothing still count as read.
         let read = read_to(consumed);
-        if self.session(session_id).and_then(|session| session.offsets.get(key)) != Some(&read) {
+        if !batch.deltas.is_empty() {
+            self.store_batch(session_id, key, &mut batch, read).await?;
+        } else if self.session(session_id).and_then(|session| session.offsets.get(key)) != Some(&read) {
             let agent = self.session(session_id).expect("caller checked").record.agent.clone();
             self.store.set_session_offset(&agent, session_id, &read).await?;
             if let Some(session) = self.session_mut(session_id) {
                 session.offsets.insert(key.to_owned(), read);
             }
         }
-        Ok(())
+        Ok(offset + (consumed as u64) < length)
     }
 
     /// Stores one transcript record, indexes its text, and applies the turn
@@ -893,6 +970,15 @@ impl Core {
         line: String,
         read: Option<SessionFileOffset>,
     ) -> Result<(), CoreError> {
+        let staged = self.stage_line(session_id, key, line)?;
+        self.store_lines(session_id, key, staged.family, &[staged.delta], &staged.rows, read).await?;
+        self.apply_marks(session_id, staged.marks).await
+    }
+
+    /// Applies a transcript record to its family in memory, with what it
+    /// indexes and the turn marks it carries for agents without Silt's
+    /// hooks.
+    fn stage_line(&mut self, session_id: &str, key: &str, line: String) -> Result<StagedLine, CoreError> {
         // An agent still running may send a line after its thread was
         // purged here.
         let session = self
@@ -900,8 +986,7 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("session {session_id} is no longer recorded here")))?;
         let agent = session.agent;
         let parsed = session.readers.entry(key.to_owned()).or_insert_with(|| agent.reader()).push(&line);
-        let (family, thread, reference, agent_name) =
-            (session.family, session.record.thread, session.reference(), session.record.agent.clone());
+        let (family, thread, reference) = (session.family, session.record.thread, session.reference());
         let op = ConvOp::Native { session: reference.clone(), file: source_of(key), line };
         let texts: Vec<(String, String)> = parsed
             .entries
@@ -911,15 +996,47 @@ impl Core {
                 Some((entry.kind().to_owned(), text))
             })
             .collect();
-        let read_to = read.as_ref().map(|offset| SessionRead { agent: &agent_name, session_id, offset });
-        self.append_conv_with(family, thread, agent_author(&reference), op, texts, read_to).await?;
+        let (delta, rows) = self.stage_conv(family, thread, agent_author(&reference), op, texts)?;
+        let marks = if agent.capture() != Capture::Hooks && key == "main" { parsed.marks } else { Vec::new() };
+        Ok(StagedLine { family, delta, rows, marks })
+    }
+
+    async fn store_batch(
+        &mut self,
+        session_id: &str,
+        key: &str,
+        batch: &mut Batch,
+        read: SessionFileOffset,
+    ) -> Result<(), CoreError> {
+        let Batch { family: Some(family), deltas, rows, .. } = std::mem::take(batch) else {
+            return Ok(());
+        };
+        self.store_lines(session_id, key, family, &deltas, &rows, Some(read)).await
+    }
+
+    /// Stores records staged from one session file, with how far the file
+    /// has been read, all or none of them.
+    async fn store_lines(
+        &mut self,
+        session_id: &str,
+        key: &str,
+        family: FamilyId,
+        deltas: &[Delta],
+        rows: &[SearchRow],
+        read: Option<SessionFileOffset>,
+    ) -> Result<(), CoreError> {
+        let agent = self.session(session_id).map(|session| session.record.agent.clone()).unwrap_or_default();
+        let progress = read.as_ref().map(|offset| SessionRead { agent: &agent, session_id, offset });
+        self.persist_with(family, deltas, rows, progress).await?;
         if let (Some(read), Some(session)) = (read, self.session_mut(session_id)) {
             session.offsets.insert(key.to_owned(), read);
         }
-        if agent.capture() != Capture::Hooks && key == "main" {
-            for mark in parsed.marks {
-                self.apply_mark(session_id, mark).await?;
-            }
+        Ok(())
+    }
+
+    async fn apply_marks(&mut self, session_id: &str, marks: Vec<Mark>) -> Result<(), CoreError> {
+        for mark in marks {
+            self.apply_mark(session_id, mark).await?;
         }
         Ok(())
     }

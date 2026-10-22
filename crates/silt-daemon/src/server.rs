@@ -134,6 +134,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Tick => core.tick().await,
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
+            Event::Drain { session_id } => core.drain(&session_id).await,
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
             Event::Pushed { family, epoch, generation, outcome, error } => {
                 core.pushed(family, epoch, generation, outcome, error).await

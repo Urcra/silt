@@ -291,11 +291,14 @@ struct Shape {
 #[derive(Debug, Default)]
 struct Shapes(Mutex<Vec<(ShapeKey, Arc<Shape>)>>);
 
-/// The thread's version, or the family's when the view is the family's own.
 #[derive(Debug, PartialEq, Eq)]
-struct ShapeKey {
-    whole: bool,
-    version: Frontier,
+enum ShapeKey {
+    /// The family's own tree, after this many changes to it. Most deltas
+    /// leave the tree as it was, so its paths are listed again only when
+    /// one changes it, not after every line of a conversation.
+    Whole { tree_changes: u64 },
+    /// The thread's version, when it hasn't seen everything.
+    At(Frontier),
 }
 
 const SHAPES_KEPT: usize = 8;
@@ -332,6 +335,11 @@ pub struct Family {
     turns: HashMap<SessionRef, Turns>,
     log: Vec<Delta>,
     shapes: Shapes,
+    /// The fingerprints snapshots took of the log's first deltas. The log
+    /// only grows, so each delta is fingerprinted once rather than by every
+    /// snapshot, which made recording a long session quadratic.
+    fingerprints: Vec<u64>,
+    tree_changes: u64,
 }
 
 impl Family {
@@ -732,7 +740,7 @@ impl Family {
     pub fn thread_view(&self, thread: ThreadId) -> ThreadView<'_> {
         let version = self.thread_head(thread);
         let whole = self.threads.len() <= 1 || version == *self.graph.frontier();
-        let key = ShapeKey { whole, version: if whole { self.graph.frontier().clone() } else { version.clone() } };
+        let key = if whole { ShapeKey::Whole { tree_changes: self.tree_changes } } else { ShapeKey::At(version.clone()) };
         let shape = self.shapes.get_or_insert(key, || {
             let seen = (!whole).then(|| self.graph.version_vector(&version));
             Shape { tree: seen.as_ref().map(|seen| self.tree.at(|id| seen.contains(id))), seen, paths: OnceLock::new() }
@@ -865,12 +873,14 @@ impl Family {
         let id = delta.span.first();
         match &delta.op {
             Op::Create { kind, content, executable, .. } => {
+                self.tree_changes += 1;
                 self.tree.apply(&tree_event(id, &delta.op))?;
                 if *kind != InodeKind::Dir {
                     self.files.insert(InodeId(id), FileState::new(file_content(*content, id), id, *executable));
                 }
             }
             Op::Move { .. } | Op::Delete { .. } => {
+                self.tree_changes += 1;
                 self.tree.apply(&tree_event(id, &delta.op))?;
             }
             Op::Text { inode, op } => {

@@ -1,5 +1,5 @@
 // Each route's view in the shell's page; a view drawn as its board takes
-// its own `Page`, the rest a plain one until they are (ADR 0035).
+// its own `Page`, the rest a plain one until they are (ADR 0036).
 
 import { useParams } from '@tanstack/react-router'
 import type { ComponentType } from 'react'

@@ -1,4 +1,4 @@
-// The pieces the boards' screens are drawn with (ADR 0035): status dots,
+// The pieces the boards' screens are drawn with (ADR 0036): status dots,
 // pills, section labels, cards, key/value lists, diff blocks and the status bar.
 
 import type { HTMLAttributes, ReactNode } from 'react'

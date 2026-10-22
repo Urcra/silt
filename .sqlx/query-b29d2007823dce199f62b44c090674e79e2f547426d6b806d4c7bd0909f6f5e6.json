@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO delta_chunks (family_id, first_seq, last_seq, codec, data) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b29d2007823dce199f62b44c090674e79e2f547426d6b806d4c7bd0909f6f5e6"
+}

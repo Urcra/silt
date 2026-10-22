@@ -10,7 +10,7 @@ use std::sync::Arc;
 use silt_log::Delta;
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 pub use blobs::BlobStore;
 pub use queue::QueuedPrompt;
@@ -31,6 +31,10 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("stored {what} has an invalid length")]
     Corrupt { what: &'static str },
+    #[error("a delta chunk could not be compressed or decompressed")]
+    Chunk(#[source] std::io::Error),
+    #[error("a delta chunk is in codec {0}, which this build doesn't know")]
+    UnknownCodec(i64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +194,10 @@ impl Store {
             .filename(dir.join("silt.sqlite"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
+            // With WAL, a crash can't corrupt the store at NORMAL; a power
+            // cut may lose the last commits, which recording takes in again
+            // from the transcripts' stored offsets.
+            .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(std::time::Duration::from_secs(10))
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options.clone()).await?;
@@ -218,13 +226,40 @@ impl Store {
         Ok(sqlx::query_scalar!("SELECT seq FROM family_positions WHERE family_id = ?", family).fetch_optional(&self.pool).await?)
     }
 
-    /// The family's deltas stored after position `after`, in order.
+    /// The family's deltas stored after position `after`, in order: those
+    /// in chunks, then the rows after the last chunk (ADR 0035).
     pub async fn deltas_after(&self, family: FamilyId, after: i64) -> Result<Vec<Delta>, StoreError> {
         let family = id_bytes(family.0);
-        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, after)
-            .fetch_all(&self.pool)
-            .await?;
-        rows.into_iter().map(|row| Ok(silt_log::decode_stored(row.format, &row.data)?)).collect()
+        let chunks = sqlx::query!(
+            "SELECT first_seq, last_seq, codec, data FROM delta_chunks WHERE family_id = ? AND last_seq > ? ORDER BY first_seq",
+            family,
+            after
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let rows_after = chunks.last().map_or(after, |chunk| chunk.last_seq.max(after));
+        let rows =
+            sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, rows_after)
+                .fetch_all(&self.pool)
+                .await?;
+        let mut deltas = Vec::new();
+        for chunk in chunks {
+            let (first, last) = (chunk.first_seq, chunk.last_seq);
+            let packed = chunks::decode(chunk.codec, chunk.data)?;
+            let held = chunks::unpack(&packed)?;
+            if i64::try_from(held.len()).ok() != Some(last - first + 1) {
+                return Err(StoreError::Corrupt { what: "delta chunk" });
+            }
+            for (seq, (format, data)) in (first..).zip(held) {
+                if seq > after {
+                    deltas.push(silt_log::decode_stored(format, data)?);
+                }
+            }
+        }
+        for row in rows {
+            deltas.push(silt_log::decode_stored(row.format, &row.data)?);
+        }
+        Ok(deltas)
     }
 
     pub fn blobs(&self) -> &BlobStore {
@@ -627,24 +662,7 @@ impl Store {
 
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
-        let family = id_bytes(family.0);
-        let chunks = sqlx::query!("SELECT last_seq, data FROM delta_chunks WHERE family_id = ? ORDER BY first_seq", family)
-            .fetch_all(&self.pool)
-            .await?;
-        let packed = chunks.last().map_or(-1, |chunk| chunk.last_seq);
-        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, packed)
-            .fetch_all(&self.pool)
-            .await?;
-        let mut deltas = Vec::new();
-        for chunk in &chunks {
-            for (format, data) in chunks::unpack(&chunk.data)? {
-                deltas.push(silt_log::decode_stored(format, data)?);
-            }
-        }
-        for row in rows {
-            deltas.push(silt_log::decode_stored(row.format, &row.data)?);
-        }
-        Ok(deltas)
+        self.deltas_after(family, -1).await
     }
 
     pub async fn add_checkout(
@@ -836,23 +854,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut tx = self.write_transaction().await?;
         append_deltas_in(&mut tx, family, deltas).await?;
-        for row in rows {
-            let (thread, actor, lamport) = (id_bytes(row.thread.0), id_bytes(row.delta.actor.0), lamport_i64(row.delta.lamport));
-            let inserted = sqlx::query!(
-                "INSERT INTO search (body, thread_id, actor, lamport, kind) VALUES (?, ?, ?, ?, ?)",
-                row.body,
-                thread,
-                actor,
-                lamport,
-                row.kind,
-            )
-            .execute(&mut *tx)
-            .await?
-            .last_insert_rowid();
-            sqlx::query!("INSERT INTO search_threads (row_id, thread_id) VALUES (?, ?)", inserted, thread)
-                .execute(&mut *tx)
-                .await?;
-        }
+        insert_search_rows_in(&mut tx, rows).await?;
         if let Some(read) = read {
             set_session_offset_in(&mut tx, read.agent, read.session_id, read.offset).await?;
         }
@@ -893,61 +895,111 @@ impl Store {
     }
 }
 
+/// Rows one multi-row insert carries, well within SQLite's limit on the
+/// values bound to one statement.
+const ROWS_PER_INSERT: usize = 500;
+
+/// Appends deltas after the family's last (ADR 0035): whole chunks of the
+/// rows waiting and the new deltas go straight into compressed chunks, and
+/// only what's left over keeps its bytes in its row.
 async fn append_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
     let family = id_bytes(family.0);
     let next = sqlx::query_scalar!(r#"SELECT COALESCE(MAX(seq) + 1, 0) AS "next!: i64" FROM deltas WHERE family_id = ?"#, family)
         .fetch_one(&mut *tx)
         .await?;
-    for (seq, delta) in (next..).zip(deltas) {
-        let (actor, lamport, len) =
-            (id_bytes(delta.span.actor.0), lamport_i64(delta.span.start), i64::try_from(delta.span.len).unwrap_or(i64::MAX));
-        let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta)?);
-        sqlx::query!(
-            "INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            family,
-            seq,
-            actor,
-            lamport,
-            len,
-            format,
-            data,
-        )
-        .execute(&mut *tx)
-        .await?;
+    let packed = packed_in(tx, &family).await?;
+    let encoded = deltas.iter().map(silt_log::encode_stored).collect::<Result<Vec<_>, _>>()?;
+    let waiting = usize::try_from(next - packed - 1).unwrap_or_default();
+    let whole = (waiting + deltas.len()) / chunks::CHUNK_ROWS;
+    let chunked = (whole * chunks::CHUNK_ROWS).saturating_sub(waiting);
+    if whole > 0 {
+        let rows = sqlx::query!("SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, packed)
+            .fetch_all(&mut *tx)
+            .await?;
+        let items: Vec<(i64, &[u8])> = rows
+            .iter()
+            .map(|row| (row.format, row.data.as_slice()))
+            .chain(encoded[..chunked].iter().map(|data| (silt_log::DELTA_FORMAT, data.as_slice())))
+            .collect();
+        let whole = items.as_chunks::<{ chunks::CHUNK_ROWS }>().0;
+        for (first, data) in (packed + 1..).step_by(chunks::CHUNK_ROWS).zip(chunks::compress_each(whole)?) {
+            let last = first + chunks::CHUNK_ROWS as i64 - 1;
+            sqlx::query!(
+                "INSERT INTO delta_chunks (family_id, first_seq, last_seq, codec, data) VALUES (?, ?, ?, ?, ?)",
+                family,
+                first,
+                last,
+                chunks::ZSTD,
+                data
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query!("UPDATE deltas SET data = x'' WHERE family_id = ? AND seq > ?", family, packed).execute(&mut *tx).await?;
     }
-    pack_deltas_in(tx, &family).await
+    let rows: Vec<(i64, &Delta, &[u8])> = (next..)
+        .zip(deltas.iter().zip(&encoded))
+        .enumerate()
+        .map(|(index, (seq, (delta, data)))| (seq, delta, if index < chunked { &[][..] } else { data.as_slice() }))
+        .collect();
+    for batch in rows.chunks(ROWS_PER_INSERT) {
+        // Built at runtime: sqlx's macros take a fixed number of values.
+        let mut insert = sqlx::QueryBuilder::new("INSERT INTO deltas (family_id, seq, actor, lamport, len, format, data) ");
+        insert.push_values(batch, |mut values, (seq, delta, data)| {
+            values
+                .push_bind(family.as_slice())
+                .push_bind(*seq)
+                .push_bind(id_bytes(delta.span.actor.0))
+                .push_bind(lamport_i64(delta.span.start))
+                .push_bind(i64::try_from(delta.span.len).unwrap_or(i64::MAX))
+                .push_bind(silt_log::DELTA_FORMAT)
+                .push_bind(*data);
+        });
+        insert.build().execute(&mut *tx).await?;
+    }
+    Ok(())
 }
 
-/// Packs the family's rows not in a chunk yet, a chunk's worth at a time.
-async fn pack_deltas_in(tx: &mut sqlx::SqliteConnection, family: &[u8]) -> Result<(), StoreError> {
-    let packed = sqlx::query_scalar!(
+/// The position of the family's last delta in a chunk, or -1.
+async fn packed_in(tx: &mut sqlx::SqliteConnection, family: &[u8]) -> Result<i64, StoreError> {
+    Ok(sqlx::query_scalar!(
         r#"SELECT COALESCE(MAX(last_seq), -1) AS "packed!: i64" FROM delta_chunks WHERE family_id = ?"#,
         family
     )
     .fetch_one(&mut *tx)
-    .await?;
-    let unpacked =
-        sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM deltas WHERE family_id = ? AND seq > ?"#, family, packed)
-            .fetch_one(&mut *tx)
-            .await?;
-    if usize::try_from(unpacked).unwrap_or_default() < chunks::CHUNK_ROWS {
+    .await?)
+}
+
+async fn insert_search_rows_in(tx: &mut sqlx::SqliteConnection, rows: &[SearchRow]) -> Result<(), StoreError> {
+    if rows.is_empty() {
         return Ok(());
     }
-    let rows = sqlx::query!("SELECT seq, format, data FROM deltas WHERE family_id = ? AND seq > ? ORDER BY seq", family, packed)
-        .fetch_all(&mut *tx)
+    // Every search row has its `search_threads` row, so the next free row id
+    // is found by that table's key rather than by scanning the index.
+    let first = sqlx::query_scalar!(r#"SELECT COALESCE(MAX(row_id), 0) + 1 AS "first!: i64" FROM search_threads"#)
+        .fetch_one(&mut *tx)
         .await?;
-    for chunk in rows.as_chunks::<{ chunks::CHUNK_ROWS }>().0 {
-        let (first, last) = (chunk[0].seq, chunk[chunks::CHUNK_ROWS - 1].seq);
-        let data = chunks::pack(chunk.iter().map(|row| (row.format, row.data.as_slice())));
-        sqlx::query!(
-            "INSERT INTO delta_chunks (family_id, first_seq, last_seq, data) VALUES (?, ?, ?, ?)",
-            family,
-            first,
-            last,
-            data
-        )
-        .execute(&mut *tx)
-        .await?;
+    let rows: Vec<(i64, &SearchRow)> = (first..).zip(rows).collect();
+    for batch in rows.chunks(ROWS_PER_INSERT) {
+        let mut insert = sqlx::QueryBuilder::new("INSERT INTO search (rowid, body, thread_id, actor, lamport, kind) ");
+        insert.push_values(batch, |mut values, (row_id, row)| {
+            values
+                .push_bind(*row_id)
+                .push_bind(row.body.as_str())
+                .push_bind(id_bytes(row.thread.0))
+                .push_bind(id_bytes(row.delta.actor.0))
+                .push_bind(lamport_i64(row.delta.lamport))
+                .push_bind(row.kind.as_str());
+        });
+        insert.build().execute(&mut *tx).await?;
+        let mut threads = sqlx::QueryBuilder::new("INSERT INTO search_threads (row_id, thread_id) ");
+        threads.push_values(batch, |mut values, (row_id, row)| {
+            values.push_bind(*row_id).push_bind(id_bytes(row.thread.0));
+        });
+        threads.build().execute(&mut *tx).await?;
     }
     Ok(())
 }

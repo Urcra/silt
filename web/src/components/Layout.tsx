@@ -247,7 +247,7 @@ function TabBar() {
 }
 
 /**
- * The shell every screen sits in (ADR 0035): the top bar, the project
+ * The shell every screen sits in (ADR 0036): the top bar, the project
  * sidebar, the view, and the status bar; on a phone, the sidebar is a
  * drawer and a tab bar takes the status bar's place.
  */

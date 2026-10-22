@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { cx } from '../ui'
 
 /**
- * A view inside the shell (ADR 0035): its header with title, a mono line of
+ * A view inside the shell (ADR 0036): its header with title, a mono line of
  * what it is and its actions, its body, and an inspector on the right
  * where it has one. `width` keeps forms and reading to a column.
  */

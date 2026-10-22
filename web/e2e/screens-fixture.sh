@@ -1,5 +1,5 @@
 #!/bin/sh
-# The screen references' world (ADR 0035): live-fixture.sh's server, Alice,
+# The screen references' world (ADR 0036): live-fixture.sh's server, Alice,
 # Bob and Alice's laptop, plus a fork of Alice's thread with a merge request
 # from it. Prints live-fixture.sh's JSON line with the fork added.
 set -eu

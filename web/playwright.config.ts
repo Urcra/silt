@@ -7,6 +7,6 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: { browserName: 'chromium', trace: 'retain-on-failure' },
-  // One reference per screen and variant, whatever machine takes it (ADR 0035).
+  // One reference per screen and variant, whatever machine takes it (ADR 0036).
   snapshotPathTemplate: '{testDir}/{testFileName}-snapshots/{arg}{ext}',
 })

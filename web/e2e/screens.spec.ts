@@ -1,4 +1,4 @@
-// The screen references (ADR 0035): every screen, light and dark, at desktop
+// The screen references (ADR 0036): every screen, light and dark, at desktop
 // and phone width, compared with the screenshot kept beside this file. A
 // deliberate change rewrites them with `pnpm e2e:update`, and review then
 // compares the new one with its board.

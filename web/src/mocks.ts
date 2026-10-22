@@ -1,4 +1,4 @@
-// What the boards draw that the daemon can't tell yet (ADR 0035). Each mock
+// What the boards draw that the daemon can't tell yet (ADR 0036). Each mock
 // is listed here and in docs/ui-mocks.md, with what replacing it needs; a
 // build with VITE_SILT_MOCKS=off leaves every mocked part out.
 

@@ -157,7 +157,7 @@ function forksUnderSources(threads: ThreadSummary[]): ThreadSummary[] {
 }
 
 /**
- * The workspace home (ADR 0035, the Threads board): what needs the person,
+ * The workspace home (ADR 0036, the Threads board): what needs the person,
  * then every thread by project.
  */
 export function ThreadList() {

@@ -1,21 +1,21 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) AS \"count!: i64\" FROM deltas WHERE family_id = ? AND seq > ?",
+  "query": "SELECT COALESCE(MAX(row_id), 0) + 1 AS \"first!: i64\" FROM search_threads",
   "describe": {
     "columns": [
       {
-        "name": "count!: i64",
+        "name": "first!: i64",
         "ordinal": 0,
         "type_info": "Integer",
         "origin": "Expression"
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 0
     },
     "nullable": [
       false
     ]
   },
-  "hash": "2a12b0a65ad048516a083787a6d8d1ab10642acaceb534cc1c1fdfd86c33f3cc"
+  "hash": "8dc753b4ccf06dd9c20f7025527155ba79a9cb7c30026831b6cb825777549201"
 }
