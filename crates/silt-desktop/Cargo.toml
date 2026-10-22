@@ -1,0 +1,32 @@
+# Its own workspace, so building the rest of Silt never needs WebKitGTK
+# (ADR 0040).
+[workspace]
+
+[package]
+name = "silt-desktop"
+description = "Silt's desktop app: the web UI in a window, next to the local daemon"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "silt-desktop"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+exn = "0.3.1"
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-single-instance = "2.5.4"
+thiserror = "2.0.21"

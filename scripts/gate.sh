@@ -15,6 +15,19 @@ cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
+# The desktop app is its own workspace, as it needs WebKitGTK (ADR 0040).
+if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+    (
+        cd crates/silt-desktop
+        cargo fmt -- --check
+        cargo build
+        cargo clippy --all-targets -- -D warnings
+        cargo test
+    )
+else
+    echo "gate: skipping crates/silt-desktop, as WebKitGTK 4.1 isn't installed (scripts/cloud-setup.sh installs it)" >&2
+fi
+
 # Performance budgets (ADR 0034), timed on an optimized build.
 cargo build --profile perf -p silt-cli -p silt-bench
 target/perf/silt-bench check
