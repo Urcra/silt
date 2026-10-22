@@ -6,6 +6,7 @@ mod checkout;
 pub mod conventions;
 mod filters;
 mod remote;
+mod untracked;
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -58,6 +59,16 @@ pub struct Repo {
     /// Whether filtering needs the git CLI, as of when `.git/info/attributes`
     /// was last modified then.
     needs_git_cli_filters: Cell<Option<(bool, Option<std::time::SystemTime>)>>,
+    /// What each directory of the worktree held when it was last walked,
+    /// once [`Repo::keep_walks`] asks for it.
+    untracked: std::cell::RefCell<Option<untracked::Cache>>,
+}
+
+/// Now, in nanoseconds since the epoch, as file modification times are.
+fn now_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_nanos()).unwrap_or(i64::MAX))
 }
 
 impl Repo {
@@ -67,7 +78,7 @@ impl Repo {
         let repo = gix::discover(path).map_err(|_| not_a_repo())?;
         let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
         let root = root.canonicalize().unwrap_or(root);
-        Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None) })
+        Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None), untracked: std::cell::RefCell::default() })
     }
 
     pub fn root(&self) -> &Path {
@@ -197,16 +208,25 @@ impl Repo {
         Ok(self.worktree_listing_under(dir)?.into_iter().map(|file| file.path).collect())
     }
 
+    /// Walks the worktree in this process from now on, keeping what each
+    /// directory held so a later walk reads only those that changed, for a
+    /// process that lists it again and again, as the daemon does.
+    pub fn keep_walks(&self) {
+        self.untracked.borrow_mut().get_or_insert_with(untracked::Cache::default);
+    }
+
     /// `worktree_files_under`, with what each file's `stat` found.
     pub fn worktree_listing_under(&self, dir: &str) -> Result<Vec<ListedFile>, GitError> {
-        // Finding untracked files takes git a walk of the worktree; the
-        // tracked ones are read from the index and looked at meanwhile.
+        // Only a whole worktree's walk is kept: below a directory, a rule
+        // from one above it may have changed unseen. A walk not kept is
+        // git's, which takes about half as long as one in process, cold.
+        let kept = dir.is_empty() && self.untracked.borrow().is_some();
         let mut args = vec!["ls-files", "-z", "--others", "--exclude-standard"];
         let pathspec = format!(":(literal){dir}");
         if !dir.is_empty() {
             args.extend(["--", &pathspec]);
         }
-        let untracked = git_command(&self.root, &args, &[]).stdin(Stdio::null()).spawn()?;
+        let by_git = if kept { None } else { Some(git_command(&self.root, &args, &[]).stdin(Stdio::null()).spawn()?) };
         let index = self.repo.index_or_empty().map_err(GitError::gix)?;
         let prefix = format!("{dir}/");
         let mut paths: Vec<String> = index
@@ -217,10 +237,24 @@ impl Repo {
             .filter_map(utf8_path)
             .collect();
         paths.dedup();
-        let mut found = metadata_of(&self.root, &paths);
-        let untracked = finish(untracked, &args)?;
-        let others: Vec<String> =
-            untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()).filter_map(utf8_path).collect();
+        // The tracked files are looked at while the worktree is walked for
+        // the others.
+        let (mut found, others) = match by_git {
+            Some(untracked) => {
+                let found = metadata_of(&self.root, &paths);
+                let untracked = finish(untracked, &args)?;
+                (found, Ok(untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()).filter_map(utf8_path).collect()))
+            }
+            None => std::thread::scope(|scope| {
+                let root = self.root.as_path();
+                let tracked = scope.spawn(|| metadata_of(root, &paths));
+                let walk = untracked::Walk { repo: &self.repo, root: &self.root, index: &index };
+                let mut cache = self.untracked.borrow_mut();
+                let others = walk.untracked(dir, cache.as_mut(), now_ns());
+                (tracked.join().expect("looking at files doesn't panic"), others)
+            }),
+        };
+        let others: Vec<String> = others?;
         found.extend(metadata_of(&self.root, &others));
         paths.extend(others);
         let mut listed: Vec<ListedFile> = paths

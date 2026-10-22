@@ -794,6 +794,10 @@ impl Core {
             .map(|thread| thread.family)
             .ok_or_else(|| CoreError::Invalid("checkout of an unknown thread".into()))?;
         let repo = Repo::discover(&record.path)?;
+        // A daemon compares its checkouts again and again.
+        if self.resident {
+            repo.keep_walks();
+        }
         let bridge = Bridge::new(record.actor, record.thread, entries);
         self.checkouts.insert(record.id, Checkout { record, family, repo, bridge, _watched: None });
         Ok(())

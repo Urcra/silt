@@ -195,3 +195,102 @@ fn checks_more_ignored_paths_than_a_pipe_holds() {
     let ignored = receiver.recv_timeout(std::time::Duration::from_secs(30)).expect("git answered");
     assert_eq!(ignored.expect("checked"), 20_000);
 }
+
+/// What git lists of the worktree: its tracked files and the untracked ones
+/// it doesn't ignore, as a listing of the worktree should find them.
+fn listed_by_git(root: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .output()
+        .expect("git runs");
+    let mut paths: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Makes every directory and ignore file look changed a while ago, so a
+/// walk keeps what it read of them.
+fn age(root: &Path) {
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(30);
+    let mut pending = vec![root.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("reads") {
+            let path = entry.expect("entry").path();
+            if path.file_name() == Some(".git".as_ref()) {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name() == Some(".gitignore".as_ref()) {
+                fs::File::options().write(true).open(&path).expect("opens").set_modified(then).expect("ages");
+            }
+        }
+        fs::File::open(&dir).expect("opens").set_modified(then).expect("ages");
+    }
+}
+
+#[test]
+fn the_worktree_listing_finds_the_untracked_files_git_does_as_they_change() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        fs::write(path, text).expect("write");
+    };
+    write("notes.txt", "untracked\n");
+    write("sub/b.txt", "untracked\n");
+    write("sub/a.log", "ignored\n");
+    write("sub/keep.log", "kept by a negation\n");
+    write("sub/.gitignore", "skipped/\n");
+    write("sub/skipped/c.txt", "in an ignored directory\n");
+    write("only-ignored/d.log", "all its files are ignored\n");
+    write("target/debug/out", "ignored directory\n");
+    write("nested/inner/f", "another repository\n");
+    git(&root.join("nested"), &["init", "-q"]);
+    fs::write(root.join(".gitignore"), "target/\n*.log\n!keep.log\n").expect("write");
+    let walking = Repo::discover(root).expect("discovers");
+    walking.keep_walks();
+    let asking_git = Repo::discover(root).expect("discovers");
+    let listed = || walking.worktree_files_under("").expect("lists");
+    let check = |when: &str| {
+        assert_eq!(listed(), listed_by_git(root), "{when}, walked");
+        assert_eq!(asking_git.worktree_files_under("").expect("lists"), listed_by_git(root), "{when}, by git");
+    };
+
+    check("at first");
+    age(root);
+    check("walked again with what it kept");
+    check("and again");
+
+    write("sub/deeper/new.rs", "a new file in a new directory\n");
+    check("a file added");
+    age(root);
+    check("kept after adding");
+
+    fs::write(root.join("sub/.gitignore"), "skipped/\nb.txt\n").expect("write");
+    check("a rule added below");
+    age(root);
+    fs::write(root.join(".gitignore"), "target/\n*.log\n!keep.log\n*.rs\n").expect("write");
+    check("a rule added above");
+    age(root);
+
+    fs::write(root.join(".git/info/exclude"), "notes.txt\n").expect("write");
+    check("the repository's own excludes");
+    age(root);
+
+    git(root, &["add", "sub/keep.log"]);
+    check("a file added to the index");
+    fs::remove_file(root.join("sub/keep.log")).expect("removes");
+    git(root, &["rm", "-q", "--cached", "sub/keep.log"]);
+    check("a file removed");
+    assert!(listed().contains(&"nested/".to_owned()), "another repository is listed whole");
+}
