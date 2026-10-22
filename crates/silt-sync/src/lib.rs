@@ -4,5 +4,5 @@
 mod client;
 mod room;
 
-pub use client::{ClientSync, Effect, Outcome, PUSH_BATCH, Pull, Push};
+pub use client::{ClientSync, Effect, Outcome, PUSH_BATCH, PUSH_BYTES, Pull, Push};
 pub use room::{Prepared, PullError, PushError, PushOutcome, Room};

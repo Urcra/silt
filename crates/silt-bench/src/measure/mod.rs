@@ -1,6 +1,7 @@
 mod daemon;
 mod hook;
 mod rescan;
+mod sync;
 
 use std::path::Path;
 
@@ -9,7 +10,7 @@ use exn::{Exn, ResultExt};
 use crate::BenchError;
 use crate::budgets::{
     CHECKOUT_RESCAN, DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, Measured, RECORD_HOOK, RECORD_HOOK_DAEMONLESS, RECORD_IMPORT,
-    STORE_SIZE,
+    STORE_SIZE, SYNC_PULL, SYNC_PUSH,
 };
 use crate::fixtures::Fixtures;
 
@@ -19,16 +20,18 @@ pub enum Scenario {
     Hook,
     Rescan,
     Daemon,
+    Sync,
 }
 
 impl Scenario {
-    pub const ALL: [Self; 3] = [Self::Hook, Self::Rescan, Self::Daemon];
+    pub const ALL: [Self; 4] = [Self::Hook, Self::Rescan, Self::Daemon, Self::Sync];
 
     pub fn budgets(self) -> &'static [&'static str] {
         match self {
             Self::Hook => &[RECORD_HOOK, RECORD_HOOK_DAEMONLESS],
             Self::Rescan => &[CHECKOUT_RESCAN],
             Self::Daemon => &[RECORD_IMPORT, STORE_SIZE, DAEMON_STARTUP, DAEMON_READY, DAEMON_IDLE],
+            Self::Sync => &[SYNC_PUSH, SYNC_PULL],
         }
     }
 
@@ -50,9 +53,10 @@ impl Scenario {
             Self::Hook => hook::measure(silt, root.path()).await,
             Self::Rescan => {
                 let repo = fixtures.big_repo().or_raise(|| BenchError("cannot write the 50k-file repository".into()))?;
-                Ok(vec![(CHECKOUT_RESCAN, rescan::measure(root.path(), &repo).await?)])
+                rescan::measure(root.path(), &repo).await.map(|time| vec![(CHECKOUT_RESCAN, time)])
             }
             Self::Daemon => daemon::measure(silt, root.path(), fixtures, wanted).await,
+            Self::Sync => sync::measure(silt, root.path(), fixtures).await,
         };
         if keep {
             eprintln!("silt-bench: kept {self:?} in {}", root.keep().display());

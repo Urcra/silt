@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(seq), 0) FROM deltas WHERE family_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "COALESCE(MAX(seq), 0)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c3c97de6659843125b356e352671de1f2eecd9e27983fd9d6113f8f32822cad6"
+}

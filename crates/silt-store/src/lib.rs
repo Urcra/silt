@@ -162,6 +162,39 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// Pages a commit in a long-lived process may leave in the WAL before it
+/// copies them into the database itself; SQLite's default is 1000. Below
+/// that, [`checkpoint_in_background`] copies them away from commits, so
+/// writing a batch costs one write of its pages rather than two (ADR 0034).
+pub const AUTOCHECKPOINT_PAGES: &str = "16384";
+/// How often the WAL is looked at while commits come, and once it's copied.
+const CHECKPOINT_BUSY: std::time::Duration = std::time::Duration::from_millis(500);
+const CHECKPOINT_IDLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Copies what commits leave in the WAL into the database file once they
+/// pause, until the pool closes. Copying while a batch is still being
+/// written would compete with it for the disk.
+pub fn checkpoint_in_background(pool: SqlitePool) {
+    tokio::spawn(async move {
+        let Ok(connection) = pool.acquire().await else {
+            return;
+        };
+        let mut connection = connection.detach();
+        let (mut seen, mut copied) = (None, true);
+        while !pool.is_closed() {
+            // Pragmas, which sqlx's macros can't describe.
+            if let Ok(version) = sqlx::query_scalar::<_, i64>("PRAGMA data_version").fetch_one(&mut connection).await {
+                if seen.replace(version) != Some(version) {
+                    copied = false;
+                } else if !copied {
+                    copied = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)").execute(&mut connection).await.is_ok();
+                }
+            }
+            tokio::time::sleep(if copied { CHECKPOINT_IDLE } else { CHECKPOINT_BUSY }).await;
+        }
+    });
+}
+
 /// The local database and blob store.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -189,8 +222,19 @@ impl Store {
 
     /// Opens (creating if needed) the store in `dir` and migrates it.
     pub async fn open(dir: &Path) -> Result<Self, StoreError> {
+        Self::open_with(dir, false).await
+    }
+
+    /// [`Self::open`] for a process that keeps the store open, such as the
+    /// daemon: it copies the WAL into the database in the background rather
+    /// than in commits. [`Self::checkpoint`] before it exits.
+    pub async fn open_long_lived(dir: &Path) -> Result<Self, StoreError> {
+        Self::open_with(dir, true).await
+    }
+
+    async fn open_with(dir: &Path, long_lived: bool) -> Result<Self, StoreError> {
         tokio::fs::create_dir_all(dir).await?;
-        let options = SqliteConnectOptions::from_str("sqlite://")?
+        let mut options = SqliteConnectOptions::from_str("sqlite://")?
             .filename(dir.join("silt.sqlite"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
@@ -200,10 +244,24 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(std::time::Duration::from_secs(10))
             .foreign_keys(true);
+        if long_lived {
+            options = options.pragma("wal_autocheckpoint", AUTOCHECKPOINT_PAGES);
+        }
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(options.clone()).await?;
         MIGRATOR.run(&pool).await?;
+        if long_lived {
+            checkpoint_in_background(pool.clone());
+        }
         let watch = Watch { connection: sqlx::ConnectOptions::connect(&options).await?, seen: None };
         Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")), watch: Arc::new(tokio::sync::Mutex::new(watch)) })
+    }
+
+    /// Copies the whole WAL into the database and empties it, so the store
+    /// is left as small as it is and quick for the next process to read.
+    pub async fn checkpoint(&self) -> Result<(), StoreError> {
+        // A pragma, which sqlx's macros can't describe.
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&self.pool).await?;
+        Ok(())
     }
 
     /// Whether anyone committed to the database since the last call, this

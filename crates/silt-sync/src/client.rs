@@ -2,7 +2,10 @@ use silt_log::Delta;
 use silt_types::DeltaId;
 
 /// Most deltas sent in one push.
-pub const PUSH_BATCH: u64 = 500;
+pub const PUSH_BATCH: u64 = 5000;
+/// Most bytes of stored deltas sent in one push, past its first delta:
+/// well under what a server takes in one body once it is JSON.
+pub const PUSH_BYTES: usize = 16 << 20;
 
 /// Push local deltas `from..to` (positions in the local log).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,12 +110,22 @@ impl ClientSync {
         changed
     }
 
-    /// The next push, given how many deltas the local log has.
-    pub fn next_push(&mut self, local_len: u64) -> Option<Push> {
+    /// The next push, given how many deltas the local log has and the size
+    /// of the delta at each position.
+    pub fn next_push(&mut self, local_len: u64, mut size_of: impl FnMut(u64) -> usize) -> Option<Push> {
         if self.push_in_flight.is_some() || self.diverged.is_some() || self.pushed >= local_len {
             return None;
         }
-        let push = Push { from: self.pushed, to: local_len.min(self.pushed + PUSH_BATCH) };
+        let mut bytes = size_of(self.pushed);
+        let mut to = self.pushed + 1;
+        while to < local_len.min(self.pushed + PUSH_BATCH) {
+            bytes += size_of(to);
+            if bytes > PUSH_BYTES {
+                break;
+            }
+            to += 1;
+        }
+        let push = Push { from: self.pushed, to };
         self.push_in_flight = Some(push);
         Some(push)
     }
@@ -190,6 +203,14 @@ impl ClientSync {
         }
     }
 
+    /// Deltas through the server `seq` `seq`, whose delta was `last`, were
+    /// pulled and applied outside this state machine; a pull in flight from
+    /// before is then ignored when it answers.
+    pub fn took_in(&mut self, seq: u64, last: DeltaId) {
+        self.pulled = seq;
+        self.last_pulled = Some(last);
+    }
+
     /// Another process sharing this replica's store synced it as far as
     /// `stored` (ADR 0018). It is taken when nothing here is in flight, as an
     /// answer on its way would move the same cursors.
@@ -246,24 +267,51 @@ mod tests {
     #[test]
     fn a_conflict_stops_pushing_but_not_pulling() {
         let mut sync = ClientSync::default();
-        assert_eq!(sync.next_push(3), Some(Push { from: 0, to: 3 }));
+        assert_eq!(sync.next_push(3, |_| 1), Some(Push { from: 0, to: 3 }));
         let id = DeltaId::new(ActorId(1), Lamport(0));
         assert_eq!(sync.on_push(Some(7), Outcome::Conflict(id)), vec![Effect::Diverged(id)]);
         assert_eq!(sync.diverged(), Some(id));
-        assert_eq!(sync.next_push(4), None);
+        assert_eq!(sync.next_push(4, |_| 1), None);
         assert!(sync.next_pull().is_some());
+    }
+
+    #[test]
+    fn a_push_stops_at_its_count_or_its_bytes_but_takes_at_least_one_delta() {
+        let mut sync = ClientSync::default();
+        assert_eq!(sync.next_push(PUSH_BATCH * 2, |_| 1), Some(Push { from: 0, to: PUSH_BATCH }));
+
+        let mut sync = ClientSync::default();
+        let quarter = PUSH_BYTES / 4;
+        assert_eq!(sync.next_push(10, |_| quarter), Some(Push { from: 0, to: 4 }));
+
+        let mut sync = ClientSync::default();
+        assert_eq!(
+            sync.next_push(10, |_| PUSH_BYTES * 2),
+            Some(Push { from: 0, to: 1 }),
+            "a delta bigger than a push goes alone"
+        );
+    }
+
+    #[test]
+    fn a_pull_in_flight_is_ignored_once_its_deltas_were_taken_in_otherwise() {
+        let mut sync = ClientSync::new(Some(1), 0, 0, None, 0);
+        assert_eq!(sync.next_pull(), Some(Pull { after: 0, last: None }));
+        let last = DeltaId::new(ActorId(1), Lamport(9));
+        sync.took_in(40, last);
+        assert_eq!(sync.on_pull(Some(1), Outcome::Pulled(Vec::new())), Vec::new());
+        assert_eq!(sync.next_pull(), Some(Pull { after: 40, last: Some(last) }));
     }
 
     #[test]
     fn a_restarted_server_gets_pushes_again_after_a_conflict() {
         let mut sync = ClientSync::default();
-        sync.next_push(3);
+        sync.next_push(3, |_| 1);
         let id = DeltaId::new(ActorId(1), Lamport(0));
         sync.on_push(Some(7), Outcome::Conflict(id));
         sync.next_pull();
         sync.on_pull(Some(8), Outcome::Pulled(Vec::new()));
         assert_eq!(sync.diverged(), None, "the new server may not have the colliding delta");
-        assert_eq!(sync.next_push(3), Some(Push { from: 0, to: 3 }));
+        assert_eq!(sync.next_push(3, |_| 1), Some(Push { from: 0, to: 3 }));
     }
 
     #[test]
@@ -275,7 +323,7 @@ mod tests {
         assert_eq!((sync.pushed(), sync.pulled(), sync.last_pulled()), (6, 9, last));
 
         let mut busy = ClientSync::new(Some(1), 2, 3, None, 0);
-        busy.next_push(4);
+        busy.next_push(4, |_| 1);
         busy.next_pull();
         busy.caught_up(&stored);
         assert_eq!((busy.pushed(), busy.pulled()), (2, 3));

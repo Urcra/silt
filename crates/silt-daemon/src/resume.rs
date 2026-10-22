@@ -177,22 +177,43 @@ impl Core {
         (!entries.is_empty()).then(|| render_transcript(&entries, &thread.to_string(), "an earlier agent", PRIMED_BUDGET))
     }
 
-    /// Pulls everything the server has for the family, so a resume never
-    /// starts from a partial thread.
+    /// Pulls everything the server has for the family that this machine
+    /// hasn't pulled yet, so a resume never starts from a partial thread.
+    /// Each page applied moves the family's pull cursor, so the background
+    /// sync doesn't fetch it again.
     pub(crate) async fn catch_up(&mut self, family: FamilyId) -> Result<(), CoreError> {
         let Some(remote) = self.remote_of(family).cloned() else {
             return Ok(());
         };
-        let mut after = 0;
-        let mut last = None;
-        loop {
-            let deltas = pull_page(&remote, family, after, last).await?;
-            let Some((seq, delta)) = deltas.last() else {
-                return Ok(());
+        let (pulled, last_pulled) = self.syncs.get(&family).map_or((0, None), |sync| (sync.pulled(), sync.last_pulled()));
+        let mut page = match pull_page(&remote, family, pulled, last_pulled).await {
+            // A restarted server may no longer have the history the cursor
+            // points into.
+            Err(_) if pulled > 0 => pull_page(&remote, family, 0, None).await?,
+            page => page?,
+        };
+        while let Some((after, delta)) = page.last() {
+            let (remote, after, last) = (remote.clone(), *after, Some(delta.span.first()));
+            let next = tokio::spawn(async move { pull_page(&remote, family, after, last).await });
+            let positions: Vec<(u64, DeltaId)> = page.iter().map(|(seq, delta)| (*seq, delta.span.first())).collect();
+            let stopped = self.apply_pulled(family, page.into_iter().map(|(_, delta)| delta).collect()).await?;
+            // What comes after a delta that can't apply yet is left to the
+            // background sync, which pulls it again once it can.
+            let through = match stopped {
+                Some(index) => index.checked_sub(1).map(|previous| positions[previous]),
+                None => Some((after, last.expect("a delta was pulled"))),
             };
-            (after, last) = (*seq, Some(delta.span.first()));
-            self.apply_pulled(family, deltas.into_iter().map(|(_, delta)| delta).collect()).await?;
+            if let Some((seq, id)) = through {
+                self.syncs.entry(family).or_default().took_in(seq, id);
+            }
+            if stopped.is_some() {
+                next.abort();
+                break;
+            }
+            page = next.await??;
         }
+        self.save_sync(family).await;
+        Ok(())
     }
 
     /// Everything the server has for the family, with its sequence numbers,

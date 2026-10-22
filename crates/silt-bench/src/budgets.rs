@@ -46,6 +46,8 @@ pub const DAEMON_STARTUP: &str = "daemon.startup";
 pub const DAEMON_READY: &str = "daemon.ready";
 pub const CHECKOUT_RESCAN: &str = "checkout.rescan";
 pub const DAEMON_IDLE: &str = "daemon.idle";
+pub const SYNC_PUSH: &str = "sync.push";
+pub const SYNC_PULL: &str = "sync.pull";
 
 pub const BUDGETS: &[Budget] = &[
     Budget {
@@ -103,10 +105,16 @@ pub const BUDGETS: &[Budget] = &[
         status: Status::Elsewhere("web/e2e, from M18-06"),
     },
     Budget {
-        name: "sync.family",
-        measures: "pushing and pulling the ten-fork family",
-        limit: Limit::Described("set by M18-07"),
-        status: Status::Elsewhere("silt-bench, from M18-07"),
+        name: SYNC_PUSH,
+        measures: "`silt sync --once` pushing a family holding 100 MB of transcript to a server, at 100 MB/s",
+        limit: Limit::Time(Duration::from_secs(1)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: SYNC_PULL,
+        measures: "`silt resume` pulling that family onto another machine and restoring its session, at 100 MB/s",
+        limit: Limit::Time(Duration::from_secs(1)),
+        status: Status::Enforced,
     },
 ];
 

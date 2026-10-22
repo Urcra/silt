@@ -2,13 +2,13 @@
 //! queries (ADR 0011). It has no git blobs, so it can't project file text;
 //! paths come from tree operations alone, later stamps winning.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use silt_agents::Transcripts;
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{QueryBuilder, Sqlite, Transaction};
 
 /// One inode's latest placement.
 #[derive(Debug, Clone)]
@@ -185,58 +185,79 @@ impl Index {
     }
 }
 
-pub(crate) async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[Row]) -> Result<(), sqlx::Error> {
+/// Rows written in one statement, well under SQLite's bound on variables.
+const ROWS_PER_INSERT: usize = 500;
+
+/// What writing a batch of rows in order leaves: its texts, the latest time
+/// of each path touched, and one activity row for each thread.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Folded<'a> {
+    texts: Vec<(ThreadId, &'a str, &'a str, i64)>,
+    touches: BTreeMap<(ThreadId, &'a str), i64>,
+    activity: BTreeMap<ThreadId, Activity<'a>>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Activity<'a> {
+    last_ms: i64,
+    branch: Option<&'a str>,
+    merged: bool,
+}
+
+fn fold(rows: &[Row]) -> Folded<'_> {
+    let mut folded = Folded::default();
     for row in rows {
         match row {
-            Row::Text { thread, kind, body, time_ms } => {
-                let thread = crate::id_bytes(thread.0);
-                sqlx::query!(
-                    "INSERT INTO search (body, thread_id, kind, time_ms) VALUES (?, ?, ?, ?)",
-                    body,
-                    thread,
-                    kind,
-                    time_ms
-                )
-                .execute(&mut **tx)
-                .await?;
-            }
+            Row::Text { thread, kind, body, time_ms } => folded.texts.push((*thread, kind, body, *time_ms)),
             Row::Touch { thread, path, time_ms } => {
-                let thread = crate::id_bytes(thread.0);
-                sqlx::query!(
-                    "INSERT INTO touches (thread_id, path, last_ms) VALUES (?, ?, ?)
-                     ON CONFLICT (thread_id, path) DO UPDATE SET last_ms = MAX(last_ms, excluded.last_ms)",
-                    thread,
-                    path,
-                    time_ms,
-                )
-                .execute(&mut **tx)
-                .await?;
+                let last = folded.touches.entry((*thread, path)).or_insert(*time_ms);
+                *last = (*last).max(*time_ms);
             }
             Row::Activity { thread, time_ms, branch } => {
-                let thread = crate::id_bytes(thread.0);
-                sqlx::query!(
-                    "INSERT INTO thread_activity (thread_id, branch, last_ms) VALUES (?, ?, ?)
-                     ON CONFLICT (thread_id) DO UPDATE SET
-                         last_ms = MAX(last_ms, excluded.last_ms),
-                         branch = COALESCE(excluded.branch, thread_activity.branch)",
-                    thread,
-                    branch,
-                    time_ms,
-                )
-                .execute(&mut **tx)
-                .await?;
+                let activity = folded.activity.entry(*thread).or_default();
+                activity.last_ms = activity.last_ms.max(*time_ms);
+                activity.branch = branch.as_deref().or(activity.branch);
             }
-            Row::Merged { thread } => {
-                let thread = crate::id_bytes(thread.0);
-                sqlx::query!(
-                    "INSERT INTO thread_activity (thread_id, merged) VALUES (?, 1)
-                     ON CONFLICT (thread_id) DO UPDATE SET merged = 1",
-                    thread,
-                )
-                .execute(&mut **tx)
-                .await?;
-            }
+            Row::Merged { thread } => folded.activity.entry(*thread).or_default().merged = true,
         }
+    }
+    folded
+}
+
+pub(crate) async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[Row]) -> Result<(), sqlx::Error> {
+    let folded = fold(rows);
+    for texts in folded.texts.chunks(ROWS_PER_INSERT) {
+        let mut insert = QueryBuilder::<Sqlite>::new("INSERT INTO search (body, thread_id, kind, time_ms) ");
+        insert.push_values(texts, |mut row, (thread, kind, body, time_ms)| {
+            row.push_bind(*body).push_bind(crate::id_bytes(thread.0)).push_bind(*kind).push_bind(*time_ms);
+        });
+        insert.build().execute(&mut **tx).await?;
+    }
+    let touches: Vec<_> = folded.touches.into_iter().collect();
+    for touches in touches.chunks(ROWS_PER_INSERT) {
+        let mut insert = QueryBuilder::<Sqlite>::new("INSERT INTO touches (thread_id, path, last_ms) ");
+        insert.push_values(touches, |mut row, ((thread, path), last_ms)| {
+            row.push_bind(crate::id_bytes(thread.0)).push_bind(*path).push_bind(*last_ms);
+        });
+        insert.push(" ON CONFLICT (thread_id, path) DO UPDATE SET last_ms = MAX(last_ms, excluded.last_ms)");
+        insert.build().execute(&mut **tx).await?;
+    }
+    let activity: Vec<_> = folded.activity.into_iter().collect();
+    for activity in activity.chunks(ROWS_PER_INSERT) {
+        let mut insert = QueryBuilder::<Sqlite>::new("INSERT INTO thread_activity (thread_id, branch, last_ms, merged) ");
+        insert.push_values(activity, |mut row, (thread, activity)| {
+            row.push_bind(crate::id_bytes(thread.0))
+                .push_bind(activity.branch)
+                .push_bind(activity.last_ms)
+                .push_bind(activity.merged);
+        });
+        insert.push(
+            " ON CONFLICT (thread_id) DO UPDATE SET
+                 last_ms = MAX(last_ms, excluded.last_ms),
+                 branch = COALESCE(excluded.branch, thread_activity.branch),
+                 merged = MAX(merged, excluded.merged)",
+        );
+        insert.build().execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -254,6 +275,30 @@ mod tests {
     use silt_log::{Author, Content, Family};
 
     use super::*;
+
+    #[test]
+    fn a_batch_folds_into_what_writing_its_rows_in_order_leaves() {
+        let (one, two) = (ThreadId(1), ThreadId(2));
+        let rows = [
+            Row::Activity { thread: one, time_ms: 5, branch: Some("main".into()) },
+            Row::Text { thread: one, kind: "user".into(), body: "hello".into(), time_ms: 5 },
+            Row::Touch { thread: one, path: "src/lib.rs".into(), time_ms: 7 },
+            Row::Activity { thread: one, time_ms: 9, branch: None },
+            Row::Touch { thread: one, path: "src/lib.rs".into(), time_ms: 6 },
+            Row::Activity { thread: one, time_ms: 3, branch: Some("topic".into()) },
+            Row::Merged { thread: two },
+        ];
+        let folded = fold(&rows);
+        assert_eq!(folded.texts, vec![(one, "user", "hello", 5)]);
+        assert_eq!(folded.touches, BTreeMap::from([((one, "src/lib.rs"), 7)]));
+        assert_eq!(
+            folded.activity,
+            BTreeMap::from([
+                (one, Activity { last_ms: 9, branch: Some("topic"), merged: false }),
+                (two, Activity { last_ms: 0, branch: None, merged: true }),
+            ])
+        );
+    }
 
     #[test]
     fn paths_follow_creates_and_moves() {

@@ -25,8 +25,8 @@ use silt_proto::{
 use silt_store::BlobStore;
 use silt_sync::{PullError, PushError, Room};
 use silt_types::{BlobHash, DeltaId, DeviceId, FamilyId, ThreadId};
-use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::{QueryBuilder, Row, Sqlite, Transaction};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 
@@ -65,7 +65,9 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// Longest a pull waits for new deltas.
 const MAX_WAIT: Duration = Duration::from_secs(30);
-const PULL_LIMIT: usize = 1000;
+/// Most deltas one pull answers with, and most bytes of them past the first.
+const PULL_LIMIT: usize = 5000;
+const PULL_BYTES: usize = 16 << 20;
 const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
 /// Threads written to within this long are `active`.
 const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
@@ -160,10 +162,13 @@ struct Shared {
     generation: u64,
     /// Held only to look rooms up, except by a purge, which holds it
     /// throughout so no room appears meanwhile. Room locks come after it,
-    /// then `purged`, then `index`.
+    /// then `purged`, then `index`, then `indexing`.
     rooms: RwLock<HashMap<FamilyId, SharedRoom>>,
     waiters: Waiters,
     index: Mutex<Index>,
+    /// Held while a push's index rows are written, which happens after the
+    /// push is answered; whoever reads or purges the index takes it first.
+    indexing: Arc<Mutex<()>>,
     /// Each user's latest visibility snapshot, with when it was taken.
     viewers: Mutex<HashMap<UserId, (VisibilityAt, Arc<Viewer>)>>,
     viewer_serial: std::sync::atomic::AtomicU64,
@@ -201,7 +206,7 @@ impl Server {
 
     pub async fn open_with(data_dir: &Path, config: Config) -> Result<Self, OpenError> {
         tokio::fs::create_dir_all(data_dir).await?;
-        let db = open_db(data_dir).await?;
+        let db = open_serving_db(data_dir).await?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let purged = lifecycle::load_purged(&db).await?;
         let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
@@ -245,6 +250,7 @@ impl Server {
                 ),
                 waiters: Waiters::default(),
                 index: Mutex::new(index),
+                indexing: Arc::default(),
                 viewers: Mutex::new(HashMap::new()),
                 viewer_serial: std::sync::atomic::AtomicU64::new(0),
                 data_dir: data_dir.to_owned(),
@@ -374,11 +380,29 @@ pub async fn create_pairing_code(data_dir: &Path, user: &str) -> Result<String, 
 }
 
 pub(crate) async fn open_db(data_dir: &Path) -> Result<SqlitePool, OpenError> {
-    let options = SqliteConnectOptions::from_str("sqlite://")?
+    connect_db(db_options(data_dir)?).await
+}
+
+/// [`open_db`] for the running server, which copies the WAL into the
+/// database in the background rather than in commits.
+async fn open_serving_db(data_dir: &Path) -> Result<SqlitePool, OpenError> {
+    let db = connect_db(db_options(data_dir)?.pragma("wal_autocheckpoint", silt_store::AUTOCHECKPOINT_PAGES)).await?;
+    silt_store::checkpoint_in_background(db.clone());
+    Ok(db)
+}
+
+fn db_options(data_dir: &Path) -> Result<SqliteConnectOptions, OpenError> {
+    Ok(SqliteConnectOptions::from_str("sqlite://")?
         .filename(data_dir.join("server.sqlite"))
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true);
+        // A power cut can lose the last commits but not corrupt the file, and
+        // every start is a new generation that clients push again to.
+        .synchronous(SqliteSynchronous::Normal)
+        .foreign_keys(true))
+}
+
+async fn connect_db(options: SqliteConnectOptions) -> Result<SqlitePool, OpenError> {
     let db = SqlitePoolOptions::new().max_connections(4).connect_with(options).await?;
     MIGRATOR.run(&db).await?;
     Ok(db)
@@ -730,24 +754,24 @@ async fn push(
     let mut tx = server.shared.db.begin().await?;
     collab::claim_actors(&mut tx, caller.user, &claims).await?;
     let family_id = id_bytes(family.0);
-    for delta in &stored {
-        let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta).map_err(ServerError::from)?);
-        // Numbered after what is stored rather than by the room, which may
-        // have skipped a stored delta that no longer applies.
-        sqlx::query!(
-            "INSERT INTO deltas (family_id, seq, format, data) SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3 FROM deltas WHERE family_id = ?1",
-            family_id,
-            format,
-            data,
-        )
-        .execute(&mut *tx)
+    // Numbered after what is stored rather than by the room, which may have
+    // skipped a stored delta that no longer applies.
+    let last = sqlx::query_scalar!("SELECT COALESCE(MAX(seq), 0) FROM deltas WHERE family_id = ?", family_id)
+        .fetch_one(&mut *tx)
         .await?;
-    }
+    insert_deltas(&mut tx, &family_id, last + 1, &stored).await?;
     tx.commit().await?;
     let outcome = prepared.commit();
     let index_rows = server.observe(family, &stored).await;
+    // Taken under the room's lock, so index writes keep the order of
+    // their pushes and a purge can't come between.
+    let indexing = Arc::clone(&server.shared.indexing).lock_owned().await;
     drop(slot);
-    server.write_index(&index_rows).await;
+    let indexer = server.clone();
+    tokio::spawn(async move {
+        indexer.write_index(&index_rows).await;
+        drop(indexing);
+    });
     if !stored.is_empty() {
         server.wake_pulls(family);
         if let Err(error) = server.notify(&stored, caller).await {
@@ -801,6 +825,11 @@ async fn pull(
                             usize::try_from(*seq - 1).is_ok_and(|index| readable.get(index).copied().unwrap_or(false))
                         })
                         .take(PULL_LIMIT)
+                        .scan(0, |bytes, (seq, delta)| {
+                            let first = *bytes == 0;
+                            *bytes += silt_log::stored_len(delta);
+                            (first || *bytes <= PULL_BYTES).then_some((seq, delta))
+                        })
                         .map(|(seq, delta)| (seq, delta.clone()))
                         .collect()
                 }
@@ -883,6 +912,7 @@ async fn search(
     if terms.is_empty() {
         return Ok(Json(SearchReply { hits: Vec::new() }));
     }
+    server.indexed().await;
     // Only the caller's threads are matched at all, and only a page of them,
     // so a common word doesn't fetch the whole index.
     let viewer = server.viewer(caller.user).await?;
@@ -952,6 +982,7 @@ async fn in_flight(
 ) -> Result<Json<InFlightReply>, ApiError> {
     let path = query.path.trim_matches('/');
     let active_since = now_ms() - ACTIVE_MS;
+    server.indexed().await;
     let rows = sqlx::query!(
         r#"SELECT t.id, u.name AS owner, th.path, th.last_ms,
                 CASE WHEN COALESCE(a.merged, 0) = 1 THEN 'merged'
@@ -1099,6 +1130,11 @@ impl Server {
         deltas.iter().flat_map(|delta| index.observe(family, delta)).collect()
     }
 
+    /// Waits for the index rows of every push answered so far.
+    pub(crate) async fn indexed(&self) {
+        drop(self.shared.indexing.lock().await);
+    }
+
     /// Writes index rows. The index is rebuilt from the deltas at every
     /// start, so a failed write only leaves search short until then.
     async fn write_index(&self, rows: &[index::Row]) {
@@ -1178,6 +1214,27 @@ fn thread_status(text: &str) -> ThreadStatus {
 /// What the database keeps of a token or code, as it is looked up by.
 pub(crate) fn hash(text: &str) -> Vec<u8> {
     blake3::hash(text.as_bytes()).as_bytes().to_vec()
+}
+
+/// Rows written in one statement, well under SQLite's bound on variables.
+const DELTAS_PER_INSERT: usize = 500;
+
+/// Stores `deltas` in order as the family's, the first numbered `first`.
+pub(crate) async fn insert_deltas(
+    tx: &mut Transaction<'_, Sqlite>,
+    family_id: &[u8],
+    first: i64,
+    deltas: &[Delta],
+) -> Result<(), ServerError> {
+    let encoded = deltas.iter().map(silt_log::encode_stored).collect::<Result<Vec<_>, _>>()?;
+    for (start, chunk) in (0_i64..).step_by(DELTAS_PER_INSERT).zip(encoded.chunks(DELTAS_PER_INSERT)) {
+        let mut insert = QueryBuilder::<Sqlite>::new("INSERT INTO deltas (family_id, seq, format, data) ");
+        insert.push_values((first + start..).zip(chunk), |mut row, (seq, data)| {
+            row.push_bind(family_id).push_bind(seq).push_bind(silt_log::DELTA_FORMAT).push_bind(data.as_slice());
+        });
+        insert.build().execute(&mut **tx).await?;
+    }
+    Ok(())
 }
 
 pub(crate) fn id_bytes(id: u128) -> Vec<u8> {

@@ -85,13 +85,13 @@ fn repo(root: &Path, name: &str, files: usize) -> Result<PathBuf, Exn<BenchError
     repo.canonicalize().or_raise(|| BenchError("cannot resolve the repository".into()))
 }
 
-fn session_transcript(home: &Home, cwd: &Path, session: &str) -> PathBuf {
+pub(super) fn session_transcript(home: &Home, cwd: &Path, session: &str) -> PathBuf {
     claude::session_paths(&home.claude, cwd, session).transcript
 }
 
 /// Puts the cached transcript where Claude Code would have written it,
 /// linked rather than copied when it can be.
-fn place(transcript: &Path, at: &Path) -> Result<(), Exn<BenchError>> {
+pub(super) fn place(transcript: &Path, at: &Path) -> Result<(), Exn<BenchError>> {
     let failed = || BenchError(format!("cannot place the transcript at {}", at.display()));
     fs::create_dir_all(at.parent().expect("in a project dir")).or_raise(failed)?;
     if fs::hard_link(transcript, at).is_err() {
@@ -102,7 +102,7 @@ fn place(transcript: &Path, at: &Path) -> Result<(), Exn<BenchError>> {
 
 /// Waits until the daemon has recorded the session's transcript up to
 /// `bytes`.
-async fn recorded(home: &Home, session: &str, bytes: u64) -> Result<(), Exn<BenchError>> {
+pub(super) async fn recorded(home: &Home, session: &str, bytes: u64) -> Result<(), Exn<BenchError>> {
     let store = Store::open(&home.data).await.or_raise(|| BenchError("cannot open the store".into()))?;
     let deadline = Instant::now() + IMPORT_TIMEOUT;
     while Instant::now() < deadline {

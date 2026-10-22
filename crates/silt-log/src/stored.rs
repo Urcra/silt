@@ -19,6 +19,11 @@ pub fn encode_stored(delta: &Delta) -> Result<Vec<u8>, postcard::Error> {
     postcard::to_allocvec(delta)
 }
 
+/// How many bytes `encode_stored` makes of `delta`, without making them.
+pub fn stored_len(delta: &Delta) -> usize {
+    postcard::experimental::serialized_size(delta).expect("a delta always encodes")
+}
+
 pub fn decode_stored(format: i64, bytes: &[u8]) -> Result<Delta, StoredError> {
     match format {
         DELTA_FORMAT => Ok(postcard::from_bytes(bytes)?),
@@ -40,5 +45,13 @@ mod tests {
         let bytes = encode_stored(&delta).expect("encodes");
         assert_eq!(decode_stored(DELTA_FORMAT, &bytes).expect("decodes"), delta);
         assert!(matches!(decode_stored(DELTA_FORMAT + 1, &bytes), Err(StoredError::UnknownFormat(1))));
+    }
+
+    #[test]
+    fn a_stored_length_is_that_of_the_encoding() {
+        let family = Family::new();
+        let delta =
+            family.delta(ActorId(1), ThreadId(2), Author::User, 3, Frontier::root(), Op::Conv(ConvOp::Title("é".repeat(300))));
+        assert_eq!(stored_len(&delta), encode_stored(&delta).expect("encodes").len());
     }
 }

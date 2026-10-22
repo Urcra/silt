@@ -16,4 +16,4 @@ pub use family::{
 };
 pub use graph::{GraphEvent, GraphItem, graph_of};
 pub use purge::kept_after_purge;
-pub use stored::{DELTA_FORMAT, StoredError, decode_stored, encode_stored};
+pub use stored::{DELTA_FORMAT, StoredError, decode_stored, encode_stored, stored_len};

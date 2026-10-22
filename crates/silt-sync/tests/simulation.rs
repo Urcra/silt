@@ -96,7 +96,7 @@ struct Network {
 impl Network {
     fn send(&mut self, index: usize) {
         let client = &mut self.clients[index];
-        if let Some(push) = client.sync.next_push(client.log.len() as u64) {
+        if let Some(push) = client.sync.next_push(client.log.len() as u64, |_| 1) {
             let batch = client.log[push.from as usize..push.to as usize].to_vec();
             self.queue.push(Request::Push(index, batch));
         }

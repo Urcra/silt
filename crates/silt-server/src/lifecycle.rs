@@ -160,6 +160,7 @@ impl Server {
             slots.insert(family, room.lock_owned().await);
         }
         let mut purged = self.shared.purged.lock().await;
+        let _indexing = self.shared.indexing.lock().await;
         let mut now_purged = purged.clone();
         now_purged.extend(threads.iter().map(|(thread, _)| *thread));
         // What changes in memory is decided here and done only after the
@@ -218,18 +219,7 @@ impl Server {
             if !kept.is_empty() {
                 room.push(kept.clone())?;
             }
-            for (seq, delta) in (1_i64..).zip(&kept) {
-                let (format, data) = (silt_log::DELTA_FORMAT, silt_log::encode_stored(delta)?);
-                sqlx::query!(
-                    "INSERT INTO deltas (family_id, seq, format, data) VALUES (?, ?, ?, ?)",
-                    family_id,
-                    seq,
-                    format,
-                    data
-                )
-                .execute(&mut *tx)
-                .await?;
-            }
+            crate::insert_deltas(&mut tx, &family_id, 1, &kept).await?;
             rebuilt.push((family, Some(room)));
         }
         tx.commit().await?;

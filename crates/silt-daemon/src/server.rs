@@ -82,7 +82,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             fs::TryLockError::Error(error) => return Err(error.into()),
         }
     }
-    let store = Store::open(data_dir).await?;
+    let store = Store::open_long_lived(data_dir).await?;
     let actor = load_actor(data_dir)?;
     let (events, mut inbox) = mpsc::unbounded_channel();
     let capture_lock = CaptureLock::open(data_dir)?;
@@ -141,6 +141,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         match event {
             Event::Request(Request::Shutdown, reply) => {
                 core.tick().await;
+                if let Err(error) = core.store.checkpoint().await {
+                    warn!(%error, "could not copy the WAL into the database");
+                }
                 let _ = fs::remove_file(socket);
                 let _ = reply.send(Response::ok("shutting down"));
                 let _ = tokio::time::timeout(SHUTDOWN_REPLY_WAIT, answered_rx.recv()).await;

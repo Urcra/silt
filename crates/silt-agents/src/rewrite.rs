@@ -93,6 +93,10 @@ struct Matcher {
     replacements: Vec<String>,
 }
 
+/// Below this many bytes of lines, rewriting them on one thread is faster
+/// than starting others.
+const PARALLEL_BYTES: usize = 4 << 20;
+
 impl Rewrites {
     /// Former session directories, cwds, roots and ids, in that order of
     /// precedence, mapped to the new ones.
@@ -121,6 +125,12 @@ impl Rewrites {
     /// and an old value counts only where it ends: `/a/repo` is not rewritten
     /// in `/a/repo-old`.
     pub fn apply(&self, json: &str) -> String {
+        let mut out = String::with_capacity(json.len());
+        self.apply_into(json, &mut out);
+        out
+    }
+
+    fn apply_into(&self, json: &str, out: &mut String) {
         let matcher = self.matcher.get_or_init(|| Matcher::new(&self.pairs));
         let mut matches: Vec<(usize, usize, usize)> = matcher
             .automaton
@@ -129,7 +139,6 @@ impl Rewrites {
             .map(|found| (found.start(), found.end(), found.pattern().as_usize()))
             .collect();
         matches.sort_by_key(|(start, end, pattern)| (*start, std::cmp::Reverse(*end), *pattern));
-        let mut out = String::with_capacity(json.len());
         let mut done = 0;
         for (start, end, pattern) in matches {
             if start < done {
@@ -140,11 +149,30 @@ impl Rewrites {
             done = end;
         }
         out.push_str(&json[done..]);
-        out
     }
 
+    /// `lines` rewritten, one to a line. A long session's are rewritten on
+    /// every core.
     pub fn lines(&self, lines: &[String]) -> String {
-        lines.iter().map(|line| self.apply(line) + "\n").collect()
+        let bytes: usize = lines.iter().map(|line| line.len() + 1).sum();
+        let threads = if bytes < PARALLEL_BYTES { 1 } else { std::thread::available_parallelism().map_or(1, usize::from) };
+        if threads == 1 {
+            return self.joined(lines);
+        }
+        std::thread::scope(|scope| {
+            let parts: Vec<_> =
+                lines.chunks(lines.len().div_ceil(threads)).map(|part| scope.spawn(|| self.joined(part))).collect();
+            parts.into_iter().map(|part| part.join().expect("rewriting doesn't panic")).collect()
+        })
+    }
+
+    fn joined(&self, lines: &[String]) -> String {
+        let mut out = String::with_capacity(lines.iter().map(|line| line.len() + 1).sum());
+        for line in lines {
+            self.apply_into(line, &mut out);
+            out.push('\n');
+        }
+        out
     }
 }
 
@@ -188,6 +216,17 @@ mod tests {
         for name in ["", "/etc/passwd", "a/.", "a/..", "../a", "a//b", "a/", "./a"] {
             assert!(!is_side_file_name(name), "{name}");
         }
+    }
+
+    #[test]
+    fn a_long_session_rewrites_as_its_lines_do_one_by_one() {
+        let rewrites = Rewrites::default().with("/a/repo", "/b/repo");
+        let lines: Vec<String> = (0..PARALLEL_BYTES / 500)
+            .map(|index| format!(r#"{{"cwd":"/a/repo","n":{index},"pad":"{}"}}"#, "x".repeat(500)))
+            .collect();
+        let one_by_one: String = lines.iter().map(|line| rewrites.apply(line) + "\n").collect();
+        assert_eq!(rewrites.lines(&lines), one_by_one);
+        assert!(!one_by_one.contains("/a/repo"));
     }
 
     #[test]

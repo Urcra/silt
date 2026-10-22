@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use silt_crdt::InodeId;
-use silt_log::{Applied, ConvOp, Delta, LogError, Op};
+use silt_log::{Applied, ConvOp, Delta, Family, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{CheckoutId, SearchRow, Store, SyncState, ThreadRecord};
 use silt_sync::{ClientSync, Effect, Outcome};
@@ -20,13 +20,17 @@ const PULL_WAIT: Duration = Duration::from_secs(20);
 /// apply yet.
 const PULL_RETRY: Duration = Duration::from_secs(30);
 
+fn log_of<'a>(families: &'a HashMap<FamilyId, Family>, raw: &'a HashMap<FamilyId, Vec<Delta>>, family: FamilyId) -> &'a [Delta] {
+    match families.get(&family) {
+        Some(family) => family.log(),
+        None => raw.get(&family).map_or(&[], Vec::as_slice),
+    }
+}
+
 impl Core {
     /// Every delta of the family in local order, projected or not.
     pub(crate) fn local_log(&self, family: FamilyId) -> &[Delta] {
-        match self.families.get(&family) {
-            Some(family) => family.log(),
-            None => self.raw.get(&family).map_or(&[], Vec::as_slice),
-        }
+        log_of(&self.families, &self.raw, family)
     }
 
     pub(crate) fn family_ids(&self) -> Vec<FamilyId> {
@@ -88,8 +92,9 @@ impl Core {
     /// The family's next deltas to push, redacted, unless a push is in
     /// flight or there is nothing to push.
     pub(crate) fn next_push(&mut self, family: FamilyId) -> Option<PushBatch> {
-        let local_len = self.local_log(family).len() as u64;
-        let push = self.syncs.entry(family).or_default().next_push(local_len)?;
+        let log = log_of(&self.families, &self.raw, family);
+        let push =
+            self.syncs.entry(family).or_default().next_push(log.len() as u64, |at| silt_log::stored_len(&log[at as usize]))?;
         let mut found = Vec::new();
         let deltas: Vec<Delta> = self.local_log(family)[push.from as usize..push.to as usize]
             .iter()
@@ -200,7 +205,7 @@ impl Core {
         }
     }
 
-    async fn save_sync(&self, family: FamilyId) {
+    pub(crate) async fn save_sync(&self, family: FamilyId) {
         let Some(sync) = self.syncs.get(&family) else {
             return;
         };
@@ -223,8 +228,10 @@ impl Core {
 
     /// Applies deltas fetched outside the sync loop, deduplicating against
     /// what is already here.
-    pub(crate) async fn apply_pulled(&mut self, family: FamilyId, deltas: Vec<Delta>) -> Result<(), CoreError> {
-        self.apply_remote(family, deltas).await.map(|_| ())
+    /// Applies deltas pulled outside the background sync, returning where
+    /// they stopped as [`Self::apply_remote`] does.
+    pub(crate) async fn apply_pulled(&mut self, family: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
+        self.apply_remote(family, deltas).await
     }
 
     /// Applies deltas from the server and brings checkouts up to date.
