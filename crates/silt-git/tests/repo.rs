@@ -36,7 +36,10 @@ fn reads_head_branch_remote_and_tree() {
     let repo = Repo::discover(&dir.path().join("src")).expect("discovers from a subdirectory");
     assert_eq!(repo.root(), dir.path().canonicalize().expect("canonical"));
     assert_eq!(repo.head_branch().expect("branch").as_deref(), Some("main"));
-    assert_eq!(repo.remote_url("origin").expect("remote").as_deref(), Some("git@github.com:Urcra/silt.git"));
+    // As git reads it, with any `insteadOf` in the machine's own config.
+    let url = Command::new("git").arg("-C").arg(dir.path()).args(["remote", "get-url", "origin"]).output().expect("git runs");
+    let url = String::from_utf8(url.stdout).expect("UTF-8");
+    assert_eq!(repo.remote_url("origin").expect("remote").as_deref(), Some(url.trim()));
     assert_eq!(repo.remote_url("upstream").expect("remote"), None);
 
     let head = repo.head_commit().expect("head").expect("has a commit");

@@ -156,6 +156,14 @@ pub fn daemon_stop() -> Result<(), Exn<CliError>> {
         return Ok(());
     }
     call::<String>(&Request::Shutdown)?;
+    // Until its process exits, the daemon may still be writing the store.
+    let deadline = Instant::now() + BUSY_DAEMON_WAIT;
+    while silt_daemon::holds_lock(&paths::data_dir()) {
+        if Instant::now() >= deadline {
+            return Err(fail(format!("the Silt daemon is still exiting; see {}", paths::log_path().display())));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     println!("stopped");
     Ok(())
 }
