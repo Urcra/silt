@@ -2,7 +2,6 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use silt_store::BlobStore;
 use silt_types::BlobHash;
@@ -183,12 +182,9 @@ pub fn remove(root: &Path, path: &str) -> io::Result<()> {
     }
 }
 
+/// As a worktree listing reports it, so a file compares equal to its entry.
 fn mtime_ns(metadata: &fs::Metadata) -> i64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX))
+    silt_git::mtime_ns(metadata)
 }
 
 #[cfg(test)]

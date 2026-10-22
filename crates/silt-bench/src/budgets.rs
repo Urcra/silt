@@ -40,6 +40,7 @@ pub struct Budget {
 
 pub const RECORD_IMPORT: &str = "record.import";
 pub const RECORD_HOOK: &str = "record.hook";
+pub const RECORD_HOOK_DAEMONLESS: &str = "record.hook_daemonless";
 pub const STORE_SIZE: &str = "store.size";
 pub const DAEMON_STARTUP: &str = "daemon.startup";
 pub const CHECKOUT_RESCAN: &str = "checkout.rescan";
@@ -54,8 +55,14 @@ pub const BUDGETS: &[Budget] = &[
     },
     Budget {
         name: RECORD_HOOK,
-        measures: "a hook's capture step in process, p95 of the slowest event, at 100k deltas and 20k files",
+        measures: "`silt hook` forwarded to the running daemon, p95 of the slowest event, at 100k deltas and 20k files",
         limit: Limit::Time(Duration::from_millis(20)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: RECORD_HOOK_DAEMONLESS,
+        measures: "a hook's capture step in process with no daemon, p95 of the slowest event, at 100k deltas and 20k files",
+        limit: Limit::Time(Duration::from_millis(50)),
         status: Status::Pending("M18-10"),
     },
     Budget {
@@ -74,7 +81,7 @@ pub const BUDGETS: &[Budget] = &[
         name: CHECKOUT_RESCAN,
         measures: "the capture step after a Bash call, comparing a 50,000-file checkout",
         limit: Limit::Time(Duration::from_millis(200)),
-        status: Status::Pending("M18-08"),
+        status: Status::Enforced,
     },
     Budget {
         name: DAEMON_IDLE,
@@ -156,7 +163,7 @@ pub fn line(budget: &Budget, measured: Option<Measured>) -> String {
         Some(measured) => (measured.to_string(), verdict_word(verdict(budget.limit, measured))),
         None => ("-".to_owned(), "not measured"),
     };
-    format!("{:<16} {:>18}  {:<30} {:<13} {}", budget.name, shown, budget.limit.to_string(), verdict, budget.status)
+    format!("{:<23} {:>18}  {:<30} {:<13} {}", budget.name, shown, budget.limit.to_string(), verdict, budget.status)
 }
 
 /// What the gate prints for an enforced budget that's over.

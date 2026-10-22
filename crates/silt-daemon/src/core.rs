@@ -4,8 +4,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
-use silt_git::Repo;
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState};
+use silt_git::{ListedFile, Repo};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState, ThreadView};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
 use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, SessionRecord, Store, ThreadRecord};
@@ -754,7 +754,7 @@ impl Core {
     pub(crate) async fn ingest_paths(&mut self, checkout_id: CheckoutId, paths: Vec<PathBuf>) -> Result<(), CoreError> {
         let checkout = self.checkout(checkout_id)?;
         let root = checkout.record.path.clone();
-        if paths.iter().any(|path| *path == root || path.file_name() == Some(".gitattributes".as_ref())) {
+        if paths.iter().any(|path| path.file_name() == Some(".gitattributes".as_ref())) {
             checkout.repo.attributes_changed();
         }
         let mut probes = Vec::new();
@@ -774,18 +774,30 @@ impl Core {
                 Probe::Gone(relative)
             });
         }
-        let thread_paths =
-            if probes.iter().any(|probe| matches!(probe, Probe::Root(_))) { self.family_paths(checkout_id) } else { Vec::new() };
-        let listed: HashSet<String> = probes
-            .iter()
-            .flat_map(|probe| match probe {
-                Probe::Root(files) | Probe::Dir(files) => files.as_slice(),
-                Probe::File(_) | Probe::Gone(_) => &[],
-            })
-            .cloned()
-            .collect();
-        let recorded = self.checkout(checkout_id)?.bridge.entries().keys();
-        let mut worklist = self.trackable(checkout_id, candidates(probes, recorded, &thread_paths), &listed)?;
+        let checkout = self.checkout(checkout_id)?;
+        let whole = probes.iter().any(|probe| matches!(probe, Probe::Root(_)));
+        let view = self.families.get(&checkout.family).filter(|_| whole).map(|family| family.thread_view(checkout.record.thread));
+        let family_paths = view.as_ref().map(ThreadView::paths).unwrap_or_default();
+        let is_dir = |path: &str| {
+            let kind = view.as_ref().zip(family_paths.get(path)).and_then(|(view, inode)| view.tree().kind(*inode));
+            kind == Some(silt_crdt::InodeKind::Dir)
+        };
+        let (entries, now) = (checkout.bridge.entries(), now_ms());
+        // A file of the same size and modification time as recorded is
+        // unchanged, as `ingest_file` would find; left out here, by the stat
+        // git's listing took, so comparing a whole checkout doesn't take each
+        // file in turn. Only a match is trusted, to leave a file out.
+        let mut recorded = Recorded::new(entries);
+        let maybe_changed = |file: &ListedFile| {
+            !matches!((recorded.get(&file.path), file.stat), (Some(entry), Some((size, mtime_ns)))
+                if entry.size == size && entry.mtime_ns == mtime_ns && settled(mtime_ns, now))
+        };
+        let thread_paths = family_paths.keys().map(String::as_str);
+        let Candidates { paths, listed } = candidates(probes, entries.keys(), thread_paths, is_dir, maybe_changed);
+        let mut worklist = self.trackable(checkout_id, paths, &listed)?;
+        if worklist.iter().any(|path| path.rsplit('/').next() == Some(".gitattributes")) {
+            self.checkout(checkout_id)?.repo.attributes_changed();
+        }
         for path in self.ingest_renames(checkout_id, &worklist, &listed).await? {
             worklist.retain(|candidate| *candidate != path);
         }
@@ -915,29 +927,13 @@ impl Core {
         held
     }
 
-    fn files_under(&self, checkout: CheckoutId, relative: &str) -> Result<Vec<String>, CoreError> {
-        let files = self.checkout(checkout)?.repo.worktree_files_under(relative)?;
+    fn files_under(&self, checkout: CheckoutId, relative: &str) -> Result<Vec<ListedFile>, CoreError> {
+        let files = self.checkout(checkout)?.repo.worktree_listing_under(relative)?;
+        let prefix = format!("{relative}/");
         Ok(files
             .into_iter()
-            .filter(|path| relative.is_empty() || path.starts_with(&format!("{relative}/")) || path == relative)
+            .filter(|file| relative.is_empty() || file.path.starts_with(&prefix) || file.path == relative)
             .collect())
-    }
-
-    fn family_paths(&self, checkout: CheckoutId) -> Vec<String> {
-        let Ok(checkout) = self.checkout(checkout) else {
-            return Vec::new();
-        };
-        self.families
-            .get(&checkout.family)
-            .map(|family| {
-                let view = family.thread_view(checkout.record.thread);
-                view.paths()
-                    .iter()
-                    .filter(|(_, inode)| view.tree().kind(**inode) != Some(silt_crdt::InodeKind::Dir))
-                    .map(|(path, _)| path.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Records one file's disk state. Returns paths that changed again
@@ -947,13 +943,10 @@ impl Core {
         let entry = self.checkout(checkout_id)?.bridge.entries().get(path).cloned();
         // Same size and modification time as recorded: unchanged, without
         // reading and hashing it, which a rescan would do for every file.
-        // File times tick coarsely, so two quick writes can share one; a
-        // recent time isn't trusted, as git doesn't.
-        let settled = |mtime_ns: i64| mtime_ns != 0 && mtime_ns < (now_ms() - 2_000).saturating_mul(1_000_000);
         if let (Some(entry), Ok(Some((size, mtime_ns, _)))) = (&entry, disk::stat(&root, path))
             && entry.size == size
             && entry.mtime_ns == mtime_ns
-            && settled(mtime_ns)
+            && settled(mtime_ns, now_ms())
         {
             return Ok(Vec::new());
         }
@@ -1798,45 +1791,117 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
     }
 }
 
+/// Whether a file's modification time can be trusted to change with its
+/// bytes. File times tick coarsely, so two quick writes can share one; a
+/// recent time isn't trusted, as git doesn't.
+fn settled(mtime_ns: i64, now_ms: i64) -> bool {
+    mtime_ns != 0 && mtime_ns < (now_ms - 2_000).saturating_mul(1_000_000)
+}
+
 /// What was found at a path that changed in a checkout.
 enum Probe {
     /// The checkout's root, with the files under it.
-    Root(Vec<String>),
+    Root(Vec<ListedFile>),
     /// Another directory, with the files under it.
-    Dir(Vec<String>),
+    Dir(Vec<ListedFile>),
     File(String),
     Gone(String),
 }
 
-/// The files to look at again after changes at `probes`. A rescan of the
-/// root also looks at every file recorded on disk or in the thread, and a
-/// path that is gone takes the recorded files under it along, since either
-/// may have disappeared.
+/// The files to look at again after changes at `probes`, and which of them
+/// git listed. A listed file is left out when `maybe_changed` says it is as
+/// recorded. A rescan of the root also looks at every file recorded on disk
+/// or in the thread (`recorded` and `thread_paths`, each sorted) that wasn't
+/// listed, and a path that is gone takes the
+/// recorded files under it along, since either may have disappeared.
 fn candidates<'a>(
     probes: Vec<Probe>,
     recorded: impl Iterator<Item = &'a String> + Clone,
-    thread_paths: &[String],
-) -> Vec<String> {
-    let mut found = Vec::new();
+    thread_paths: impl Iterator<Item = &'a str>,
+    is_dir: impl Fn(&str) -> bool,
+    mut maybe_changed: impl FnMut(&ListedFile) -> bool,
+) -> Candidates {
+    let mut paths = Vec::new();
+    if probes.iter().any(|probe| matches!(probe, Probe::Root(_))) {
+        let mut listed: Vec<&str> = probes
+            .iter()
+            .flat_map(|probe| match probe {
+                Probe::Root(files) | Probe::Dir(files) => files.as_slice(),
+                Probe::File(_) | Probe::Gone(_) => &[],
+            })
+            .map(|file| file.path.as_str())
+            .collect();
+        listed.sort_unstable();
+        paths.extend(unlisted(recorded.clone().map(String::as_str), &listed).into_iter().map(str::to_owned));
+        // Directories are never listed, so only what wasn't is asked.
+        paths.extend(unlisted(thread_paths, &listed).into_iter().filter(|path| !is_dir(path)).map(str::to_owned));
+    }
+    let mut listed = HashSet::new();
     for probe in probes {
         match probe {
-            Probe::Root(files) => {
-                found.extend(files);
-                found.extend(recorded.clone().cloned());
-                found.extend_from_slice(thread_paths);
+            Probe::Root(files) | Probe::Dir(files) => {
+                for file in files.into_iter().filter(|file| maybe_changed(file)) {
+                    listed.insert(file.path.clone());
+                    paths.push(file.path);
+                }
             }
-            Probe::Dir(files) => found.extend(files),
-            Probe::File(path) => found.push(path),
+            Probe::File(path) => paths.push(path),
             Probe::Gone(path) => {
                 let prefix = format!("{path}/");
-                found.extend(recorded.clone().filter(|recorded| recorded.starts_with(&prefix)).cloned());
-                found.push(path);
+                paths.extend(recorded.clone().filter(|recorded| recorded.starts_with(&prefix)).cloned());
+                paths.push(path);
             }
         }
     }
-    found.sort();
-    found.dedup();
-    found
+    paths.sort();
+    paths.dedup();
+    Candidates { paths, listed }
+}
+
+struct Candidates {
+    paths: Vec<String>,
+    /// Those of `paths` git listed, so they are there.
+    listed: HashSet<String>,
+}
+
+/// A checkout's recorded entries, looked up in order by walking them
+/// alongside, as a listing of the whole checkout asks for each in turn.
+struct Recorded<'a> {
+    entries: &'a BTreeMap<String, DiskEntry>,
+    walk: std::iter::Peekable<std::collections::btree_map::Iter<'a, String, DiskEntry>>,
+    /// The last entry walked past.
+    passed: Option<&'a str>,
+}
+
+impl<'a> Recorded<'a> {
+    fn new(entries: &'a BTreeMap<String, DiskEntry>) -> Self {
+        Self { entries, walk: entries.iter().peekable(), passed: None }
+    }
+
+    fn get(&mut self, path: &str) -> Option<&'a DiskEntry> {
+        // Asked out of order, it looks the path up instead.
+        if self.passed.is_some_and(|passed| passed >= path) {
+            return self.entries.get(path);
+        }
+        while let Some((recorded, _)) = self.walk.next_if(|(recorded, _)| recorded.as_str() < path) {
+            self.passed = Some(recorded);
+        }
+        self.walk.peek().filter(|(recorded, _)| recorded.as_str() == path).map(|(_, entry)| *entry)
+    }
+}
+
+/// The paths of `paths` that aren't in `listed`, both sorted: walked side by
+/// side, as a whole checkout's tens of thousands would be slow to hash.
+fn unlisted<'a>(paths: impl Iterator<Item = &'a str>, listed: &[&str]) -> Vec<&'a str> {
+    let mut at = 0;
+    paths
+        .filter(|path| {
+            while listed.get(at).is_some_and(|listed| listed < path) {
+                at += 1;
+            }
+            listed.get(at) != Some(path)
+        })
+        .collect()
 }
 
 /// Threads whose lease `deltas` moved to a device other than `device`. The
@@ -1923,13 +1988,60 @@ mod tests {
     fn a_rescan_looks_at_what_changed_and_what_may_be_gone() {
         let recorded = ["a/one".to_owned(), "a/two".to_owned(), "ab".to_owned(), "b".to_owned()];
         let found = candidates(
-            vec![Probe::Gone("a".into()), Probe::File("c".into()), Probe::Dir(vec!["d/x".into()])],
+            vec![Probe::Gone("a".into()), Probe::File("c".into()), Probe::Dir(listed(&["d/x"]))],
             recorded.iter(),
-            &["thread-only".to_owned()],
+            ["thread-only"].into_iter(),
+            |_| false,
+            |_| true,
         );
-        assert_eq!(found, ["a", "a/one", "a/two", "c", "d/x"]);
-        let root = candidates(vec![Probe::Root(vec!["new".into(), "b".into()])], recorded.iter(), &["thread-only".to_owned()]);
-        assert_eq!(root, ["a/one", "a/two", "ab", "b", "new", "thread-only"]);
+        assert_eq!(found.paths, ["a", "a/one", "a/two", "c", "d/x"]);
+        assert_eq!(found.listed, HashSet::from(["d/x".to_owned()]));
+        let root = candidates(
+            vec![Probe::Root(listed(&["new", "b"]))],
+            recorded.iter(),
+            ["a-dir", "b", "thread-only"].into_iter(),
+            |path| path == "a-dir",
+            |_| true,
+        );
+        assert_eq!(root.paths, ["a/one", "a/two", "ab", "b", "new", "thread-only"]);
+    }
+
+    #[test]
+    fn a_rescan_leaves_out_listed_files_as_recorded() {
+        let recorded = ["gone".to_owned(), "same".to_owned()];
+        let root = candidates(
+            vec![Probe::Root(listed(&["new", "same", "touched"]))],
+            recorded.iter(),
+            ["same", "thread-only"].into_iter(),
+            |_| false,
+            |file| file.path != "same",
+        );
+        assert_eq!(root.paths, ["gone", "new", "thread-only", "touched"]);
+        assert_eq!(root.listed, HashSet::from(["new".to_owned(), "touched".to_owned()]));
+    }
+
+    #[test]
+    fn recorded_entries_are_found_in_order_or_not() {
+        let entry = |size| DiskEntry {
+            inode: InodeId(silt_types::DeltaId::new(ActorId(1), Lamport(size))),
+            hash: BlobHash([0; 32]),
+            size,
+            mtime_ns: 0,
+            version: Frontier::default(),
+        };
+        let entries: BTreeMap<String, DiskEntry> =
+            [("a", 1), ("c", 3), ("e", 5)].map(|(path, size)| (path.to_owned(), entry(size))).into();
+        let mut recorded = Recorded::new(&entries);
+        let size = |found: Option<&DiskEntry>| found.map(|entry| entry.size);
+        assert_eq!(size(recorded.get("a")), Some(1));
+        assert_eq!(size(recorded.get("b")), None);
+        assert_eq!(size(recorded.get("e")), Some(5));
+        assert_eq!(size(recorded.get("c")), Some(3), "asked out of order");
+        assert_eq!(size(recorded.get("f")), None);
+    }
+
+    fn listed(paths: &[&str]) -> Vec<ListedFile> {
+        paths.iter().map(|path| ListedFile { path: (*path).to_owned(), stat: None }).collect()
     }
 
     #[test]

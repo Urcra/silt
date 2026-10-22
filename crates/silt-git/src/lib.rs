@@ -55,7 +55,9 @@ pub struct TreeFile {
 pub struct Repo {
     root: PathBuf,
     repo: gix::Repository,
-    needs_git_cli_filters: Cell<Option<bool>>,
+    /// Whether filtering needs the git CLI, as of when `.git/info/attributes`
+    /// was last modified then.
+    needs_git_cli_filters: Cell<Option<(bool, Option<std::time::SystemTime>)>>,
 }
 
 impl Repo {
@@ -179,31 +181,60 @@ impl Repo {
     /// `worktree_files` under the directory `dir` (relative, `""` for all),
     /// without listing the rest of the worktree.
     pub fn worktree_files_under(&self, dir: &str) -> Result<Vec<String>, GitError> {
-        let mut args = vec!["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"];
+        Ok(self.worktree_listing_under(dir)?.into_iter().map(|file| file.path).collect())
+    }
+
+    /// `worktree_files_under`, with what each file's `stat` found.
+    pub fn worktree_listing_under(&self, dir: &str) -> Result<Vec<ListedFile>, GitError> {
+        // Finding untracked files takes git a walk of the worktree; the
+        // tracked ones are read from the index and looked at meanwhile.
+        let mut args = vec!["ls-files", "-z", "--others", "--exclude-standard"];
         let pathspec = format!(":(literal){dir}");
         if !dir.is_empty() {
             args.extend(["--", &pathspec]);
         }
-        let output = self.git(&args, None)?;
-        let mut files: Vec<String> = output
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
+        let untracked = git_command(&self.root, &args, &[]).stdin(Stdio::null()).spawn()?;
+        let index = self.repo.index_or_empty().map_err(GitError::gix)?;
+        let prefix = format!("{dir}/");
+        let mut paths: Vec<String> = index
+            .entries()
+            .iter()
+            .map(|entry| entry.path(&index).as_bytes())
+            .filter(|path| dir.is_empty() || *path == dir.as_bytes() || path.starts_with(prefix.as_bytes()))
             .filter_map(utf8_path)
-            .filter(|path| self.root.join(path).symlink_metadata().is_ok())
             .collect();
-        files.sort();
-        files.dedup();
-        Ok(files)
+        paths.dedup();
+        let mut found = metadata_of(&self.root, &paths);
+        let untracked = finish(untracked, &args)?;
+        let others: Vec<String> =
+            untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()).filter_map(utf8_path).collect();
+        found.extend(metadata_of(&self.root, &others));
+        paths.extend(others);
+        let mut listed: Vec<ListedFile> = paths
+            .into_iter()
+            .zip(found)
+            .filter_map(|(path, metadata)| {
+                let metadata = metadata?;
+                let stat = metadata.is_file().then(|| (metadata.len(), mtime_ns(&metadata)));
+                Some(ListedFile { path, stat })
+            })
+            .collect();
+        listed.sort_unstable_by(|one, other| one.path.cmp(&other.path));
+        listed.dedup_by(|one, other| one.path == other.path);
+        Ok(listed)
     }
 
     /// Which of `paths` git ignores. Tracked files are never ignored, even
-    /// when they match an ignore rule.
+    /// when they match an ignore rule, so only the others are asked about.
     pub fn ignored(&self, paths: &[String]) -> Result<HashSet<String>, GitError> {
-        if paths.is_empty() {
+        let index = self.repo.index_or_empty().map_err(GitError::gix)?;
+        let untracked: Vec<&String> =
+            paths.iter().filter(|path| index.entry_by_path(path.as_bytes().as_bstr()).is_none()).collect();
+        if untracked.is_empty() {
             return Ok(HashSet::new());
         }
         let mut input = Vec::new();
-        for path in paths {
+        for path in untracked {
             input.extend_from_slice(path.as_bytes());
             input.push(0);
         }
@@ -223,11 +254,13 @@ impl Repo {
     /// `.gitattributes` files use is looked up once; call
     /// [`Repo::attributes_changed`] when one of them changes.
     pub fn filters(&self) -> Result<Filters<'_>, GitError> {
+        // Not a worktree file, so no rescan sees it change.
+        let info = std::fs::metadata(self.repo.git_dir().join("info").join("attributes")).and_then(|info| info.modified()).ok();
         let use_git_cli = match self.needs_git_cli_filters.get() {
-            Some(known) => known,
-            None => {
+            Some((known, seen)) if seen == info => known,
+            _ => {
                 let found = filters::uses_attributes_gix_gets_wrong(&self.root, self.repo.git_dir());
-                self.needs_git_cli_filters.set(Some(found));
+                self.needs_git_cli_filters.set(Some((found, info)));
                 found
             }
         };
@@ -270,6 +303,23 @@ pub(crate) fn run_git_with(
     stdin: Option<&[u8]>,
     envs: &[(String, String)],
 ) -> Result<Vec<u8>, GitError> {
+    let mut child = git_command(dir, args, envs).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).spawn()?;
+    // Fed from another thread: git writes output while it still reads
+    // input, and both pipes would fill up.
+    let feeding = stdin.map(|input| {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let input = input.to_vec();
+        std::thread::spawn(move || pipe.write_all(&input))
+    });
+    let output = finish(child, args);
+    if let Some(feeding) = feeding {
+        feeding.join().map_err(|_| std::io::Error::other("feeding git panicked"))??;
+    }
+    output
+}
+
+/// git run in `dir` with Silt's settings and `envs`, its output piped.
+fn git_command(dir: &Path, args: &[&str], envs: &[(String, String)]) -> Command {
     let mut command = Command::new("git");
     command
         .args(HARDENED)
@@ -281,24 +331,17 @@ pub(crate) fn run_git_with(
         .env("GIT_TERMINAL_PROMPT", "0")
         // Messages Silt reads must not be translated.
         .env("LC_ALL", "C")
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
-    let mut child = command.spawn()?;
-    // Fed from another thread: git writes output while it still reads
-    // input, and both pipes would fill up.
-    let feeding = stdin.map(|input| {
-        let mut pipe = child.stdin.take().expect("stdin is piped");
-        let input = input.to_vec();
-        std::thread::spawn(move || pipe.write_all(&input))
-    });
+    command
+}
+
+/// What a git process printed, once it exited well.
+fn finish(child: std::process::Child, args: &[&str]) -> Result<Vec<u8>, GitError> {
     let output = child.wait_with_output()?;
-    if let Some(feeding) = feeding {
-        feeding.join().map_err(|_| std::io::Error::other("feeding git panicked"))??;
-    }
     if !output.status.success() {
         return Err(GitError::Command {
             args: args.join(" "),
@@ -306,6 +349,39 @@ pub(crate) fn run_git_with(
         });
     }
     Ok(output.stdout)
+}
+
+/// A file in the worktree, as `Repo::worktree_listing_under` found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedFile {
+    pub path: String,
+    /// A regular file's size and `mtime_ns`; `None` for anything else, such
+    /// as a symlink.
+    pub stat: Option<(u64, i64)>,
+}
+
+/// A file's modification time in nanoseconds since the epoch, 0 if unknown.
+pub fn mtime_ns(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX))
+}
+
+/// Each path's `symlink_metadata` under `root`, if it's there: on several
+/// threads for a large worktree, whose files are mostly waiting on the
+/// kernel one `stat` at a time.
+fn metadata_of(root: &Path, paths: &[String]) -> Vec<Option<std::fs::Metadata>> {
+    const PER_THREAD: usize = 2048;
+    let stat = |paths: &[String]| paths.iter().map(|path| root.join(path).symlink_metadata().ok()).collect::<Vec<_>>();
+    if paths.len() <= PER_THREAD {
+        return stat(paths);
+    }
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = paths.chunks(PER_THREAD).map(|chunk| scope.spawn(move || stat(chunk))).collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+    })
 }
 
 /// A path Silt can track. Paths aren't UTF-8 text in the family, so other

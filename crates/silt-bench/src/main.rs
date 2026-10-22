@@ -71,12 +71,13 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     let here = std::env::current_exe().or_raise(|| BenchError("cannot find this executable".into()))?;
     let bin = here.parent().expect("in a directory");
     let silt = cli.silt.clone().unwrap_or_else(|| bin.join("silt"));
-    if !silt.exists() {
+    // Absolute, as the daemon is started from `/`.
+    let Ok(silt) = silt.canonicalize() else {
         return Err(fail(format!(
             "no silt binary at {}; build it with `cargo build --profile perf -p silt-cli`",
             silt.display()
         )));
-    }
+    };
     let fixture_dir = cli.fixtures.clone().unwrap_or_else(|| bin.parent().unwrap_or(bin).join("silt-bench"));
     let fixtures = Fixtures::in_dir(&fixture_dir);
     for name in &cli.only {

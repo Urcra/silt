@@ -358,8 +358,8 @@ pub fn is_valid_name(name: &str) -> bool {
 /// A peer must never be able to place files in a repository's git
 /// directory, where hooks and config run code.
 pub fn is_git_dir_name(name: &str) -> bool {
-    let name = name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
-    name == ".git" || name == "git~1"
+    let name = name.trim_end_matches(['.', ' ']);
+    name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case("git~1")
 }
 
 #[cfg(test)]

@@ -6,14 +6,13 @@ use silt_crdt::is_git_dir_name;
 
 /// Whether `path`, relative to the checkout, may be written or removed.
 pub fn is_writable(path: &str) -> bool {
-    let components: Vec<&str> = path.split('/').collect();
-    let normal = components
-        .iter()
-        .all(|component| !component.is_empty() && *component != "." && *component != ".." && !component.contains('\0'));
-    let in_git = components.iter().any(|component| is_git_dir_name(component));
-    let in_silt_data = matches!(components.as_slice(), [first, second, ..]
+    let normal_outside_git = path.split('/').all(|component| {
+        !component.is_empty() && component != "." && component != ".." && !component.contains('\0') && !is_git_dir_name(component)
+    });
+    let mut components = path.split('/');
+    let in_silt_data = matches!((components.next(), components.next()), (Some(first), Some(second))
         if first.eq_ignore_ascii_case(".silt") && second.eq_ignore_ascii_case("checkouts"));
-    normal && !in_git && !in_silt_data && !path.starts_with('/')
+    normal_outside_git && !in_silt_data && !path.starts_with('/')
 }
 
 #[cfg(test)]

@@ -1,11 +1,15 @@
-//! `record.hook`: how long an agent's hook takes to capture in its own
-//! process, without the daemon (ADR 0018), for a family of 100k deltas and
-//! a checkout of 20k files. It measures the capture step, not starting the
-//! `silt hook` process around it.
+//! How long an agent's hook takes, for a family of 100k deltas and a
+//! checkout of 20k files:
+//! - `record.hook_daemonless`: the capture step in the hook's own process,
+//!   with no daemon (ADR 0018), not counting starting that process;
+//! - `record.hook`: `silt hook` as agents run it, forwarded to the daemon,
+//!   process start included.
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use exn::{Exn, ResultExt};
@@ -14,7 +18,8 @@ use silt_log::{Author, ConvOp, Delta, Family, Op, SessionFile, SessionRef};
 use silt_store::Store;
 use silt_types::ActorId;
 
-use crate::budgets::{Measured, quantile};
+use crate::budgets::{Measured, RECORD_HOOK, RECORD_HOOK_DAEMONLESS, quantile};
+use crate::daemon::Home;
 use crate::fixtures::write_repo;
 use crate::{BenchError, fail};
 
@@ -23,21 +28,38 @@ const DELTAS: usize = 100_000;
 const RUNS: usize = 40;
 const EVENTS: [&str; 4] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"];
 
-/// The p95 of the slowest hook event.
-pub async fn measure(root: &Path) -> Result<Measured, Exn<BenchError>> {
-    let (data, repo) = (root.join("silt"), root.join("repo"));
+/// How a hook is captured.
+enum Way<'a> {
+    InProcess,
+    Forwarded(&'a Home),
+}
+
+/// Both budgets, on the same family: in process first, then through a
+/// daemon started on it.
+pub async fn measure(silt: &Path, root: &Path) -> Result<Vec<(&'static str, Measured)>, Exn<BenchError>> {
+    let home = Home::new(silt, root);
+    let repo = root.join("repo");
     let started = Instant::now();
     write_repo(&repo, FILES).or_raise(|| BenchError("cannot write the 20k-file repository".into()))?;
     let session = uuid::Uuid::new_v4().to_string();
     let run = NewRun { cwd: &repo, agent: "claude", session_id: Some(&session), isolated: false };
-    drop(Recorder::start(&data, run).await.or_raise(|| BenchError("cannot start a session".into()))?);
-    grow_family(&data, DELTAS).await?;
+    drop(Recorder::start(&home.data, run).await.or_raise(|| BenchError("cannot start a session".into()))?);
+    grow_family(&home.data, DELTAS).await?;
     eprintln!("silt-bench: {FILES} files and {DELTAS} deltas set up in {:.1?}", started.elapsed());
 
+    let daemonless = time_hooks(&home, &repo, &session, &Way::InProcess).await?;
+    let daemon = home.start()?;
+    let forwarded = time_hooks(&home, &repo, &session, &Way::Forwarded(&home)).await;
+    daemon.stop()?;
+    Ok(vec![(RECORD_HOOK_DAEMONLESS, daemonless), (RECORD_HOOK, forwarded?)])
+}
+
+/// The p95 of the slowest hook event.
+async fn time_hooks(home: &Home, repo: &Path, session: &str, way: &Way<'_>) -> Result<Measured, Exn<BenchError>> {
     let edited = repo.join("src/d0/f0.rs");
     let mut times: HashMap<&str, Vec<Duration>> = HashMap::new();
     // The first run saves the family's snapshot, as the first hook after a
-    // long stretch does.
+    // long stretch does, and lets a daemon just started settle.
     for run in 0..=RUNS {
         for event in EVENTS {
             if event == "PostToolUse" {
@@ -51,7 +73,12 @@ pub async fn measure(root: &Path) -> Result<Measured, Exn<BenchError>> {
                 "tool_input": { "file_path": edited },
             });
             let start = Instant::now();
-            capture_here(&data, event, input).await.or_raise(|| BenchError(format!("cannot capture {event}")))?;
+            match way {
+                Way::InProcess => {
+                    capture_here(&home.data, event, input).await.or_raise(|| BenchError(format!("cannot capture {event}")))?;
+                }
+                Way::Forwarded(home) => run_hook(home, repo, event, &input)?,
+            }
             if run > 0 {
                 times.entry(event).or_default().push(start.elapsed());
             }
@@ -59,6 +86,7 @@ pub async fn measure(root: &Path) -> Result<Measured, Exn<BenchError>> {
     }
 
     let mut slowest = Duration::ZERO;
+    let label = if matches!(way, Way::InProcess) { "in process" } else { "forwarded" };
     for event in EVENTS {
         let taken = times.remove(event).unwrap_or_default();
         let (p50, p95, max) = (quantile(taken.clone(), 0.5), quantile(taken.clone(), 0.95), quantile(taken, 1.0));
@@ -66,9 +94,21 @@ pub async fn measure(root: &Path) -> Result<Measured, Exn<BenchError>> {
             return Err(fail(format!("no {event} hooks were measured")));
         };
         slowest = slowest.max(p95);
-        eprintln!("silt-bench: {event:>16}: p50 {p50:>8.1?}  p95 {p95:>8.1?}  max {max:>8.1?}");
+        eprintln!("silt-bench: {label:>10} {event:>16}: p50 {p50:>8.1?}  p95 {p95:>8.1?}  max {max:>8.1?}");
     }
     Ok(Measured::Time(slowest))
+}
+
+/// Runs `silt hook <event>` as Claude Code does, with the input on stdin.
+fn run_hook(home: &Home, repo: &Path, event: &str, input: &serde_json::Value) -> Result<(), Exn<BenchError>> {
+    let failed = || BenchError(format!("silt hook {event} failed"));
+    let mut child =
+        home.command(repo).args(["hook", event]).stdin(Stdio::piped()).stdout(Stdio::null()).spawn().or_raise(failed)?;
+    child.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).or_raise(failed)?;
+    if !child.wait().or_raise(failed)?.success() {
+        return Err(fail(format!("silt hook {event} exited with an error")));
+    }
+    Ok(())
 }
 
 /// Fills the session's family up to `total` deltas with transcript lines,
