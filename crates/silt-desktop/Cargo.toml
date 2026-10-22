@@ -1,5 +1,5 @@
 # Its own workspace, so building the rest of Silt never needs WebKitGTK
-# (ADR 0040).
+# (ADR 0041).
 [workspace]
 
 [package]

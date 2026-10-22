@@ -1,5 +1,5 @@
 //! Finding the local daemon's web UI through the `silt` CLI, which attaches
-//! to the daemon or starts it (ADR 0040).
+//! to the daemon or starts it (ADR 0041).
 
 use std::ffi::OsString;
 use std::io;

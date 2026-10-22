@@ -15,7 +15,7 @@ cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# The desktop app is its own workspace, as it needs WebKitGTK (ADR 0040).
+# The desktop app is its own workspace, as it needs WebKitGTK (ADR 0041).
 if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
     (
         cd crates/silt-desktop

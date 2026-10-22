@@ -12,6 +12,7 @@ import { formatKeys } from '../shortcuts'
 import { threadTone } from '../threadLook'
 import { ago } from '../time'
 import { Button, Dot, EmptyState, Icon, Kbd, cx, toast } from '../ui'
+import { CloudLaunches } from './Cloud'
 import { CHIP, ChipSelect } from './ChipSelect'
 import { Mock } from './Mock'
 import { Page } from './Page'
@@ -66,6 +67,9 @@ export function NewThread() {
   const [plan, setPlan] = useState(false)
   const [stash, setStash] = useState(readStash)
   const [error, setError] = useState<string>()
+  // In a Claude Code cloud session rather than on this machine (ADR 0040).
+  const [cloud, setCloud] = useState(false)
+  const [starting, setStarting] = useState(false)
   const clones = choices.data?.clones ?? []
   const project = clone || clones[0]?.path || ''
   // What the project's new threads start with, until the person picks (ADR 0023).
@@ -131,6 +135,20 @@ export function NewThread() {
       (failure: unknown) => setError(message(failure)),
     )
   }
+  const startInCloud = () => {
+    setError(undefined)
+    setStarting(true)
+    api
+      .cloudStart(project, prompt.trim())
+      .then(
+        (launch) => {
+          toast(launch.warnings.length > 0 ? `Cloud session started. ${launch.warnings.join(' ')}` : 'Cloud session started', 'ok')
+          setPrompt('')
+        },
+        (failure: unknown) => setError(message(failure)),
+      )
+      .finally(() => setStarting(false))
+  }
   const saveStash = (next: Stashed[]) => {
     setStash(next)
     writeStash(next)
@@ -139,7 +157,7 @@ export function NewThread() {
     .filter((thread) => !thread.mine.settled && !thread.merged)
     .sort((a, b) => b.last_ms - a.last_ms)
     .slice(0, 4)
-  const ready = Boolean(agent && project)
+  const ready = cloud ? Boolean(project && prompt.trim()) && !starting : Boolean(agent && project)
 
   return (
     <Page flush label="new thread">
@@ -150,7 +168,8 @@ export function NewThread() {
           className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault()
-            start(false)
+            if (cloud) startInCloud()
+            else start(false)
           }}
         >
           <div className="flex flex-wrap items-center gap-1.5">
@@ -162,7 +181,7 @@ export function NewThread() {
               onChange={setClone}
               options={clones.map((known) => ({ id: known.path, name: known.repo ? projectName(known.repo) : known.path, description: known.path }))}
             />
-            {!here && (
+            {!here && !cloud && (
               <ChipSelect
                 label="base branch"
                 prefix="From"
@@ -172,7 +191,7 @@ export function NewThread() {
                 options={[{ id: '', name: 'current checkout' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
               />
             )}
-            <div role="radiogroup" aria-label="works in" className="inline-flex overflow-hidden rounded-sm border border-line">
+            {!cloud && <div role="radiogroup" aria-label="works in" className="inline-flex overflow-hidden rounded-sm border border-line">
               {[
                 ['own', 'Own checkout', false],
                 ['here', 'In my clone', true],
@@ -188,12 +207,17 @@ export function NewThread() {
                   {label as string}
                 </button>
               ))}
-            </div>
+            </div>}
             <span className={cx(CHIP, 'md:ml-auto')}>
               <Icon name="laptop" className="h-3 w-3" />
               <span className="text-fg-2">On</span>
               <Mock id="new.device">{device}</Mock>
             </span>
+            <label className={cx(CHIP, 'cursor-pointer', cloud && 'border-accent bg-accent-tint text-accent-fg')} title="Starts a Claude Code cloud session with your own claude, from the project's GitHub remote">
+              <input type="checkbox" checked={cloud} onChange={(event) => setCloud(event.target.checked)} className="accent-[var(--accent)]" />
+              <Icon name="cloud" className="h-3 w-3" />
+              In the cloud
+            </label>
           </div>
           <div className="flex flex-col rounded-md border border-line-strong bg-elevated">
             <label htmlFor="first-prompt" className="sr-only">
@@ -208,13 +232,16 @@ export function NewThread() {
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && ready) {
                   event.preventDefault()
-                  start(event.shiftKey)
+                  if (cloud) startInCloud()
+                  else start(event.shiftKey)
                 }
               }}
-              placeholder="Describe the task. You can also start the agent and prompt it later."
+              placeholder={cloud ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
               className="resize-none border-0 bg-transparent px-3.5 py-3 text-sm leading-normal text-fg-1 placeholder:text-fg-2 focus:outline-none"
             />
             <div className="flex flex-wrap items-center gap-1.5 border-t border-line-subtle px-2.5 py-2">
+              {!cloud && (
+                <>
               <ChipSelect
                 label="agent to start"
                 value={agent}
@@ -266,6 +293,8 @@ export function NewThread() {
                   ]}
                 />
               )}
+                </>
+              )}
               <span className="ml-auto flex flex-wrap items-center gap-1.5">
                 <Button disabled={!prompt.trim()} variant="ghost" icon="clock" onClick={() => {
                   saveStash([{ text: prompt.trim(), project: repo, at: Date.now() }, ...stash].slice(0, 10))
@@ -273,17 +302,24 @@ export function NewThread() {
                 }}>
                   Stash
                 </Button>
-                <Button disabled={!ready} onClick={() => start(true)} title="Starts it and stays here, to start another">
-                  Start in background
-                  <Kbd>{formatKeys('mod+shift+⏎')}</Kbd>
-                </Button>
-                <Button type="submit" variant="primary" icon="play" disabled={!ready}>
-                  Start
+                {!cloud && (
+                  <Button disabled={!ready} onClick={() => start(true)} title="Starts it and stays here, to start another">
+                    Start in background
+                    <Kbd>{formatKeys('mod+shift+⏎')}</Kbd>
+                  </Button>
+                )}
+                <Button type="submit" variant="primary" icon={cloud ? 'cloud' : 'play'} disabled={!ready}>
+                  {cloud ? (starting ? 'Starting…' : 'Start in the cloud') : 'Start'}
                   <Kbd onAccent>{formatKeys('mod+⏎')}</Kbd>
                 </Button>
               </span>
             </div>
           </div>
+          {cloud ? (
+            <p className="text-xs text-fg-2">
+              Runs <code>claude --cloud</code> in this project with your own sign-in, from its GitHub remote at the clone&apos;s branch. The session records itself into a thread when the repository is set up for it (docs/guide/cloud.md).
+            </p>
+          ) : (
           <ul aria-label="permission presets" className="flex flex-wrap gap-x-5 gap-y-1 text-2xs text-fg-2">
             {PRESETS.map((choice) => (
               <li key={choice.id} className={cx(choice.id === preset && 'text-fg-1')}>
@@ -291,9 +327,11 @@ export function NewThread() {
               </li>
             ))}
           </ul>
-          {preset === 'full_access' && <p className="text-xs text-fg-2">Nothing asks; the agent&apos;s own sandbox is all that limits it.</p>}
-          {error && <p className="text-sm text-danger">{error}</p>}
+          )}
+          {!cloud && preset === 'full_access' && <p className="text-xs text-fg-2">Nothing asks; the agent&apos;s own sandbox is all that limits it.</p>}
+          {error && <p className="text-sm text-danger whitespace-pre-wrap">{error}</p>}
         </form>
+        <CloudLaunches />
         <div className="grid gap-6 md:grid-cols-2">
           <section aria-labelledby="stashed" className="flex flex-col gap-1.5">
             <h2 id="stashed" className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">

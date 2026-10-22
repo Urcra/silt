@@ -5,6 +5,7 @@ mod capture;
 pub mod capture_lock;
 mod catch_up;
 pub mod client;
+mod cloud;
 mod comments;
 mod control;
 mod core;

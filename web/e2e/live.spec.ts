@@ -281,6 +281,19 @@ test("another of Alice's machines directs the agent running on the first, throug
   await laptop.context().close()
 })
 
+test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('main').getByRole('link', { name: 'New thread' }).click()
+  await page.getByText('In the cloud').click()
+  await expect(page.getByLabel('agent to start')).toBeHidden()
+  await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
+  await page.getByRole('button', { name: 'Start in the cloud' }).click()
+  const launch = page.getByRole('region', { name: 'Cloud sessions' }).getByRole('listitem').filter({ hasText: 'tidy the readme in the cloud' })
+  await expect(launch).toContainText('waiting for its thread', { timeout: 20_000 })
+  await expect(launch.getByRole('link', { name: 'claude.ai' })).toHaveAttribute('href', 'https://claude.ai/code/session_01FakeCloud')
+  await expect(page.getByLabel('first prompt')).toHaveValue('')
+})
+
 test('the inbox hears that an agent waits, and answers it in place', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')

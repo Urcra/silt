@@ -16,6 +16,7 @@ use silt_daemon::protocol::{
     Request, Response, Resumed, Reverted, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
+use silt_types::CloudSessionId;
 
 use crate::CliError;
 use crate::recording::{Recording, push_in_background};
@@ -215,6 +216,7 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
             session_id: session_id.clone(),
             isolated,
             existing: false,
+            cloud: None,
         })?;
         let recording = Recording::by_daemon(&started.thread)?;
         (started, recording)
@@ -510,15 +512,16 @@ pub fn track(agent: &str, session: Option<&str>) -> Result<(), Exn<CliError>> {
                 .id
         }
     };
-    let thread = start_tracking(agent, cwd, id)?;
+    let thread = start_tracking(agent, cwd, id, None)?;
     println!("tracking session in thread {}", short(&thread));
     Ok(())
 }
 
-fn start_tracking(agent: &dyn Agent, cwd: PathBuf, id: String) -> Result<String, Exn<CliError>> {
+fn start_tracking(agent: &dyn Agent, cwd: PathBuf, id: String, cloud: Option<CloudSessionId>) -> Result<String, Exn<CliError>> {
     ensure_daemon()?;
-    let started: SessionStarted =
-        call(&Request::StartSession { cwd, agent: agent.id().into(), session_id: Some(id), isolated: false, existing: true })?;
+    let request =
+        Request::StartSession { cwd, agent: agent.id().into(), session_id: Some(id), isolated: false, existing: true, cloud };
+    let started: SessionStarted = call(&request)?;
     Ok(started.thread)
 }
 
@@ -536,7 +539,9 @@ pub fn track_from_hook(agent: &str) -> Result<(), Exn<CliError>> {
     };
     let cwd = PathBuf::from(cwd);
     let cwd = cwd.canonicalize().unwrap_or(cwd);
-    let thread = start_tracking(agent, cwd, id.to_owned())?;
+    // Claude Code sets it in a cloud session's container (ADR 0040).
+    let cloud = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID").ok().and_then(|id| id.parse().ok());
+    let thread = start_tracking(agent, cwd, id.to_owned(), cloud)?;
     eprintln!("silt: recording this session in thread {}", short(&thread));
     let event = input["hook_event_name"].as_str().unwrap_or("SessionStart").to_owned();
     hook_input(Some(agent.id()), &event, input);

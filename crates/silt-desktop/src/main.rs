@@ -1,4 +1,4 @@
-//! Silt's desktop app: the local daemon's web UI in a window (ADR 0040).
+//! Silt's desktop app: the local daemon's web UI in a window (ADR 0041).
 //! Recording never depends on it. The daemon runs on its own, and closing
 //! the window leaves it and its agents running.
 

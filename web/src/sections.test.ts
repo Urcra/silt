@@ -24,6 +24,7 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     visibility: null,
     server: null,
     local_only: false,
+    cloud: null,
     ...overrides,
   }
 }

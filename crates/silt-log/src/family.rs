@@ -7,7 +7,7 @@ use silt_crdt::{
     Added, CausalError, CausalGraph, FileTree, InodeId, InodeKind, Parent, Stamp, TextDoc, TextError, TextEvent, TreeError,
     TreeEvent, TreeOp, VersionVector,
 };
-use silt_types::{ActorId, BlobHash, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
+use silt_types::{ActorId, BlobHash, CloudSessionId, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op, SessionRef, TurnMark};
 
@@ -128,6 +128,7 @@ pub struct ThreadState {
     lease: Option<(DeviceId, u64)>,
     forked_from: Option<ThreadId>,
     fork_point: Option<Frontier>,
+    cloud: Option<CloudSessionId>,
     /// Indices into the family log of the thread's merges.
     merges: Vec<usize>,
 }
@@ -144,6 +145,11 @@ impl ThreadState {
     /// The device that may write to the thread, with the lease's epoch.
     pub fn lease(&self) -> Option<(DeviceId, u64)> {
         self.lease
+    }
+
+    /// The Claude Code cloud session the thread records.
+    pub fn cloud_session(&self) -> Option<&CloudSessionId> {
+        self.cloud.as_ref()
     }
 
     /// The thread this one was forked from.
@@ -956,6 +962,9 @@ impl Family {
             {
                 thread.title = Some(title.clone());
                 thread.title_stamp = stamp;
+            }
+            if let crate::delta::ConvOp::CloudSession { id, .. } = conv {
+                thread.cloud = Some(id.clone());
             }
         }
         if let Op::Conv(crate::delta::ConvOp::Turn { session, mark }) = &delta.op {
