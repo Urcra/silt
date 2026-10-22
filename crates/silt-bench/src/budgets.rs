@@ -103,7 +103,7 @@ pub const BUDGETS: &[Budget] = &[
         name: "web.thread",
         measures: "a 2,000-message thread in the browser",
         limit: Limit::Described("shown < 100 ms, heap < 200 MB"),
-        status: Status::Elsewhere("web/e2e, from M18-06"),
+        status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
     },
     Budget {
         name: SYNC_PUSH,

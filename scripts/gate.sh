@@ -20,7 +20,8 @@ cargo build --profile perf -p silt-cli -p silt-bench
 target/perf/silt-bench check
 cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm --target wasm32-unknown-unknown
 
-# Playwright drives the built UI against a real daemon.
+# Playwright drives the built UI against a real daemon, the optimized one,
+# as `web.thread` is timed there.
 if [ -f web/package.json ]; then
-    pnpm -C web e2e
+    SILT="$PWD/target/perf/silt" pnpm -C web e2e
 fi

@@ -5,14 +5,20 @@ import { expect, test } from '@playwright/test'
 import { SILT, fixture } from './fixture'
 
 // `web.thread` of ADR 0034: a 2,000-message thread shows in under 100 ms
-// and keeps the page under 200 MB. Pending until the thread page loads its
-// history in pages (M18-06), so it reports rather than fails until then.
-const ENFORCED = false
+// and keeps the page under 200 MB. Timed on the optimized build the gate
+// passes in `$SILT`; a debug build only reports.
+const ENFORCED = process.env.SILT !== undefined
 const SHOWN_BUDGET_MS = 100
 const HEAP_BUDGET_MB = 200
 const ROUNDS = 1000
 
 let thread = ''
+
+/** When the thread's link was clicked and its first entry drawn, in the page's clock. */
+interface Timed {
+  clicked?: number
+  shown?: number
+}
 
 /** A long session of prompts, tool calls with large results, and replies. */
 function transcript(cwd: string, session: string): string {
@@ -79,18 +85,33 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
     await page.reload()
     await expect(row).toContainText(`${2 * ROUNDS}`, { timeout: 1000 })
   }).toPass({ timeout: 60_000 })
-  const started = Date.now()
+  // Timed in the page, from the click to the first entry being drawn, as
+  // Playwright's own work before a click lands takes tens of milliseconds.
+  await page.evaluate(() => {
+    const timed = window as unknown as Timed
+    document.addEventListener('click', () => (timed.clicked = performance.now()), { capture: true, once: true })
+    const drawn = new MutationObserver(() => {
+      if (document.querySelector('[data-testid="history"]')?.textContent?.includes('prompt 0: look at the module')) {
+        drawn.disconnect()
+        requestAnimationFrame(() => (timed.shown = performance.now()))
+      }
+    })
+    drawn.observe(document.body, { childList: true, subtree: true, characterData: true })
+  })
   const history = page.waitForResponse((response) => response.url().includes('/history'))
   await link.click()
   const answered = await history
-  console.log(`web.thread: history answered after ${Date.now() - started} ms, ${(await answered.body()).length} bytes`)
+  console.log(`web.thread: the first history page is ${(await answered.body()).length} bytes`)
   await expect(page.getByTestId('history').getByText('prompt 0: look at the module')).toBeVisible({ timeout: 60_000 })
-  const shown = Date.now() - started
+  const shown = await page.evaluate(() => {
+    const { clicked, shown } = window as unknown as Timed
+    return (shown ?? Number.NaN) - (clicked ?? Number.NaN)
+  })
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('HeapProfiler.collectGarbage')
   const { usedSize } = (await cdp.send('Runtime.getHeapUsage')) as { usedSize: number }
   const heapMb = usedSize / 1024 / 1024
-  console.log(`web.thread: shown in ${shown} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`)
+  console.log(`web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`)
   if (ENFORCED) {
     expect(shown, 'web.thread: shown').toBeLessThan(SHOWN_BUDGET_MS)
     expect(heapMb, 'web.thread: heap').toBeLessThan(HEAP_BUDGET_MB)
