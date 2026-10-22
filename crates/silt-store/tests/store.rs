@@ -85,6 +85,31 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 }
 
 #[tokio::test]
+async fn search_rows_written_after_their_deltas_are_pending_until_written() {
+    let (_dir, store) = store_with_thread().await;
+    store.append_deltas(FAMILY, &titles(10)).await.expect("appends");
+    let pulled = titles(31);
+    store.append_deltas_unindexed(FAMILY, &pulled[10..30]).await.expect("appends");
+    assert_eq!(store.deltas(FAMILY).await.expect("loads"), pulled[..30]);
+    assert_eq!(store.pending_search().await.expect("pending"), vec![(FAMILY, 10)]);
+    store.append_deltas_unindexed(FAMILY, &pulled[30..]).await.expect("appends");
+    assert_eq!(store.pending_search().await.expect("pending"), vec![(FAMILY, 10)], "the first unwritten stays");
+
+    let row = |delta: &silt_log::Delta, body: &str| silt_store::SearchRow {
+        thread: THREAD,
+        delta: delta.span.first(),
+        kind: "user".into(),
+        body: body.into(),
+    };
+    store.write_pending_search(FAMILY, &[row(&pulled[12], "halfway there")], 19).await.expect("writes");
+    assert_eq!(store.pending_search().await.expect("pending"), vec![(FAMILY, 20)]);
+    store.write_pending_search(FAMILY, &[row(&pulled[25], "the rest")], 30).await.expect("writes");
+    assert!(store.pending_search().await.expect("pending").is_empty());
+    assert_eq!(store.search("halfway", 10).await.expect("searches").len(), 1);
+    assert_eq!(store.search("rest", 10).await.expect("searches").len(), 1);
+}
+
+#[tokio::test]
 async fn compacting_compresses_the_chunks_stored_plain_and_reads_back_the_same() {
     let (dir, store) = store_with_thread().await;
     let appended = titles(2_500);

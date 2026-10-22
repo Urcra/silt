@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT first_seq, last_seq, codec, data FROM delta_chunks\n             WHERE family_id = ? AND last_seq > ? AND first_seq < ? ORDER BY first_seq",
+  "describe": {
+    "columns": [
+      {
+        "name": "first_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "first_seq"
+          }
+        }
+      },
+      {
+        "name": "last_seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "name": "codec",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "codec"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "delta_chunks",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "704131349c0d12858fc1c2fd790e670fd5d704fd6b15f816eca3d3bdc3b44310"
+}

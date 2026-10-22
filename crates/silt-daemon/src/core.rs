@@ -75,6 +75,8 @@ pub enum Event {
     },
     /// Compact the store if it's worth it, once after starting.
     Compact,
+    /// Write a batch of the search rows still pending for pulled deltas.
+    IndexPending,
     Acp {
         thread: ThreadId,
         run: u64,
@@ -172,6 +174,10 @@ pub struct Core {
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
+    /// Whether an [`Event::IndexPending`] waits in the queue. One at a time,
+    /// so a request queued behind a pull waits for one batch of rows, not
+    /// one per page pulled.
+    pub(crate) index_queued: bool,
     /// Threads in the trash, hidden until restored or purged.
     pub(crate) deleted: HashSet<ThreadId>,
     /// When this machine last moved each thread into or out of the trash;
@@ -256,6 +262,9 @@ pub struct Core {
     /// will compare it loads, for that comparison to take.
     prelisted: Option<(CheckoutId, Prelisting)>,
 }
+
+/// Pulled deltas whose search rows are written in one turn of the daemon.
+const INDEX_BATCH: i64 = 5000;
 
 /// A worktree's listing, being taken on a thread of its own.
 type Prelisting = std::thread::JoinHandle<Result<Vec<ListedFile>, silt_git::GitError>>;
@@ -424,6 +433,7 @@ impl Core {
             next_token: 0,
             change_noticed: None,
             importing: false,
+            index_queued: false,
             deleted: HashSet::new(),
             trash_changed: HashMap::new(),
             collaborators: HashMap::new(),
@@ -1339,7 +1349,35 @@ impl Core {
         rows: &[SearchRow],
         read: Option<SessionRead<'_>>,
     ) -> Result<(), CoreError> {
-        let Err(error) = self.store.append_deltas_with(family_id, deltas, rows, read).await else {
+        let written = self.store.append_deltas_with(family_id, deltas, rows, read).await;
+        self.persisted(family_id, deltas, written).await
+    }
+
+    /// [`Self::persist_with`] for deltas pulled from a server, whose search
+    /// rows are written afterwards, by [`Event::IndexPending`].
+    pub(crate) async fn persist_unindexed(&mut self, family_id: FamilyId, deltas: &[Delta]) -> Result<(), CoreError> {
+        let written = self.store.append_deltas_unindexed(family_id, deltas).await;
+        let persisted = self.persisted(family_id, deltas, written).await;
+        self.queue_index_pending();
+        persisted
+    }
+
+    pub(crate) fn queue_index_pending(&mut self) {
+        if !self.index_queued {
+            self.index_queued = self.events.send(Event::IndexPending).is_ok();
+        }
+    }
+
+    /// What follows writing `deltas`: a snapshot when one is due and word to
+    /// whoever listens, or the family read back from the store when the
+    /// write failed, so what's in memory never runs ahead of it.
+    async fn persisted(
+        &mut self,
+        family_id: FamilyId,
+        deltas: &[Delta],
+        written: Result<(), silt_store::StoreError>,
+    ) -> Result<(), CoreError> {
+        let Err(error) = written else {
             self.snapshot_if_due(family_id).await;
             self.announce_family(family_id, deltas);
             return Ok(());
@@ -1348,6 +1386,23 @@ impl Core {
             warn!(error = %reload, family = %family_id, "could not reload the family after a failed write");
         }
         Err(error.into())
+    }
+
+    /// Writes a batch of the search rows still pending for deltas pulled
+    /// from a server, and queues the next batch while any is left.
+    pub(crate) async fn index_pending(&mut self) -> Result<(), CoreError> {
+        self.index_queued = false;
+        let Some((family, from)) = self.store.pending_search().await?.into_iter().next() else {
+            return Ok(());
+        };
+        let to = from + INDEX_BATCH;
+        let stored = self.store.stored_deltas_in(family, from..to).await?;
+        let batch = usize::try_from(INDEX_BATCH).expect("a small batch");
+        let deltas = stored.decode(0..stored.len().min(batch))?;
+        let rows = self.search_rows(&deltas);
+        self.store.write_pending_search(family, &rows, to - 1).await?;
+        self.queue_index_pending();
+        Ok(())
     }
 
     async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, from_seq FROM search_pending ORDER BY family_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "search_pending",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "from_seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "search_pending",
+            "name": "from_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ca8dd35d4e5b3ea3a9b7364f880e3de8cf608fd70450a23af8c3acf8dd2dee56"
+}

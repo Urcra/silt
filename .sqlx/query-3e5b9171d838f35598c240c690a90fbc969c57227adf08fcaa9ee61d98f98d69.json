@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM search_pending WHERE family_id = ?1\n             AND from_seq > (SELECT COALESCE(MAX(seq), -1) FROM deltas WHERE family_id = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3e5b9171d838f35598c240c690a90fbc969c57227adf08fcaa9ee61d98f98d69"
+}

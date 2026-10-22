@@ -457,6 +457,40 @@ impl Store {
         self.stored_deltas_after(family, -1).await
     }
 
+    /// The family's deltas at positions `seqs`, read but not decoded: the
+    /// first of them at position 0. The chunk holding the last may hold
+    /// more after it.
+    pub async fn stored_deltas_in(&self, family: FamilyId, seqs: std::ops::Range<i64>) -> Result<StoredDeltas, StoreError> {
+        let (after, before) = (seqs.start - 1, seqs.end);
+        let family = id_bytes(family.0);
+        let chunks = sqlx::query!(
+            "SELECT first_seq, last_seq, codec, data FROM delta_chunks
+             WHERE family_id = ? AND last_seq > ? AND first_seq < ? ORDER BY first_seq",
+            family,
+            after,
+            before
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let rows_after = chunks.last().map_or(after, |chunk| chunk.last_seq.max(after));
+        let rows = sqlx::query!(
+            "SELECT format, data FROM deltas WHERE family_id = ? AND seq > ? AND seq < ? ORDER BY seq",
+            family,
+            rows_after,
+            before
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(StoredDeltas {
+            after,
+            chunks: chunks
+                .into_iter()
+                .map(|chunk| StoredChunk { first: chunk.first_seq, last: chunk.last_seq, codec: chunk.codec, data: chunk.data })
+                .collect(),
+            rows: rows.into_iter().map(|row| (row.format, row.data)).collect(),
+        })
+    }
+
     async fn stored_deltas_after(&self, family: FamilyId, after: i64) -> Result<StoredDeltas, StoreError> {
         let family = id_bytes(family.0);
         let chunks = sqlx::query!(
@@ -1087,6 +1121,59 @@ impl Store {
         Ok(())
     }
 
+    /// Stores `deltas` for the family without their search rows, which
+    /// [`Self::write_pending_search`] writes later: writing them takes as long
+    /// again, and a pull from a server shouldn't wait on it. Where they are
+    /// still to be written is stored with the deltas, so a crash between
+    /// leaves them to write at the next start.
+    pub async fn append_deltas_unindexed(&self, family: FamilyId, deltas: &[Delta]) -> Result<(), StoreError> {
+        if deltas.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.write_transaction().await?;
+        let id = id_bytes(family.0);
+        let from = sqlx::query_scalar!(r#"SELECT COALESCE(MAX(seq) + 1, 0) AS "from!: i64" FROM deltas WHERE family_id = ?"#, id)
+            .fetch_one(&mut *tx)
+            .await?;
+        append_deltas_in(&mut tx, family, deltas).await?;
+        sqlx::query!(
+            "INSERT INTO search_pending (family_id, from_seq) VALUES (?, ?) ON CONFLICT (family_id) DO NOTHING",
+            id,
+            from
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The families whose search rows are still to be written, each with the
+    /// position of its first delta without them.
+    pub async fn pending_search(&self) -> Result<Vec<(FamilyId, i64)>, StoreError> {
+        let rows =
+            sqlx::query!("SELECT family_id, from_seq FROM search_pending ORDER BY family_id").fetch_all(&self.pool).await?;
+        rows.into_iter().map(|row| Ok((FamilyId(id_from(&row.family_id)?), row.from_seq))).collect()
+    }
+
+    /// Writes the search rows of the family's deltas up to position
+    /// `through`, which are then no longer pending.
+    pub async fn write_pending_search(&self, family: FamilyId, rows: &[SearchRow], through: i64) -> Result<(), StoreError> {
+        let mut tx = self.write_transaction().await?;
+        insert_search_rows_in(&mut tx, rows).await?;
+        let id = id_bytes(family.0);
+        let next = through + 1;
+        sqlx::query!("UPDATE search_pending SET from_seq = ? WHERE family_id = ?", next, id).execute(&mut *tx).await?;
+        sqlx::query!(
+            "DELETE FROM search_pending WHERE family_id = ?1
+             AND from_seq > (SELECT COALESCE(MAX(seq), -1) FROM deltas WHERE family_id = ?1)",
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Full-text search; `query` uses SQLite FTS5 syntax and words are
     /// matched as prefixes.
     pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchHit>, StoreError> {
@@ -1268,6 +1355,7 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
     sqlx::query!("DELETE FROM delta_chunks WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM family_snapshots WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM sync_state WHERE family_id = ?1", family).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM search_pending WHERE family_id = ?1", family).execute(&mut *tx).await?;
     Ok(())
 }
 

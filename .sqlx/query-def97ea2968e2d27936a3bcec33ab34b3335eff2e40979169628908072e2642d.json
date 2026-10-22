@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO search_pending (family_id, from_seq) VALUES (?, ?) ON CONFLICT (family_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "def97ea2968e2d27936a3bcec33ab34b3335eff2e40979169628908072e2642d"
+}

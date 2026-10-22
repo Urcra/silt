@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(seq) + 1, 0) AS \"from!: i64\" FROM deltas WHERE family_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "from!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c057b8b82a78a0924e1375a68e98d31102071cae35487d17b5769ab578429f87"
+}

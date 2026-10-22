@@ -116,7 +116,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             return Err(error.into());
         }
     };
-    // After the requests that came during the load.
+    // After the requests that came during the load: rows a crash left
+    // unwritten, then a store from an older Silt compacted.
+    core.queue_index_pending();
     let _ = events.send(Event::Compact);
     let tick_events = events.clone();
     let idle = Arc::new(AtomicBool::new(false));
@@ -158,6 +160,11 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Drain { session_id } => core.drain(&session_id).await,
             Event::Compact => core.compact_if_worth_it().await,
+            Event::IndexPending => {
+                if let Err(error) = core.index_pending().await {
+                    warn!(%error, "could not write the search rows of pulled deltas; they're written at the next start");
+                }
+            }
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
             Event::Pushed { family, epoch, generation, outcome, error } => {
                 core.pushed(family, epoch, generation, outcome, error).await

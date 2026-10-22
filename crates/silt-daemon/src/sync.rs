@@ -238,6 +238,26 @@ impl Core {
     /// what is already here.
     /// Applies deltas pulled outside the background sync, returning where
     /// they stopped as [`Self::apply_remote`] does.
+    /// What search finds of `deltas`: the entries of their agents' lines.
+    pub(crate) fn search_rows(&mut self, deltas: &[Delta]) -> Vec<SearchRow> {
+        let mut rows = Vec::new();
+        for delta in deltas {
+            if let Op::Conv(ConvOp::Native { .. }) = &delta.op {
+                for entry in crate::transcripts::native_entries(&mut self.index_transcripts, delta) {
+                    if let Some(body) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
+                        rows.push(SearchRow {
+                            thread: delta.thread,
+                            delta: delta.span.first(),
+                            kind: entry.kind().to_owned(),
+                            body,
+                        });
+                    }
+                }
+            }
+        }
+        rows
+    }
+
     pub(crate) async fn apply_pulled(&mut self, family: FamilyId, deltas: Vec<Delta>) -> Result<Option<usize>, CoreError> {
         self.apply_remote(family, deltas).await
     }
@@ -290,22 +310,8 @@ impl Core {
         if fresh.is_empty() {
             return Ok(stopped);
         }
-        let mut rows = Vec::new();
-        for delta in &fresh {
-            if let Op::Conv(ConvOp::Native { .. }) = &delta.op {
-                for entry in crate::transcripts::native_entries(&mut self.index_transcripts, delta) {
-                    if let Some(body) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
-                        rows.push(SearchRow {
-                            thread: delta.thread,
-                            delta: delta.span.first(),
-                            kind: entry.kind().to_owned(),
-                            body,
-                        });
-                    }
-                }
-            }
-        }
-        self.persist_with(family_id, &fresh, &rows, None).await?;
+        // Their search rows take as long again to write, and come after.
+        self.persist_unindexed(family_id, &fresh).await?;
         // Others' work is what the server notifies people of.
         self.announce(crate::protocol::BusEvent::Inbox);
         self.syncs.entry(family_id).or_default().appended_from_server(at, fresh.len() as u64);

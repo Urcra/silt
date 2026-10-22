@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE search_pending SET from_seq = ? WHERE family_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3f2c48b95e13239121055f775bbf1643e132390eda448a9ad1592460278ddcb9"
+}

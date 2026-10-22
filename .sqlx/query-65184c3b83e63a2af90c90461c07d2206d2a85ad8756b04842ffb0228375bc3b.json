@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM search_pending WHERE family_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "65184c3b83e63a2af90c90461c07d2206d2a85ad8756b04842ffb0228375bc3b"
+}
