@@ -561,12 +561,27 @@ fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
             if let (Some(thread), "Stop") = (&captured.thread, event) {
                 push_in_background(thread);
             }
+            if captured.thread.is_some() {
+                start_daemon_for_later_hooks();
+            }
             captured.reply
         }
         Err(error) => {
             eprintln!("silt: could not record the {event} hook: {}", silt_daemon::protocol::error_chain(&error));
             HookReply::default()
         }
+    }
+}
+
+/// Starts the daemon after a hook of a recorded session captured without
+/// one, so the session's later hooks are forwarded rather than each loading
+/// its family (ADR 0036). Capture in process asked for starts none.
+fn start_daemon_for_later_hooks() {
+    if daemonless_capture() || silt_daemon::holds_lock(&paths::data_dir()) {
+        return;
+    }
+    if let Err(error) = spawn_daemon() {
+        eprintln!("silt: could not start the daemon for this session's next hooks: {error}");
     }
 }
 

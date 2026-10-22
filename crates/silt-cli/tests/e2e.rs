@@ -271,6 +271,38 @@ fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
     assert!(env.stdout(&["diff", &thread, "--turn", "1"]).contains("+fn farewell() {}"));
 }
 
+#[test]
+fn a_hook_that_finds_no_daemon_starts_one_for_the_hooks_after_it() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    env.silt(&["daemon", "stop"]);
+    let session = env.transcript().file_stem().map(|stem| stem.to_string_lossy().into_owned()).expect("session id");
+    let hook = |envs: &[(&str, &str)]| {
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+            .args(["hook", "UserPromptSubmit"])
+            .current_dir(&env.repo)
+            .env("SILT_HOME", &env.silt_home)
+            .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+            .envs(envs.iter().copied())
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("hook runs");
+        std::io::Write::write_all(
+            &mut hook.stdin.take().expect("stdin"),
+            format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit"}}"#).as_bytes(),
+        )
+        .expect("hook input");
+        assert!(hook.wait().expect("hook ends").success());
+    };
+    let running = || env.stdout(&["daemon", "status"]).starts_with("running");
+
+    hook(&[("SILT_DAEMONLESS_CAPTURE", "1")]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!running(), "capture in process, as asked for, starts no daemon");
+    hook(&[]);
+    assert!(eventually(running), "the hook started the daemon");
+}
+
 /// What a recorded session projects to, as `silt show` and `silt diff` print
 /// it, with what differs between two machines (paths, thread ids) left out.
 fn projection(env: &Env, envs: &[(&str, &str)]) -> String {
