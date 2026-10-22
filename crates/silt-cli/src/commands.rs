@@ -156,6 +156,15 @@ pub fn daemon_stop() -> Result<(), Exn<CliError>> {
         return Ok(());
     }
     call::<String>(&Request::Shutdown)?;
+    // The daemon answers before it closes the store, and lets go of its lock
+    // only after: until then the data dir isn't safe to copy.
+    let deadline = Instant::now() + BUSY_DAEMON_WAIT;
+    while silt_daemon::holds_lock(&paths::data_dir()) {
+        if Instant::now() >= deadline {
+            return Err(fail(format!("the Silt daemon does not exit; see {}", paths::log_path().display())));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     println!("stopped");
     Ok(())
 }

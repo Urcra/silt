@@ -2,6 +2,7 @@
 //!
 //! `silt-bench check` measures the enforced budgets and fails on any over
 //! its limit; the gate runs it. `silt-bench report` measures every budget.
+//! A cloud session's machine has its own limits (ADR 0037).
 //! Build both binaries with `cargo build --profile perf -p silt-cli -p
 //! silt-bench`, since debug timings say nothing about what people see.
 
@@ -17,7 +18,7 @@ use std::process::{Command, ExitCode};
 use clap::{Parser, Subcommand};
 use exn::{Exn, ResultExt};
 
-use budgets::{BUDGETS, Budget, Measured, Status, Verdict};
+use budgets::{BUDGETS, Budget, Machine, Measured, Status, Verdict};
 use fixtures::Fixtures;
 use measure::Scenario;
 
@@ -83,6 +84,9 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     };
     let fixture_dir = cli.fixtures.clone().unwrap_or_else(|| bin.parent().unwrap_or(bin).join("silt-bench"));
     let fixtures = Fixtures::in_dir(&fixture_dir);
+    let limits =
+        Machine::choose(std::env::var("SILT_BENCH_MACHINE").ok().as_deref(), std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref())
+            .map_err(fail)?;
     for name in &cli.only {
         if budgets::budget(name).is_none() {
             return Err(fail(format!("no budget is named {name}")));
@@ -112,7 +116,7 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
         // noise of a busy machine. Other work on the machine only ever adds
         // to a measurement, so the better of the two stands.
         for scenario in &scenarios {
-            if scenario.budgets().iter().any(|name| over(&selected, &measured, name)) {
+            if scenario.budgets().iter().any(|name| over(&selected, limits, &measured, name)) {
                 eprintln!("silt-bench: over budget; measuring {scenario:?} again");
                 for (name, again) in scenario.run(&silt, &fixtures, &wanted, cli.keep).await? {
                     let better = measured.get(name).map_or(again, |first| budgets::better(*first, again));
@@ -123,16 +127,16 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     }
 
     let machine = machine(&fixture_dir);
-    println!("silt-bench on {machine}");
+    println!("silt-bench on {machine}, with {limits}");
     for budget in BUDGETS.iter().filter(|budget| selected.contains(budget) || measured.contains_key(budget.name)) {
-        println!("{}", budgets::line(budget, measured.get(budget.name).copied()));
+        println!("{}", budgets::line(budget, limits, measured.get(budget.name).copied()));
     }
     let mut within = true;
     for budget in selected.iter().filter(|budget| budget.status == Status::Enforced) {
-        if over(&selected, &measured, budget.name) {
+        if over(&selected, limits, &measured, budget.name) {
             within = false;
             match measured.get(budget.name) {
-                Some(measured) => eprintln!("{}", budgets::failure(budget, *measured, &machine)),
+                Some(measured) => eprintln!("{}", budgets::failure(budget, limits, *measured, &machine)),
                 None => eprintln!("over budget: {} was never measured", budget.name),
             }
         }
@@ -140,11 +144,11 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     Ok(within)
 }
 
-fn over(selected: &[&Budget], measured: &HashMap<&str, Measured>, name: &str) -> bool {
+fn over(selected: &[&Budget], limits: Machine, measured: &HashMap<&str, Measured>, name: &str) -> bool {
     let Some(budget) = selected.iter().find(|budget| budget.name == name && budget.status == Status::Enforced) else {
         return false;
     };
-    measured.get(name).is_none_or(|measured| budgets::verdict(budget.limit, *measured) != Verdict::Within)
+    measured.get(name).is_none_or(|measured| budgets::verdict(budget.limit(limits), *measured) != Verdict::Within)
 }
 
 /// The machine's cores and the filesystem the fixtures are on, which

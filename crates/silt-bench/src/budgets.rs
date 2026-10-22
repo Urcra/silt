@@ -35,8 +35,51 @@ pub enum Status {
 pub struct Budget {
     pub name: &'static str,
     pub measures: &'static str,
-    pub limit: Limit,
+    /// On the reference machine, the development box (ADR 0034).
+    pub dev: Limit,
+    /// On a cloud session's machine, which is several times slower (ADR 0037).
+    pub cloud: Limit,
     pub status: Status,
+}
+
+impl Budget {
+    pub fn limit(&self, machine: Machine) -> Limit {
+        match machine {
+            Machine::Dev => self.dev,
+            Machine::Cloud => self.cloud,
+        }
+    }
+}
+
+/// Which limits apply: the machine the budgets were set on, or a cloud
+/// session's (ADR 0037).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Machine {
+    Dev,
+    Cloud,
+}
+
+impl Machine {
+    /// From `SILT_BENCH_MACHINE` when it's set, and otherwise from
+    /// `CLAUDE_CODE_REMOTE`, which cloud sessions set to `true`.
+    pub fn choose(chosen: Option<&str>, remote: Option<&str>) -> Result<Self, String> {
+        match chosen {
+            Some("dev") => Ok(Self::Dev),
+            Some("cloud") => Ok(Self::Cloud),
+            Some(other) => Err(format!("SILT_BENCH_MACHINE is {other:?}; it takes dev or cloud")),
+            None if remote == Some("true") => Ok(Self::Cloud),
+            None => Ok(Self::Dev),
+        }
+    }
+}
+
+impl fmt::Display for Machine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dev => f.write_str("dev limits"),
+            Self::Cloud => f.write_str("cloud limits"),
+        }
+    }
 }
 
 pub const RECORD_IMPORT: &str = "record.import";
@@ -56,79 +99,92 @@ pub const BUDGETS: &[Budget] = &[
     Budget {
         name: RECORD_IMPORT,
         measures: "tracking a 100 MB transcript, the daemon already running",
-        limit: Limit::Time(Duration::from_secs(1)),
+        dev: Limit::Time(Duration::from_secs(1)),
+        cloud: Limit::Time(Duration::from_secs(4)),
         status: Status::Enforced,
     },
     Budget {
         name: RECORD_HOOK,
         measures: "`silt hook` forwarded to the running daemon, p95 of the slowest event, at 100k deltas and 20k files",
-        limit: Limit::Time(Duration::from_millis(20)),
+        dev: Limit::Time(Duration::from_millis(20)),
+        cloud: Limit::Time(Duration::from_millis(70)),
         status: Status::Enforced,
     },
     Budget {
         name: RECORD_HOOK_DAEMONLESS,
         measures: "the hook that finds no daemon and captures in process before starting one, p95 of the slowest event, at 100k deltas and 20k files",
-        limit: Limit::Time(Duration::from_millis(50)),
+        dev: Limit::Time(Duration::from_millis(50)),
+        cloud: Limit::Time(Duration::from_millis(200)),
         status: Status::Enforced,
     },
     Budget {
         name: STORE_SIZE,
         measures: "the data dir over the transcript bytes it records",
-        limit: Limit::Ratio(1.5),
+        dev: Limit::Ratio(1.5),
+        cloud: Limit::Ratio(1.5),
         status: Status::Enforced,
     },
     Budget {
         name: DAEMON_STARTUP,
         measures: "spawning the daemon to its first answer, holding every fixture",
-        limit: Limit::Time(Duration::from_millis(100)),
+        dev: Limit::Time(Duration::from_millis(100)),
+        cloud: Limit::Time(Duration::from_millis(100)),
         status: Status::Enforced,
     },
     Budget {
         name: DAEMON_READY,
         measures: "spawning the daemon to its first thread listing, holding every fixture (100 MB of transcript), at 100 MB/s",
-        limit: Limit::Time(Duration::from_secs(1)),
+        dev: Limit::Time(Duration::from_secs(1)),
+        cloud: Limit::Time(Duration::from_millis(1600)),
         status: Status::Enforced,
     },
     Budget {
         name: CHECKOUT_RESCAN,
         measures: "the capture step after a Bash call, comparing a 50,000-file checkout",
-        limit: Limit::Time(Duration::from_millis(200)),
+        dev: Limit::Time(Duration::from_millis(200)),
+        cloud: Limit::Time(Duration::from_millis(850)),
         status: Status::Enforced,
     },
     Budget {
         name: DAEMON_IDLE,
         measures: "CPU of a daemon with nothing to do, over 10 s",
-        limit: Limit::CoreShare(0.001),
+        dev: Limit::CoreShare(0.001),
+        cloud: Limit::CoreShare(0.002),
         status: Status::Enforced,
     },
     Budget {
         name: "web.thread",
         measures: "a 2,000-message thread in the browser",
-        limit: Limit::Described("shown < 100 ms, heap < 200 MB"),
+        dev: Limit::Described("shown < 100 ms, heap < 200 MB"),
+        cloud: Limit::Described("shown < 210 ms, heap < 200 MB"),
         status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
     },
     Budget {
         name: SYNC_PUSH,
         measures: "`silt sync --once` pushing a family holding 100 MB of transcript to a server, at 100 MB/s",
-        limit: Limit::Time(Duration::from_secs(1)),
+        dev: Limit::Time(Duration::from_secs(1)),
+        cloud: Limit::Time(Duration::from_millis(2600)),
         status: Status::Enforced,
     },
     Budget {
         name: SYNC_PULL,
         measures: "`silt resume` pulling that family onto another machine and restoring its session, at 100 MB/s",
-        limit: Limit::Time(Duration::from_secs(1)),
+        dev: Limit::Time(Duration::from_secs(1)),
+        cloud: Limit::Time(Duration::from_secs(7)),
         status: Status::Enforced,
     },
     Budget {
         name: APP_THREADS,
         measures: "the server's hosted app listing threads, holding that family",
-        limit: Limit::Time(Duration::from_millis(100)),
+        dev: Limit::Time(Duration::from_millis(100)),
+        cloud: Limit::Time(Duration::from_millis(200)),
         status: Status::Enforced,
     },
     Budget {
         name: APP_HISTORY,
         measures: "the hosted app's first page of that family's 100 MB session, the first time it's opened",
-        limit: Limit::Time(Duration::from_millis(100)),
+        dev: Limit::Time(Duration::from_millis(100)),
+        cloud: Limit::Time(Duration::from_millis(230)),
         status: Status::Enforced,
     },
 ];
@@ -199,17 +255,23 @@ pub fn better(first: Measured, again: Measured) -> Measured {
 }
 
 /// One row of the report.
-pub fn line(budget: &Budget, measured: Option<Measured>) -> String {
+pub fn line(budget: &Budget, machine: Machine, measured: Option<Measured>) -> String {
+    let limit = budget.limit(machine);
     let (shown, verdict) = match measured {
-        Some(measured) => (measured.to_string(), verdict_word(verdict(budget.limit, measured))),
+        Some(measured) => (measured.to_string(), verdict_word(verdict(limit, measured))),
         None => ("-".to_owned(), "not measured"),
     };
-    format!("{:<23} {:>18}  {:<30} {:<13} {}", budget.name, shown, budget.limit.to_string(), verdict, budget.status)
+    format!("{:<23} {:>18}  {:<30} {:<13} {}", budget.name, shown, limit.to_string(), verdict, budget.status)
 }
 
 /// What the gate prints for an enforced budget that's over.
-pub fn failure(budget: &Budget, measured: Measured, machine: &str) -> String {
-    format!("over budget: {} ({}) measured {measured}, limit {}, on {machine}", budget.name, budget.measures, budget.limit)
+pub fn failure(budget: &Budget, limits: Machine, measured: Measured, machine: &str) -> String {
+    format!(
+        "over budget: {} ({}) measured {measured}, limit {}, on {machine} with {limits}",
+        budget.name,
+        budget.measures,
+        budget.limit(limits)
+    )
 }
 
 fn verdict_word(verdict: Verdict) -> &'static str {
@@ -269,9 +331,34 @@ mod tests {
     #[test]
     fn every_budget_measured_here_has_a_comparable_limit() {
         for budget in BUDGETS {
-            let comparable = !matches!(budget.limit, Limit::Described(_));
-            assert_eq!(comparable, !matches!(budget.status, Status::Elsewhere(_)), "{}", budget.name);
+            for limit in [budget.dev, budget.cloud] {
+                let comparable = !matches!(limit, Limit::Described(_));
+                assert_eq!(comparable, !matches!(budget.status, Status::Elsewhere(_)), "{}", budget.name);
+            }
         }
+    }
+
+    #[test]
+    fn a_cloud_limit_is_of_the_same_kind_and_never_tighter() {
+        for budget in BUDGETS {
+            let looser = match (budget.dev, budget.cloud) {
+                (Limit::Time(dev), Limit::Time(cloud)) => cloud >= dev,
+                (Limit::Ratio(dev), Limit::Ratio(cloud)) | (Limit::CoreShare(dev), Limit::CoreShare(cloud)) => cloud >= dev,
+                (Limit::Described(_), Limit::Described(_)) => true,
+                _ => false,
+            };
+            assert!(looser, "{}", budget.name);
+        }
+    }
+
+    #[test]
+    fn the_machine_is_chosen_by_name_or_by_a_cloud_session() {
+        assert_eq!(Machine::choose(None, None), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(None, Some("true")), Ok(Machine::Cloud));
+        assert_eq!(Machine::choose(None, Some("false")), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(Some("dev"), Some("true")), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(Some("cloud"), None), Ok(Machine::Cloud));
+        assert!(Machine::choose(Some("laptop"), None).is_err());
     }
 
     #[test]
@@ -284,11 +371,11 @@ mod tests {
     #[test]
     fn a_failure_names_the_budget_its_limit_and_the_measurement() {
         let budget = budget(RECORD_IMPORT).expect("listed");
-        let message = failure(budget, Measured::Time(Duration::from_millis(1500)), "32 cores, ext2/ext3");
+        let message = failure(budget, Machine::Dev, Measured::Time(Duration::from_millis(1500)), "32 cores, ext2/ext3");
         assert_eq!(
             message,
             "over budget: record.import (tracking a 100 MB transcript, the daemon already running) \
-             measured 1.50 s, limit < 1.00 s, on 32 cores, ext2/ext3"
+             measured 1.50 s, limit < 1.00 s, on 32 cores, ext2/ext3 with dev limits"
         );
     }
 

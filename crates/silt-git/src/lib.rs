@@ -160,11 +160,11 @@ impl Repo {
         self.repo.config_snapshot().boolean("core.ignoreCase").unwrap_or(false)
     }
 
+    /// The URL as configured, before `insteadOf` rewrites: it names the
+    /// project the same way on every machine, and a copy of it into another
+    /// repository keeps following the user's rewrites.
     pub fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
-        let Ok(remote) = self.repo.find_remote(name) else {
-            return Ok(None);
-        };
-        Ok(remote.url(gix::remote::Direction::Fetch).map(|url| url.to_bstring().to_str_lossy().into_owned()))
+        Ok(self.repo.config_snapshot().string_by("remote", Some(name.into()), "url").map(|url| url.to_str_lossy().into_owned()))
     }
 
     /// Every file in `commit`'s tree. Submodules are skipped.
