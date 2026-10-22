@@ -75,6 +75,28 @@ test('the workspace home', async ({ page }) => {
   })
 })
 
+test('the command palette', async ({ page }) => {
+  await open(page, '/')
+  await shoot(page, 'palette', async (shown) => {
+    await shown.keyboard.press('Escape')
+    await shown.getByRole('button', { name: 'command palette' }).click()
+    await shown.getByLabel('command', { exact: true }).fill('farewell')
+    await expect(shown.getByText('In history, including before compaction')).toBeVisible()
+  })
+})
+
+test('switching workspace', async ({ page }) => {
+  await open(page, '/')
+  await shoot(page, 'switcher', async (shown) => {
+    await shown.keyboard.press('Escape')
+    await shown.keyboard.press('Escape')
+    const drawer = shown.getByRole('button', { name: 'show projects' })
+    if ((shown.viewportSize()?.width ?? 0) < 768 && (await drawer.count()) > 0) await drawer.click()
+    await shown.getByRole('button', { name: /^workspace: / }).click()
+    await expect(shown.getByRole('dialog', { name: 'Switch workspace' })).toBeVisible()
+  })
+})
+
 test('a thread', async ({ page }) => {
   await open(page, `/t/${world.thread}`)
   await shoot(page, 'thread', async (shown) => {

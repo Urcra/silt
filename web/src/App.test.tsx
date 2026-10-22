@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from './App'
 import type { ThreadSummary } from './api'
@@ -26,6 +26,8 @@ test('lists threads from the daemon', async () => {
               edits: 3,
               location: 'here',
               forked_from: null,
+              owner: '',
+              collaborators: [],
               last_ms: 1,
               merged: false,
               review: false,
@@ -37,11 +39,10 @@ test('lists threads from the daemon', async () => {
     }),
   )
   render(<App />)
-  expect(await screen.findByRole('link', { name: 'Silt' })).toBeInTheDocument()
-  expect(await screen.findAllByText('Fix the lexer')).toHaveLength(2)
-  expect(screen.getByText('456789abcdef')).toBeInTheDocument()
+  expect(await screen.findByRole('link', { name: 'silt' })).toBeInTheDocument()
+  await waitFor(() => expect(screen.getAllByText('Fix the lexer')).toHaveLength(2))
   const project = screen.getByRole('region', { name: 'github.com/u/r' })
-  expect(project).toHaveTextContent('r1Fix the lexer')
+  expect(project).toHaveTextContent('rFix the lexer')
 })
 
 test('threads are grouped by project, newest first', () => {

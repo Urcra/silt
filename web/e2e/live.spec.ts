@@ -111,7 +111,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   const asked = alice.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
-  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('needs you')
+  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('waiting on you')
   await asked.getByRole('button', { name: 'Allow' }).click()
 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -181,7 +181,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
     await hosted.reload()
     await expect(waiting).toBeVisible({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
-  await expect(waiting.getByText('needs you')).toBeVisible()
+  await expect(waiting.getByText(/waiting on you/)).toBeVisible()
 
   // The browser has no daemon: what it asks goes through the server to the machine.
   await waiting.getByRole('link').first().click()
@@ -625,7 +625,7 @@ test('a comment written in the server-hosted app reaches the machines', async ({
 
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('banner').getByRole('link', { name: 'Devices' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Devices', exact: true }).click()
   const here = page.getByRole('region').filter({ has: page.getByText('this device', { exact: true }) })
   await expect(here.getByText('online', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'alice-laptop' }).getByText('online', { exact: true })).toBeVisible()
@@ -906,7 +906,7 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await alice.goto(live.alice)
   await bob.goto(live.bob)
   const sidebar = (page: Page) => page.getByRole('navigation', { name: 'projects' })
-  const shared = (page: Page) => sidebar(page).getByRole('link', { name: /Add a farewell$/ }).first()
+  const shared = (page: Page) => sidebar(page).getByRole('link', { name: /^Add a farewell/ }).first()
   const act = async (page: Page, action: string) => {
     await shared(page).hover()
     await sidebar(page).getByRole('button', { name: 'actions for Add a farewell' }).first().click()
@@ -918,9 +918,9 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await expect(sidebar(bob).getByRole('region', { name: 'pinned' })).toHaveCount(0)
   await act(alice, 'Unpin')
   await act(alice, 'Snooze until something happens')
+  // Snoozed threads fold behind a count under their project.
+  await sidebar(alice).getByRole('button', { name: /1 snoozed/ }).click()
   const snoozed = sidebar(alice).getByRole('region', { name: 'snoozed' })
-  await expect(snoozed).toContainText('1')
-  await snoozed.getByRole('button', { expanded: false }).click()
   await snoozed.getByRole('button', { name: 'actions for Add a farewell' }).click()
   await alice.getByRole('menuitem', { name: 'Wake up' }).click()
   await expect(snoozed).toHaveCount(0)
@@ -939,7 +939,7 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await expect(shared(bob).getByRole('img', { name: 'unread' })).toHaveCount(0)
 
   await act(alice, 'Settle')
-  await expect(sidebar(alice).getByRole('region', { name: 'settled' })).toContainText('1')
+  await expect(sidebar(alice).getByRole('button', { name: /1 settled/ })).toBeVisible()
   await alice.context().close()
   await bob.context().close()
 })
@@ -1033,7 +1033,7 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
 
-  await page.getByRole('banner').getByRole('link', { name: 'Graph' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /history graph$/ }).first().click()
   // A test above settles threads, which the graph leaves out unless asked.
   await page.getByLabel('Settled too').check()
   const graph = page.getByRole('list', { name: 'graph' })

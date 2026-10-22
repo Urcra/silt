@@ -1,26 +1,56 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Fragment, useState } from 'react'
-import { api } from '../api'
+import { useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
+import { api, type OrgInfo } from '../api'
 import { useNow } from '../now'
 import { keys } from '../query'
 import { sections } from '../sections'
 import { serverName } from '../served'
-import { useActions } from '../shortcuts'
-import { Dialog, Select } from '../ui'
-import { type Workspace, inWorkspace, orgsOf, setWorkspace, useWorkspace, workspaceOf, workspaceValue } from '../workspace'
+import { formatKeys, useActions } from '../shortcuts'
+import { Button, Dialog, Icon, Kbd, Popover, cx } from '../ui'
+import { type Workspace, inWorkspace, orgsOf, setWorkspace, useWorkspace, workspaceValue } from '../workspace'
 
-const CONNECT = 'connect'
+interface Choice {
+  name: string
+  /** What it holds, under its name. */
+  sub: string
+  /** How the palette and a screen reader name it. */
+  long: string
+  workspace: Workspace
+  offline?: boolean
+}
 
-/**
- * Picks the workspace this tab looks at (ADR 0032): an org on one of the
- * servers this machine is signed in to, a whole server, this machine's own
- * threads, or everything, each with how many threads need the person.
- */
-export function WorkspaceSwitcher() {
-  const workspace = useWorkspace()
-  const queries = useQueryClient()
+interface Group {
+  label: string
+  choices: Choice[]
+}
+
+/** A workspace's letter on a tile of its own colour, as the boards draw it. */
+function Badge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
+  const shades = ['bg-[var(--tobacco-500)]', 'bg-[var(--slate-600)]', 'bg-[var(--olive-600)]', 'bg-[var(--amber-700)]', 'bg-[var(--rust-600)]']
+  const shade = shades[[...name].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % shades.length]
+  return (
+    <span
+      aria-hidden="true"
+      style={{ width: size, height: size }}
+      className={cx(
+        'inline-flex shrink-0 items-center justify-center rounded-md text-xs font-semibold',
+        local ? 'bg-surface-3 text-fg-1' : cx(shade, 'text-[var(--paper-50)]'),
+      )}
+    >
+      {local ? <Icon name="laptop" /> : name.slice(0, 1).toUpperCase()}
+    </span>
+  )
+}
+
+function counted(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`
+}
+
+/** Every workspace this machine can show (ADR 0032), grouped by server. */
+function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => number; current: Choice } {
   const now = useNow()
-  const [connecting, setConnecting] = useState(false)
+  const workspace = useWorkspace()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
   const servers = status.data?.servers ?? []
   const orgs = useQueries({
@@ -35,69 +65,174 @@ export function WorkspaceSwitcher() {
   const owned = orgsOf(projects.data ?? [])
   const waiting = (shown: Workspace) =>
     sections((threads.data ?? []).filter((thread) => inWorkspace(thread, shown, owned)), now).needs_you.length
-  const named = (name: string, shown: Workspace) => {
-    const count = waiting(shown)
-    return count > 0 ? `${name} · ${count} need you` : name
-  }
+  const projectCount = (server: string | null, org: string | null) =>
+    (projects.data ?? []).filter((project) => (server === null ? !project.server : project.server === server && (org === null || project.org === org)))
+      .length
+  const orgChoice = (url: string, host: string, org: OrgInfo, offline: boolean): Choice => ({
+    name: org.name,
+    sub: `${counted(projectCount(url, org.name), 'project', 'projects')} · ${org.role}`,
+    long: `${org.name} on ${host}`,
+    workspace: { kind: 'server', server: url, org: org.name },
+    offline,
+  })
+  const groups: Group[] = [
+    {
+      label: 'Everywhere',
+      choices: [{ name: 'Everything', sub: 'every server and this machine', long: 'everything', workspace: { kind: 'all' } }],
+    },
+    ...servers.map((server, index) => {
+      const host = serverName(server.url)
+      const offline = server.sync_error !== null
+      return {
+        label: `On ${host}`,
+        choices: [
+          {
+            name: `All of ${host}`,
+            sub: `${counted(projectCount(server.url, null), 'project', 'projects')} · signed in as ${server.user}`,
+            long: `all of ${host}`,
+            workspace: { kind: 'server', server: server.url, org: null } as Workspace,
+            offline,
+          },
+          ...(orgs[index]?.data ?? []).map((org) => orgChoice(server.url, host, org, offline)),
+        ],
+      }
+    }),
+    {
+      label: 'Not synced',
+      choices: [
+        {
+          name: 'This machine',
+          sub: `${counted(projectCount(null, null), 'project', 'projects')} · history stays here`,
+          long: 'this machine',
+          workspace: { kind: 'local' },
+        },
+      ],
+    },
+  ]
+  const all = groups.flatMap((group) => group.choices)
+  const current = all.find((choice) => workspaceValue(choice.workspace) === workspaceValue(workspace)) ?? all[0]
+  return { groups, waiting, current }
+}
+
+/**
+ * The sidebar's header: the workspace this tab looks at (ADR 0032), opening
+ * the others, each with how many threads need the person.
+ */
+export function WorkspaceSwitcher() {
+  const queries = useQueryClient()
+  const navigate = useNavigate()
+  const [connecting, setConnecting] = useState(false)
+  const { groups, waiting, current } = useWorkspaces()
   const choose = (shown: Workspace) => {
     setWorkspace(shown)
     for (const key of [keys.orgs, keys.devices, keys.notificationSettings]) void queries.invalidateQueries({ queryKey: key })
   }
-  type Choice = { label: string; long: string; workspace: Workspace }
-  const groups: { server?: string; choices: Choice[] }[] = [
-    { choices: [{ label: 'Everything', long: 'everything', workspace: { kind: 'all' } }] },
-    ...servers.map((server, index) => {
-      const host = serverName(server.url)
-      return {
-        server: host,
-        choices: [
-          { label: `All of ${host}`, long: `all of ${host}`, workspace: { kind: 'server', server: server.url, org: null } as Workspace },
-          ...(orgs[index]?.data ?? []).map((org) => ({
-            label: org.name,
-            long: `${org.name} on ${host}`,
-            workspace: { kind: 'server', server: server.url, org: org.name } as Workspace,
-          })),
-        ],
-      }
-    }),
-    { choices: [{ label: 'This machine', long: 'this machine', workspace: { kind: 'local' } }] },
-  ]
+  const choices = groups.flatMap((group) => group.choices)
   useActions(
-    groups
-      .flatMap((group) => group.choices)
-      .map((choice) => ({
-        id: `workspace:${workspaceValue(choice.workspace)}`,
-        label: `Show ${choice.long}`,
-        run: () => choose(choice.workspace),
-      })),
+    choices.map((choice, index) => ({
+      id: `workspace:${workspaceValue(choice.workspace)}`,
+      label: `Show ${choice.long}`,
+      keys: index < 4 ? `alt+${index + 1}` : undefined,
+      run: () => choose(choice.workspace),
+    })),
   )
-  const option = (choice: Choice) => (
-    <option key={workspaceValue(choice.workspace)} value={workspaceValue(choice.workspace)}>
-      {named(choice.label, choice.workspace)}
-    </option>
-  )
+  const host = current.workspace.kind === 'server' ? serverName(current.workspace.server) : current.sub
+  const orgServer = current.workspace.kind === 'server' ? host : groups[1]?.label.replace(/^On /, '')
   return (
     <>
-      <Select
-        aria-label="workspace"
-        className="max-w-48 text-xs"
-        value={workspaceValue(workspace)}
-        onChange={(event) => {
-          if (event.target.value === CONNECT) setConnecting(true)
-          else choose(workspaceOf(event.target.value))
-        }}
+      <Popover
+        label="Switch workspace"
+        className="relative block"
+        triggerLabel={`workspace: ${current.long}`}
+        triggerClassName="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-fg-1 hover:bg-surface-2"
+        panelClassName="w-[340px] max-w-[calc(100vw-20px)] p-1.5"
+        trigger={
+          <>
+            <Badge name={current.name} local={current.workspace.kind === 'local'} size={22} />
+            <span className="flex min-w-0 flex-1 flex-col leading-tight">
+              <b className="truncate font-medium">{current.name}</b>
+              <span className="truncate font-mono text-2xs text-fg-2">{host}</span>
+            </span>
+            <Icon name="selector" className="text-fg-2" />
+          </>
+        }
       >
-        {groups.map((group, index) =>
-          group.server ? (
-            <optgroup key={group.server} label={group.server}>
-              {group.choices.map(option)}
-            </optgroup>
-          ) : (
-            <Fragment key={index}>{group.choices.map(option)}</Fragment>
-          ),
+        {(close) => (
+          <div className="flex flex-col gap-0.5">
+            {groups.map((group, groupIndex) => (
+              <section key={group.label} aria-label={group.label} className={cx(groupIndex > 0 && 'mt-1 border-t border-line-subtle pt-1')}>
+                <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-2xs font-medium tracking-[0.04em] text-fg-2 uppercase">{group.label}</h3>
+                {group.choices.map((choice) => {
+                  const chosen = choice === current
+                  const count = waiting(choice.workspace)
+                  return (
+                    <button
+                      key={workspaceValue(choice.workspace)}
+                      type="button"
+                      aria-current={chosen || undefined}
+                      onClick={() => {
+                        choose(choice.workspace)
+                        close()
+                      }}
+                      className={cx(
+                        'grid w-full grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-fg-1 hover:bg-surface-2',
+                        chosen && 'bg-accent-tint',
+                      )}
+                    >
+                      <Badge name={choice.name} local={choice.workspace.kind === 'local'} />
+                      <span className="flex min-w-0 flex-col">
+                        <b className="truncate font-medium">{choice.name}</b>
+                        <span className="truncate font-mono text-2xs text-fg-2">{choice.sub}</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {chosen && <Icon name="check" className="text-accent-fg" />}
+                        {choice.offline && <span className="font-mono text-2xs text-fg-2">offline</span>}
+                        {count > 0 && (
+                          <span aria-label={`${count} need you`} className="rounded-sm bg-warn-tint px-1.5 text-2xs text-fg-1">
+                            {count}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  )
+                })}
+              </section>
+            ))}
+            <div className="mt-1 flex flex-col border-t border-line-subtle pt-1">
+              <Button
+                variant="ghost"
+                icon="plus"
+                className="justify-start px-2.5 py-1.5"
+                onClick={() => {
+                  close()
+                  void navigate({ to: '/orgs' })
+                }}
+              >
+                {orgServer ? `Create an org on ${orgServer}` : 'Create an org'}
+              </Button>
+              <Button
+                variant="ghost"
+                icon="link"
+                className="justify-start px-2.5 py-1.5"
+                onClick={() => {
+                  close()
+                  setConnecting(true)
+                }}
+              >
+                Connect another server
+              </Button>
+              <p className="flex gap-3 px-2.5 pt-1.5 pb-1 text-2xs text-fg-2">
+                <span>
+                  <Kbd>{formatKeys('alt+1')}</Kbd>–<Kbd>{formatKeys('alt+4')}</Kbd> switch
+                </span>
+                <span>
+                  <Kbd>Esc</Kbd> close
+                </span>
+              </p>
+            </div>
+          </div>
         )}
-        <option value={CONNECT}>Connect another server…</option>
-      </Select>
+      </Popover>
       <Dialog open={connecting} onClose={() => setConnecting(false)} title="Connect another server">
         <p className="text-sm">Run this in a terminal on this machine, with the server's address:</p>
         <pre className="mt-2 rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs">silt auth login --server https://silt.example.com</pre>

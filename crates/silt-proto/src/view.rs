@@ -213,6 +213,9 @@ pub struct DaemonStatus {
     /// Recovery forks made since the daemon started.
     #[serde(default)]
     pub recovered: Vec<String>,
+    /// The daemon's own version, as the web UI's status bar shows it.
+    #[serde(default)]
+    pub version: String,
 }
 
 /// This machine's sign-in to a server, without its token.

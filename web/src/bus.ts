@@ -3,7 +3,7 @@
 // the views' queries fetch it again.
 
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { token, type BusEvent } from './api'
 import { keys } from './query'
 import { apiUrl, hosted } from './served'
@@ -18,6 +18,22 @@ class Bus {
   private topics = new Map<string, number>()
   private listeners = new Set<Listener>()
   private retry: ReturnType<typeof setTimeout> | null = null
+  private open = false
+  private watchers = new Set<() => void>()
+
+  /** Whether the socket is open now; hosted pages, which poll, count as connected. */
+  connected = (): boolean => this.open || hosted()
+
+  /** Hears the socket open and close, until the returned function is called. */
+  watch = (watcher: () => void): (() => void) => {
+    this.watchers.add(watcher)
+    return () => this.watchers.delete(watcher)
+  }
+
+  private setOpen(open: boolean) {
+    this.open = open
+    for (const watcher of this.watchers) watcher()
+  }
 
   /** Hears every event, until the returned function is called. */
   listen(listener: Listener): () => void {
@@ -63,6 +79,7 @@ class Bus {
     let opened = false
     socket.onopen = () => {
       opened = true
+      this.setOpen(true)
       this.send({ subscribe: [...this.topics.keys()] })
     }
     socket.onmessage = (message: MessageEvent<string>) => {
@@ -71,6 +88,7 @@ class Bus {
     }
     socket.onclose = () => {
       this.socket = null
+      this.setOpen(false)
       this.retry = setTimeout(() => {
         this.retry = null
         this.connect()
@@ -82,6 +100,11 @@ class Bus {
 }
 
 export const bus = new Bus()
+
+/** Whether the page hears the daemon's events now. */
+export function useBusConnected(): boolean {
+  return useSyncExternalStore(bus.watch, bus.connected)
+}
 
 /** Subscribes to `topic` while the calling component is mounted. */
 export function useTopic(topic: string | null) {

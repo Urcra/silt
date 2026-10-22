@@ -48,7 +48,7 @@ export function SectionLabel({ children, aside, className }: { children: ReactNo
   return (
     <div
       className={cx(
-        'flex items-center justify-between gap-2 px-3 pt-2.5 pb-1 font-mono text-[10px] tracking-[0.06em] text-fg-2 uppercase',
+        'flex items-center justify-between gap-2 px-3 pt-2.5 pb-1 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase',
         className,
       )}
     >
@@ -125,7 +125,7 @@ export function StatusBar({ children, className, label }: { children: ReactNode;
   return (
     <footer
       aria-label={label}
-      className={cx('flex h-6 shrink-0 items-center gap-3 border-t border-line bg-bg px-2.5 font-mono text-[10px] text-fg-2', className)}
+      className={cx('flex h-6 shrink-0 items-center gap-3 border-t border-line bg-bg px-2.5 font-mono text-2xs text-fg-2', className)}
     >
       {children}
     </footer>

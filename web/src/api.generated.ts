@@ -198,7 +198,11 @@ diverged: Array<string>,
 /**
  * Recovery forks made since the daemon started.
  */
-recovered: Array<string>, };
+recovered: Array<string>, 
+/**
+ * The daemon's own version, as the web UI's status bar shows it.
+ */
+version: string, };
 
 export type SignIn = { url: string, user: string, device: string, 
 /**

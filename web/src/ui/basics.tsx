@@ -33,7 +33,10 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      className={cx('inline-flex items-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1', className)}
+      className={cx(
+        'inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11',
+        className,
+      )}
       {...props}
     >
       <Icon name={icon} />
@@ -151,7 +154,7 @@ export function Avatar({ name, size = 20 }: { name: string; size?: number }) {
       title={name}
       aria-label={name}
       role="img"
-      className="inline-flex shrink-0 items-center justify-center rounded-full bg-surface-3 font-mono font-semibold text-fg-1"
+      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--tobacco-300)] font-mono font-semibold text-[var(--paper-50)]"
       style={{ width: size, height: size, fontSize: size * 0.45 }}
     >
       {initials || '?'}

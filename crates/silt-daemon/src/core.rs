@@ -517,6 +517,7 @@ impl Core {
                     .map(|thread| thread.id.to_string())
                     .collect(),
                 recovered: self.recoveries.clone(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
             Request::Fork { thread, cwd, here, agent, private, turn } => {
