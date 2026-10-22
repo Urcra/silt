@@ -52,6 +52,17 @@ fn reads_head_branch_remote_and_tree() {
 }
 
 #[test]
+fn a_remote_url_is_read_before_url_rewrites() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    git(root, &["config", "url.https://github.com/.insteadOf", "git@github.com:"]);
+    git(root, &["remote", "add", "fork", "git@github.com:someone/silt.git"]);
+    let repo = Repo::discover(root).expect("discovers");
+    assert_eq!(repo.remote_url("origin").expect("remote").as_deref(), Some("git@github.com:Urcra/silt.git"));
+    assert_eq!(repo.remote_url("fork").expect("remote").as_deref(), Some("git@github.com:someone/silt.git"));
+}
+
+#[test]
 fn lists_branches_and_finds_the_commit_a_name_means() {
     let dir = repo_with_commit();
     let root = dir.path();
