@@ -380,7 +380,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await phone.getByRole('button', { name: 'Sign in' }).click()
   await expect(phone).toHaveURL(`${live.server}/app/needs-you`)
   await desk.getByRole('button', { name: "It's paired" }).click()
-  await expect(desk.getByRole('region', { name: 'Phone' })).toContainText('phone')
+  await expect(desk.getByRole('region', { name: 'Phone', exact: true })).toContainText('phone')
 
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
