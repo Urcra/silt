@@ -108,7 +108,24 @@ export function useBusConnected(): boolean {
 
 /** Subscribes to `topic` while the calling component is mounted. */
 export function useTopic(topic: string | null) {
-  useEffect(() => (topic ? bus.subscribe(topic) : undefined), [topic])
+  const queries = useQueryClient()
+  useEffect(() => {
+    if (!topic) return undefined
+    const unsubscribe = bus.subscribe(topic)
+    // A view subscribes once it has what it shows, so whatever changed in
+    // between was announced to no one: fetch it again.
+    for (const queryKey of topicKeys(topic)) void queries.invalidateQueries({ queryKey })
+    return unsubscribe
+  }, [topic, queries])
+}
+
+/** What an event on `topic` fetches again. */
+function topicKeys(topic: string): readonly (readonly string[])[] {
+  if (topic.startsWith('thread:')) return [keys.thread(topic.slice('thread:'.length))]
+  if (topic === 'threads') return [keys.threads]
+  if (topic === 'inbox') return [['inbox']]
+  if (topic === 'mrs') return [keys.mrs]
+  return []
 }
 
 /** Calls `listener` for every event while the calling component is mounted. */
