@@ -59,6 +59,9 @@ pub enum Request {
         turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
+        /// Only these of the changed files, in path order: a page of them.
+        #[serde(default)]
+        files: Option<FilePage>,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -483,6 +486,13 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
         cause = source.source();
     }
     message
+}
+
+/// A page of a diff's files: `limit` of them from the `offset`th.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilePage {
+    pub offset: usize,
+    pub limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

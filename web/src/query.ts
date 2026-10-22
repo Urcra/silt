@@ -20,6 +20,7 @@ export const keys = {
   comments: (id: string) => ['thread', id, 'comments'] as const,
   queue: (id: string) => ['thread', id, 'queue'] as const,
   diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,
+  diffPages: (id: string, base: string) => ['thread', id, 'diff-pages', base] as const,
   mrs: ['mrs'] as const,
   mr: (id: string) => ['mrs', id] as const,
   inbox: (all: boolean) => ['inbox', all] as const,

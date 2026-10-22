@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, type CommentView } from '../api'
 import { parseDiff } from '../diffParse'
@@ -153,9 +153,11 @@ export function DiffPanel({
   const [error, setError] = useState<string>()
   const base =
     view === 'thread' ? '' : view === 'other' ? (other === 'commit' ? (commit ? `commit:${commit}` : '') : other) : view
-  const diff = useQuery({
-    queryKey: keys.diff(thread, { base }),
-    queryFn: () => api.diff(thread, { base }),
+  const diff = useInfiniteQuery({
+    queryKey: keys.diffPages(thread, base),
+    queryFn: ({ pageParam }) => api.diff(thread, { base, offset: pageParam, limit: FILES_PAGE }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => (filesIn(last) < FILES_PAGE ? undefined : pages.length * FILES_PAGE),
     enabled: open,
   })
   const pending = comments.filter((comment) => !comment.resolved && linesOf(comment) !== null)
@@ -208,7 +210,7 @@ export function DiffPanel({
         <div className="mt-2">
           <ReviewDiff
             thread={thread}
-            text={diff.data}
+            text={diff.data.pages.join('')}
             comments={comments}
             onComment={async (at, text) => {
               await api.addComment(thread, { on: 'lines', ...at }, text)
@@ -216,8 +218,22 @@ export function DiffPanel({
             }}
             onChanged={onCommented}
           />
+          {diff.hasNextPage && (
+            <Button className="mt-2" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
+              More files
+            </Button>
+          )}
         </div>
       )}
     </section>
   )
+}
+
+/** Files shown in a page of the changes panel: a change touching thousands
+ * comes a page at a time. */
+const FILES_PAGE = 50
+
+/** How many files a page of a diff holds. */
+function filesIn(diff: string): number {
+  return diff.split('\n').filter((line) => line.startsWith('diff --git ')).length
 }

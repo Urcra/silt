@@ -5,6 +5,8 @@ import { LiveReplica } from '../replica'
 import { AgentPanel } from './Agent'
 
 const HEARTBEAT_MS = 2000
+/** Files listed beside the editor at a time: a checkout of thousands lists more on asking. */
+const FILES_PAGE = 200
 
 interface Live {
   /** How often the family grew since this view opened. */
@@ -160,6 +162,8 @@ export function LivePanel({
   const [draft, setDraft] = useState('')
   const [line, setLine] = useState<number | null>(null)
   const [following, setFollowing] = useState<string | null>(null)
+  const [filesShown, setFilesShown] = useState(FILES_PAGE)
+  const paths = replica?.paths() ?? []
   const { changes, agent, tool, preset, setPreset } = useLive(thread)
   const people = usePresence(thread, file, line, draft, (present) => {
     const followed = present.find((person) => person.device === following)?.file
@@ -244,7 +248,7 @@ export function LivePanel({
       {replica && (
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[12rem_1fr]">
           <ul aria-label="files" className="max-h-96 overflow-y-auto text-sm">
-            {replica.paths().map((path) => (
+            {paths.slice(0, filesShown).map((path) => (
               <li key={path}>
                 <button
                   className={`block w-full truncate text-left ${path === file ? 'font-semibold' : 'text-accent-fg'}`}
@@ -255,6 +259,13 @@ export function LivePanel({
                 </button>
               </li>
             ))}
+            {paths.length > filesShown && (
+              <li>
+                <button className="text-left text-xs text-fg-2" onClick={() => setFilesShown(filesShown + FILES_PAGE)}>
+                  More files ({paths.length - filesShown} more)
+                </button>
+              </li>
+            )}
           </ul>
           {file && (
             <Suspense fallback={<p className="text-xs text-fg-3">Opening the editor…</p>}>

@@ -12,7 +12,7 @@ use silt_proto::view::FileAt;
 
 use crate::homes::Home;
 
-use crate::protocol::{FileEdit, SearchFilters, SearchResult, ShowLine, ThreadSummary};
+use crate::protocol::{FileEdit, FilePage, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 use crate::transcripts::native_entries;
 
 impl Core {
@@ -191,7 +191,13 @@ impl Core {
         lines
     }
 
-    pub(crate) fn diff(&self, thread: ThreadId, turn: Option<usize>, base: Option<&str>) -> Result<String, CoreError> {
+    pub(crate) fn diff(
+        &self,
+        thread: ThreadId,
+        turn: Option<usize>,
+        base: Option<&str>,
+        files: Option<FilePage>,
+    ) -> Result<String, CoreError> {
         let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
@@ -202,7 +208,7 @@ impl Core {
         if turn.is_none()
             && let Some(rev) = base.and_then(git_base)
         {
-            return self.diff_against_git(family_id, &graph.version_vector(&head), rev);
+            return self.diff_against_git(family_id, &graph.version_vector(&head), rev, files);
         }
         let (from, to) = match (turn, base) {
             (Some(turn), _) => {
@@ -216,12 +222,18 @@ impl Core {
             }
             (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
         };
-        Ok(render_diff(&self.changes(family_id, &from, &to)))
+        Ok(render_diff(&self.changes_in(family_id, &from, &to, files)))
     }
 
     /// How the files at `head` differ from a commit's tree in this machine's
     /// clone, such as its main branch as it is now.
-    fn diff_against_git(&self, family_id: FamilyId, head: &VersionVector, rev: GitBase) -> Result<String, CoreError> {
+    fn diff_against_git(
+        &self,
+        family_id: FamilyId,
+        head: &VersionVector,
+        rev: GitBase,
+        files: Option<FilePage>,
+    ) -> Result<String, CoreError> {
         let family = &self.families()[&family_id];
         let repos = self.family_repos(family_id);
         let names: &[&str] = match rev {
@@ -276,7 +288,7 @@ impl Core {
                 binary,
             });
         }
-        Ok(render_diff(&changes))
+        Ok(render_diff(&page_of(changes, files)))
     }
 
     /// A file of the thread as a permalink shows it: at the version the link
@@ -306,6 +318,17 @@ impl Core {
 
     /// How the family's files differ between two versions.
     pub(crate) fn changes(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Vec<FileChange> {
+        self.changes_in(family_id, before, after, None)
+    }
+
+    /// [`Self::changes`], in path order, only those in `files` when given.
+    fn changes_in(
+        &self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+        files: Option<FilePage>,
+    ) -> Vec<FileChange> {
         let Some(family) = self.families().get(&family_id) else {
             return Vec::new();
         };
@@ -332,7 +355,7 @@ impl Core {
                 Some(FileView::Blob(_)) | None => String::new(),
             }
         };
-        let mut changes = Vec::new();
+        let mut changed = Vec::new();
         for inode in inodes {
             let (old_path, new_path) = (before_files.get(&inode).cloned(), after_files.get(&inode).cloned());
             let old = old_path.as_ref().and_then(|_| family.file_at(inode, before));
@@ -340,17 +363,24 @@ impl Core {
             if old == new && old_path == new_path {
                 continue;
             }
-            changes.push(FileChange {
+            changed.push((inode, old_path, new_path, old, new));
+        }
+        changed.sort_by(|(_, old_a, new_a, ..), (_, old_b, new_b, ..)| {
+            new_a.as_ref().or(old_a.as_ref()).cmp(&new_b.as_ref().or(old_b.as_ref()))
+        });
+        // Texts are read only for the page asked for: a change touching
+        // thousands of files shows them a page at a time.
+        page_of(changed, files)
+            .into_iter()
+            .map(|(inode, old_path, new_path, old, new)| FileChange {
                 inode: Some(inode),
                 binary: matches!(old, Some(FileView::Blob(_))) || matches!(new, Some(FileView::Blob(_))),
                 old_text: text_of(&old),
                 new_text: text_of(&new),
                 old_path,
                 new_path,
-            });
-        }
-        changes.sort_by(|a, b| a.path().cmp(b.path()));
-        changes
+            })
+            .collect()
     }
 
     /// Searches every server signed in to, and this machine for the threads
@@ -578,6 +608,14 @@ pub(crate) struct FileChange {
 impl FileChange {
     pub(crate) fn path(&self) -> &str {
         self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or_default()
+    }
+}
+
+/// The page of `items` that `files` asks for, or all of them.
+fn page_of<T>(items: Vec<T>, files: Option<FilePage>) -> Vec<T> {
+    match files {
+        Some(FilePage { offset, limit }) => items.into_iter().skip(offset).take(limit).collect(),
+        None => items,
     }
 }
 

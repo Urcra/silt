@@ -120,10 +120,15 @@ export const api = {
     }
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
-  diff: (id: string, options: { turn?: number; base?: string } = {}) => {
+  /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order. */
+  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number } = {}) => {
     const params = new URLSearchParams()
     if (options.turn !== undefined) params.set('turn', String(options.turn))
     if (options.base) params.set('base', options.base)
+    if (options.limit !== undefined) {
+      params.set('offset', String(options.offset ?? 0))
+      params.set('limit', String(options.limit))
+    }
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
   comments: (id: string) => request<CommentView[]>('GET', `${thread(id)}/comments`),

@@ -272,6 +272,33 @@ fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
 }
 
 #[test]
+fn the_web_ui_reads_a_diff_a_page_of_files_at_a_time() {
+    let env = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).matches("diff --git").count() == 3),
+        "{}",
+        env.stdout(&["diff", &thread])
+    );
+    let url = env.stdout(&["open", "--no-browser"]);
+    let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+    let diff = |query: &str| -> String {
+        let output = Command::new("curl")
+            .args(["-s", "-H"])
+            .arg(format!("Authorization: Bearer {token}"))
+            .arg(format!("{base}/api/threads/{thread}/diff{query}"))
+            .output()
+            .expect("curl runs");
+        serde_json::from_slice(&output.stdout).expect("a diff")
+    };
+    let (first, rest, whole) = (diff("?offset=0&limit=2"), diff("?offset=2&limit=2"), diff(""));
+    assert_eq!(first.matches("diff --git").count(), 2);
+    assert_eq!(rest.matches("diff --git").count(), 1);
+    assert_eq!(first + &rest, whole, "the pages make up the whole diff, in path order");
+}
+
+#[test]
 fn a_hook_that_finds_no_daemon_starts_one_for_the_hooks_after_it() {
     let env = Env::new();
     env.silt(&["claude"]);

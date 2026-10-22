@@ -353,10 +353,14 @@ async fn graph(State(web): State<Web>, Query(query): Query<silt_proto::view::Gra
 struct DiffQuery {
     turn: Option<usize>,
     base: Option<String>,
+    /// A page of the changed files, as the changes panel shows them.
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let request = Request::Diff { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) };
+    let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let request = Request::Diff { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()), files };
     ask(&web, request).await
 }
 
