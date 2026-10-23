@@ -9,8 +9,15 @@
 #   SILT_PASSWORD  that account's password
 set -eu
 
+# A release binary when one can be downloaded, else built from source. The
+# script is fetched first: a failed download piped into `sh` would succeed.
 if ! command -v silt >/dev/null; then
-    cargo install --locked --git https://github.com/Urcra/silt silt-cli
+    if install=$(curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh) &&
+        printf '%s\n' "$install" | SILT_INSTALL_DIR=/usr/local/bin sh; then
+        :
+    else
+        cargo install --locked --git https://github.com/Urcra/silt silt-cli
+    fi
 fi
 
 if [ -n "${SILT_SERVER:-}" ]; then

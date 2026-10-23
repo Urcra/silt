@@ -83,6 +83,7 @@ impl fmt::Display for Machine {
 }
 
 pub const RECORD_IMPORT: &str = "record.import";
+pub const IMPORT_SESSION: &str = "import.session";
 pub const RECORD_HOOK: &str = "record.hook";
 pub const RECORD_HOOK_DAEMONLESS: &str = "record.hook_daemonless";
 pub const STORE_SIZE: &str = "store.size";
@@ -99,6 +100,13 @@ pub const BUDGETS: &[Budget] = &[
     Budget {
         name: RECORD_IMPORT,
         measures: "tracking a 100 MB transcript, the daemon already running",
+        dev: Limit::Time(Duration::from_secs(1)),
+        cloud: Limit::Time(Duration::from_secs(4)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: IMPORT_SESSION,
+        measures: "`silt import` of a 100 MB transcript, the daemon already running",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(4)),
         status: Status::Enforced,

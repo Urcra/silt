@@ -12,8 +12,9 @@ use silt_agents::{Agent, LaunchPlan, McpServer, SessionIds, Start};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled,
-    Request, Response, Resumed, Reverted, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
+    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, ImportCandidate, ImportedThread, InFlight, Mount,
+    MrDetails, MrSummary, Pulled, Request, Response, Resumed, Reverted, SearchFilters, SearchResult, Sent, SessionStarted,
+    ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use silt_types::CloudSessionId;
@@ -514,6 +515,63 @@ pub fn track(agent: &str, session: Option<&str>) -> Result<(), Exn<CliError>> {
     };
     let thread = start_tracking(agent, cwd, id, None)?;
     println!("tracking session in thread {}", short(&thread));
+    Ok(())
+}
+
+/// Imports the sessions on disk Silt hasn't recorded, one request each so
+/// the daemon answers others between them (ADR 0042).
+pub fn import(paths: &[PathBuf], agent: Option<&str>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let cwd = current_dir()?;
+    let paths: Vec<PathBuf> = paths.iter().map(|path| cwd.join(path)).collect();
+    let candidates: Vec<ImportCandidate> = call(&Request::ImportCandidates { paths, agent: agent.map(str::to_owned) })?;
+    if candidates.is_empty() {
+        println!("no sessions to import: every session on disk is recorded or imported already");
+        return Ok(());
+    }
+    let (mut imported, mut failed) = (0, 0);
+    for candidate in candidates {
+        let (agent, id) = (candidate.agent.clone(), candidate.id.clone());
+        match call::<Option<ImportedThread>>(&Request::Import { candidate }) {
+            Ok(Some(thread)) => {
+                imported += 1;
+                let place = match (&thread.project, &thread.cwd) {
+                    (project, _) if !project.is_empty() => project.clone(),
+                    (_, Some(cwd)) => format!("{} (no project)", cwd.display()),
+                    _ => "(no project)".to_owned(),
+                };
+                println!(
+                    "{}  {agent} session from {}  {}",
+                    short(&thread.thread),
+                    silt_agents::time::format_timestamp(thread.started_ms).get(..10).unwrap_or_default(),
+                    render::safe(&place)
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                failed += 1;
+                eprintln!(
+                    "silt: could not import {agent} session {}: {}",
+                    render::safe(&id),
+                    render::safe(&crate::explain(&error))
+                );
+            }
+        }
+    }
+    println!("imported {imported} sessions into threads kept on this machine; `silt send --all` sends them to your server");
+    if failed > 0 {
+        return Err(fail(format!("{failed} sessions could not be imported")));
+    }
+    Ok(())
+}
+
+pub fn send(threads: Vec<String>, project: Option<String>, server: Option<String>) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let sent: Sent = call(&Request::Send { threads, project, server })?;
+    println!("sending {} imported threads to {}", sent.threads, sent.server);
+    if sent.redacted > 0 {
+        println!("{} secrets in them are redacted before they leave this machine", sent.redacted);
+    }
     Ok(())
 }
 

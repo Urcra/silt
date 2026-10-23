@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
-    Start, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
+    SessionIds, Start, Write, translated_text,
 };
 
 pub const AGENT: &str = "gemini-cli";
@@ -121,6 +121,38 @@ fn file_session_id(path: &Path) -> Option<String> {
     BufReader::new(file).read_line(&mut line).ok()?;
     let value: Value = serde_json::from_str(&line).ok()?;
     value.get("sessionId")?.as_str().map(str::to_owned)
+}
+
+/// Every session in the `.gemini` directory `gemini`, with the project
+/// directory its chats belong to and when it started.
+pub fn on_disk_in(gemini: &Path) -> Vec<OnDisk> {
+    let Ok(slugs) = fs::read_dir(gemini.join("tmp")) else {
+        return Vec::new();
+    };
+    let registered: HashMap<String, String> =
+        registry(gemini).into_iter().filter_map(|(path, slug)| Some((slug.as_str()?.to_owned(), path))).collect();
+    let mut found = Vec::new();
+    for slug in slugs.flatten() {
+        let name = slug.file_name().to_string_lossy().into_owned();
+        let cwd = fs::read_to_string(slug.path().join(".project_root"))
+            .ok()
+            .map(|owner| owner.trim().to_owned())
+            .or_else(|| registered.get(&name).cloned())
+            .map(PathBuf::from);
+        for path in session_files(&slug.path().join("chats")) {
+            let Some(id) = file_session_id(&path) else {
+                continue;
+            };
+            let first = crate::first_line(&path).unwrap_or_default();
+            let started_ms = serde_json::from_str::<Value>(&first)
+                .ok()
+                .and_then(|start| start.get("startTime")?.as_str().and_then(crate::time::parse_timestamp))
+                .or_else(|| crate::record_time(&first));
+            found.push(OnDisk { id, transcript: path, cwd: cwd.clone(), started_ms });
+        }
+    }
+    found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+    found
 }
 
 /// The newest session of `cwd` written since `since_ms` in the `.gemini`
@@ -452,6 +484,10 @@ impl Agent for Gemini {
         discover_in(&gemini_dir()?, cwd, since_ms, known)
     }
 
+    fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
+        gemini_dir().map(|gemini| on_disk_in(&gemini)).unwrap_or_default()
+    }
+
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let gemini = gemini_dir().ok_or(AgentError::NoHome)?;
         restore_into(&gemini, root, cwd, session)
@@ -659,5 +695,22 @@ mod tests {
         assert_eq!(chats_dir(gemini.path(), Path::new("/w/My_Proj")), Some(dir.clone()));
         fs::write(gemini.path().join("projects.json"), r#"{"projects":{}}"#).expect("write");
         assert_eq!(chats_dir(gemini.path(), Path::new("/w/My_Proj")), Some(dir), "found by its marker");
+    }
+
+    #[test]
+    fn chats_on_disk_are_listed_with_their_project() {
+        let gemini = tempfile::tempdir().expect("temp dir");
+        let chats = claim_chats_dir(gemini.path(), Path::new("/w/repo")).expect("claims");
+        fs::create_dir_all(&chats).expect("mkdir");
+        fs::write(
+            chats.join("session-2026-01-02T03-04-abcd1234.jsonl"),
+            "{\"sessionId\":\"abcd1234-0000\",\"startTime\":\"2026-01-02T03:04:05.000Z\",\"kind\":\"main\"}\n",
+        )
+        .expect("writes");
+        let found = on_disk_in(gemini.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].id, "abcd1234-0000");
+        assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/w/repo")));
+        assert_eq!(found[0].started_ms, crate::time::parse_timestamp("2026-01-02T03:04:05.000Z"));
     }
 }

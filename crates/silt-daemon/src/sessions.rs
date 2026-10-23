@@ -42,11 +42,11 @@ const BACKLOG_CHUNK: u64 = 8 << 20;
 const DISCOVER_SLACK_MS: i64 = 5_000;
 
 /// A transcript record applied to its family in memory, not stored yet.
-struct StagedLine {
-    family: FamilyId,
-    delta: Delta,
-    rows: Vec<SearchRow>,
-    marks: Vec<Mark>,
+pub(crate) struct StagedLine {
+    pub(crate) family: FamilyId,
+    pub(crate) delta: Delta,
+    pub(crate) rows: Vec<SearchRow>,
+    pub(crate) marks: Vec<Mark>,
 }
 
 /// Records staged from one session file, to store in one write.
@@ -1039,7 +1039,7 @@ impl Core {
     /// Applies a transcript record to its family in memory, with what it
     /// indexes and the turn marks it carries for agents without Silt's
     /// hooks.
-    fn stage_line(&mut self, session_id: &str, key: &str, line: String) -> Result<StagedLine, CoreError> {
+    pub(crate) fn stage_line(&mut self, session_id: &str, key: &str, line: String) -> Result<StagedLine, CoreError> {
         // An agent still running may send a line after its thread was
         // purged here.
         let session = self
@@ -1102,7 +1102,7 @@ impl Core {
         Ok(())
     }
 
-    async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
+    pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
         let open = self.open_tool(session_id).map(str::to_owned);
         let session = self.session_mut(session_id).expect("caller checked");
         let mark = match mark {
@@ -1157,7 +1157,7 @@ impl Core {
 
     /// Records the session's side files as attachments when they are new or
     /// changed, so a restored session is complete.
-    async fn attach_side_files(&mut self, session_id: &str, transcript: &Path) -> Result<(), CoreError> {
+    pub(crate) async fn attach_side_files(&mut self, session_id: &str, transcript: &Path) -> Result<(), CoreError> {
         let session = self.session(session_id).expect("caller checked");
         let mut changed = Vec::new();
         for (name, path) in session.agent.attachments(transcript) {

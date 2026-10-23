@@ -1,0 +1,88 @@
+# Builds static `silt` binaries for Linux from a tag and publishes them,
+# with their checksums, on the tag's release (ADR 0042). scripts/install.sh
+# installs them.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q musl-tools
+          rustup show
+          rustup target add ${{ matrix.target }}
+          arch=$(uname -m)
+          release="wasm-bindgen-0.2.126-$arch-unknown-linux-musl"
+          curl -sSfL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.126/$release.tar.gz" |
+            tar xz -C "$HOME/.cargo/bin" --strip-components=1 "$release/wasm-bindgen"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # The web UI is embedded in the binary, so it is built first.
+      - name: Web UI
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web build
+
+      - name: silt
+        env:
+          CC: musl-gcc
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
+
+      - name: Archive
+        run: |
+          bin=target/${{ matrix.target }}/release/silt
+          strip "$bin"
+          file "$bin" | grep -Eq 'static-pie linked|statically linked'
+          "$bin" --version
+          mkdir dist
+          tar -czf dist/silt-${{ matrix.target }}.tar.gz -C "$(dirname "$bin")" silt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: silt-${{ matrix.target }}
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum silt-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

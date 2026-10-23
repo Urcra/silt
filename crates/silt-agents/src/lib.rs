@@ -216,6 +216,16 @@ pub struct Found {
     pub transcript: PathBuf,
 }
 
+/// A session the agent has on disk, which may have ended long ago.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnDisk {
+    pub id: String,
+    pub transcript: PathBuf,
+    /// Where it ran, when its files say.
+    pub cwd: Option<PathBuf>,
+    pub started_ms: Option<i64>,
+}
+
 /// One agent CLI.
 pub trait Agent: Send + Sync {
     /// The name recorded with its sessions.
@@ -247,6 +257,11 @@ pub trait Agent: Send + Sync {
     /// The newest session started in `cwd` no earlier than `since_ms` whose
     /// id isn't in `known`.
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found>;
+    /// Every session on disk, for importing (ADR 0042). An agent that can
+    /// only be asked per directory is asked in each of `dirs`.
+    fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
+        Vec::new()
+    }
     /// The session's records as of now, for agents read by snapshot.
     fn snapshot(&self, _found: &Found) -> Result<Vec<String>, AgentError> {
         Err(AgentError::NoSnapshot)
@@ -444,6 +459,30 @@ pub(crate) fn first_line(path: &Path) -> Option<String> {
     let mut line = String::new();
     std::io::BufRead::read_line(&mut std::io::BufReader::new(std::io::Read::take(file, LIMIT)), &mut line).ok()?;
     Some(line)
+}
+
+/// A transcript's first `count` lines, read without reading the rest.
+pub(crate) fn first_lines(path: &Path, count: usize) -> Vec<String> {
+    const LIMIT: u64 = 4 << 20;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    std::io::BufRead::lines(std::io::BufReader::new(std::io::Read::take(file, LIMIT))).take(count).map_while(Result::ok).collect()
+}
+
+/// When a transcript record says it was written: its `timestamp`, as RFC
+/// 3339 or milliseconds since the epoch.
+pub fn record_time(line: &str) -> Option<i64> {
+    #[derive(serde::Deserialize)]
+    struct Stamped {
+        timestamp: serde_json::Value,
+    }
+    let stamped: Stamped = serde_json::from_str(line).ok()?;
+    match stamped.timestamp {
+        serde_json::Value::String(text) => time::parse_timestamp(&text),
+        serde_json::Value::Number(number) => number.as_i64(),
+        _ => None,
+    }
 }
 
 pub(crate) fn modified_ms(path: &Path) -> Option<i64> {

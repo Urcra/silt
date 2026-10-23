@@ -51,6 +51,29 @@ enum Command {
         #[arg(long)]
         from_hook: bool,
     },
+    /// Import the agent sessions already on disk, each as a thread kept on this machine until sent
+    Import {
+        /// Only sessions that ran in or under these directories
+        paths: Vec<PathBuf>,
+        /// Only this agent's sessions
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Send imported threads to a server, redacted: some, a project's, or all
+    Send {
+        /// The threads to send
+        #[arg(required_unless_present_any = ["project", "all"], conflicts_with_all = ["project", "all"])]
+        threads: Vec<String>,
+        /// All imported threads of this project, as `silt project` names it
+        #[arg(long, conflicts_with = "all")]
+        project: Option<String>,
+        /// Every imported thread kept on this machine
+        #[arg(long)]
+        all: bool,
+        /// Send them to this server rather than the default one
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Continue a thread here: its code, its conversation and its agent session
     Resume {
         thread: String,
@@ -592,7 +615,7 @@ fn main() -> std::process::ExitCode {
 
 /// The error and what caused it, outermost first, as one line for people:
 /// no source locations, which are for Silt's developers.
-fn explain(error: &Exn<CliError>) -> String {
+pub(crate) fn explain(error: &Exn<CliError>) -> String {
     let mut causes: Vec<String> = Vec::new();
     let mut frame = error.frame();
     loop {
@@ -630,6 +653,8 @@ fn run() -> Result<(), Exn<CliError>> {
                 commands::track(&agent, session.as_deref())
             }
         }
+        Command::Import { paths, agent } => commands::import(&paths, agent.as_deref()),
+        Command::Send { threads, project, all: _, server } => commands::send(threads, project, server),
         Command::Resume { thread, continued } => {
             commands::resume(&thread, continued.here, continued.agent.as_deref(), &continued.args)
         }

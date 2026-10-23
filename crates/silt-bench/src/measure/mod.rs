@@ -9,7 +9,7 @@ use exn::{Exn, ResultExt};
 
 use crate::BenchError;
 use crate::budgets::{
-    APP_HISTORY, APP_THREADS, CHECKOUT_RESCAN, DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, Measured, RECORD_HOOK,
+    APP_HISTORY, APP_THREADS, CHECKOUT_RESCAN, DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, IMPORT_SESSION, Measured, RECORD_HOOK,
     RECORD_HOOK_DAEMONLESS, RECORD_IMPORT, STORE_SIZE, SYNC_PULL, SYNC_PUSH,
 };
 use crate::fixtures::Fixtures;
@@ -30,7 +30,7 @@ impl Scenario {
         match self {
             Self::Hook => &[RECORD_HOOK, RECORD_HOOK_DAEMONLESS],
             Self::Rescan => &[CHECKOUT_RESCAN],
-            Self::Daemon => &[RECORD_IMPORT, STORE_SIZE, DAEMON_STARTUP, DAEMON_READY, DAEMON_IDLE],
+            Self::Daemon => &[RECORD_IMPORT, STORE_SIZE, IMPORT_SESSION, DAEMON_STARTUP, DAEMON_READY, DAEMON_IDLE],
             Self::Sync => &[SYNC_PUSH, SYNC_PULL, APP_THREADS, APP_HISTORY],
         }
     }

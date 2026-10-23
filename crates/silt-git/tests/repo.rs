@@ -305,3 +305,25 @@ fn the_worktree_listing_finds_the_untracked_files_git_does_as_they_change() {
     check("a file removed");
     assert!(listed().contains(&"nested/".to_owned()), "another repository is listed whole");
 }
+
+#[test]
+fn the_commit_at_a_time_is_the_one_head_was_at() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let repo = Repo::discover(root).expect("discovers");
+    let first = repo.head_commit().expect("head").expect("a commit");
+    let between = now_ms() + 1000;
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    fs::write(root.join("src/main.rs"), "fn main() { later() }\n").expect("write");
+    git(root, &["commit", "-q", "-am", "later"]);
+    let second = repo.head_commit().expect("head").expect("a commit");
+    assert_ne!(first, second);
+    assert_eq!(repo.commit_at(between).expect("reads"), Some(first));
+    assert_eq!(repo.commit_at(now_ms() + 1000).expect("reads"), Some(second));
+    assert_eq!(repo.commit_at(0).expect("reads"), Some(second), "before any commit, HEAD's own");
+}
+
+fn now_ms() -> i64 {
+    i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("after the epoch").as_millis())
+        .expect("fits")
+}

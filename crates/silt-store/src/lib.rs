@@ -130,6 +130,15 @@ pub struct SessionRecord {
     pub checkout_id: CheckoutId,
 }
 
+/// A session that ran before Silt recorded it, imported whole (ADR 0042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRecord {
+    pub agent: String,
+    pub session_id: String,
+    pub thread: ThreadId,
+    pub family: FamilyId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionFileOffset {
     pub file: String,
@@ -1074,6 +1083,38 @@ impl Store {
                     session_id: row.session_id,
                     thread: ThreadId(id_from(&row.thread_id)?),
                     checkout_id: CheckoutId(row.checkout_id),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn add_import(&self, import: &ImportRecord, now_ms: i64) -> Result<(), StoreError> {
+        let (thread, family) = (id_bytes(import.thread.0), id_bytes(import.family.0));
+        sqlx::query!(
+            "INSERT INTO imports (agent, session_id, thread_id, family_id, imported_ms) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (agent, session_id) DO NOTHING",
+            import.agent,
+            import.session_id,
+            thread,
+            family,
+            now_ms,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn imports(&self) -> Result<Vec<ImportRecord>, StoreError> {
+        let rows = sqlx::query!("SELECT agent, session_id, thread_id, family_id FROM imports ORDER BY imported_ms")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ImportRecord {
+                    agent: row.agent,
+                    session_id: row.session_id,
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    family: FamilyId(id_from(&row.family_id)?),
                 })
             })
             .collect()

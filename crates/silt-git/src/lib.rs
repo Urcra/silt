@@ -98,6 +98,27 @@ impl Repo {
         }
     }
 
+    /// The commit HEAD was at `time_ms`: from the reflog, else the newest
+    /// commit HEAD has from before then, else HEAD's own (ADR 0042).
+    pub fn commit_at(&self, time_ms: i64) -> Result<Option<GitOid>, GitError> {
+        let seconds = time_ms.div_euclid(1000);
+        let reflog = self.git(&["reflog", "show", "--date=unix", "--format=%H %gd", "HEAD"], None).unwrap_or_default();
+        let from_reflog = String::from_utf8_lossy(&reflog).lines().find_map(|line| {
+            let (commit, selector) = line.split_once(' ')?;
+            let when: i64 = selector.strip_prefix("HEAD@{")?.strip_suffix('}')?.parse().ok()?;
+            (when <= seconds).then(|| commit.parse().ok()).flatten()
+        });
+        if from_reflog.is_some() {
+            return Ok(from_reflog);
+        }
+        let before = format!("--before={seconds}");
+        let older = self.git(&["rev-list", "-1", &before, "HEAD"], None).unwrap_or_default();
+        match String::from_utf8_lossy(&older).trim().parse() {
+            Ok(commit) => Ok(Some(commit)),
+            Err(_) => self.head_commit(),
+        }
+    }
+
     /// When what `head_commit` reads last changed: `HEAD`, the branch it
     /// names and the packed refs. Unchanged, HEAD is the same commit, which
     /// a few `stat`s tell more cheaply than resolving it.

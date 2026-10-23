@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agent, session_id, thread_id, family_id FROM imports ORDER BY imported_ms",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "imports",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "imports",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "imports",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "imports",
+            "name": "family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8383d0c75d162034d57c2a4676486c427c750fb38dc73242f5eb79031a3185d1"
+}
