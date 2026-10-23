@@ -6,12 +6,12 @@ import { useBusConnected } from '../bus'
 import { useNotifier } from '../notifier'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
+import { Drawer } from '../shell'
 import { hosted } from '../served'
 import { useActions } from '../shortcuts'
 import { THEMES, applyTheme, storedTheme } from '../theme'
-import { Dot, Icon, IconButton, Toaster, cx } from '../ui'
+import { Dot, Icon, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
-import { openPalette } from '../palette'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
 
@@ -38,8 +38,8 @@ function useGlobalActions() {
     ...(hosted()
       ? []
       : [
-          { id: 'new', label: 'New thread in this project', keys: 'n', run: () => void navigate({ to: '/', search: {} }) },
-          { id: 'new-elsewhere', label: 'New thread in another project', keys: 'shift+n', run: () => void navigate({ to: '/', search: { pick: 'projects' } }) },
+          { id: 'new', label: 'New thread in this project', keys: 'n', run: () => void navigate({ to: '/new', search: {} }) },
+          { id: 'new-elsewhere', label: 'New thread in another project', keys: 'shift+n', run: () => void navigate({ to: '/new', search: { pick: 'projects' } }) },
         ]),
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/threads' }) },
     { id: 'settings', label: 'Settings', run: () => void navigate({ to: '/settings' }) },
@@ -119,7 +119,7 @@ function TabBar() {
   const unread = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
     <nav aria-label="tabs" className="grid grid-cols-4 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden">
-      <Tab to="/threads" icon="list" at={(path) => path === '/threads' || path === '/needs-you' || path.startsWith('/t/')}>
+      <Tab to="/" icon="list" at={(path) => path === '/' || path === '/threads' || path.startsWith('/t/')}>
         Threads
       </Tab>
       <Tab to="/mrs" icon="merge" at={(path) => path === '/mrs' || path.startsWith('/mr/')}>
@@ -135,26 +135,6 @@ function TabBar() {
         Search
       </Tab>
     </nav>
-  )
-}
-
-/** A phone's header: the drawer, the wordmark, search and New thread. */
-function PhoneHeader({ drawer, onDrawer }: { drawer: boolean; onDrawer: () => void }) {
-  return (
-    <header className="flex h-[52px] items-center gap-1 border-b border-line-subtle px-2 md:hidden">
-      <IconButton icon="list" label={drawer ? 'hide projects' : 'show projects'} aria-expanded={drawer} onClick={onDrawer} className="min-h-11 min-w-11" />
-      <Link to={hosted() ? '/' : '/threads'} className="text-[17px] font-medium tracking-[-0.04em] text-fg-1">
-        silt
-      </Link>
-      <span className="ml-auto flex items-center gap-1">
-        <IconButton icon="search" label="command palette" onClick={openPalette} className="min-h-11 min-w-11" />
-        {!hosted() && (
-          <Link to="/" aria-label="New thread" className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-accent text-on-accent">
-            <Icon name="plus" />
-          </Link>
-        )}
-      </span>
-    </header>
   )
 }
 
@@ -187,14 +167,13 @@ export function Layout() {
   const sidebarShown = drawerOn === path
   const setSidebarShown = (shown: boolean) => setDrawerOn(shown ? path : null)
   return (
-    <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">
-      <PhoneHeader drawer={sidebarShown} onDrawer={() => setSidebarShown(!sidebarShown)} />
+    <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">
       <div className="flex min-h-0">
         <aside
           style={{ width: sidebar.width }}
           className={cx(
             'shrink-0 flex-col border-r border-line bg-bg',
-            sidebarShown ? 'fixed top-[52px] bottom-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none' : 'hidden md:flex',
+            sidebarShown ? 'fixed inset-y-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none' : 'hidden md:flex',
           )}
         >
           <ErrorBoundary>
@@ -214,13 +193,15 @@ export function Layout() {
           className="-ml-px hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent md:block"
         />
         {sidebarShown && (
-          <button type="button" aria-label="close projects" onClick={() => setSidebarShown(false)} className="fixed inset-0 top-[52px] z-20 bg-backdrop md:hidden" />
+          <button type="button" aria-label="close projects" onClick={() => setSidebarShown(false)} className="fixed inset-0 z-20 bg-backdrop md:hidden" />
         )}
         <main ref={scroll} inert={sidebarShown || undefined} className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <Reconnecting />
           <ErrorBoundary>
             <MainScroll.Provider value={scroll}>
-              <Outlet />
+              <Drawer.Provider value={{ open: sidebarShown, toggle: () => setSidebarShown(!sidebarShown) }}>
+                <Outlet />
+              </Drawer.Provider>
             </MainScroll.Provider>
           </ErrorBoundary>
         </main>

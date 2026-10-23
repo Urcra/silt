@@ -385,7 +385,7 @@ export function MergeRequest({ id }: { id: string }) {
       label="merge request"
       title={mr.title}
       meta={
-        <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <span className="inline-flex items-center gap-x-1.5">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-px font-sans text-2xs text-fg-1">
             <Dot tone={state.tone} />
             <span data-testid="mr-status" className="sr-only">
@@ -395,11 +395,11 @@ export function MergeRequest({ id }: { id: string }) {
           </span>
           {forkThread?.owner && <Avatar name={forkThread.owner} size={16} />}
           <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'merge fork'}</span>
-          <Link className="text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.fork }}>
+          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.fork }}>
             <span data-volatile>{short(mr.fork)}</span>
           </Link>
           <span>into</span>
-          <Link className="text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.target }}>
+          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.target }}>
             <span data-volatile>{short(mr.target)}</span>
           </Link>
           <span>
@@ -413,6 +413,7 @@ export function MergeRequest({ id }: { id: string }) {
         </Link>
       }
       inspectorLabel="decision"
+      inspectorTitle="Decision"
       inspector={
         wide && (
           <div className="flex flex-col gap-5 p-4">

@@ -9,7 +9,7 @@ import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Icon, IconButton, Kbd, Spinner, cx } from '../ui'
-import { CHIP, ChipSelect, GHOST_CHIP } from './ChipSelect'
+import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
@@ -131,13 +131,15 @@ function useTurnClock(status: AgentStatus | null): string | null {
 export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatus; toolOutput: string; onCancel: () => void }) {
   const clock = useTurnClock(status)
   if (!working(status) && !status.streaming) return null
+  const thinkingNow = status.state === 'working' && !status.streaming && !toolOutput
   return (
     <div className="flex flex-col gap-3" aria-live="polite">
       {status.thinking && (
-        <details open className="group/think border-l-2 border-line pl-3">
+        // Open while it's what the agent does; folded once it answers, runs a tool or asks.
+        <details key={thinkingNow ? 'now' : 'done'} open={thinkingNow} className="group/think border-l-2 border-line pl-3">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-fg-2">
             <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
-            Thinking
+            {thinkingNow ? 'Thinking' : 'Thought it through'}
           </summary>
           <p className="mt-1.5 text-xs whitespace-pre-wrap text-fg-2 italic">{status.thinking}</p>
         </details>
@@ -155,7 +157,11 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
         <div role="status" className="flex items-center gap-2.5 text-xs text-fg-2">
           <Spinner />
           <span className="text-fg-1">{status.state === 'awaiting_permission' ? 'Waiting on you' : 'Working'}</span>
-          {clock && <span className="font-mono">{clock}</span>}
+          {clock && (
+            <span className="font-mono" data-volatile>
+              {clock}
+            </span>
+          )}
           <button type="button" onClick={onCancel} className="ml-auto hover:text-fg-1 max-md:min-h-11">
             Stop the turn
           </button>
@@ -210,7 +216,10 @@ export function AgentDock({
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
 }) {
-  const [agent, setAgent] = useState('')
+  const [chosenAgent, setAgent] = useState<string>()
+  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
+  const agents = choices.data?.agents ?? []
+  const agent = chosenAgent ?? agents[0]?.id ?? ''
   const [attached, setAttached] = useState<PromptAttachment[]>([])
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
@@ -232,7 +241,13 @@ export function AgentDock({
     ...(status?.state === 'awaiting_input' ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }] : []),
   ])
   const sendable = live && draft.trim() !== '' && !(attached.length > 0 && !ready(status))
+  const startable = !live && !elsewhere && !hosted() && agent !== ''
+  // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
+  const start = () => {
+    if (startable) act(api.startAgent(agent, { thread }, { preset, prompt: draft.trim() ? draft : null }), () => onDraft(''))
+  }
   const send = () => {
+    if (startable) return start()
     if (!live || !sendable) return
     act(api.prompt(thread, draft, false, attached), () => {
       setAttached([])
@@ -241,11 +256,11 @@ export function AgentDock({
   }
 
   const statusLine = live ? (
-    <span data-testid="agent-state" className="px-1.5 text-xs text-fg-2">
+    <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
       {status.agent} {STATE_PHRASE[status.state]}
     </span>
   ) : elsewhere?.agent ? (
-    <span data-testid="agent-state" className="px-1.5 text-xs text-fg-2">
+    <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
       {elsewhere.user}&apos;s {elsewhere.agent.name} {STATE_PHRASE[elsewhere.agent.state]}
     </span>
   ) : null
@@ -309,15 +324,14 @@ export function AgentDock({
           />
         </label>
       )}
-      {statusLine}
       {!live && !elsewhere && !hosted() && (
-        <>
-          <span className="px-1 text-xs text-fg-2">Run an agent here:</span>
-          <AgentPicker value={agent} onChange={setAgent} className={cx(CHIP, 'pr-2')} />
-          <Button variant="primary" disabled={!agent} onClick={() => act(api.startAgent(agent, { thread }))}>
-            Start agent
-          </Button>
-        </>
+        <ChipSelect
+          ghost
+          label="agent to start"
+          value={agent}
+          onChange={setAgent}
+          options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+        />
       )}
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live && status.modes && (
@@ -358,31 +372,41 @@ export function AgentDock({
     </>
   )
 
-  const actions = live && (
-    <>
-      {turning && (
-        <Button variant="ghost" disabled={!draft.trim()} onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
-          Steer now
-        </Button>
-      )}
-      {turning && !draft.trim() ? (
-        <RoundButton quiet label="Cancel turn" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
-      ) : (
-        <RoundButton
-          label={ready(status) ? 'Send' : 'Queue'}
-          icon="arrowUp"
-          disabled={!sendable}
-          onClick={send}
-          title={
-            ready(status)
-              ? `Sends your draft together with everyone else's (${formatKeys('mod+⏎')})`
-              : attached.length > 0
-                ? 'Attached files go with a prompt the agent takes now'
-                : `Queues your draft for when the agent is ready (${formatKeys('mod+⏎')})`
-          }
-        />
-      )}
-    </>
+  const startName = agents.find((choice) => choice.id === agent)?.name ?? 'the agent'
+  const actions = startable ? (
+    <RoundButton
+      label="Start agent"
+      icon="arrowUp"
+      onClick={start}
+      title={`Starts ${startName} here${draft.trim() ? ' with your draft' : ''} (${formatKeys('mod+⏎')})`}
+    />
+  ) : (
+    live && (
+      <>
+        {turning && (
+          <Button variant="ghost" disabled={!draft.trim()} onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
+            Steer now
+          </Button>
+        )}
+        {turning && !draft.trim() ? (
+          <RoundButton quiet label="Cancel turn" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
+        ) : (
+          <RoundButton
+            label={ready(status) ? 'Send' : 'Queue'}
+            icon="arrowUp"
+            disabled={!sendable}
+            onClick={send}
+            title={
+              ready(status)
+                ? `Sends your draft together with everyone else's (${formatKeys('mod+⏎')})`
+                : attached.length > 0
+                  ? 'Attached files go with a prompt the agent takes now'
+                  : `Queues your draft for when the agent is ready (${formatKeys('mod+⏎')})`
+            }
+          />
+        )}
+      </>
+    )
   )
 
   return (
@@ -397,7 +421,9 @@ export function AgentDock({
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         placeholder={
           !live
-            ? 'Draft the next prompt; everyone here sees it'
+            ? startable
+              ? 'Ask for the next step; sending starts the agent'
+              : 'Draft the next prompt; everyone here sees it'
             : status.state === 'awaiting_input'
               ? 'Or say what to change in the plan'
               : turning
@@ -409,6 +435,7 @@ export function AgentDock({
         tools={tools}
         actions={actions}
       />
+      {statusLine}
       {preset === 'full_access' && (
         <p className="px-1 text-xs text-fg-2">
           <Icon name="alert" className="mr-1 inline h-3 w-3 text-warn" />

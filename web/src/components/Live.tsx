@@ -434,6 +434,7 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
       label="live session"
       inspector={session}
       inspectorLabel="session"
+      inspectorTitle="Session"
       title={
         <span className="flex items-center gap-2">
           Live

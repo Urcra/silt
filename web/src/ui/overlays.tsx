@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -194,7 +195,9 @@ export function Popover({
   const place = useCallback(() => {
     if (!button.current) return
     const box = button.current.getBoundingClientRect()
-    setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+    // A phone's popover spans the screen's width from its left edge, never past its right.
+    if (window.innerWidth < 768) setAt({ top: box.bottom + 4, left: 8 })
+    else setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
   }, [align])
   const toggle = () => {
     if (open) close()
@@ -206,15 +209,23 @@ export function Popover({
     opened.current = true
     place()
   }, [openOnMount, place])
-  // The trigger moves when what's around it settles, as when fonts load
-  // under a picker opened with the page.
+  // A panel past the window's edge, as on a phone, moves back inside it.
+  useLayoutEffect(() => {
+    if (!at || !panel.current) return
+    const box = panel.current.getBoundingClientRect()
+    const edge = 8
+    if (box.right <= window.innerWidth - edge + 1 && box.left >= edge - 1) return
+    const left = Math.round(Math.max(edge, Math.min(box.left, window.innerWidth - edge - box.width)))
+    if (at.left !== left || at.right !== undefined) setAt({ top: at.top, left })
+  }, [at])
+  // The trigger moves when what's around it settles, as when fonts load or
+  // a centred page's content arrives under a picker opened with the page.
   useEffect(() => {
-    const around = button.current?.parentElement
-    if (!open || !around || typeof ResizeObserver === 'undefined') return
+    if (!open || !button.current || typeof ResizeObserver === 'undefined') return
     let live = true
     const again = () => live && place()
     const observer = new ResizeObserver(again)
-    observer.observe(around)
+    for (let around: Element | null = button.current.parentElement; around; around = around.parentElement) observer.observe(around)
     void document.fonts?.ready.then(again)
     return () => {
       live = false
@@ -243,7 +254,7 @@ export function Popover({
             aria-label={label}
             style={{ top: at.top, left: at.left, right: at.right }}
             className={cx(
-              'fixed z-40 max-h-[calc(100dvh-60px)] overflow-y-auto rounded-md border border-line bg-elevated text-fg-1 shadow-overlay',
+              'fixed z-40 max-h-[calc(100dvh-60px)] max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-line bg-elevated text-fg-1 shadow-overlay',
               panelClassName ?? 'w-72 p-3',
             )}
           >

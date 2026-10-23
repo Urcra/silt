@@ -77,6 +77,8 @@ async function shoot(page: Page, name: string, ready: (page: Page) => Promise<vo
 test('the workspace home, a new thread (ADR 0044)', async ({ page }) => {
   await open(page, '/')
   await shoot(page, 'home', async (shown) => {
+    // A phone's home is the list; its new thread opens from there.
+    if ((shown.viewportSize()?.width ?? 0) < 768) return expect(shown.getByTestId('threads')).toBeVisible()
     await expect(shown.getByRole('form', { name: 'new thread' })).toBeVisible()
   })
 })
@@ -92,6 +94,8 @@ test('the command palette', async ({ page }) => {
   await open(page, '/')
   await shoot(page, 'palette', async (shown) => {
     await shown.keyboard.press('Escape')
+    const drawer = shown.getByRole('button', { name: 'show projects' })
+    if ((shown.viewportSize()?.width ?? 0) < 768 && (await drawer.count()) > 0) await drawer.click()
     await shown.getByRole('button', { name: 'command palette' }).click()
     await shown.getByLabel('command', { exact: true }).fill('farewell')
     await expect(shown.getByText('In history, including before compaction')).toBeVisible()
@@ -242,5 +246,54 @@ test('a merge request', async ({ page }) => {
   await page.getByRole('link', { name: 'Retry blob uploads on 5xx' }).first().click()
   await shoot(page, 'merge-request', async (shown) => {
     await expect(shown.getByTestId('mr-status')).toBeVisible()
+  })
+})
+
+test('the first open, with no projects yet', async ({ page }) => {
+  // A fresh machine has no clones; what the agents left on disk is found.
+  await page.route('**/api/agents', async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...((await response.json()) as object), clones: [] } })
+  })
+  await page.route('**/api/found', (route) =>
+    route.fulfill({
+      json: [
+        { path: '/home/alice/src/api', repo: 'github.com/acme/api', git: true, added: false, sessions: [{ agent: 'Claude Code', count: 12 }], last_ms: Date.now() - 7_200_000 },
+        { path: '/home/alice/src/site', repo: 'github.com/acme/site', git: true, added: false, sessions: [{ agent: 'Codex', count: 3 }], last_ms: Date.now() - 86_400_000 * 3 },
+        { path: '/home/alice/notes', repo: '', git: false, added: false, sessions: [{ agent: 'Claude Code', count: 2 }], last_ms: Date.now() - 86_400_000 * 9 },
+      ],
+    }),
+  )
+  await shoot(page, 'first-open', async (shown) => {
+    await open(shown, (shown.viewportSize()?.width ?? 0) < 768 ? '/new' : '/')
+    await expect(shown.getByRole('heading', { name: 'Pick a folder to start in' })).toBeVisible()
+  })
+})
+
+// Last: these start agents, which every screen after them would show.
+async function startFake(page: Page, prompt: string, preset?: string) {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await open(page, '/')
+  const form = page.getByRole('form', { name: 'new thread' })
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
+  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('first prompt').fill(prompt)
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await page.waitForURL(/\/t\/[0-9a-f]+$/)
+}
+
+test('a thread waiting on a permission', async ({ page }) => {
+  await startFake(page, 'Add a hello line to main', 'Ask for everything')
+  await shoot(page, 'thread-waiting', async (shown) => {
+    await expect(shown.getByRole('group', { name: 'permission' })).toBeVisible()
+    await expect(shown.getByText('Waiting on you').first()).toBeVisible()
+  })
+})
+
+test('a plan to approve', async ({ page }) => {
+  await startFake(page, 'Retry the upload twice', 'Plan')
+  await shoot(page, 'thread-plan', async (shown) => {
+    await expect(shown.getByRole('group', { name: 'plan' })).toBeVisible()
   })
 })

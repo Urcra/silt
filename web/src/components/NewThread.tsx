@@ -261,6 +261,8 @@ function Welcome() {
   const [declined, setDeclined] = useState(() => stored('silt-import-declined', false))
   const [error, setError] = useState<string>()
   const folders = found.data ?? []
+  const startable = (folder: FoundFolder) => folder.git && folder.repo !== ''
+  const firstStartable = folders.find(startable)?.path
   const sessions = folders.reduce((sum, folder) => sum + folder.sessions.reduce((count, each) => count + each.count, 0), 0)
   const added = (path: string) => {
     void queries.invalidateQueries({ queryKey: keys.agents })
@@ -287,18 +289,29 @@ function Welcome() {
         {found.isSuccess && folders.length === 0 && <p className="text-xs text-fg-2">No agent sessions on this machine yet. Open a folder, or clone a repository.</p>}
         {folders.length > 0 && (
           <ul className="overflow-hidden rounded-md border border-line bg-elevated">
-            {folders.map((folder, index) => (
+            {folders.map((folder) => (
               <li key={folder.path} className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-3.5 py-2.5 last:border-b-0">
                 <span className="flex min-w-[220px] flex-1 flex-col">
                   <span className="font-mono font-medium">{folder.path}</span>
                   <span className="text-xs text-fg-2">
-                    {folder.git
-                      ? [folder.repo || 'no remote', sessionsSaid(folder), folder.last_ms !== null && `last ${ago(folder.last_ms, now)}`].filter(Boolean).join(' · ')
-                      : `not a git repository · ${sessionsSaid(folder)} · searchable once imported; ask an agent to git init it to start threads`}
+                    {[
+                      folder.git ? folder.repo || 'no remote' : 'not a git repository',
+                      sessionsSaid(folder),
+                      folder.last_ms !== null && `last ${ago(folder.last_ms, now)}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </span>
+                  {!startable(folder) && (
+                    <span className="text-xs text-fg-3">
+                      {folder.git
+                        ? 'Threads start in a repository with an origin remote; its sessions can be imported now.'
+                        : 'Threads need git: ask an agent to run git init here. Its sessions can be imported now.'}
+                    </span>
+                  )}
                 </span>
-                {folder.git && folder.repo && (
-                  <Button variant={index === 0 ? 'primary' : 'secondary'} onClick={() => start(folder.path)}>
+                {startable(folder) && (
+                  <Button variant={folder.path === firstStartable ? 'primary' : 'secondary'} onClick={() => start(folder.path)}>
                     Start here
                   </Button>
                 )}
@@ -327,7 +340,6 @@ function Welcome() {
             </span>
           </span>
           <Button
-            variant="primary"
             disabled={importing}
             onClick={() => {
               setImporting(true)
@@ -539,6 +551,7 @@ export function NewThread() {
           ) : (
             <ProjectPicker clones={clones} projects={projectsQuery.data ?? []} value={project} onPick={pick} opening={search.pick} />
           )}
+          <span className="-ml-1.5">?</span>
         </h2>
         <form
           aria-label="new thread"

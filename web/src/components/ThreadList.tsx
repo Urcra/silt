@@ -168,7 +168,7 @@ export function ThreadList() {
             Graph
           </Link>
           {!hosted() && (
-            <Link to="/" className={buttonClass('primary')}>
+            <Link to="/new" className={buttonClass('primary')}>
               <Icon name="plus" />
               New thread
             </Link>

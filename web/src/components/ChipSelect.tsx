@@ -28,14 +28,14 @@ export function ChipSelect({
   ghost?: boolean
 }) {
   return (
-    <label className={cx(ghost ? GHOST_CHIP : CHIP, 'relative cursor-pointer pr-1')}>
+    <label className={cx(ghost ? GHOST_CHIP : CHIP, 'relative min-w-0 cursor-pointer pr-1')}>
       {icon && <Icon name={icon} className="h-3.5 w-3.5 text-fg-2" />}
       {prefix && <span className="text-fg-2">{prefix}</span>}
       <select
         aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={cx('max-w-56 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none', mono && 'font-mono')}
+        className={cx('field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none', mono && 'font-mono')}
       >
         {options.map((option) => (
           <option key={option.id} value={option.id} title={option.description ?? undefined}>

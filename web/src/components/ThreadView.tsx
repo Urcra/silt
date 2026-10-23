@@ -43,7 +43,7 @@ import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 import { Mock } from './Mock'
-import { Page } from './Page'
+import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
@@ -416,12 +416,12 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   ])
   return (
     <>
-      <Button icon="fork" onClick={fork} title="A copy of the thread, in a checkout of its own, to try something else in">
-        Fork
+      <Button icon="fork" onClick={fork} aria-label="Fork" title="A copy of the thread, in a checkout of its own, to try something else in">
+        <span className="max-md:sr-only">Fork</span>
       </Button>
       {forked && !offering && (
-        <Button icon="merge" onClick={() => setOffering(true)}>
-          Offer as merge request
+        <Button icon="merge" onClick={() => setOffering(true)} aria-label="Offer as merge request" title="Offer this fork's work back to its source">
+          <span className="max-lg:sr-only">Offer as merge request</span>
         </Button>
       )}
       {offering && (
@@ -545,37 +545,42 @@ function ThreadHeader({
   onDetails: () => void
 }) {
   const where = summary ? threadWhere(summary) : null
-  const meta = summary
-    ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.owner && `started by ${summary.owner}`, summary.agent && `recorded with ${summary.agent}`].filter(Boolean)
-    : []
+  // Where it is and what records it; who started it and the rest are in Details.
+  const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
   return (
-    <header className="flex min-h-12 flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line-subtle px-4 py-1.5 md:pr-3 md:pl-5">
-      <h1 className="text-[15px] font-medium">{summary?.title ?? 'Thread'}</h1>
+    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle px-4 md:pr-3 md:pl-5">
+      <DrawerButton />
+      <h1 className="max-w-[50%] min-w-0 shrink-0 truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
+        {summary?.title ?? 'Thread'}
+      </h1>
       {waiting && (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap">
           <Dot tone="warn" />
           Waiting on you
         </span>
       )}
       {summary?.local_only && (
-        <span title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
+        <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
           <Tag>This machine only</Tag>
         </span>
       )}
-      <span className="min-w-0 font-mono text-2xs text-fg-2">
-        <span data-volatile>{short(thread)}</span>
-        {meta.map((part) => ` · ${part}`)}
-      </span>
-      {summary?.forked_from && (
-        <span className="text-2xs text-fg-2">
-          Fork of{' '}
-          <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
-            {short(summary.forked_from)}
-          </Link>
+      <span className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden whitespace-nowrap max-md:hidden">
+        <span className="min-w-0 truncate font-mono text-2xs text-fg-2" data-volatile>
+          {short(thread)}
+          {meta.map((part) => ` · ${part}`)}
         </span>
-      )}
+        {summary?.forked_from && (
+          <span className="shrink-0 text-2xs text-fg-2">
+            Fork of{' '}
+            <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
+              {short(summary.forked_from)}
+            </Link>
+          </span>
+        )}
+      </span>
+      <span className="flex-1 md:hidden" />
       <Here people={people} />
-      <span className="flex flex-wrap items-center gap-1 lg:ml-auto">
+      <span className="flex shrink-0 items-center gap-1">
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
         <Button
@@ -585,12 +590,11 @@ function ThreadHeader({
           title="What the thread changed, beside the conversation (D)"
           className="aria-pressed:border-accent aria-pressed:bg-accent-tint aria-pressed:text-accent-fg"
         >
-          Changes
+          <span className="max-md:sr-only">Changes</span>
           {changes && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} />
       </span>
-      {summary && <CloudSession thread={summary} />}
       {summary && <ThreadStateActions summary={summary} />}
     </header>
   )
@@ -692,7 +696,6 @@ function ThreadCommits({ thread }: { thread: string }) {
 function Details({
   thread,
   summary,
-  threads,
   total,
   diff,
   codeComments,
@@ -702,7 +705,6 @@ function Details({
 }: {
   thread: string
   summary: ThreadSummary | undefined
-  threads: ThreadSummary[]
   total: number
   diff: string | undefined
   codeComments: CommentView[]
@@ -739,18 +741,6 @@ function Details({
         />
         <p className="text-xs leading-normal text-fg-2">Picking it up on another machine moves the agent session there. This one stops writing.</p>
       </InspectorSection>
-      {summary && (
-        <InspectorSection
-          title="Lineage"
-          aside={
-            <Link to="/graph" className="text-accent-fg hover:text-fg-1">
-              View graph
-            </Link>
-          }
-        >
-          <Lineage summary={summary} threads={threads} />
-        </InspectorSection>
-      )}
       <InspectorSection title="Files changed">
         {files === null && <Skeleton className="h-10" />}
         {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
@@ -831,7 +821,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'details' | 'changes'
+type InspectorTab = 'changes' | 'details' | 'lineage'
 
 function ThreadBody({
   thread,
@@ -913,11 +903,10 @@ function ThreadBody({
       inspector={
         (panel || sheet) && (
         <div className="flex flex-col">
-          <div className="sticky top-0 z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line bg-bg px-4">
+          <div className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b border-line-subtle bg-bg px-4">
             <Tabs
               label="inspector"
               tabs={[
-                { id: 'details', label: 'Details' },
                 {
                   id: 'changes',
                   label: (
@@ -926,16 +915,32 @@ function ThreadBody({
                     </>
                   ),
                 },
+                { id: 'details', label: 'Details' },
+                { id: 'lineage', label: 'Lineage' },
               ]}
               value={tab}
               onChange={setTab}
             />
           </div>
-          {tab === 'details' ? (
+          {tab === 'lineage' ? (
+            <div className="flex flex-col gap-6 px-5 py-5">
+              {summary && (
+                <InspectorSection
+                  title="Lineage"
+                  aside={
+                    <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+                      View graph
+                    </Link>
+                  }
+                >
+                  <Lineage summary={summary} threads={threads.data ?? []} />
+                </InspectorSection>
+              )}
+            </div>
+          ) : tab === 'details' ? (
             <Details
               thread={thread}
               summary={summary}
-              threads={threads.data ?? []}
               total={total}
               diff={diff.data}
               codeComments={codeComments}
@@ -978,6 +983,11 @@ function ThreadBody({
         }}
       />
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 md:px-6">
+        {summary?.cloud && (
+          <div className="pt-3">
+            <CloudSession thread={summary} />
+          </div>
+        )}
         <p className="pt-3 font-mono text-2xs text-fg-3">
           {total} {total === 1 ? 'entry' : 'entries'}
           {turn !== null && ` · ${turn} ${turn === 1 ? 'turn' : 'turns'}`}

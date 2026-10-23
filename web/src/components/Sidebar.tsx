@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
 import { APPROVED } from '../agentState'
 import { useAgentStatus } from '../agentStatus'
@@ -14,7 +14,7 @@ import { formatKeys } from '../shortcuts'
 import { threadDoing } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Avatar, Button, Dot, Icon, type IconName, Menu, SectionLabel, Skeleton, cx } from '../ui'
+import { Avatar, Button, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { PaletteRow } from './Palette'
 import { ThreadMark } from './ThreadMark'
@@ -24,7 +24,7 @@ const ROW = 'flex min-w-0 items-center gap-2 rounded-sm px-2 text-fg-1 hover:bg-
 const ACTIVE = 'bg-accent-tint text-accent-fg shadow-[inset_2px_0_0_var(--accent)] hover:bg-accent-tint'
 
 /** One thread in the sidebar: its state, its title and how long ago, on one line (ADR 0044). */
-function ThreadItem({ thread, nested = false, aside }: { thread: ThreadSummary; nested?: boolean; aside?: ReactNode }) {
+function ThreadItem({ thread, nested = false, aside, current = true }: { thread: ThreadSummary; nested?: boolean; aside?: ReactNode; current?: boolean }) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
   const actions = useThreadState(thread)
@@ -35,7 +35,7 @@ function ThreadItem({ thread, nested = false, aside }: { thread: ThreadSummary; 
         params={{ id: thread.id }}
         title={[title, threadDoing(thread)].filter(Boolean).join(' · ')}
         className={cx(ROW, 'flex-1 py-[5px]', nested ? 'pl-[26px]' : 'pl-2')}
-        activeProps={{ className: ACTIVE }}
+        activeProps={current ? { className: ACTIVE } : undefined}
       >
         <ThreadMark thread={thread} />
         <span className={cx('min-w-0 flex-1 truncate', unread(thread) && 'font-semibold')}>{title}</span>
@@ -75,7 +75,7 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
   return (
     <li role="group" aria-label={`${title} needs you`}>
       <ul>
-        <ThreadItem thread={thread} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread)}</span>} />
+        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread)}</span>} />
       </ul>
       {asked && (
         <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">
@@ -108,7 +108,7 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
   const [open, setOpen] = useState(true)
   const [showRest, setShowRest] = useState(false)
   const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
-  const shown = newest.filter((thread) => ['working', 'active'].includes(section(thread, now)))
+  const shown = newest.filter((thread) => ['needs_you', 'working', 'active'].includes(section(thread, now)))
   const rest = newest.filter((thread) => ['snoozed', 'settled'].includes(section(thread, now)))
   const working = threads.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
   return (
@@ -159,9 +159,24 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
   )
 }
 
-function NavItem({ to, icon, children, count, accent = false }: { to: string; icon: IconName; children: ReactNode; count?: ReactNode; accent?: boolean }) {
+function NavItem({
+  to,
+  icon,
+  children,
+  count,
+  accent = false,
+  also = false,
+}: {
+  to: string
+  icon: IconName
+  children: ReactNode
+  count?: ReactNode
+  accent?: boolean
+  /** Current on a page under it too, such as one merge request under the list. */
+  also?: boolean
+}) {
   return (
-    <Link to={to} className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
+    <Link to={to} className={cx(ROW, 'h-[30px]', also && ACTIVE)} activeProps={{ className: ACTIVE }}>
       <Icon name={icon} className="h-[15px] w-[15px] shrink-0" />
       <span className="flex-1 truncate">{children}</span>
       {count !== undefined && <span className={cx('font-mono text-2xs', accent ? 'text-accent-fg' : 'text-fg-2')}>{count}</span>}
@@ -177,7 +192,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const signIn = status.data?.servers?.[0]
   const name = signIn?.name ?? 'this machine'
   const sync = status.data?.sync_error
-  const agents = `${running === 1 ? '1 agent' : `${running} agents`}${waiting > 0 ? `, ${waiting} waiting` : ' running'}`
+  const agents = running === 0 ? null : `${running === 1 ? '1 agent' : `${running} agents`}${waiting > 0 ? `, ${waiting} waiting` : ' running'}`
   return (
     <div className="mt-auto flex items-center gap-2 border-t border-line px-2 pt-2.5 pb-1 text-xs text-fg-2">
       {hosted() ? (
@@ -186,7 +201,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
         <Link to="/settings/devices" className="flex min-w-0 flex-1 items-center gap-2 hover:text-fg-1" title={sync ?? undefined}>
           <Dot tone={sync ? 'danger' : signIn ? 'ok' : 'idle'} />
           <span className="truncate">
-            {name} · {sync ? 'sync failing' : agents}
+            {[name, sync ? 'sync failing' : agents].filter(Boolean).join(' · ')}
           </span>
         </Link>
       )}
@@ -217,7 +232,9 @@ export function Sidebar() {
   const shown = useInWorkspace()
   const mine = (threads.data ?? []).filter(shown)
   const grouped = sections(mine, now)
-  const listed = mine.filter((thread) => LISTED.includes(section(thread, now)))
+  // A thread that needs the person stays in its project too, where it lives.
+  const listed = mine.filter((thread) => [...LISTED, 'needs_you'].includes(section(thread, now)))
+  const path = useRouterState({ select: (state) => state.location.pathname })
   const reviews = mine.filter((thread) => thread.review).length
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
@@ -229,17 +246,17 @@ export function Sidebar() {
         {!hosted() && <WorkspaceSwitcher />}
       </div>
       {!hosted() && (
-        <Link to="/" className={cx(ROW, 'h-[30px]')} activeOptions={{ exact: true, includeSearch: false }} activeProps={{ className: ACTIVE }}>
+        <Link to="/new" className={cx(ROW, 'h-[30px]', (path === '/' || path === '/new') && ACTIVE)}>
           <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
           <span className="flex-1">New thread</span>
-          <span aria-hidden="true" className="font-mono text-2xs text-fg-3">{formatKeys('n')}</span>
+          <Kbd>{formatKeys('n')}</Kbd>
         </Link>
       )}
       <PaletteRow className={cx(ROW, 'h-[30px] w-full text-left')} />
       <NavItem to="/threads" icon="list">
         All threads
       </NavItem>
-      <NavItem to="/mrs" icon="merge" count={reviews || undefined}>
+      <NavItem to="/mrs" icon="merge" count={reviews || undefined} also={path.startsWith('/mr/')}>
         Merge requests
       </NavItem>
       <NavItem to="/inbox" icon="inbox" count={unreadInbox || undefined} accent>
@@ -254,7 +271,9 @@ export function Sidebar() {
       {grouped.needs_you.length > 0 && (
         <section aria-label="needs you" className="mt-2">
           <SectionLabel className="px-2 text-accent-fg" aside={<span className="font-mono">{grouped.needs_you.length}</span>}>
-            Needs you
+            <Link to="/needs-you" className={cx('rounded-sm hover:underline', path === '/needs-you' && 'underline underline-offset-4')}>
+              Needs you
+            </Link>
           </SectionLabel>
           <ul>
             {grouped.needs_you.map((thread) => (

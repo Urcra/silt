@@ -48,7 +48,7 @@ export function PaletteRow({ className }: { className?: string }) {
     <button type="button" aria-label="command palette" onClick={openPalette} className={className}>
       <Icon name="search" className="h-[15px] w-[15px] shrink-0" />
       <span className="flex-1">Search</span>
-      <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+k')}</span>
+      <Kbd>{formatKeys('mod+k')}</Kbd>
     </button>
   )
 }

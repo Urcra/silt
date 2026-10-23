@@ -743,7 +743,7 @@ test('a thread started in the background from a branch plans its first prompt an
   await expect(page.getByText('Fake agent started in a new thread')).toBeVisible()
   await expect(form.getByLabel('first prompt')).toHaveValue('')
   const waiting = page.getByRole('region', { name: 'needs you' })
-  await waiting.getByRole('link').first().click()
+  await waiting.getByRole('group').first().getByRole('link').first().click()
   await expect(page.getByText('Plan: write the docs')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
   await expect(page.getByLabel('permissions', { exact: true })).toHaveValue('plan')

@@ -246,6 +246,7 @@ export function Graph() {
       title="History graph"
       inspector={picked ? <Details row={picked} thread={threadOf(picked.thread)} /> : undefined}
       inspectorLabel="selected"
+      inspectorTitle="Selected"
     >
       <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line px-4 py-1.5 md:px-6">
         <Tabs

@@ -1,7 +1,8 @@
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from '@tanstack/react-router'
 import { Layout } from './components/Layout'
 import * as routes from './components/Routes'
-import { basePath } from './served'
+import { basePath, hosted } from './served'
+import { phone } from './shell'
 
 const root = createRootRoute({ component: Layout })
 
@@ -41,8 +42,9 @@ export const router = createRouter({
       getParentRoute: () => root,
       path: '/new',
       validateSearch: newThreadSearch,
+      component: routes.NewRoute,
       beforeLoad: ({ search }) => {
-        throw redirect({ to: '/', search, replace: true })
+        if (!phone() || hosted()) throw redirect({ to: '/', search, replace: true })
       },
     }),
     createRoute({ getParentRoute: () => root, path: '/threads', component: routes.ThreadsRoute }),
