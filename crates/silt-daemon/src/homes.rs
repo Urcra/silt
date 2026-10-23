@@ -146,8 +146,13 @@ impl Core {
         };
         self.store.set_project_home(repo, home.stored()).await?;
         self.project_homes.insert(repo.to_owned(), home.clone());
-        let families: BTreeSet<FamilyId> =
-            self.threads.values().filter(|record| record.repo == repo).map(|record| record.family).collect();
+        let held = self.held_imports().await?;
+        let families: BTreeSet<FamilyId> = self
+            .threads
+            .values()
+            .filter(|record| record.repo == repo && !held.contains(&record.family))
+            .map(|record| record.family)
+            .collect();
         let mut moved = 0;
         let mut staying = BTreeSet::new();
         for family in families {

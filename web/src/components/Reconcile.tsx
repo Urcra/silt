@@ -158,7 +158,7 @@ export function Reconcile() {
           )}
           <span className="flex flex-wrap gap-2">
             <Button variant="primary" icon="merge" onClick={() => (offering ? void offer() : setOffering(true))} disabled={offering && !title.trim()}>
-              Open merge request into <span data-volatile>{short(found.thread)}</span>
+              Open merge request into <span className="font-mono" data-volatile>{short(found.thread)}</span>
             </Button>
             <Link to="/t/$id" params={{ id: found.recovery }} className={buttonClass('secondary')}>
               Open recovery thread

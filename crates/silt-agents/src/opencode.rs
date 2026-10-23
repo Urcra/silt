@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, Capture, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Rewrites, SessionIds, Start,
+    Agent, AgentError, Capture, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Rewrites,
+    SessionIds, Start,
 };
 
 pub const AGENT: &str = "opencode";
@@ -292,6 +293,35 @@ impl Agent for OpenCode {
             .filter_map(|session| session.get("id").and_then(Value::as_str).map(str::to_owned))
             .find(|id| !known.contains(id))
             .map(|id| Found { transcript: PathBuf::from(format!("opencode:{id}")), id })
+    }
+
+    fn on_disk(&self, dirs: &[PathBuf]) -> Vec<OnDisk> {
+        let mut found: Vec<OnDisk> = Vec::new();
+        for dir in dirs.iter().filter(|dir| dir.is_dir()) {
+            let Ok(listed) = opencode(&["session", "list", "--format", "json"], Some(dir)) else {
+                continue;
+            };
+            let Some(start) = listed.iter().position(|byte| *byte == b'[') else {
+                continue;
+            };
+            let sessions: Vec<Value> = serde_json::from_slice(&listed[start..]).unwrap_or_default();
+            for session in sessions {
+                let Some(id) = session.get("id").and_then(Value::as_str).filter(|id| crate::is_safe_id(id)) else {
+                    continue;
+                };
+                if found.iter().any(|known| known.id == id) {
+                    continue;
+                }
+                found.push(OnDisk {
+                    id: id.to_owned(),
+                    transcript: PathBuf::from(format!("opencode:{id}")),
+                    cwd: session.get("directory").and_then(Value::as_str).map(PathBuf::from),
+                    started_ms: session.get("created").and_then(Value::as_i64),
+                });
+            }
+        }
+        found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+        found
     }
 
     fn capture(&self) -> Capture {

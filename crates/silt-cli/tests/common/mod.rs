@@ -105,6 +105,21 @@ pub fn eventually(mut check: impl FnMut() -> bool) -> bool {
     false
 }
 
+/// Runs a script a test just wrote. Another test forking while it was being
+/// written can hold it open for a moment, which fails the exec.
+pub fn output_once_released(command: &mut Command) -> Output {
+    (0..50)
+        .find_map(|_| match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+                None
+            }
+            other => Some(other),
+        })
+        .expect("the script was released")
+        .expect("the script runs")
+}
+
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])

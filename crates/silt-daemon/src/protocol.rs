@@ -77,6 +77,28 @@ pub enum Request {
     /// Re-reads the server settings after `silt auth login`.
     Reload,
     Status,
+    /// The sessions on disk not yet recorded or imported (ADR 0043), of
+    /// `agent` or all, that ran under one of `paths` or anywhere.
+    ImportCandidates {
+        #[serde(default)]
+        paths: Vec<PathBuf>,
+        #[serde(default)]
+        agent: Option<String>,
+    },
+    /// Imports one of them into a thread kept on this machine.
+    Import {
+        candidate: ImportCandidate,
+    },
+    /// Sends imported threads kept on this machine to `server`, or the
+    /// default one: `threads`, those of `project`, or with neither all.
+    Send {
+        #[serde(default)]
+        threads: Vec<String>,
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        server: Option<String>,
+    },
     /// Continues a thread on this machine (ADR 0009), with its own agent or
     /// with `agent` (ADR 0012).
     Resume {
@@ -530,6 +552,37 @@ pub struct Compaction {
 pub struct FilePage {
     pub offset: usize,
     pub limit: usize,
+}
+
+/// A session on disk that Silt hasn't recorded (ADR 0043).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportCandidate {
+    pub agent: String,
+    pub id: String,
+    pub transcript: PathBuf,
+    pub cwd: Option<PathBuf>,
+    pub started_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedThread {
+    pub thread: String,
+    pub agent: String,
+    pub session_id: String,
+    /// Empty for a session that ran outside any clone with an origin.
+    pub project: String,
+    pub cwd: Option<PathBuf>,
+    pub started_ms: i64,
+    /// Records read from its files.
+    pub lines: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sent {
+    pub threads: usize,
+    pub server: String,
+    /// Distinct secrets the push redacts from them.
+    pub redacted: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

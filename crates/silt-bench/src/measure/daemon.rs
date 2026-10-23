@@ -1,8 +1,9 @@
 //! The budgets a real daemon is measured on, one data dir built up in turn:
 //! importing the big transcript (`record.import`, then `store.size`), then
-//! a family of ten forks and a 50,000-file checkout, then starting the
-//! daemon on all of it (`daemon.startup`) and leaving it idle
-//! (`daemon.idle`).
+//! importing it as a session that ran before Silt into a data dir of its
+//! own (`import.session`), then a family of ten forks and a 50,000-file
+//! checkout, then starting the daemon on all of it (`daemon.startup`) and
+//! leaving it idle (`daemon.idle`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,12 +15,13 @@ use silt_agents::claude;
 use silt_daemon::protocol::{MrSummary, Request, Resumed};
 use silt_store::Store;
 
-use crate::budgets::{DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, Measured, RECORD_IMPORT, STORE_SIZE, median};
+use crate::budgets::{DAEMON_IDLE, DAEMON_READY, DAEMON_STARTUP, IMPORT_SESSION, Measured, RECORD_IMPORT, STORE_SIZE, median};
 use crate::daemon::{Daemon, Home};
 use crate::fixtures::{Fixtures, SESSION_ID, clone_repo, small_transcript, write_repo};
 use crate::{BenchError, fail};
 
 const FORKS: usize = 10;
+const IMPORTED_ID: &str = "5e1f0000-0000-4000-8000-0000000000aa";
 const STARTS: usize = 3;
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -48,6 +50,17 @@ pub async fn measure(
     #[expect(clippy::cast_precision_loss, reason = "a ratio of sizes")]
     let ratio = stored_bytes(&home.data)? as f64 / bytes as f64;
     measured.push((STORE_SIZE, Measured::Ratio(ratio)));
+
+    // The same transcript as a session that ran before Silt, in a data dir
+    // of its own, so the daemon's later budgets hold what they always did.
+    let before = Home::new(silt, &root.join("before-silt"));
+    let earlier = self::repo(root, "earlier", 10)?;
+    place(&transcript, &session_transcript(&before, &earlier, IMPORTED_ID))?;
+    let daemon = before.start()?;
+    let start = Instant::now();
+    before.silt(&earlier, &["import", "--agent", "claude"])?;
+    measured.push((IMPORT_SESSION, Measured::Time(start.elapsed())));
+    daemon.stop()?;
     if !wanted.iter().any(|name| [DAEMON_STARTUP, DAEMON_READY, DAEMON_IDLE].contains(name)) {
         return Ok(measured);
     }

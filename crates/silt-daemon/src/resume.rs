@@ -86,6 +86,12 @@ impl Core {
     /// the base commit.
     async fn prepare_thread(&mut self, thread: ThreadId, cwd: &Path, here: bool) -> Result<(Repo, Option<GitOid>), CoreError> {
         let record = self.threads[&thread].clone();
+        if record.repo.is_empty() && self.families.contains_key(&record.family) && self.genesis_commit(record.family)?.is_none() {
+            return Err(CoreError::Invalid(format!(
+                "thread {} ran outside any git clone, so there's no code to continue it from; read it with `silt show`",
+                thread.short()
+            )));
+        }
         let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
         let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
@@ -134,6 +140,7 @@ impl Core {
         } else {
             managed_checkout_path(repo, thread, base)?
         };
+        self.import_tree_if_missing(thread, repo).await?;
         let checkout_id = self.attach_checkout(thread, &checkout_path, !here).await?;
         self.materialize(checkout_id).await?;
 

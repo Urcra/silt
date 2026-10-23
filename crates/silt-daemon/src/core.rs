@@ -179,6 +179,9 @@ pub struct Core {
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
+    /// The time the conversation deltas being staged carry, while a session
+    /// that ran before is imported (ADR 0043); else they carry now.
+    pub(crate) recorded_at: Option<i64>,
     /// Whether an [`Event::IndexPending`] waits in the queue. One at a time,
     /// so a request queued behind a pull waits for one batch of rows, not
     /// one per page pulled.
@@ -443,6 +446,7 @@ impl Core {
             next_token: 0,
             change_noticed: None,
             importing: false,
+            recorded_at: None,
             index_queued: false,
             deleted: HashSet::new(),
             trash_changed: HashMap::new(),
@@ -540,6 +544,11 @@ impl Core {
                 to_response(started)
             }
             Request::Hook { event, input } => self.hook(&event, input).await,
+            Request::ImportCandidates { paths, agent } => to_response(self.import_candidates(&paths, agent.as_deref()).await),
+            Request::Import { candidate } => to_response(self.import_session(candidate).await),
+            Request::Send { threads, project, server } => {
+                to_response(self.send(&threads, project.as_deref(), server.as_deref()).await)
+            }
             Request::EndSession { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.end_session(thread).await),
                 Err(error) => Response::error(error),
@@ -1356,7 +1365,8 @@ impl Core {
     ) -> Result<(Delta, Vec<SearchRow>), CoreError> {
         let actor = self.thread_actor(thread);
         let family = self.families.get_mut(&family_id).expect("session's family is loaded");
-        let delta = family.delta(actor, thread, author, now_ms(), family.thread_head(thread), Op::Conv(op));
+        let time = self.recorded_at.unwrap_or_else(now_ms);
+        let delta = family.delta(actor, thread, author, time, family.thread_head(thread), Op::Conv(op));
         family.apply(delta.clone(), &mut HashMap::new())?;
         let rows = texts.into_iter().map(|(kind, body)| SearchRow { thread, delta: delta.span.first(), kind, body }).collect();
         Ok((delta, rows))
@@ -2125,7 +2135,7 @@ pub(crate) async fn stored_entries(store: &Store, checkout: CheckoutId) -> Resul
 
 /// Redacts the secrets in this process's environment and in the data
 /// directory's `secrets` file.
-fn redactor(data_dir: &Path) -> Redactor {
+pub(crate) fn redactor(data_dir: &Path) -> Redactor {
     let file = data_dir.join("secrets");
     let secrets = silt_redact::read_secrets_file(&file).unwrap_or_else(|error| {
         warn!(%error, path = %file.display(), "could not read the secrets file; its secrets are not redacted");

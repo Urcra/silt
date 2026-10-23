@@ -18,11 +18,6 @@ use crate::{ApiError, Server, UserId, pages};
 /// Longest error answer rewritten for the app.
 const ERROR_BODY: usize = 64 * 1024;
 
-#[derive(rust_embed::Embed)]
-#[folder = "../../web/dist"]
-#[allow_missing = true]
-struct Assets;
-
 /// The person a browser request is from, by their session cookie, and what
 /// that session may do: everything, unless it's a paired phone's.
 #[derive(Debug, Clone, Copy)]
@@ -73,11 +68,11 @@ async fn page(State(server): State<Server>, headers: HeaderMap, uri: Uri) -> Res
         return Redirect::to(&format!("/login?next={}", crate::sign_in::encode(&next))).into_response();
     }
     let path = uri.path().trim_start_matches("/app/");
-    if let Some(file) = Assets::get(path).filter(|_| !path.is_empty()) {
+    if let Some(file) = silt_web::Assets::get(path).filter(|_| !path.is_empty()) {
         let mime = file.metadata.mimetype().to_owned();
         return ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response();
     }
-    match Assets::get("index.html") {
+    match silt_web::Assets::get("index.html") {
         Some(file) => {
             let html = hosted_index(&String::from_utf8_lossy(&file.data));
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8".to_owned())], html).into_response()
@@ -94,9 +89,9 @@ pub(crate) async fn font(UrlPath(name): UrlPath<String>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let prefix = format!("assets/{stem}-");
-    let found = Assets::iter()
+    let found = silt_web::Assets::iter()
         .find(|path| path.strip_prefix(&prefix).is_some_and(|hash| hash.ends_with(".woff2")))
-        .and_then(|path| Assets::get(&path));
+        .and_then(|path| silt_web::Assets::get(&path));
     match found {
         Some(file) => (
             [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=86400")],

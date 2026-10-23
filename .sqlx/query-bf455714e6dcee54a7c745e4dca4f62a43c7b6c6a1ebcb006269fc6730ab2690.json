@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO imports (agent, session_id, thread_id, family_id, imported_ms) VALUES (?, ?, ?, ?, ?)\n             ON CONFLICT (agent, session_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "bf455714e6dcee54a7c745e4dca4f62a43c7b6c6a1ebcb006269fc6730ab2690"
+}

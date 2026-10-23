@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::entry::Entry;
 use crate::{
-    Agent, AgentError, Capture, CheckedSession, Found, Launch, LaunchPlan, Read, Reader, Restore, Rewrites, Role, SessionIds,
-    Start, Stateless, Write, translated_text,
+    Agent, AgentError, Capture, CheckedSession, Found, Launch, LaunchPlan, OnDisk, Read, Reader, Restore, Rewrites, Role,
+    SessionIds, Start, Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "claude-code";
@@ -30,6 +30,47 @@ pub fn config_dir() -> Option<PathBuf> {
 /// The directory name Claude Code uses for sessions started in `cwd`.
 pub fn project_slug(cwd: &Path) -> String {
     cwd.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect()
+}
+
+/// Every session in the configuration directory `config`, with where and
+/// when it started as its first records say. Older versions kept
+/// subagents' transcripts beside the sessions, as `agent-<id>.jsonl`.
+pub fn on_disk_in(config: &Path) -> Vec<OnDisk> {
+    let Ok(projects) = fs::read_dir(config.join("projects")) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for project in projects.flatten() {
+        let Ok(sessions) = fs::read_dir(project.path()) else {
+            continue;
+        };
+        for entry in sessions.flatten() {
+            let path = entry.path();
+            let Some(id) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            if path.extension().is_none_or(|extension| extension != "jsonl")
+                || id.starts_with("agent-")
+                || !crate::is_safe_id(&id)
+            {
+                continue;
+            }
+            let (mut cwd, mut started_ms) = (None, None);
+            for line in crate::first_lines(&path, 32) {
+                let Ok(record) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                cwd = cwd.or_else(|| record.get("cwd").and_then(Value::as_str).map(PathBuf::from));
+                started_ms = started_ms.or_else(|| crate::record_time(&line));
+                if cwd.is_some() && started_ms.is_some() {
+                    break;
+                }
+            }
+            found.push(OnDisk { id, transcript: path, cwd, started_ms });
+        }
+    }
+    found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+    found
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +256,10 @@ impl Agent for ClaudeCode {
                 id: path.file_stem().expect("filtered on extension").to_string_lossy().into_owned(),
                 transcript: path,
             })
+    }
+
+    fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
+        config_dir().map(|config| on_disk_in(&config)).unwrap_or_default()
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
@@ -559,5 +604,25 @@ mod tests {
         assert_eq!(input.tool_use_id.as_deref(), Some("toolu_9"));
         let settings: Value = serde_json::from_str(&hook_settings("silt hook")).expect("valid json");
         assert_eq!(settings.pointer("/hooks/PostToolUse/0/hooks/0/command"), Some(&json!("silt hook PostToolUse")));
+    }
+
+    #[test]
+    fn sessions_on_disk_are_listed_with_where_and_when_they_started() {
+        let config = tempfile::tempdir().expect("temp dir");
+        let project = config.path().join("projects/-w-repo");
+        fs::create_dir_all(project.join("s1/subagents")).expect("mkdir");
+        fs::write(
+            project.join("s1.jsonl"),
+            "{\"type\":\"summary\",\"summary\":\"x\"}\n{\"type\":\"user\",\"cwd\":\"/w/repo\",\"timestamp\":\"2026-01-02T03:04:05.000Z\"}\n",
+        )
+        .expect("writes");
+        fs::write(project.join("s1/subagents/agent-a.jsonl"), "{}\n").expect("writes");
+        fs::write(project.join("agent-old.jsonl"), "{}\n").expect("writes");
+        fs::write(project.join("s0.jsonl"), "not json\n").expect("writes");
+        let found = on_disk_in(config.path());
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!((found[0].id.as_str(), found[0].cwd.as_deref()), ("s0", None));
+        assert_eq!(found[1].cwd.as_deref(), Some(Path::new("/w/repo")));
+        assert_eq!(found[1].started_ms, crate::time::parse_timestamp("2026-01-02T03:04:05.000Z"));
     }
 }

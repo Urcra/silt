@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
-    Start, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
+    SessionIds, Start, Write, translated_text,
 };
 
 pub const AGENT: &str = "copilot-cli";
@@ -142,6 +142,29 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
         .map(|(id, transcript)| Found { id, transcript })
 }
 
+/// Every session in the Copilot home `home`, with where and when it started.
+pub fn on_disk_in(home: &Path) -> Vec<OnDisk> {
+    let Ok(entries) = fs::read_dir(home.join("session-state")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<OnDisk> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            let transcript = entry.path().join("events.jsonl");
+            if !crate::is_safe_id(&id) || !transcript.is_file() {
+                return None;
+            }
+            let first = crate::first_line(&transcript).unwrap_or_default();
+            let start: Value = serde_json::from_str(&first).unwrap_or_default();
+            let cwd = start.pointer("/data/context/cwd").and_then(Value::as_str).map(PathBuf::from);
+            Some(OnDisk { id, cwd, started_ms: crate::record_time(&first), transcript })
+        })
+        .collect();
+    found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+    found
+}
+
 /// Writes `session` as a session directory in the Copilot home `home`.
 pub fn restore_into(home: &Path, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
     let restore = plan_restore(home, root, cwd, session);
@@ -265,6 +288,10 @@ impl Agent for Copilot {
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
         discover_in(&home()?, cwd, since_ms, known)
+    }
+
+    fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
+        home().map(|home| on_disk_in(&home)).unwrap_or_default()
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
@@ -423,5 +450,22 @@ mod tests {
         let start: Value = serde_json::from_str(&lines[0]).expect("json");
         assert!(start["data"]["copilotVersion"].is_string());
         assert_eq!(read_line(&lines[2]).entries, vec![Entry::Assistant { text: "hello".into() }]);
+    }
+
+    #[test]
+    fn sessions_on_disk_are_listed_with_where_they_started() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let dir = home.path().join("session-state/s1");
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::write(
+            dir.join("events.jsonl"),
+            "{\"type\":\"session.start\",\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"data\":{\"context\":{\"cwd\":\"/w/repo\"}}}\n",
+        )
+        .expect("writes");
+        fs::create_dir_all(home.path().join("session-state/empty")).expect("mkdir");
+        let found = on_disk_in(home.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/w/repo")));
+        assert!(found[0].started_ms.is_some());
     }
 }

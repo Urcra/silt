@@ -16,6 +16,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
         "Guide",
         &[
             "guide/index.md",
+            "guide/import.md",
             "guide/handoff.md",
             "guide/forks-and-merge-requests.md",
             "guide/history-and-search.md",
@@ -38,6 +39,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 /// under `docs/`.
 pub const PAGES: &[&str] = &[
     "guide/index.md",
+    "guide/import.md",
     "guide/handoff.md",
     "guide/forks-and-merge-requests.md",
     "guide/history-and-search.md",

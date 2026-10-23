@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::{
-    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, Restore, Rewrites, Role, SessionIds,
-    Start, Stateless, Write, translated_text,
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
+    SessionIds, Start, Stateless, Write, translated_text,
 };
 
 pub const AGENT: &str = "codex";
@@ -94,6 +94,25 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
         })
         .min_by_key(|(started, _, _)| *started)
         .map(|(_, id, transcript)| Found { id, transcript })
+}
+
+/// Every rollout in the Codex home `home`, with where and when it started.
+pub fn on_disk_in(home: &Path) -> Vec<OnDisk> {
+    let mut found: Vec<OnDisk> = rollouts(home)
+        .into_iter()
+        .filter_map(|path| {
+            let id = rollout_id(&path)?;
+            let meta = session_meta(&path);
+            let field = |key: &str| meta.as_ref()?.get(key)?.as_str().map(str::to_owned);
+            let cwd = field("cwd").map(PathBuf::from);
+            let started_ms = field("timestamp").as_deref().and_then(crate::time::parse_timestamp);
+            Some(OnDisk { id, transcript: path, cwd, started_ms })
+        })
+        .collect();
+    found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+    // A reverted thread's rollout shares its id; the first is the session.
+    found.dedup_by(|later, earlier| later.id == earlier.id);
+    found
 }
 
 /// Writes `session` as a rollout in the Codex home `home`. Codex trusts its
@@ -324,6 +343,10 @@ impl Agent for Codex {
         discover_in(&home()?, cwd, since_ms, known)
     }
 
+    fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
+        home().map(|home| on_disk_in(&home)).unwrap_or_default()
+    }
+
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
         let home = home().ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
@@ -446,5 +469,23 @@ mod tests {
             lines.iter().flat_map(|line| read_line(line).entries).filter(|entry| !matches!(entry, Entry::Other { .. })).collect();
         assert_eq!(entries, vec![Entry::User { text: "Fix it".into() }, Entry::Assistant { text: "Fixed.".into() }]);
         assert!(lines.last().expect("lines").contains("task_complete"));
+    }
+
+    #[test]
+    fn rollouts_on_disk_are_listed_once_per_session() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let dir = home.path().join("sessions/2026/01/02");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let id = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        let meta = format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"cwd\":\"/w/repo\"}}}}\n"
+        );
+        fs::write(dir.join(format!("rollout-2026-01-02T03-04-05-{id}.jsonl")), &meta).expect("writes");
+        fs::write(dir.join(format!("rollout-2026-01-02T03-04-05-{id}_other.jsonl")), &meta).expect("writes");
+        let found = on_disk_in(home.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].id, id);
+        assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/w/repo")));
+        assert!(found[0].started_ms.is_some());
     }
 }
