@@ -38,6 +38,9 @@ pub struct AgentInfo {
     /// The command to run, unless it must be downloaded first.
     #[serde(skip)]
     pub distribution: Distribution,
+    /// Programs that, found on `PATH`, show the agent is installed here.
+    #[serde(skip)]
+    pub clis: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -104,6 +107,34 @@ struct Build {
     sha256: Option<String>,
 }
 
+/// `name` without the suffixes registry ids and packages add to a CLI's own name.
+fn bare(name: &str) -> &str {
+    ["-acp", "-cli", "-agent"].iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name)
+}
+
+impl Entry {
+    /// The names its CLI may go by. The registry doesn't say, so they're
+    /// guessed from the id, the package and the binary's command.
+    fn clis(&self) -> Vec<String> {
+        let packages = [&self.distribution.npx, &self.distribution.uvx].into_iter().flatten().map(|package| {
+            let unscoped = package.package.rsplit('/').next().unwrap_or(&package.package);
+            unscoped.split(['@', '=']).next().unwrap_or(unscoped)
+        });
+        let commands = self.distribution.binary.values().filter_map(|build| Path::new(&build.cmd).file_name()?.to_str());
+        let mut names: Vec<String> = std::iter::once(self.id.as_str())
+            .chain(self.id.split('-').next())
+            .chain(packages)
+            .chain(commands)
+            .flat_map(|name| [name, bare(name)])
+            .filter(|name| is_plain_relative(name))
+            .map(str::to_owned)
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+}
+
 impl Distributions {
     fn for_this_machine(self) -> Distribution {
         if let Some(npx) = self.npx {
@@ -134,6 +165,7 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
         .into_iter()
         .filter_map(|agent| serde_json::from_value::<Entry>(agent).ok())
         .map(|entry| AgentInfo {
+            clis: entry.clis(),
             id: entry.id,
             name: entry.name,
             description: entry.description,
@@ -264,6 +296,7 @@ impl Custom {
             Some((name, value))
         });
         AgentInfo {
+            clis: Vec::new(),
             name: self.name.unwrap_or_else(|| self.id.clone()),
             id: self.id,
             description: self.description,
@@ -281,6 +314,44 @@ pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
     let mut agents = custom(data_dir);
     agents.extend(cached(data_dir));
     agents
+}
+
+/// The agents of [`all`] installed on this machine: a custom agent whose
+/// command resolves, or a registry agent whose CLI is on `PATH` or whose
+/// binary was downloaded already. The registry lists far more agents than
+/// anyone has, and `npx` would fetch any of them.
+pub fn installed_here(data_dir: &Path) -> Vec<AgentInfo> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    all(data_dir).into_iter().filter(|agent| is_installed(agent, data_dir, &path)).collect()
+}
+
+fn is_installed(agent: &AgentInfo, data_dir: &Path, path: &std::ffi::OsStr) -> bool {
+    match &agent.distribution {
+        Distribution::Command { program, .. } if agent.clis.is_empty() => resolves(program, path),
+        Distribution::Binary { .. } if downloaded(agent, data_dir) => true,
+        Distribution::Unavailable => false,
+        _ => agent.clis.iter().any(|cli| resolves(cli, path)),
+    }
+}
+
+/// Whether a build of the agent was installed into `data_dir` whole.
+fn downloaded(agent: &AgentInfo, data_dir: &Path) -> bool {
+    is_plain_relative(&agent.id)
+        && std::fs::read_dir(data_dir.join("agents").join(&agent.id)).is_ok_and(|mut builds| {
+            builds.any(|build| build.is_ok_and(|build| build.path().join(".silt-program-sha256").is_file()))
+        })
+}
+
+/// Whether `program` names an executable, directly or on `path`.
+fn resolves(program: &str, path: &std::ffi::OsStr) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    let executable = |candidate: &Path| {
+        candidate.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return executable(Path::new(program));
+    }
+    !program.is_empty() && std::env::split_paths(path).any(|dir| executable(&dir.join(program)))
 }
 
 /// The text at `url`, or none when it can't be had; the bundled snapshot
@@ -447,6 +518,7 @@ mod tests {
                 args: Vec::new(),
                 sha256: sha256.map(str::to_owned),
             },
+            clis: Vec::new(),
         };
         for (id, cmd) in [("../x", "agent"), ("ok", "../../bin/sh"), ("ok", "/bin/sh")] {
             let refused = command(&agent(id, cmd, Some("00")), dir.path()).await;
@@ -489,5 +561,55 @@ mod tests {
         );
         assert!(agents.iter().any(|agent| matches!(agent.distribution, Distribution::Binary { .. })));
         assert!(agents.len() > 20);
+    }
+
+    #[test]
+    fn registry_agents_go_by_the_names_their_clis_have() {
+        let agents = parse(SNAPSHOT);
+        let clis = |id: &str| agents.iter().find(|agent| agent.id == id).expect(id).clis.clone();
+        assert!(clis("claude-acp").contains(&"claude".to_owned()));
+        assert!(clis("github-copilot-cli").contains(&"copilot".to_owned()));
+        assert!(clis("gemini").contains(&"gemini".to_owned()));
+        assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
+    }
+
+    #[test]
+    fn only_agents_installed_here_are_offered() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let data = tempfile::tempdir().expect("tempdir");
+        let bin = tempfile::tempdir().expect("tempdir");
+        let program = |name: &str, mode: u32| {
+            let path = bin.path().join(name);
+            std::fs::write(&path, "#!/bin/sh\n").expect("write");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        };
+        program("claude", 0o755);
+        program("gemini", 0o644);
+        let stamped = data.path().join("agents/goose/build");
+        std::fs::create_dir_all(&stamped).expect("mkdir");
+        std::fs::write(stamped.join(".silt-program-sha256"), "00").expect("stamp");
+        std::fs::create_dir_all(data.path().join("agents/kimi/.install-1-2")).expect("mkdir");
+        let custom = |command: &str| {
+            Custom {
+                id: command.into(),
+                name: None,
+                description: String::new(),
+                command: command.into(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                pass_env: Vec::new(),
+            }
+            .into_info()
+        };
+        let path = bin.path().as_os_str();
+        let offered: Vec<String> = parse(SNAPSHOT)
+            .into_iter()
+            .chain([custom("claude"), custom("not-here"), custom("/bin/sh")])
+            .filter(|agent| is_installed(agent, data.path(), path))
+            .map(|agent| agent.id)
+            .collect();
+        let goose = if platform().is_some() { vec!["goose"] } else { Vec::new() };
+        let expected: Vec<&str> = ["claude-acp"].into_iter().chain(goose).chain(["claude", "/bin/sh"]).collect();
+        assert_eq!(offered, expected);
     }
 }
