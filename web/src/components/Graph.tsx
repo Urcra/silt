@@ -243,8 +243,10 @@ export function Graph() {
     <Page
       flush
       label="history graph"
+      title="History graph"
       inspector={picked ? <Details row={picked} thread={threadOf(picked.thread)} /> : undefined}
       inspectorLabel="selected"
+      inspectorTitle="Selected"
     >
       <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line px-4 py-1.5 md:px-6">
         <Tabs
@@ -321,7 +323,7 @@ export function Graph() {
                       >
                         <span className="flex min-w-0 items-center gap-2">
                           <KindTag row={row} />
-                          <span className="min-w-0 truncate">{plain(row.text)}</span>
+                          <span className={cx('min-w-0 truncate', row.kind === 'fork' && 'font-mono text-xs')}>{plain(row.text)}</span>
                           {row.turn !== null && <span className="shrink-0 font-mono text-2xs text-fg-2">turn {row.turn}</span>}
                           {thread && ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') && row.kind === 'turn' && (
                             <span className="shrink-0 rounded-sm bg-warn-tint px-1.5 text-2xs">waiting on you</span>

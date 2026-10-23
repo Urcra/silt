@@ -72,7 +72,7 @@ function Go({ notification, review }: { notification: InboxEntry; review: MrSumm
 }
 
 /** Which kinds notify, as a quiet list under the inbox. */
-function NotificationSettings() {
+export function NotificationSettings({ open = false }: { open?: boolean }) {
   const queries = useQueryClient()
   const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false })
   if (!settings.data) return null
@@ -82,7 +82,7 @@ function NotificationSettings() {
       (failure: unknown) => toast(message(failure), 'danger'),
     )
   return (
-    <details className="rounded-md border border-line px-3 py-2 text-sm">
+    <details open={open} className="rounded-md border border-line px-3 py-2 text-sm">
       <summary className="flex cursor-pointer items-center text-xs text-fg-2 max-md:min-h-11">What notifies you</summary>
       <fieldset className="mt-2 grid gap-1 pb-1 sm:grid-cols-2">
         <legend className="mb-1 text-xs text-fg-2">Notify me, not only list it, when:</legend>
@@ -105,7 +105,7 @@ function NotificationSettings() {
 const BANNER_KEY = 'silt-notifications-asked'
 
 /** Asks once whether to show browser notifications, until the person says yes or not now. */
-function NotificationBanner() {
+export function NotificationBanner() {
   const [allowed, setAllowed] = useState(notificationsAllowed())
   const [dismissed, setDismissed] = useState(() => {
     try {
@@ -178,8 +178,18 @@ export function Inbox() {
   }
   const days = (['Today', 'Earlier'] as const).map((day) => [day, shown.filter((notification) => dayOf(Number(notification.created_ms), now) === day)] as const)
   return (
-    <Page flush label="inbox">
-      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line px-4 py-1.5 md:px-8">
+    <Page
+      flush
+      label="inbox"
+      title="Inbox"
+      meta={`${unread.length} unread`}
+      actions={
+        <Button variant="ghost" icon="check" disabled={unread.length === 0} onClick={() => void markRead({ all: true })}>
+          Mark all read
+        </Button>
+      }
+    >
+      <div className="mx-auto flex w-full max-w-[960px] flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
         <Tabs
           label="inbox filter"
           value={filter}
@@ -190,11 +200,8 @@ export function Inbox() {
             { id: 'all', label: 'All' },
           ]}
         />
-        <Button variant="ghost" icon="check" className="ml-auto" disabled={unread.length === 0} onClick={() => void markRead({ all: true })}>
-          Mark all read
-        </Button>
       </div>
-      <div className="flex max-w-[960px] flex-col gap-4 px-4 py-4 md:px-8">
+      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-4 px-4 py-4 md:px-6">
         <NotificationBanner />
         {inbox.error && <p className="text-danger">{message(inbox.error)}</p>}
         {inbox.isPending && <Skeleton className="h-24" />}

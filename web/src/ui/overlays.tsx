@@ -4,8 +4,10 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -162,6 +164,7 @@ export function Popover({
   panelClassName,
   align = 'left',
   className,
+  openOnMount = false,
 }: {
   trigger: ReactNode
   children: ReactNode | ((close: () => void) => ReactNode)
@@ -172,6 +175,8 @@ export function Popover({
   align?: 'left' | 'right'
   /** The box around the trigger and panel; an inline block unless given. */
   className?: string
+  /** Opens as soon as it's shown, such as when a link asked for it. */
+  openOnMount?: boolean
 }) {
   // Where the panel goes, measured from the trigger as it opens; it floats
   // over the page so no scrolling box around the trigger clips it.
@@ -187,14 +192,46 @@ export function Popover({
     window.addEventListener('resize', close)
     return () => window.removeEventListener('resize', close)
   }, [open])
-  const toggle = () => {
-    if (open || !button.current) {
-      close()
-      return
-    }
+  const place = useCallback(() => {
+    if (!button.current) return
     const box = button.current.getBoundingClientRect()
-    setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+    // A phone's popover spans the screen's width from its left edge, never past its right.
+    if (window.innerWidth < 768) setAt({ top: box.bottom + 4, left: 8 })
+    else setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+  }, [align])
+  const toggle = () => {
+    if (open) close()
+    else place()
   }
+  const opened = useRef(false)
+  useEffect(() => {
+    if (!openOnMount || opened.current) return
+    opened.current = true
+    place()
+  }, [openOnMount, place])
+  // A panel past the window's edge, as on a phone, moves back inside it.
+  useLayoutEffect(() => {
+    if (!at || !panel.current) return
+    const box = panel.current.getBoundingClientRect()
+    const edge = 8
+    if (box.right <= window.innerWidth - edge + 1 && box.left >= edge - 1) return
+    const left = Math.round(Math.max(edge, Math.min(box.left, window.innerWidth - edge - box.width)))
+    if (at.left !== left || at.right !== undefined) setAt({ top: at.top, left })
+  }, [at])
+  // The trigger moves when what's around it settles, as when fonts load or
+  // a centred page's content arrives under a picker opened with the page.
+  useEffect(() => {
+    if (!open || !button.current || typeof ResizeObserver === 'undefined') return
+    let live = true
+    const again = () => live && place()
+    const observer = new ResizeObserver(again)
+    for (let around: Element | null = button.current.parentElement; around; around = around.parentElement) observer.observe(around)
+    void document.fonts?.ready.then(again)
+    return () => {
+      live = false
+      observer.disconnect()
+    }
+  }, [open, place])
   return (
     <div className={className ?? 'relative inline-block'}>
       <button
@@ -217,7 +254,7 @@ export function Popover({
             aria-label={label}
             style={{ top: at.top, left: at.left, right: at.right }}
             className={cx(
-              'fixed z-40 max-h-[calc(100dvh-60px)] overflow-y-auto rounded-md border border-line bg-elevated text-fg-1 shadow-overlay',
+              'fixed z-40 max-h-[calc(100dvh-60px)] max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-line bg-elevated text-fg-1 shadow-overlay',
               panelClassName ?? 'w-72 p-3',
             )}
           >

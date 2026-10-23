@@ -38,8 +38,11 @@ test('lists threads from the daemon', async () => {
     }),
   )
   render(<App />)
-  expect(await screen.findByRole('link', { name: 'silt' })).toBeInTheDocument()
-  await waitFor(() => expect(screen.getAllByText('Fix the lexer')).toHaveLength(2))
+  // The sidebar's wordmark, and the phone header's, which a stylesheet hides on a desktop.
+  expect(await screen.findAllByRole('link', { name: 'silt' })).not.toHaveLength(0)
+  // With no clone, `/` is the first open's new thread, and the sidebar lists the thread (ADR 0044).
+  expect(await screen.findByText('Pick a folder to start in')).toBeInTheDocument()
+  await waitFor(() => expect(screen.getAllByText('Fix the lexer')).toHaveLength(1))
   const project = screen.getByRole('region', { name: 'github.com/u/r' })
   expect(project).toHaveTextContent('rFix the lexer')
 })

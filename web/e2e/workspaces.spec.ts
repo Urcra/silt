@@ -31,11 +31,12 @@ const host = (url: string) => new URL(url).host
 
 /** Starts the fake agent in a new thread of the project whose name matches, then stops it. */
 async function startIn(page: Page, project: RegExp, prompt: string) {
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
-  const projects = form.getByLabel('project')
-  await projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
+  await page.getByRole('button', { name: /^project:/ }).click()
+  await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: project }).click()
   await form.getByLabel('first prompt').fill(prompt)
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
@@ -56,7 +57,7 @@ test('each server is a workspace, and the sidebar shows only the threads of the 
   await page.keyboard.press('Escape')
 
   // The tools project's threads go to the open-source server; the app's to work, the default.
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
+  await page.getByRole('link', { name: 'Settings', exact: true }).click()
   const tools = page.getByTestId('projects').getByRole('listitem', { name: 'tools' }).first()
   await tools.getByLabel('where tools syncs').selectOption(fixture.oss)
   await expect(page.getByText(/new threads of .* sync with/).first()).toBeVisible()

@@ -44,7 +44,7 @@ const VARIANTS = [
 
 /** Signs in to Alice's daemon and opens `path` once the app has settled. */
 async function open(page: Page, path: string) {
-  const origin = world.alice.split('#')[0].replace(/\/$/, '')
+  const origin = new URL(world.alice).origin
   await page.goto(world.alice)
   await page.goto(`${origin}${path}`)
   await page.waitForLoadState('networkidle')
@@ -57,7 +57,7 @@ async function open(page: Page, path: string) {
  */
 function shotOptions(page: Page) {
   return {
-    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/)],
+    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true })],
     animations: 'disabled' as const,
     caret: 'hide' as const,
     maxDiffPixelRatio: 0.001,
@@ -74,10 +74,19 @@ async function shoot(page: Page, name: string, ready: (page: Page) => Promise<vo
   }
 }
 
-test('the workspace home', async ({ page }) => {
+test('the workspace home, a new thread (ADR 0044)', async ({ page }) => {
   await open(page, '/')
   await shoot(page, 'home', async (shown) => {
-    await expect(shown.getByRole('main')).toBeVisible()
+    // A phone's home is the list; its new thread opens from there.
+    if ((shown.viewportSize()?.width ?? 0) < 768) return expect(shown.getByTestId('threads')).toBeVisible()
+    await expect(shown.getByRole('form', { name: 'new thread' })).toBeVisible()
+  })
+})
+
+test('all threads', async ({ page }) => {
+  await open(page, '/threads')
+  await shoot(page, 'threads', async (shown) => {
+    await expect(shown.getByTestId('threads')).toBeVisible()
   })
 })
 
@@ -85,6 +94,8 @@ test('the command palette', async ({ page }) => {
   await open(page, '/')
   await shoot(page, 'palette', async (shown) => {
     await shown.keyboard.press('Escape')
+    const drawer = shown.getByRole('button', { name: 'show projects' })
+    if ((shown.viewportSize()?.width ?? 0) < 768 && (await drawer.count()) > 0) await drawer.click()
     await shown.getByRole('button', { name: 'command palette' }).click()
     await shown.getByLabel('command', { exact: true }).fill('farewell')
     await expect(shown.getByText('In history, including before compaction')).toBeVisible()
@@ -110,14 +121,14 @@ test('a thread', async ({ page }) => {
   })
 })
 
-test("a thread's changes", async ({ page }) => {
+test("a thread's details", async ({ page }) => {
   await open(page, `/t/${world.thread}`)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.getByRole('button', { name: 'Changes', exact: true }).click()
+  await page.getByRole('tab', { name: 'Details' }).click()
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
-    await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
-    await expect(page).toHaveScreenshot(`thread-changes-desktop-${colorScheme}.png`, shotOptions(page))
+    await expect(page.getByTestId('code-comments')).toBeVisible()
+    await expect(page).toHaveScreenshot(`thread-details-desktop-${colorScheme}.png`, shotOptions(page))
   }
 })
 
@@ -153,14 +164,14 @@ test('reconciling a diverged thread', async ({ page }) => {
   })
   await open(page, `/t/${world.fork}/reconcile`)
   await shoot(page, 'reconcile', async (shown) => {
-    await expect(shown.getByRole('heading', { name: /differed from the server’s/ })).toBeVisible()
+    await expect(shown.getByText(/differed from the server’s/).first()).toBeVisible()
   })
 })
 
-test('a new thread', async ({ page }) => {
-  await open(page, '/new')
+test("a new thread's project picker", async ({ page }) => {
   await shoot(page, 'new-thread', async (shown) => {
-    await expect(shown.getByRole('form', { name: 'new thread' })).toBeVisible()
+    await open(shown, '/?pick=projects')
+    await expect(shown.getByRole('dialog', { name: 'Pick a project' })).toBeVisible()
   })
 })
 
@@ -172,7 +183,7 @@ test('needs you', async ({ page }) => {
 })
 
 test('devices and pairing a phone', async ({ page }) => {
-  await open(page, '/devices')
+  await open(page, '/settings/devices')
   await shoot(page, 'devices', async (shown) => {
     await expect(shown.getByRole('region', { name: 'pair a phone' })).toBeVisible()
     await expect(shown.getByText('this device', { exact: true })).toBeVisible()
@@ -180,14 +191,14 @@ test('devices and pairing a phone', async ({ page }) => {
 })
 
 test('projects', async ({ page }) => {
-  await open(page, '/projects')
+  await open(page, '/settings/projects')
   await shoot(page, 'projects', async (shown) => {
     await expect(shown.getByTestId('projects')).toBeVisible()
   })
 })
 
 test('adding a project', async ({ page }) => {
-  await open(page, '/projects/add')
+  await open(page, '/settings/add')
   await shoot(page, 'add-project', async (shown) => {
     await expect(shown.getByRole('region', { name: 'add a project' })).toBeVisible()
   })
@@ -201,7 +212,9 @@ test("the server's sign-in page", async ({ page }) => {
 })
 
 test('search', async ({ page }) => {
-  await open(page, '/search?q=farewell')
+  // Only the prompt: a server's hit is placed by time, and the reply and
+  // summary are recorded in the compaction's millisecond, either side of it.
+  await open(page, '/search?q=farewell%20line')
   await shoot(page, 'search', async (shown) => {
     await expect(shown.getByTestId('search-results')).toBeVisible()
   })
@@ -233,5 +246,54 @@ test('a merge request', async ({ page }) => {
   await page.getByRole('link', { name: 'Retry blob uploads on 5xx' }).first().click()
   await shoot(page, 'merge-request', async (shown) => {
     await expect(shown.getByTestId('mr-status')).toBeVisible()
+  })
+})
+
+test('the first open, with no projects yet', async ({ page }) => {
+  // A fresh machine has no clones; what the agents left on disk is found.
+  await page.route('**/api/agents', async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...((await response.json()) as object), clones: [] } })
+  })
+  await page.route('**/api/found', (route) =>
+    route.fulfill({
+      json: [
+        { path: '/home/alice/src/api', repo: 'github.com/acme/api', git: true, added: false, sessions: [{ agent: 'Claude Code', count: 12 }], last_ms: Date.now() - 7_200_000 },
+        { path: '/home/alice/src/site', repo: 'github.com/acme/site', git: true, added: false, sessions: [{ agent: 'Codex', count: 3 }], last_ms: Date.now() - 86_400_000 * 3 },
+        { path: '/home/alice/notes', repo: '', git: false, added: false, sessions: [{ agent: 'Claude Code', count: 2 }], last_ms: Date.now() - 86_400_000 * 9 },
+      ],
+    }),
+  )
+  await shoot(page, 'first-open', async (shown) => {
+    await open(shown, (shown.viewportSize()?.width ?? 0) < 768 ? '/new' : '/')
+    await expect(shown.getByRole('heading', { name: 'Pick a folder to start in' })).toBeVisible()
+  })
+})
+
+// Last: these start agents, which every screen after them would show.
+async function startFake(page: Page, prompt: string, preset?: string) {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await open(page, '/')
+  const form = page.getByRole('form', { name: 'new thread' })
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
+  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('first prompt').fill(prompt)
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await page.waitForURL(/\/t\/[0-9a-f]+$/)
+}
+
+test('a thread waiting on a permission', async ({ page }) => {
+  await startFake(page, 'Add a hello line to main', 'Ask for everything')
+  await shoot(page, 'thread-waiting', async (shown) => {
+    await expect(shown.getByRole('group', { name: 'permission' })).toBeVisible()
+    await expect(shown.getByText('Waiting on you').first()).toBeVisible()
+  })
+})
+
+test('a plan to approve', async ({ page }) => {
+  await startFake(page, 'Retry the upload twice', 'Plan')
+  await shoot(page, 'thread-plan', async (shown) => {
+    await expect(shown.getByRole('group', { name: 'plan' })).toBeVisible()
   })
 })

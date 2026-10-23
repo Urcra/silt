@@ -440,7 +440,7 @@ fn the_owners_agent_hears_teammates_drafts() {
     let thread = thread_of(alice);
     assert!(eventually(|| bob.log_line(&thread).is_some()));
     let url = bob.stdout(&["open", "--no-browser"]);
-    let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+    let (base, token) = common::web_ui(&url);
     let full = alice.stdout(&["history", &thread]);
     let full_id = full.split_whitespace().nth(1).expect("the thread's full id").trim_end_matches(':').to_owned();
     let posted = Command::new("curl")

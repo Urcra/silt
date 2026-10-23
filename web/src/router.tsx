@@ -1,25 +1,65 @@
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent } from '@tanstack/react-router'
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from '@tanstack/react-router'
 import { Layout } from './components/Layout'
 import * as routes from './components/Routes'
-import { basePath } from './served'
+import { basePath, hosted } from './served'
+import { phone } from './shell'
 
 const root = createRootRoute({ component: Layout })
+
+/** What the new thread at `/` opens with: a project, the picker open on a tab, or a prompt typed elsewhere. */
+export interface NewThreadSearch {
+  project?: string
+  pick?: 'projects' | 'folder' | 'clone' | 'workspace'
+  prompt?: string
+}
+
+const PICKS = ['projects', 'folder', 'clone', 'workspace']
+
+function newThreadSearch(search: Record<string, unknown>): NewThreadSearch {
+  return {
+    ...(typeof search.project === 'string' ? { project: search.project } : {}),
+    ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),
+    ...(typeof search.prompt === 'string' ? { prompt: search.prompt } : {}),
+  }
+}
+
+/** A path moved into Settings (ADR 0044). */
+function moved(path: string, section: string) {
+  return createRoute({
+    getParentRoute: () => root,
+    path,
+    beforeLoad: () => {
+      throw redirect({ to: '/settings/$section', params: { section }, replace: true })
+    },
+  })
+}
 
 export const router = createRouter({
   basepath: basePath(),
   routeTree: root.addChildren([
-    createRoute({ getParentRoute: () => root, path: '/', component: routes.HomeRoute }),
+    createRoute({ getParentRoute: () => root, path: '/', component: routes.HomeRoute, validateSearch: newThreadSearch }),
     createRoute({
       getParentRoute: () => root,
       path: '/new',
-      component: lazyRouteComponent(() => import('./components/NewThread'), 'NewThread'),
-      validateSearch: (search: Record<string, unknown>): { prompt?: string } =>
-        typeof search.prompt === 'string' ? { prompt: search.prompt } : {},
+      validateSearch: newThreadSearch,
+      component: routes.NewRoute,
+      beforeLoad: ({ search }) => {
+        if (!phone() || hosted()) throw redirect({ to: '/', search, replace: true })
+      },
     }),
-    createRoute({ getParentRoute: () => root, path: '/projects', component: lazyRouteComponent(() => import('./components/Projects'), 'Projects') }),
-    createRoute({ getParentRoute: () => root, path: '/projects/add', component: lazyRouteComponent(() => import('./components/Projects'), 'AddProjectPage') }),
-    createRoute({ getParentRoute: () => root, path: '/orgs', component: lazyRouteComponent(() => import('./components/Orgs'), 'OrgsRoute') }),
-    createRoute({ getParentRoute: () => root, path: '/devices', component: lazyRouteComponent(() => import('./components/Devices'), 'Devices') }),
+    createRoute({ getParentRoute: () => root, path: '/threads', component: routes.ThreadsRoute }),
+    createRoute({
+      getParentRoute: () => root,
+      path: '/settings',
+      beforeLoad: () => {
+        throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
+      },
+    }),
+    createRoute({ getParentRoute: () => root, path: '/settings/$section', component: lazyRouteComponent(() => import('./components/Settings'), 'Settings') }),
+    moved('/projects', 'projects'),
+    moved('/projects/add', 'add'),
+    moved('/orgs', 'orgs'),
+    moved('/devices', 'devices'),
     createRoute({ getParentRoute: () => root, path: '/needs-you', component: lazyRouteComponent(() => import('./components/NeedsYou'), 'NeedsYou') }),
     createRoute({ getParentRoute: () => root, path: '/graph', component: lazyRouteComponent(() => import('./components/Graph'), 'Graph') }),
     createRoute({

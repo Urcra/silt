@@ -145,10 +145,10 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
   }
   return (
     <>
-      <Button icon="link" onClick={() => setOpen(true)}>
-        Share
+      <Button icon="link" onClick={() => setOpen(true)} aria-label="Share">
+        <span className="max-md:sr-only">Share</span>
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={`Share ${thread.title ?? 'this thread'}`}>
+      <Dialog open={open} onClose={() => setOpen(false)} title={thread.title ? `Share “${thread.title}”` : 'Share this thread'}>
         {thread.local_only ? (
           <p className="text-sm text-fg-2">
             This thread stays on this machine only. To share it, choose a server for its project on the Projects page.

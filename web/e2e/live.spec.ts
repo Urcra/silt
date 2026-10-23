@@ -31,10 +31,35 @@ test.afterAll(() => {
   rmSync(live.work, { recursive: true, force: true })
 })
 
+/** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */
+async function allThreads(page: Page) {
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'All threads' }).click()
+}
+
+/** Opens a section of Settings, at the sidebar's bottom. */
+async function settings(page: Page, section: string) {
+  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  await page.getByRole('navigation', { name: 'settings' }).getByRole('link', { name: section, exact: true }).click()
+}
+
+/** Picks the new thread's project from its picker. */
+async function pickProject(page: Page, project: RegExp) {
+  await page.getByRole('button', { name: /^project:/ }).click()
+  await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: project }).click()
+}
+
+/** Starts the new thread in the background, from its start menu. */
+async function startInTheBackground(page: Page) {
+  await page.getByRole('button', { name: 'More ways to start' }).click()
+  await page.getByRole('menuitem', { name: /^Start in the background/ }).click()
+}
+
 /** Opens the thread's Live page. */
 async function goLive(page: Page, url: string) {
   await page.goto(url)
+  await allThreads(page)
   await page.getByRole('link', { name: live.thread }).click()
+  await page.getByRole('button', { name: 'More for this thread' }).click()
   await page.getByRole('link', { name: /^Join live/ }).click()
 }
 
@@ -103,6 +128,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   const bob = await (await browser.newContext()).newPage()
   // Alice runs the agent from the thread's page; Bob edits on its Live page.
   await alice.goto(live.alice)
+  await allThreads(alice)
   await alice.getByRole('link', { name: live.thread }).click()
   await openFile(bob, live.bob)
   await bob.getByLabel('draft').fill('mind the tests')
@@ -119,7 +145,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   const asked = alice.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
-  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('waiting on you')
+  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('asks to run')
   await asked.getByRole('button', { name: 'Allow' }).click()
 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -127,7 +153,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   const reply = alice.getByTestId('entry').filter({ hasText: /^Done: You are continuing a conversation[\s\S]*add acp/ })
   await expect(reply).toContainText('add acp')
   await expect(reply).toContainText('bob: mind the tests')
-  await expect(alice.getByText('› add acp')).toBeVisible()
+  await expect(alice.getByText('add acp', { exact: true })).toBeVisible()
   await expect(bob.getByLabel('draft')).toHaveValue('')
   await expect(bob.getByTestId('editor')).toContainText('fn acp() {}', { timeout: 15_000 })
 
@@ -166,7 +192,8 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
 
 async function startInNewThread(page: Page, agent: string) {
   await page.goto(live.alice)
-  await page.getByRole('main').getByRole('link', { name: 'New thread' }).click()
+  // A checkout of its own, so the tests' agents leave the clone as it is.
+  await page.getByRole('radio', { name: 'Worktree' }).click()
   await page.getByLabel('agent to start').selectOption({ label: agent })
   await page.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
@@ -191,7 +218,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
     await hosted.reload()
     await expect(waiting).toBeVisible({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
-  await expect(waiting.getByText(/waiting on you/)).toBeVisible()
+  await expect(waiting.getByText(/asks to run/).first()).toBeVisible()
 
   // The browser has no daemon: what it asks goes through the server to the machine.
   await waiting.getByRole('link').first().click()
@@ -283,11 +310,10 @@ test("another of Alice's machines directs the agent running on the first, throug
 
 test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('main').getByRole('link', { name: 'New thread' }).click()
-  await page.getByText('In the cloud').click()
+  await page.getByRole('radio', { name: 'Cloud' }).click()
   await expect(page.getByLabel('agent to start')).toBeHidden()
   await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
-  await page.getByRole('button', { name: 'Start in the cloud' }).click()
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
   const launch = page.getByRole('region', { name: 'Cloud sessions' }).getByRole('listitem').filter({ hasText: 'tidy the readme in the cloud' })
   await expect(launch).toContainText('waiting for its thread', { timeout: 20_000 })
   await expect(launch.getByRole('link', { name: 'claude.ai' })).toHaveAttribute('href', 'https://claude.ai/code/session_01FakeCloud')
@@ -524,8 +550,8 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   await expect(page.getByText(/^Reverted to turn 1/)).toBeVisible()
   await expect.poll(edits, { timeout: 15_000 }).toBe(1)
   const history = page.getByTestId('history')
-  await expect(history.getByTestId('entry').filter({ hasText: '› revert drops this' })).toHaveAttribute('data-rewound', 'true')
-  await expect(history.getByTestId('entry').filter({ hasText: '› revert keeps this' })).not.toHaveAttribute('data-rewound')
+  await expect(history.getByTestId('entry').filter({ has: page.getByText('revert drops this', { exact: true }) })).toHaveAttribute('data-rewound', 'true')
+  await expect(history.getByTestId('entry').filter({ has: page.getByText('revert keeps this', { exact: true }) })).not.toHaveAttribute('data-rewound')
 
   // The agent started next is primed without the rewound turn.
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
@@ -555,7 +581,7 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   }
   // This machine is on a server, so links point into the server's app.
   const here = (link: string) => new URL(`/t/${thread}${new URL(link).hash}`, live.alice).toString()
-  const entry = (on: Page, text: string) => on.getByTestId('entry').filter({ hasText: `› ${text}` })
+  const entry = (on: Page, text: string) => on.getByTestId('entry').filter({ has: on.getByText(text, { exact: true }) })
 
   const turn = await copied(page.getByRole('button', { name: 'link to turn 1' }))
   expect(turn).toMatch(/\/app\/t\/[0-9a-f]+#turn-1$/)
@@ -564,7 +590,7 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   await expect(entry(page, 'permalink first')).toHaveAttribute('data-highlighted', 'true')
   await expect(entry(page, 'permalink second')).not.toHaveAttribute('data-highlighted')
 
-  await entry(page, 'permalink second').getByText('› permalink second').hover()
+  await entry(page, 'permalink second').getByText('permalink second', { exact: true }).hover()
   await entry(page, 'permalink second').getByRole('button', { name: /^comment on entry \d+$/ }).click()
   await page.getByLabel('comment', { exact: true }).fill('link to this')
   await page.getByRole('button', { name: 'Comment', exact: true }).click()
@@ -575,7 +601,6 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   await page.goto(here(comment))
   await expect(said).toHaveAttribute('data-highlighted', 'true')
 
-  await page.getByRole('button', { name: 'Changes', exact: true }).click()
   await page.getByRole('region', { name: 'changes' }).getByRole('link', { name: 'view file' }).first().click()
   const file = page.getByTestId('file')
   await expect(file).toContainText('fn acp() {}')
@@ -631,7 +656,7 @@ test('a comment written in the server-hosted app reaches the machines', async ({
   await hosted.getByLabel('User').fill('bob')
   await hosted.getByLabel('Password').fill('correct horse battery')
   await hosted.getByRole('button', { name: 'Sign in' }).click()
-  await hosted.getByText('› Please add a farewell line to main').hover()
+  await hosted.getByTestId('history').getByText('Please add a farewell line to main', { exact: true }).first().hover()
   await hosted.getByRole('button', { name: 'comment on entry 0' }).click()
   await hosted.getByLabel('comment', { exact: true }).fill('said in the browser')
   await hosted.getByRole('button', { name: 'Comment', exact: true }).click()
@@ -649,7 +674,7 @@ test('a comment written in the server-hosted app reaches the machines', async ({
 
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Devices', exact: true }).click()
+  await settings(page, 'Devices')
   const here = page.getByRole('region').filter({ has: page.getByText('this device', { exact: true }) })
   await expect(here.getByText('online', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'alice-laptop' }).getByText('online', { exact: true })).toBeVisible()
@@ -706,26 +731,25 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
 
 test('a thread started in the background from a branch plans its first prompt and waits in Needs you', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
   await form.getByLabel('first prompt').fill('write the docs')
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('base branch').selectOption('origin/main')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByLabel('permissions').selectOption('ask_for_everything')
-  await form.getByLabel('visibility').selectOption('private')
-  await form.getByLabel('Plan first').check()
-  await form.getByRole('button', { name: 'Start in background' }).click()
+  await form.getByLabel('permissions').selectOption('plan')
+  await startInTheBackground(page)
 
   await expect(page.getByText('Fake agent started in a new thread')).toBeVisible()
   await expect(form.getByLabel('first prompt')).toHaveValue('')
   const waiting = page.getByRole('region', { name: 'needs you' })
-  await waiting.getByRole('link').first().click()
+  await waiting.getByRole('group').first().getByRole('link').first().click()
   await expect(page.getByText('Plan: write the docs')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
-  await expect(page.getByLabel('permissions')).toHaveValue('ask_for_everything')
+  await expect(page.getByLabel('permissions', { exact: true })).toHaveValue('plan')
 })
 
-test("the agent's modes and model are offered, and Plan first plans in its plan mode", async ({ page }) => {
+test("the agent's modes and model are offered, and the Plan preset plans in its plan mode", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   const mode = page.getByLabel('mode', { exact: true })
   await expect(mode).toHaveValue('code')
@@ -733,7 +757,7 @@ test("the agent's modes and model are offered, and Plan first plans in its plan 
   await expect(page.getByLabel('model')).toHaveValue('smart')
 
   await page.getByLabel('draft').fill('add a parser')
-  await page.getByLabel('Plan first').check()
+  await page.getByLabel('permissions').selectOption('plan')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Plan: add a parser')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
@@ -746,17 +770,21 @@ test("the agent's modes and model are offered, and Plan first plans in its plan 
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
 })
 
-test('Plan first asks an agent without a plan mode for a plan by the prompt', async ({ page }) => {
+test('the Plan preset asks an agent without a plan mode for a plan by the prompt', async ({ page }) => {
   await startInNewThread(page, 'Plain agent')
   await expect(page.getByLabel('mode', { exact: true })).toHaveCount(0)
   await page.getByLabel('draft').fill('add a lexer')
-  await page.getByLabel('Plan first').check()
+  await page.getByLabel('permissions').selectOption('plan')
   await page.getByRole('button', { name: 'Send' }).click()
+  // This agent edits anyway; under Plan an edit asks first.
+  const allow = () => page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
+  await allow()
   await expect(page.getByText(/^Done: Before you change anything, write a plan[\s\S]*add a lexer$/)).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Plain agent wrote a plan for you to approve')
 
   await page.getByLabel('draft').fill('use a table instead')
   await page.getByRole('button', { name: 'Send' }).click()
+  await allow()
   await expect(page.getByText('Done: use a table instead')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Plain agent is ready')
 })
@@ -795,7 +823,6 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: add a function')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Changes', exact: true }).click()
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByRole('tab', { name: 'Last turn' }).click()
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
@@ -816,14 +843,14 @@ test("comments on the agent's last turn go back to it as a prompt", async ({ pag
 
 /** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */
 async function startInBackground(page: Page, project: RegExp, prompt: string) {
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
-  const projects = form.getByLabel('project')
-  await projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
+  await pickProject(page, project)
   await form.getByLabel('first prompt').fill(prompt)
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('ask_for_everything')
-  await form.getByRole('button', { name: 'Start in background' }).click()
+  await startInTheBackground(page)
   await expect(form.getByLabel('first prompt')).toHaveValue('')
 }
 
@@ -888,7 +915,7 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
 
 test('projects show their clone here, and one is added by cloning its URL', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
+  await settings(page, 'Projects')
   const list = page.getByTestId('projects')
   await expect(list.getByRole('listitem', { name: 'tools' })).toContainText(`Here at ${live.work}/alice/tools`)
   const origin = list.getByRole('listitem', { name: 'origin' })
@@ -913,15 +940,14 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
 
 test("a new thread starts with what its project says, until the person picks", async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
-  const projects = form.getByLabel('project')
-  const pick = async (project: RegExp) =>
-    projects.selectOption((await projects.locator('option').filter({ hasText: project }).getAttribute('value')) ?? '')
+  const pick = (project: RegExp) => pickProject(page, project)
   await pick(/origin/)
   await expect(form.getByLabel('agent to start')).toHaveValue('plain')
+  // Without a project default, the first agent is picked.
   await pick(/tools/)
-  await expect(form.getByLabel('agent to start')).toHaveValue('')
+  await expect(form.getByLabel('agent to start')).not.toHaveValue('plain')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await pick(/origin/)
   await expect(form.getByLabel('agent to start')).toHaveValue('fake')
@@ -945,12 +971,11 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await expect(sidebar(bob).getByRole('region', { name: 'pinned' })).toHaveCount(0)
   await act(alice, 'Unpin')
   await act(alice, 'Snooze until something happens')
-  // Snoozed threads fold behind a count under their project.
-  await sidebar(alice).getByRole('button', { name: /1 snoozed/ }).click()
-  const snoozed = sidebar(alice).getByRole('region', { name: 'snoozed' })
-  await snoozed.getByRole('button', { name: 'actions for Add a farewell' }).click()
-  await alice.getByRole('menuitem', { name: 'Wake up' }).click()
-  await expect(snoozed).toHaveCount(0)
+  // Snoozed threads fold behind "Show more" under their project.
+  const more = sidebar(alice).getByRole('button', { name: 'Show 1 more' })
+  await more.click()
+  await act(alice, 'Wake up')
+  await expect(more).toHaveCount(0)
 
   // Bob looks, then Alice edits: Bob sees there's something new.
   await shared(bob).click()
@@ -966,7 +991,8 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await expect(shared(bob).getByRole('img', { name: 'unread' })).toHaveCount(0)
 
   await act(alice, 'Settle')
-  await expect(sidebar(alice).getByRole('button', { name: /1 settled/ })).toBeVisible()
+  // Settled, it folds with the rest; the fold is still open from waking it above.
+  await expect(sidebar(alice).getByRole('button', { name: /^Show (fewer|\d+ more)$/ }).first()).toBeVisible()
   await alice.context().close()
   await bob.context().close()
 })
@@ -976,7 +1002,7 @@ test("an org's owners set it up in the web UI, and its members only see it", asy
   execFileSync(SILT, ['server', 'user', 'admin', 'alice', '--data', data])
   const alice = await (await browser.newContext()).newPage()
   await alice.goto(live.alice)
-  await alice.getByRole('link', { name: 'Orgs' }).click()
+  await settings(alice, 'Orgs')
   await alice.getByLabel('org name').fill('acme')
   await alice.getByRole('button', { name: 'Create org' }).click()
   const acme = alice.getByRole('region', { name: 'acme', exact: true })
@@ -996,7 +1022,7 @@ test("an org's owners set it up in the web UI, and its members only see it", asy
 
   const bob = await (await browser.newContext()).newPage()
   await bob.goto(live.bob)
-  await bob.getByRole('link', { name: 'Orgs' }).click()
+  await settings(bob, 'Orgs')
   const seen = bob.getByRole('region', { name: 'acme', exact: true })
   await expect(seen).toContainText('member')
   await expect(seen.getByLabel('default visibility of acme')).toBeDisabled()
@@ -1007,6 +1033,7 @@ test("an org's owners set it up in the web UI, and its members only see it", asy
 
 test('the owner shares a thread from its page: who sees it, and who may write into it', async ({ page }) => {
   await page.goto(live.alice)
+  await allThreads(page)
   await page.getByRole('link', { name: live.thread }).click()
   await page.getByRole('button', { name: 'Share' }).click()
   const dialog = page.getByRole('dialog', { name: /^Share / })
@@ -1038,6 +1065,8 @@ test("a thread's page lists its commits with the turns they came in", async ({ p
   const commits = page.getByRole('region', { name: 'commits' })
   await expect(async () => {
     await page.goto(new URL(`/t/${live.thread}`, live.alice).toString())
+    // Commits are under Details; the panel opens on Changes.
+    await page.getByRole('tab', { name: 'Details' }).click()
     await expect(commits).toContainText('Add the farewell', { timeout: 2_000 })
   }).toPass({ timeout: 20_000 })
   // Tests above prompted in this thread too, so which turn depends on them.
@@ -1061,12 +1090,14 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
 
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /history graph$/ }).first().click()
+  await allThreads(page)
+  await page.getByRole('main').getByRole('link', { name: 'Graph' }).click()
   // A test above settles threads, which the graph leaves out unless asked.
   await page.getByLabel('Settled threads').check()
   const graph = page.getByRole('list', { name: 'graph' })
   await expect(graph.getByRole('button', { name: /^fork forked from/ }).first()).toBeVisible()
-  await expect(graph.getByRole('button', { name: /^request Fork work/ })).toBeVisible()
+  // This test's own request: the earlier tests' turns can push theirs past the first page.
+  await expect(graph.getByRole('button', { name: /^request Work to merge/ })).toBeVisible()
   await expect(graph.getByRole('button', { name: /^merge / }).first()).toBeVisible()
 
   // The fixture's commit is among the oldest rows, which the turns of the
@@ -1082,18 +1113,17 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
 
 test('a project kept on this machine starts threads that stay here, until it moves to the server', async ({ page }) => {
   await page.goto(live.alice)
-  const toProjects = () =>
-    page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Projects', exact: true }).click()
+  const toProjects = () => settings(page, 'Projects')
   await toProjects()
   const home = page.getByTestId('projects').getByRole('listitem', { name: 'tools' }).getByLabel('where tools syncs')
   await expect(home).toHaveValue(live.server)
   await home.selectOption({ label: 'This machine only' })
   await expect(page.getByText(/stay on this machine only/).first()).toBeVisible()
 
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread' }).click()
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
-  const projects = form.getByLabel('project')
-  await projects.selectOption((await projects.locator('option').filter({ hasText: /tools/ }).getAttribute('value')) ?? '')
+  await pickProject(page, /tools/)
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')

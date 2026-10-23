@@ -283,7 +283,7 @@ fn the_web_ui_reads_a_diff_a_page_of_files_at_a_time() {
         env.stdout(&["diff", &thread])
     );
     let url = env.stdout(&["open", "--no-browser"]);
-    let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+    let (base, token) = web_ui(&url);
     let diff = |query: &str| -> String {
         let output = Command::new("curl")
             .args(["-s", "-H"])
@@ -385,7 +385,7 @@ struct Api {
 impl Api {
     fn open(env: &Env) -> Self {
         let url = env.stdout(&["open", "--no-browser"]);
-        let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+        let (base, token) = web_ui(&url);
         Self { base: base.to_owned(), token: token.to_owned() }
     }
 
@@ -923,4 +923,11 @@ fn output_once_released(command: &mut Command) -> std::process::Output {
         })
         .expect("the script was released")
         .expect("the script runs")
+}
+
+/// The daemon's address and token from `silt open`'s URL, which names the
+/// project it ran in when that's a clone.
+fn web_ui(url: &str) -> (&str, &str) {
+    let (page, token) = url.trim().split_once("#token=").expect("a URL with a token");
+    (page.split_once("/?").map_or(page.trim_end_matches('/'), |(base, _project)| base), token)
 }

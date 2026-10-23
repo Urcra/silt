@@ -228,7 +228,7 @@ async fn a_threads_pull_request_gets_one_comment_kept_current() {
     });
     let github = github.lock().expect("lock");
     let body = github.comments[0]["body"].as_str().expect("a body");
-    assert_eq!((github.comments.len(), github.posts), (1, 1), "edited, not posted again");
+    assert_eq!((github.comments.len(), github.posts), (1, 1), "edited, not posted again: {:?}", github.comments);
     assert!(body.contains(&format!("- [Try another way](https://silt.example/app/t/{FORK}): in progress")), "{body}");
     assert!(!body.contains("Secret"), "a private fork isn't named: {body}");
 }

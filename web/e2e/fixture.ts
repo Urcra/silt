@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Page } from '@playwright/test'
 
 export interface Fixture {
   url: string
@@ -28,6 +29,11 @@ export function fixture(): Fixture {
 export function silt(...args: string[]): string {
   const { siltHome } = fixture()
   return execFileSync(SILT, args, { encoding: 'utf8', env: { ...process.env, SILT_HOME: siltHome } })
+}
+
+/** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */
+export async function allThreads(page: Page): Promise<void> {
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'All threads' }).click()
 }
 
 export function removeFixture(): void {

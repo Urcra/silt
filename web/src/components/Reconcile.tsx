@@ -80,10 +80,9 @@ export function Reconcile() {
     )
 
   return (
-    <Page flush label="reconcile">
-      <div className="flex max-w-[1100px] flex-col gap-5 px-4 py-6 md:px-8">
+    <Page flush label="reconcile" title="Reconcile" meta="this machine’s copy differed from the server’s">
+      <div className="flex max-w-[1100px] flex-col gap-5 px-4 py-6 md:px-6">
         <div className="flex flex-col gap-2">
-          <h1 className="text-xl font-medium">This machine’s copy differed from the server’s</h1>
           <p className="max-w-[760px] text-sm leading-relaxed text-fg-1">
             Silt’s data on <b className="font-medium">{device}</b> no longer matched the server, as happens after restoring from an old backup. The
             server’s version of <span className="font-mono" data-volatile>{short(found.thread)}</span> is kept. Nothing from this machine was lost: its work now

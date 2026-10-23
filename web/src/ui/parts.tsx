@@ -28,6 +28,22 @@ export function Dot({ tone, label, className }: { tone: DotTone; label?: string;
   )
 }
 
+/** A thread whose agent is working: a turning amber ring, still under reduced motion. */
+export function Spinner({ label, className }: { label?: string; className?: string }) {
+  return (
+    <span
+      role={label ? 'img' : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      title={label}
+      className={cx(
+        'inline-block h-[9px] w-[9px] shrink-0 animate-spin rounded-full border-[1.5px] border-accent border-r-transparent motion-reduce:animate-none',
+        className,
+      )}
+    />
+  )
+}
+
 /** A small mono label in a hairline box, such as the device in the top bar. */
 export function Pill({ children, className, ...props }: HTMLAttributes<HTMLSpanElement>) {
   return (

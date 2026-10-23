@@ -9,7 +9,7 @@ import { useNow } from '../now'
 import { keys, message } from '../query'
 import { linesOf, reviewPrompt } from '../review'
 import { ago } from '../time'
-import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Input, Skeleton, Tabs, Textarea, cx, toast } from '../ui'
+import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Input, Skeleton, Tabs, Textarea, buttonClass, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
@@ -185,7 +185,7 @@ function Approval({
   const [reason, setReason] = useState('')
   const open = mr.status === 'open'
   return (
-    <section aria-label="approval" className="flex w-full flex-col gap-2.5 rounded-md border border-line bg-elevated p-3.5 lg:w-[320px]">
+    <section aria-label="approval" className="flex w-full flex-col gap-2.5">
       <div className="flex items-center gap-2">
         <Dot tone={open ? 'warn' : standing(mr).tone} />
         <span className="text-xs font-medium">
@@ -380,46 +380,60 @@ export function MergeRequest({ id }: { id: string }) {
     />
   )
   return (
-    <Page flush label="merge request">
-      <div className="flex flex-col gap-4 border-b border-line px-4 pt-5 pb-4 md:px-8 lg:flex-row lg:items-start lg:gap-8">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-xl font-medium">{mr.title}</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-sm border border-line px-2 py-0.5 text-xs">
-              <Dot tone={state.tone} />
-              <span data-testid="mr-status" className="sr-only">
-                {mr.status}
-              </span>
-              {state.label}
+    <Page
+      flush
+      label="merge request"
+      title={mr.title}
+      meta={
+        <span className="inline-flex items-center gap-x-1.5">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-px font-sans text-2xs text-fg-1">
+            <Dot tone={state.tone} />
+            <span data-testid="mr-status" className="sr-only">
+              {mr.status}
             </span>
+            {state.label}
+          </span>
+          {forkThread?.owner && <Avatar name={forkThread.owner} size={16} />}
+          <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'merge fork'}</span>
+          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.fork }}>
+            <span data-volatile>{short(mr.fork)}</span>
+          </Link>
+          <span>into</span>
+          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.target }}>
+            <span data-volatile>{short(mr.target)}</span>
+          </Link>
+          <span>
+            {targetThread?.title && `· ${targetThread.title} `}· opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
+          </span>
+        </span>
+      }
+      actions={
+        <Link to="/t/$id" params={{ id: mr.fork }} className={buttonClass('secondary')}>
+          Open the fork
+        </Link>
+      }
+      inspectorLabel="decision"
+      inspectorTitle="Decision"
+      inspector={
+        wide && (
+          <div className="flex flex-col gap-5 p-4">
+            <Approval id={id} mr={mr} canApprove={targetThread?.writable ?? true} act={act} error={error} />
           </div>
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-2">
-            {forkThread?.owner && <Avatar name={forkThread.owner} size={18} />}
-            <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'Merge fork'}</span>
-            <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.fork }}>
-              <span data-volatile>{short(mr.fork)}</span>
-            </Link>
-            <span>into</span>
-            <Link className="font-mono text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center" to="/t/$id" params={{ id: mr.target }}>
-              <span data-volatile>{short(mr.target)}</span>
-            </Link>
-            <span>
-              {targetThread?.title && `· ${targetThread.title} `}· opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
-            </span>
-          </p>
-          {mr.summary && <Markdown text={mr.summary} className="max-w-[720px]" />}
-          <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} />
-        </div>
-        {wide && <Approval id={id} mr={mr} canApprove={targetThread?.writable ?? true} act={act} error={error} />}
+        )
+      }
+    >
+      <div className="flex flex-col gap-3 border-b border-line-subtle px-4 py-4 md:px-6">
+        {mr.summary && <Markdown text={mr.summary} className="max-w-[720px]" />}
+        <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} />
       </div>
       {mr.changes_requested && (
-        <div data-testid="changes-requested" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-8">
+        <div data-testid="changes-requested" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6">
           <span className="font-medium">Changes requested{mr.updated_since ? '; the fork has moved on since' : ''}</span>
           <span>{mr.changes_requested}</span>
         </div>
       )}
       {conflicts.length > 0 && (
-        <div data-testid="conflicts" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-8">
+        <div data-testid="conflicts" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6">
           <span className="font-medium">The merge keeps both sides in one place. Check these.</span>
           {conflicts.map((conflict) => (
             <span key={conflict} className="font-mono text-2xs">
@@ -428,7 +442,7 @@ export function MergeRequest({ id }: { id: string }) {
           ))}
         </div>
       )}
-      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line px-4 py-1.5 md:px-8">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line px-4 py-1.5 md:px-6">
         <Tabs
           label="merge request views"
           value={tab}
@@ -510,7 +524,7 @@ export function MergeRequest({ id }: { id: string }) {
               <p className="px-2 pt-2 text-2xs leading-normal text-fg-2">A file you marked seen comes back if the fork changes it again.</p>
             </nav>
           )}
-          <div className="min-w-0 flex-1 px-4 py-4 md:px-8">
+          <div className="min-w-0 flex-1 px-4 py-4 md:px-6">
             <DiffView
               text={diff}
               layout={layout}
@@ -542,12 +556,12 @@ export function MergeRequest({ id }: { id: string }) {
         </div>
       )}
       {tab === 'conversation' && (
-        <div className="max-w-[880px] px-4 py-4 md:px-8">
+        <div className="max-w-[880px] px-4 py-4 md:px-6">
           <Conversation lines={conversation} />
         </div>
       )}
       {tab === 'review' && (
-        <div className="flex max-w-[880px] flex-col gap-3 px-4 py-4 md:px-8">
+        <div className="flex max-w-[880px] flex-col gap-3 px-4 py-4 md:px-6">
           {reviewComments.length === 0 && (
             <EmptyState title="Comment on the changes from their line numbers">Comments go to the fork, and its agent can take them as a prompt.</EmptyState>
           )}

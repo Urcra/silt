@@ -546,6 +546,8 @@ impl Core {
             Request::Hook { event, input } => self.hook(&event, input).await,
             Request::ImportCandidates { paths, agent } => to_response(self.import_candidates(&paths, agent.as_deref()).await),
             Request::Import { candidate } => to_response(self.import_session(candidate).await),
+            Request::FoundFolders => to_response(self.found_folders().await),
+            Request::ImportFound { paths } => to_response(self.import_found(&paths).await),
             Request::Send { threads, project, server } => {
                 to_response(self.send(&threads, project.as_deref(), server.as_deref()).await)
             }
@@ -629,10 +631,15 @@ impl Core {
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
             Request::Graph { query } => Response::ok(self.graph(&query)),
             Request::OpenWeb { cwd, once } => {
+                let mut project = None;
                 if let Some(cwd) = cwd {
                     self.remember_clone(&cwd).await;
+                    project = Repo::discover(&cwd)
+                        .ok()
+                        .map(|repo| repo.root().to_owned())
+                        .filter(|root| self.clones.values().any(|known| known == root));
                 }
-                to_response(self.open_web(once).await)
+                to_response(self.open_web(once, project.as_deref()).await)
             }
             Request::HistoryRead { thread, offset, limit } => {
                 to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
@@ -1715,12 +1722,12 @@ impl Core {
 
     /// The web UI's URL, starting it first if needed; with `once`, one that
     /// works a single time, to hand to another program.
-    async fn open_web(&mut self, once: bool) -> Result<String, CoreError> {
+    async fn open_web(&mut self, once: bool, project: Option<&Path>) -> Result<String, CoreError> {
         if self.web.is_none() {
             self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
         }
         let web = self.web.as_ref().expect("started above");
-        Ok(if once { web.one_time_url() } else { web.url() })
+        Ok(if once { web.one_time_url(project) } else { web.url(project) })
     }
 
     fn inbox(

@@ -103,7 +103,10 @@ async fn sync_family(server: &Server, family: FamilyId) -> Result<(), BridgeErro
         let Some(config) = server.config().forges.iter().find(|forge| forge.host.eq_ignore_ascii_case(host)) else {
             continue;
         };
-        let branch = log.iter().rev().filter(|delta| seen.contains(delta.span.first())).find_map(|delta| match &delta.op {
+        // Only the thread's own commits: a fork that hasn't committed would
+        // otherwise take its source's branch and comment on its pull request.
+        let own = |delta: &&Delta| delta.thread == thread && seen.contains(delta.span.first());
+        let branch = log.iter().rev().filter(own).find_map(|delta| match &delta.op {
             Op::Git(GitOp::Committed { branch, .. } | GitOp::Genesis { branch, .. }) => branch.clone(),
             _ => None,
         });

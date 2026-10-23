@@ -1,12 +1,17 @@
 import type { AgentState, Preset } from './api'
 import type { Tone } from './ui'
 
-/** Which of the agent's permission requests the daemon answers by itself (ADR 0022). */
-export const PRESETS: { id: Preset; label: string }[] = [
-  { id: 'ask_before_commands', label: 'Ask before commands' },
-  { id: 'ask_for_everything', label: 'Ask for everything' },
-  { id: 'full_access', label: 'Full access' },
+/** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan,
+ * which asks for a plan before every new prompt (ADR 0044). */
+export const PRESETS: { id: Preset; label: string; says: string }[] = [
+  { id: 'plan', label: 'Plan', says: 'reads and writes a plan for you to approve; everything else asks' },
+  { id: 'ask_for_everything', label: 'Ask for everything', says: 'edits and commands ask' },
+  { id: 'ask_before_commands', label: 'Ask before commands', says: 'edits apply, every command asks' },
+  { id: 'full_access', label: 'Full access', says: "nothing asks; the agent's own sandbox is all that limits it" },
 ]
+
+/** The presets a project can start its threads with: Plan is chosen per thread. */
+export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')
 
 /** How a state reads after the agent's name (ADR 0022). */
 export const STATE_PHRASE: Record<AgentState, string> = {

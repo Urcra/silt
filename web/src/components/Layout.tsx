@@ -1,163 +1,56 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link, Outlet, useMatch, useNavigate, useRouterState } from '@tanstack/react-router'
+import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from 'react'
-import { api, short } from '../api'
+import { api } from '../api'
 import { useBusConnected } from '../bus'
 import { useNotifier } from '../notifier'
-import { useNow } from '../now'
-import { projectName } from '../projects'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
-import { sections } from '../sections'
+import { Drawer } from '../shell'
+import { hosted } from '../served'
 import { useActions } from '../shortcuts'
-import { hosted, serverName } from '../served'
-import { THEMES, applyTheme, storedTheme, type Theme } from '../theme'
-import { Avatar, Dot, Icon, IconButton, Pill, StatusBar, Toaster, cx } from '../ui'
-import { useWorkspace } from '../workspace'
-import { useInWorkspace } from '../workspaceFilter'
+import { THEMES, applyTheme, storedTheme } from '../theme'
+import { Dot, Icon, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
 
-const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const
-
-function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(storedTheme)
+/** The theme from the palette; Settings has it too. */
+function useThemeAction() {
+  const [theme, setTheme] = useState(storedTheme)
   const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]
-  const switchTheme = () => {
-    applyTheme(next)
-    setTheme(next)
-  }
-  useActions([{ id: 'theme', label: `Switch to the ${next} theme`, run: switchTheme }])
-  return <IconButton icon={THEME_ICON[theme]} label={`${theme} theme; switch to ${next}`} onClick={switchTheme} />
+  useActions([
+    {
+      id: 'theme',
+      label: `Switch to the ${next} theme`,
+      run: () => {
+        applyTheme(next)
+        setTheme(next)
+      },
+    },
+  ])
 }
 
 /** Where anyone can go from anywhere, by key or from the palette. */
 function useGlobalActions() {
   const navigate = useNavigate()
   useActions([
-    { id: 'new', label: 'New thread', keys: 'n', run: () => void navigate({ to: '/new' }) },
-    { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/' }) },
-    { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/projects' }) },
-    { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/orgs' }) },
-    { id: 'devices', label: 'Devices', run: () => void navigate({ to: '/devices' }) },
+    ...(hosted()
+      ? []
+      : [
+          { id: 'new', label: 'New thread in this project', keys: 'n', run: () => void navigate({ to: '/new', search: {} }) },
+          { id: 'new-elsewhere', label: 'New thread in another project', keys: 'shift+n', run: () => void navigate({ to: '/new', search: { pick: 'projects' } }) },
+        ]),
+    { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/threads' }) },
+    { id: 'settings', label: 'Settings', run: () => void navigate({ to: '/settings' }) },
+    { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/settings/projects' }) },
+    { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/settings/orgs' }) },
+    { id: 'devices', label: 'Devices', run: () => void navigate({ to: '/settings/devices' }) },
     { id: 'graph', label: 'Graph', keys: 'g', run: () => void navigate({ to: '/graph' }) },
     { id: 'search', label: 'Search everything', keys: 'mod+shift+f', run: () => void navigate({ to: '/search' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
   ])
-}
-
-const PAGES: Record<string, string> = {
-  '/': 'Threads',
-  '/new': 'New thread',
-  '/projects': 'Projects',
-  '/projects/add': 'Add a project',
-  '/orgs': 'Orgs',
-  '/devices': 'Devices',
-  '/needs-you': 'Needs you',
-  '/graph': 'History graph',
-  '/search': 'Search',
-  '/mrs': 'Merge requests',
-  '/inbox': 'Inbox',
-}
-
-/** Where this page is: the workspace, then its project and thread, or which list. */
-function Crumbs() {
-  const threadPage = useMatch({ from: '/t/$id', shouldThrow: false })
-  const filePage = useMatch({ from: '/t/$id/files/$', shouldThrow: false })
-  const livePage = useMatch({ from: '/t/$id/live', shouldThrow: false })
-  const reconcilePage = useMatch({ from: '/t/$id/reconcile', shouldThrow: false })
-  const thread = threadPage ?? filePage ?? livePage ?? reconcilePage
-  const mr = useMatch({ from: '/mr/$id', shouldThrow: false })
-  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: mr !== undefined })
-  const mrTitle = mr && mrs.data?.find((candidate) => candidate.id === mr.params.id)?.title
-  const path = useRouterState({ select: (state) => state.location.pathname })
-  const chosen = useWorkspace()
-  const workspace =
-    chosen.kind === 'server' ? (chosen.org ?? serverName(chosen.server)) : chosen.kind === 'local' ? 'This machine' : ''
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads, enabled: thread !== undefined })
-  const shown = thread && threads.data?.find((summary) => summary.id.endsWith(thread.params.id))
-  const crumbs: { text: string; mono?: boolean }[] = thread
-    ? [
-        { text: shown ? projectName(shown.repo || 'no remote') : '', mono: true },
-        { text: shown?.title ?? short(thread.params.id) },
-        { text: livePage ? 'Live' : reconcilePage ? 'Reconcile' : '' },
-      ]
-    : mr
-      ? [{ text: 'Merge requests' }, mrTitle ? { text: mrTitle } : { text: short(mr.params.id), mono: true }]
-      : [{ text: workspace }, { text: PAGES[path.replace(/\/$/, '') || '/'] ?? '' }]
-  const shownCrumbs = crumbs.filter((crumb) => crumb.text)
-  return (
-    <ol aria-label="breadcrumbs" className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
-      <li>
-        <Link to="/" className="inline-flex items-center text-[15px] font-medium tracking-[-0.04em] text-fg-1 max-md:min-h-11 max-md:px-1">
-          silt
-        </Link>
-      </li>
-      {shownCrumbs.map((crumb, index) => (
-        <li key={index} className={cx('flex min-w-0 items-center gap-2', index < shownCrumbs.length - 1 && 'hidden md:flex')}>
-          <span aria-hidden="true" className="text-fg-3">
-            /
-          </span>
-          <span
-            className={cx('truncate', crumb.mono && 'font-mono', index === shownCrumbs.length - 1 && 'font-medium text-fg-1')}
-          >
-            {crumb.text}
-          </span>
-        </li>
-      ))}
-    </ol>
-  )
-}
-
-/** Who is signed in, and on which machine, at the top bar's right. */
-function Identity() {
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const signIn = status.data?.servers?.[0]
-  const device = signIn?.name ?? 'this machine'
-  return (
-    <>
-      {!hosted() && (
-        <Link to="/devices" title={signIn ? `${device} on ${serverName(signIn.url)}` : 'Not signed in to a server'} className="hidden md:inline-flex">
-          <Pill className="hover:text-fg-1">
-            <Dot tone={signIn && !signIn.sync_error ? 'ok' : 'idle'} />
-            {device}
-          </Pill>
-        </Link>
-      )}
-      {signIn && <Avatar name={signIn.user} size={24} />}
-    </>
-  )
-}
-
-/** The status bar's account of the connection, the agents at work and the version. */
-function AppStatus() {
-  const connected = useBusConnected()
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const running = (threads.data ?? []).filter((thread) =>
-    ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? ''),
-  ).length
-  const waiting = (threads.data ?? []).filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
-  const sync = status.data?.sync_error
-  return (
-    <StatusBar label="status" className="hidden md:flex">
-      <span className="inline-flex items-center gap-1">
-        <Dot tone={connected ? 'ok' : 'danger'} />
-        {hosted() ? 'server' : 'daemon'} {connected ? 'connected' : 'reconnecting'}
-      </span>
-      {sync && (
-        <span className="inline-flex min-w-0 items-center gap-1 text-danger" title={sync}>
-          <Dot tone="danger" />
-          sync failing
-        </span>
-      )}
-      <span>{running === 1 ? '1 agent running' : `${running} agents running`}</span>
-      {waiting > 0 && <span className="text-accent-fg">{waiting} waiting on you</span>}
-      {status.data?.version && <span className="ml-auto">silt {status.data.version}</span>}
-    </StatusBar>
-  )
 }
 
 const SIDEBAR_KEY = 'silt-sidebar-width'
@@ -206,7 +99,7 @@ function useSidebarWidth() {
   return { width, drag, key }
 }
 
-function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'thread' | 'merge' | 'search'; children: ReactNode; at: (path: string) => boolean }) {
+function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'list' | 'merge' | 'search'; children: ReactNode; at: (path: string) => boolean }) {
   const current = at(useRouterState({ select: (state) => state.location.pathname }))
   return (
     <Link
@@ -220,25 +113,23 @@ function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'thread' 
   )
 }
 
-/** A phone's way around: what waits on the person first (ADR 0028). */
+/** A phone's way around (ADR 0044): threads, reviews, the inbox and search. */
 function TabBar() {
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const shown = useInWorkspace()
-  const waiting = sections((threads.data ?? []).filter(shown), useNow()).needs_you.length
+  const inbox = useQuery({ queryKey: keys.inbox(false), queryFn: () => api.inbox(false), retry: false })
+  const unread = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
-    <nav
-      aria-label="tabs"
-      className="grid grid-cols-4 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden"
-    >
-      <Tab to="/needs-you" icon="inbox" at={(path) => path === '/needs-you'}>
-        Needs you
-        {waiting > 0 && <span className="ml-1 rounded-full bg-accent px-1 text-on-accent">{waiting}</span>}
-      </Tab>
-      <Tab to="/" icon="thread" at={(path) => path === '/' || path.startsWith('/t/')}>
+    <nav aria-label="tabs" className="grid grid-cols-4 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden">
+      <Tab to="/" icon="list" at={(path) => path === '/' || path === '/threads' || path.startsWith('/t/')}>
         Threads
       </Tab>
       <Tab to="/mrs" icon="merge" at={(path) => path === '/mrs' || path.startsWith('/mr/')}>
         Reviews
+      </Tab>
+      <Tab to="/inbox" icon="inbox" at={(path) => path === '/inbox'}>
+        <span>
+          Inbox
+          {unread > 0 && <span className="ml-1 rounded-full bg-accent px-1 text-on-accent">{unread}</span>}
+        </span>
       </Tab>
       <Tab to="/search" icon="search" at={(path) => path === '/search'}>
         Search
@@ -247,13 +138,26 @@ function TabBar() {
   )
 }
 
+/** Only while the connection to the daemon or server is down. */
+function Reconnecting() {
+  const connected = useBusConnected()
+  if (connected) return null
+  return (
+    <p role="status" className="flex items-center gap-1.5 border-b border-line-subtle bg-danger-tint px-4 py-1 text-xs text-danger">
+      <Dot tone="danger" />
+      {hosted() ? 'Server' : 'Daemon'} not connected; reconnecting
+    </p>
+  )
+}
+
 /**
- * The shell every screen sits in (ADR 0039): the top bar, the project
- * sidebar, the view, and the status bar; on a phone, the sidebar is a
- * drawer and a tab bar takes the status bar's place.
+ * The shell every screen sits in (ADR 0044): the sidebar and the page, with
+ * no top bar or status bar; each page has its own header. On a phone the
+ * sidebar is a drawer, and a tab bar runs along the bottom.
  */
 export function Layout() {
   useGlobalActions()
+  useThemeAction()
   useNotifier()
   const sidebar = useSidebarWidth()
   const scroll = useRef<HTMLElement>(null)
@@ -263,28 +167,13 @@ export function Layout() {
   const sidebarShown = drawerOn === path
   const setSidebarShown = (shown: boolean) => setDrawerOn(shown ? path : null)
   return (
-    <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[40px_minmax(0,1fr)_auto] bg-bg text-fg-1">
-      <header className="flex min-w-0 items-center gap-3 border-b border-line px-3 text-xs">
-        <IconButton
-          icon="thread"
-          label={sidebarShown ? 'hide projects' : 'show projects'}
-          className="md:hidden"
-          aria-expanded={sidebarShown}
-          onClick={() => setSidebarShown(!sidebarShown)}
-        />
-        <Crumbs />
-        <div className="ml-auto flex items-center gap-2">
-          <Palette />
-          <ThemeToggle />
-          <Identity />
-        </div>
-      </header>
+    <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">
       <div className="flex min-h-0">
         <aside
           style={{ width: sidebar.width }}
           className={cx(
             'shrink-0 flex-col border-r border-line bg-bg',
-            sidebarShown ? 'fixed top-10 bottom-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none' : 'hidden md:flex',
+            sidebarShown ? 'fixed inset-y-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none' : 'hidden md:flex',
           )}
         >
           <ErrorBoundary>
@@ -304,23 +193,21 @@ export function Layout() {
           className="-ml-px hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent md:block"
         />
         {sidebarShown && (
-          <button
-            type="button"
-            aria-label="close projects"
-            onClick={() => setSidebarShown(false)}
-            className="fixed inset-0 top-10 z-20 bg-backdrop md:hidden"
-          />
+          <button type="button" aria-label="close projects" onClick={() => setSidebarShown(false)} className="fixed inset-0 z-20 bg-backdrop md:hidden" />
         )}
         <main ref={scroll} inert={sidebarShown || undefined} className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
+          <Reconnecting />
           <ErrorBoundary>
             <MainScroll.Provider value={scroll}>
-              <Outlet />
+              <Drawer.Provider value={{ open: sidebarShown, toggle: () => setSidebarShown(!sidebarShown) }}>
+                <Outlet />
+              </Drawer.Provider>
             </MainScroll.Provider>
           </ErrorBoundary>
         </main>
       </div>
-      <AppStatus />
       <TabBar />
+      <Palette />
       <Toaster />
     </div>
   )

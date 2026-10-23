@@ -103,6 +103,19 @@ const PATHS = {
   ),
   file: <path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3" />,
   bell: <path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3" />,
+  list: <path d="M2.5 4h11M2.5 8h11M2.5 12h7" />,
+  folder: <path d="M2 4.5A1 1 0 0 1 3 3.5h3l1.5 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />,
+  attach: <path d="M13.5 7.5 8 13a3.4 3.4 0 0 1-4.8-4.8l5.6-5.6a2.2 2.2 0 0 1 3.1 3.1L6.3 11.3a1.1 1.1 0 0 1-1.6-1.6l5.1-5.1" />,
+  arrowUp: <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />,
+  external: <path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v4H2.5V4h4" />,
+  edit: <path d="M2.5 13.5h3l7.5-7.5-3-3-7.5 7.5zM9 4l3 3" />,
+  image: (
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="1" />
+      <circle cx="6" cy="6.5" r="1" />
+      <path d="m14 11-3.5-3.5L4 13" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>
 
 export type IconName = keyof typeof PATHS

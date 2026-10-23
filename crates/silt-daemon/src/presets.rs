@@ -7,11 +7,15 @@ use crate::protocol::Preset;
 /// Tools that change nothing outside the checkout's files, or nothing.
 const QUIET_TOOLS: [&str; 3] = ["edit", "read", "search"];
 
+/// Tools that change nothing at all, which a plan needs to look around.
+const LOOKING_TOOLS: [&str; 2] = ["read", "search"];
+
 /// The option to answer a request with, when `preset` answers it: the
 /// agent's "allow once", else its "allow always".
 pub(crate) fn decide<'a>(preset: Preset, tool_kind: Option<&str>, option_kinds: &'a [(String, String)]) -> Option<&'a str> {
     let allows = match preset {
         Preset::AskForEverything => false,
+        Preset::Plan => tool_kind.is_some_and(|kind| LOOKING_TOOLS.contains(&kind)),
         Preset::FullAccess => true,
         Preset::AskBeforeCommands => tool_kind.is_some_and(|kind| QUIET_TOOLS.contains(&kind)),
     };
@@ -46,6 +50,8 @@ mod tests {
     fn the_other_presets_ask_for_everything_or_nothing() {
         let options = options();
         assert_eq!(decide(Preset::AskForEverything, Some("edit"), &options), None);
+        assert_eq!(decide(Preset::Plan, Some("read"), &options), Some("yes"), "a plan looks around");
+        assert_eq!(decide(Preset::Plan, Some("edit"), &options), None, "a plan asks before it edits");
         assert_eq!(decide(Preset::FullAccess, Some("execute"), &options), Some("yes"));
         let always_only = vec![("a".to_owned(), "allow_always".to_owned()), ("n".to_owned(), "reject_once".to_owned())];
         assert_eq!(decide(Preset::FullAccess, Some("execute"), &always_only), Some("a"));

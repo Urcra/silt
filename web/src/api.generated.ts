@@ -418,7 +418,7 @@ export type PermissionAsked = { id: number, title: string,
  */
 options: Array<[string, string]>, };
 
-export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access";
+export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access" | "plan";
 
 export type Project = { 
 /**
@@ -610,3 +610,24 @@ number: number,
  * The history entry of the turn's prompt.
  */
 entry: number | null, prompt: string, };
+
+export type FoundFolder = { path: string, 
+/**
+ * The normalized origin, empty without one.
+ */
+repo: string, 
+/**
+ * Threads start only in a git repository; outside one, its sessions
+ * can still be imported.
+ */
+git: boolean, 
+/**
+ * Whether this machine knows it as a clone already.
+ */
+added: boolean, 
+/**
+ * Sessions not imported yet, by agent name, most first.
+ */
+sessions: Array<FoundSessions>, last_ms: number | null, };
+
+export type FoundSessions = { agent: string, count: number, };

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
-import { PRESETS } from '../agentState'
+import { DEFAULT_PRESETS, PRESETS } from '../agentState'
 import { api, type GitNotes, type Project } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
@@ -50,7 +50,7 @@ function ProjectHome({ project }: { project: Project }) {
   )
 }
 
-function CloneHere({ project, projects }: { project: Project; projects: Project[] }) {
+export function CloneHere({ project, projects }: { project: Project; projects: Project[] }) {
   const queries = useQueryClient()
   const [path, setPath] = useState(() => suggestedPath(project, projects))
   const [cloning, setCloning] = useState(false)
@@ -168,7 +168,7 @@ function Defaults({ projects }: { projects: Project[] }) {
         </label>
         <Select id="defaults-preset" value={project.default_preset ?? ''} onChange={(event) => void save({ default_preset: event.target.value || null })} className="text-xs">
           <option value="">Ask before commands (Silt's default)</option>
-          {PRESETS.map((preset) => (
+          {DEFAULT_PRESETS.map((preset) => (
             <option key={preset.id} value={preset.id}>
               {preset.label}
             </option>
@@ -231,7 +231,7 @@ export function AddProjectPage() {
       </Page>
     )
   return (
-    <Page title={`Add a project to ${where}`} width="narrow" actions={<Link to="/projects" className={buttonClass('ghost')}>Done</Link>}>
+    <Page title={`Add a project to ${where}`} width="narrow" actions={<Link to="/settings/$section" params={{ section: 'projects' }} className={buttonClass('ghost')}>Done</Link>}>
       <section aria-label="add a project" className="flex flex-col gap-6">
         <Section title={`Clones on ${device}`}>
           <div className="overflow-hidden rounded-md border border-line bg-elevated [&>*]:border-b [&>*]:border-line-subtle [&>*:last-child]:border-b-0">
@@ -333,7 +333,7 @@ export function Projects() {
       width="wide"
       actions={
         !hosted() && (
-          <Link to="/projects/add" className={buttonClass('primary')}>
+          <Link to="/settings/$section" params={{ section: 'add' }} className={buttonClass('secondary')}>
             Add a project
           </Link>
         )
@@ -343,7 +343,7 @@ export function Projects() {
       {projects.error && <p className="text-sm text-danger">{message(projects.error)}</p>}
       {projects.isSuccess && all.length === 0 && (
         <EmptyState title="Add a clone to start threads in it">
-          From <Link to="/projects/add" className="text-accent-fg">Add a project</Link>, or run <code>silt open</code> in one.
+          From <Link to="/" search={{ pick: 'folder' }} className="text-accent-fg">New thread</Link>, or run <code>silt open</code> in one.
         </EmptyState>
       )}
       <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated">

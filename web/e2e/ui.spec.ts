@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { fixture, silt } from './fixture'
+import { allThreads, fixture, silt } from './fixture'
 
 test('a thread page shows what changes elsewhere without a reload', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)
+  await allThreads(page)
   await page.getByRole('link', { name: thread }).click()
   await expect(page.getByText('Please add a farewell line to main')).toBeVisible()
   silt('comment', thread, '--entry', '0', 'said from a terminal')
@@ -13,11 +14,12 @@ test('a thread page shows what changes elsewhere without a reload', async ({ pag
 test('lists threads and searches across compaction', async ({ page }) => {
   const { url, thread, fork } = fixture()
   await page.goto(url)
+  await allThreads(page)
   const threads = page.getByTestId('threads')
   await expect(threads).toContainText(thread)
   await expect(threads.getByRole('listitem').filter({ hasText: fork })).toContainText(`fork of ${thread}`)
 
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'Search' }).click()
+  await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')
   await page.getByRole('button', { name: 'Search' }).click()
   const results = page.getByTestId('search-results')
@@ -37,20 +39,21 @@ test('lists threads and searches across compaction', async ({ page }) => {
 test('shows a thread with compaction, turn diffs and comments', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)
+  await allThreads(page)
   await page.getByRole('link', { name: thread }).click()
   await expect(page.getByText('Please add a farewell line to main')).toBeVisible()
   await expect(page.getByTestId('compaction')).toBeVisible()
   await page.getByTestId('compaction').getByRole('button', { name: 'Show summary' }).click()
   await expect(page.getByText('Compaction summary: Summary: farewell was added to main.')).toBeVisible()
-  await expect(page.getByText('Recorded with claude')).toBeVisible()
+  await expect(page.getByRole('main').getByText(/ · claude$/)).toBeVisible()
+  await page.getByRole('button', { name: 'More for this thread' }).click()
   await page.getByLabel('agent', { exact: true }).selectOption('codex')
-  await page.getByRole('button', { name: 'Copy command' }).click()
   await expect(page.getByRole('button', { name: /^silt resume \w+ --agent codex$/ })).toBeVisible()
   await page.keyboard.press('Escape')
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()
-  await expect(page.getByTestId('diff')).toContainText('+ fn farewell() {}')
-  await page.getByRole('button', { name: 'Changes', exact: true }).click()
+  await expect(page.getByTestId('diff').first()).toContainText('+ fn farewell() {}')
+  // The changes are open beside the conversation (ADR 0044).
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByRole('tab', { name: 'Other…' }).click()
   await page.getByLabel('diff base').selectOption('last-commit')
@@ -96,6 +99,10 @@ test("the palette finds threads and runs the page's actions, which keys run too"
   // The thread's keys are its page's, which comes once its history has.
   await expect(page.getByTestId('history')).toBeVisible()
 
+  // The changes start open beside the conversation; `d` closes and opens them.
+  await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+  await page.keyboard.press('d')
+  await expect(page.getByRole('region', { name: 'changes' })).toHaveCount(0)
   await page.keyboard.press('d')
   await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
   await page.keyboard.press('ControlOrMeta+k')
@@ -104,12 +111,12 @@ test("the palette finds threads and runs the page's actions, which keys run too"
   await expect(page.getByRole('tab', { name: 'Against main' })).toHaveAttribute('aria-selected', 'true')
 
   await page.keyboard.press('n')
-  await expect(page).toHaveURL(/\/new$/)
+  await expect(page).toHaveURL(/:\d+\/(\?.*)?$/)
   // A key without a modifier is the person's while they type.
   await page.keyboard.press('ControlOrMeta+k')
   await palette.getByLabel('command').pressSequentially('inbox')
   await expect(palette.getByLabel('command')).toHaveValue('inbox')
-  await expect(page).toHaveURL(/\/new$/)
+  await expect(page).toHaveURL(/:\d+\/(\?.*)?$/)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/inbox$/)
 })

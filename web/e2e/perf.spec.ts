@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { SILT, fixture } from './fixture'
+import { SILT, allThreads, fixture } from './fixture'
 
 // `web.thread` of ADR 0034: a 2,000-message thread shows in under 100 ms
 // and keeps the page under 200 MB. Timed on the optimized build the gate
@@ -80,6 +80,7 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   test.setTimeout(180_000)
   const { url } = fixture()
   await page.goto(url)
+  await allThreads(page)
   const link = page.getByRole('link', { name: thread })
   // The whole session is recorded once the listing counts all its messages.
   const row = page.getByTestId('threads').getByRole('listitem').filter({ hasText: thread })

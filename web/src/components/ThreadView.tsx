@@ -39,48 +39,12 @@ import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
+import { changeOf } from '../edits'
+import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 import { Mock } from './Mock'
-import { Page } from './Page'
+import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
-
-/** The commands that pick the thread up in a terminal, each copied with a click. */
-function CopyCommands({ commands }: { commands: string[] }) {
-  return (
-    <Popover
-      label="commands"
-      triggerClassName={buttonClass('secondary')}
-      trigger={
-        <>
-          <Icon name="terminal" />
-          Copy command
-          <Icon name="chevronDown" className="h-3 w-3" />
-        </>
-      }
-      panelClassName="flex w-80 flex-col gap-1 p-2"
-    >
-      {(close) => (
-        <>
-          <p className="px-1 pb-1 text-2xs text-fg-2">Copy, then run it in a clone of the repository.</p>
-          {commands.map((command) => (
-            <button
-              key={command}
-              type="button"
-              className={cx(buttonClass('ghost'), 'justify-start font-mono font-normal text-fg-1')}
-              onClick={() => {
-                void navigator.clipboard?.writeText(command).catch(() => undefined)
-                toast(`Copied: ${command}`, 'ok')
-                close()
-              }}
-            >
-              {command}
-            </button>
-          ))}
-        </>
-      )}
-    </Popover>
-  )
-}
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -197,7 +161,8 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
 
 /** What one entry says: a prompt, the agent's words as Markdown, or an event. */
 function EntryText({ entry }: { entry: HistoryEntry }) {
-  if (entry.kind === 'user') return <p className="text-sm font-medium whitespace-pre-wrap">› {entry.text}</p>
+  if (entry.kind === 'user')
+    return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'merge' || entry.kind === 'pull')
     return (
@@ -219,23 +184,64 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
   return <p className="line-clamp-4 font-mono text-xs break-all whitespace-pre-wrap text-fg-2">{entry.text}</p>
 }
 
-/** A run of the agent's tool work, folded under what it amounted to. */
+/** How long the agent thought, from its thinking to what it did next, as `14s`. */
+function thoughtFor(entries: HistoryEntry[]): string | null {
+  const first = entries.findIndex((entry) => entry.kind === 'thinking')
+  if (first < 0) return null
+  const next = entries.slice(first + 1).find((entry) => entry.kind !== 'thinking')
+  return next ? duration(entries[first].time_ms, next.time_ms) : null
+}
+
+/** A run of the agent's work (ADR 0044): its thinking folded by how long it took, its tool calls folded in one card, and its edits as diffs. */
 function ToolFold({ entries, ...props }: EntryProps & { entries: HistoryEntry[] }) {
+  const thinking = entries.filter((entry) => entry.kind === 'thinking')
+  const tools = entries.filter((entry) => entry.kind !== 'thinking')
+  const edits = tools.map((entry) => ({ entry, change: changeOf(entry) })).filter((edit) => edit.change !== null)
+  const took = thoughtFor(entries)
   return (
-    <details className="group/tools rounded-sm text-xs text-fg-2">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 hover:text-fg-1 max-md:min-h-11">
-        <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/tools:rotate-90" />
-        <Icon name="terminal" className="h-3.5 w-3.5" />
-        {toolSummary(entries)}
-      </summary>
-      <div className="mt-1 ml-[18px] flex flex-col gap-1.5 border-l border-line pl-3">
-        {entries.map((entry) => (
-          <Entry key={entry.index} entry={entry} {...props}>
-            <EntryText entry={entry} />
-          </Entry>
-        ))}
-      </div>
-    </details>
+    <div className="flex flex-col gap-2.5">
+      {thinking.length > 0 && (
+        <details className="group/think border-l-2 border-line pl-3 text-xs text-fg-2">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
+            <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
+            {took ? `Thought for ${took}` : 'Thought it through'}
+          </summary>
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            {thinking.map((entry) => (
+              <Entry key={entry.index} entry={entry} {...props}>
+                <EntryText entry={entry} />
+              </Entry>
+            ))}
+          </div>
+        </details>
+      )}
+      {tools.length > 0 && (
+        <details data-testid="tools" className="group/tools rounded-md border border-line bg-elevated text-xs">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
+            <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/tools:rotate-90" />
+            <Icon name="terminal" className="h-3.5 w-3.5" />
+            {toolSummary(tools)}
+          </summary>
+          <div className="flex flex-col border-t border-line-subtle">
+            {tools.map((entry) => (
+              <div key={entry.index} className="border-b border-line-subtle px-3 py-1.5 last:border-b-0">
+                <Entry entry={entry} {...props}>
+                  <span className="flex items-start gap-2">
+                    {entry.kind === 'tool_call' && <Icon name="check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" />}
+                    <span className={cx('min-w-0 flex-1', entry.kind !== 'tool_call' && 'pl-[22px]')}>
+                      <EntryText entry={entry} />
+                    </span>
+                  </span>
+                </Entry>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {edits.map(({ entry, change }) => (
+        <EditCard key={entry.index} change={change!} />
+      ))}
+    </div>
   )
 }
 
@@ -365,9 +371,8 @@ function TranscriptRow({ row, ...props }: EntryProps & { row: Row }) {
   const pieces = piecesOf(row.entries)
   const rewound = row.prompt?.rewound ?? row.entries.some((entry) => entry.rewound)
   return (
-    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 py-2.5 md:grid-cols-[40px_minmax(0,1fr)]">
-      <span className="pt-0.5 text-right font-mono text-2xs text-fg-2">{row.prompt ? `#${row.prompt.index}` : ''}</span>
-      <div className="flex min-w-0 flex-col gap-2">
+    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="py-3">
+      <div className="flex min-w-0 flex-col gap-3.5">
         {row.prompt && (
           <Entry entry={row.prompt} {...props}>
             <EntryText entry={row.prompt} />
@@ -411,12 +416,12 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   ])
   return (
     <>
-      <Button icon="fork" onClick={fork} title="A copy of the thread, in a checkout of its own, to try something else in">
-        Fork
+      <Button icon="fork" onClick={fork} aria-label="Fork" title="A copy of the thread, in a checkout of its own, to try something else in">
+        <span className="max-md:sr-only">Fork</span>
       </Button>
       {forked && !offering && (
-        <Button icon="merge" onClick={() => setOffering(true)}>
-          Offer as merge request
+        <Button icon="merge" onClick={() => setOffering(true)} aria-label="Offer as merge request" title="Offer this fork's work back to its source">
+          <span className="max-lg:sr-only">Offer as merge request</span>
         </Button>
       )}
       {offering && (
@@ -442,121 +447,154 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   )
 }
 
-/** The thread's title, where it is, what it is, and what can be done with it (the Thread board's header). */
+/** The header's More (ADR 0044): the commands that pick the thread up in a terminal, with which agent, Join live, the graph and the details. */
+function ThreadMore({ thread, summary, here, onDetails }: { thread: string; summary: ThreadSummary | undefined; here: number; onDetails: () => void }) {
+  const [agent, setAgent] = useState('')
+  const commands = [`silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`, `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`]
+  return (
+    <Popover
+      label="more for this thread"
+      triggerLabel="More for this thread"
+      align="right"
+      triggerClassName="inline-flex h-7 w-7 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
+      panelClassName="flex w-80 flex-col gap-1 p-2"
+      trigger={<Icon name="more" />}
+    >
+      {(close) => (
+        <>
+          <p className="px-1 pb-0.5 text-2xs text-fg-2">Continue in a terminal, in a clone of the repository</p>
+          <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
+            with
+            <select
+              aria-label="agent"
+              value={agent}
+              onChange={(event) => setAgent(event.target.value)}
+              className="rounded-sm border border-line bg-elevated px-2 py-1 font-mono text-xs text-fg-1"
+            >
+              <option value="">{summary?.agent ?? 'its agent'}</option>
+              {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {commands.map((command) => (
+            <button
+              key={command}
+              type="button"
+              className={cx(buttonClass('ghost'), 'justify-start font-mono font-normal text-fg-1')}
+              onClick={() => {
+                void navigator.clipboard?.writeText(command).catch(() => undefined)
+                toast(`Copied: ${command}`, 'ok')
+                close()
+              }}
+            >
+              <Icon name="copy" />
+              {command}
+            </button>
+          ))}
+          <div className="my-1 border-t border-line-subtle" />
+          {!hosted() && (
+            <Link to="/t/$id/live" params={{ id: thread }} className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
+              <Dot tone={here > 0 ? 'ok' : 'idle'} />
+              Join live{here > 0 && ` · ${here} here`}
+            </Link>
+          )}
+          <Link to="/graph" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
+            <Icon name="graph" />
+            History graph
+          </Link>
+          <button
+            type="button"
+            className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+            onClick={() => {
+              close()
+              onDetails()
+            }}
+          >
+            <Icon name="info" />
+            Details
+          </button>
+        </>
+      )}
+    </Popover>
+  )
+}
+
+/** The thread's header (ADR 0044): its title and where it is, then Fork, Share, Changes, and the rest behind More. */
 function ThreadHeader({
   thread,
   summary,
-  here,
+  people,
   changes,
-  showingChanges,
+  panelOpen,
+  waiting,
   onChanges,
   onDetails,
 }: {
   thread: string
   summary: ThreadSummary | undefined
-  here: number
+  people: { user: string; device: string }[]
   changes: { added: number; removed: number } | null
-  showingChanges: boolean
+  panelOpen: boolean
+  /** The agent waits on the person: a plan to approve or a permission. */
+  waiting: boolean
   onChanges: () => void
-  /** Opens the inspector on a phone, where it isn't beside the conversation. */
+  /** Opens the details, beside the conversation or as a sheet on a phone. */
   onDetails: () => void
 }) {
-  const [agent, setAgent] = useState('')
   const where = summary ? threadWhere(summary) : null
-  const meta = summary
-    ? [
-        projectName(summary.repo || 'no remote'),
-        summary.owner && `started by ${summary.owner}`,
-        `${summary.messages} ${summary.messages === 1 ? 'message' : 'messages'}`,
-        `${summary.edits} ${summary.edits === 1 ? 'edit' : 'edits'}`,
-      ].filter(Boolean)
-    : []
+  // Where it is and what records it; who started it and the rest are in Details.
+  const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
   return (
-    <header className="flex flex-col gap-2.5 border-b border-line px-4 pt-5 pb-4 md:px-8">
-      <div className="flex flex-wrap items-center gap-2.5">
-        <h1 className="text-xl font-medium">{summary?.title ?? 'Thread'}</h1>
-        {where && (
-          <span className="inline-flex items-center gap-1.5 rounded-sm border border-line px-2 py-0.5 text-xs">
-            <Dot tone={summary?.agent_state === 'working' ? 'ok' : where.tone} />
-            {where.label}
-          </span>
-        )}
-        {summary?.local_only && (
-          <span title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
-            <Tag>This machine only</Tag>
-          </span>
-        )}
-      </div>
-      <p className="font-mono text-2xs text-fg-2">
-        <span data-volatile>{short(thread)}</span>
-        {meta.map((part) => ` · ${part}`)}
-        {summary?.agent && (
-          <>
-            {' · '}
-            <span>Recorded with {summary.agent}</span>
-          </>
-        )}
-      </p>
-      {summary?.forked_from && (
-        <p className="text-xs text-fg-2">
-          Fork of{' '}
-          <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
-            {short(summary.forked_from)}
-          </Link>
-        </p>
+    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle px-4 md:pr-3 md:pl-5">
+      <DrawerButton />
+      <h1 className="max-w-[50%] min-w-0 shrink-0 truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
+        {summary?.title ?? 'Thread'}
+      </h1>
+      {waiting && (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap">
+          <Dot tone="warn" />
+          Waiting on you
+        </span>
       )}
-      {summary && <CloudSession thread={summary} />}
-      <div className="mt-1 flex flex-wrap items-center gap-2">
-        {/* A terminal's commands mean nothing on a phone. */}
-        <span className="flex items-center gap-2 max-md:hidden">
-          <label className="text-xs text-fg-2" htmlFor="continue-agent">
-            Continue with
-          </label>
-          <select
-            id="continue-agent"
-            aria-label="agent"
-            value={agent}
-            onChange={(event) => setAgent(event.target.value)}
-            className="rounded-sm border border-line bg-elevated px-2 py-1 font-mono text-xs text-fg-1"
-          >
-            <option value="">{summary?.agent ?? 'its agent'}</option>
-            {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <CopyCommands
-            commands={[
-              `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-              `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-            ]}
-          />
+      {summary?.local_only && (
+        <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
+          <Tag>This machine only</Tag>
         </span>
-        <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
-        <span className="flex flex-wrap items-center gap-2 lg:ml-auto">
-          {!hosted() && (
-            <Link to="/t/$id/live" params={{ id: thread }} className={cx(buttonClass('ghost'), 'max-md:hidden')}>
-              <Dot tone={here > 0 ? 'ok' : 'idle'} />
-              Join live{here > 0 && ` · ${here} here`}
+      )}
+      <span className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden whitespace-nowrap max-md:hidden">
+        <span className="min-w-0 truncate font-mono text-2xs text-fg-2" data-volatile>
+          {short(thread)}
+          {meta.map((part) => ` · ${part}`)}
+        </span>
+        {summary?.forked_from && (
+          <span className="shrink-0 text-2xs text-fg-2">
+            Fork of{' '}
+            <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
+              {short(summary.forked_from)}
             </Link>
-          )}
-          {summary && <ShareDialog thread={summary} />}
-          <Button
-            aria-label="Changes"
-            aria-pressed={showingChanges}
-            onClick={onChanges}
-            title="What the thread changed, beside the conversation (D)"
-            className="aria-pressed:border-line-strong aria-pressed:bg-surface-3"
-          >
-            Changes
-            {changes && <Counts added={changes.added} removed={changes.removed} />}
-          </Button>
-          <Button className="lg:hidden" icon="info" onClick={onDetails}>
-            Details
-          </Button>
-        </span>
-      </div>
+          </span>
+        )}
+      </span>
+      <span className="flex-1 md:hidden" />
+      <Here people={people} />
+      <span className="flex shrink-0 items-center gap-1">
+        <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
+        {summary && <ShareDialog thread={summary} />}
+        <Button
+          aria-label="Changes"
+          aria-pressed={panelOpen}
+          onClick={onChanges}
+          title="What the thread changed, beside the conversation (D)"
+          className="aria-pressed:border-accent aria-pressed:bg-accent-tint aria-pressed:text-accent-fg"
+        >
+          <span className="max-md:sr-only">Changes</span>
+          {changes && <Counts added={changes.added} removed={changes.removed} />}
+        </Button>
+        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} />
+      </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
   )
@@ -658,7 +696,6 @@ function ThreadCommits({ thread }: { thread: string }) {
 function Details({
   thread,
   summary,
-  threads,
   total,
   diff,
   codeComments,
@@ -668,7 +705,6 @@ function Details({
 }: {
   thread: string
   summary: ThreadSummary | undefined
-  threads: ThreadSummary[]
   total: number
   diff: string | undefined
   codeComments: CommentView[]
@@ -705,18 +741,6 @@ function Details({
         />
         <p className="text-xs leading-normal text-fg-2">Picking it up on another machine moves the agent session there. This one stops writing.</p>
       </InspectorSection>
-      {summary && (
-        <InspectorSection
-          title="Lineage"
-          aside={
-            <Link to="/graph" className="text-accent-fg hover:text-fg-1">
-              View graph
-            </Link>
-          }
-        >
-          <Lineage summary={summary} threads={threads} />
-        </InspectorSection>
-      )}
       <InspectorSection title="Files changed">
         {files === null && <Skeleton className="h-10" />}
         {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
@@ -797,7 +821,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'details' | 'changes'
+type InspectorTab = 'changes' | 'details' | 'lineage'
 
 function ThreadBody({
   thread,
@@ -818,7 +842,9 @@ function ThreadBody({
   const diff = useQuery({ queryKey: keys.diff(thread, { base: '' }), queryFn: () => api.diff(thread, { base: '' }) })
   const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(id) })
   const summary = threads.data?.find((candidate) => candidate.id === thread)
-  const [tab, setTab] = useState<InspectorTab>('details')
+  const [tab, setTab] = useState<InspectorTab>('changes')
+  // Beside the conversation on a desktop, open on Changes (ADR 0044) until closed.
+  const [panel, setPanel] = useState(true)
   const [sheet, setSheet] = useState(false)
   const [draft, setDraft] = useState('')
   const navigate = useNavigate()
@@ -832,7 +858,7 @@ function ThreadBody({
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
   const clearDraft = useCallback(() => setDraft(''), [])
   useClearSentDraft(lastPrompt, draft, clearDraft)
-  useActions([{ id: 'changes', label: tab === 'changes' ? 'Hide changes' : 'Show changes', keys: 'd', run: () => setTab(tab === 'changes' ? 'details' : 'changes') }])
+  useActions([{ id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) }])
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
@@ -875,12 +901,12 @@ function ThreadBody({
       inspectorWide={tab === 'changes'}
       sheet={{ open: sheet, onClose: () => setSheet(false) }}
       inspector={
+        (panel || sheet) && (
         <div className="flex flex-col">
-          <div className="sticky top-0 z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line bg-bg px-4">
+          <div className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b border-line-subtle bg-bg px-4">
             <Tabs
               label="inspector"
               tabs={[
-                { id: 'details', label: 'Details' },
                 {
                   id: 'changes',
                   label: (
@@ -889,16 +915,32 @@ function ThreadBody({
                     </>
                   ),
                 },
+                { id: 'details', label: 'Details' },
+                { id: 'lineage', label: 'Lineage' },
               ]}
               value={tab}
               onChange={setTab}
             />
           </div>
-          {tab === 'details' ? (
+          {tab === 'lineage' ? (
+            <div className="flex flex-col gap-6 px-5 py-5">
+              {summary && (
+                <InspectorSection
+                  title="Lineage"
+                  aside={
+                    <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+                      View graph
+                    </Link>
+                  }
+                >
+                  <Lineage summary={summary} threads={threads.data ?? []} />
+                </InspectorSection>
+              )}
+            </div>
+          ) : tab === 'details' ? (
             <Details
               thread={thread}
               summary={summary}
-              threads={threads.data ?? []}
               total={total}
               diff={diff.data}
               codeComments={codeComments}
@@ -912,33 +954,45 @@ function ThreadBody({
             </div>
           )}
         </div>
+        )
       }
     >
       <ThreadHeader
         thread={thread}
         summary={summary}
-        here={people.length}
+        people={people}
         changes={totals}
-        showingChanges={tab === 'changes'}
+        panelOpen={panel}
+        waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
         onChanges={() => {
-          const opening = tab !== 'changes'
-          setTab(opening ? 'changes' : 'details')
-          setSheet(opening && window.matchMedia('(max-width: 1023px)').matches)
+          const phone = window.matchMedia('(max-width: 1023px)').matches
+          if (phone) {
+            setTab('changes')
+            setSheet(true)
+            return
+          }
+          if (!panel || tab !== 'changes') {
+            setTab('changes')
+            setPanel(true)
+          } else setPanel(false)
         }}
         onDetails={() => {
           setTab('details')
-          setSheet(true)
+          setPanel(true)
+          setSheet(window.matchMedia('(max-width: 1023px)').matches)
         }}
       />
-      <div className="flex flex-1 flex-col px-4 md:px-8">
-        <div className="flex items-center gap-2 pt-2.5 text-xs text-fg-2">
-          <Here people={people} />
-          <span>
-            {total} {total === 1 ? 'entry' : 'entries'}
-            {turn !== null && ` · ${turn} ${turn === 1 ? 'turn' : 'turns'}`}
-          </span>
-        </div>
-        <div ref={list} className="relative max-w-[880px]" style={{ height: virtual.getTotalSize() }} data-testid="history">
+      <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 md:px-6">
+        {summary?.cloud && (
+          <div className="pt-3">
+            <CloudSession thread={summary} />
+          </div>
+        )}
+        <p className="pt-3 font-mono text-2xs text-fg-3">
+          {total} {total === 1 ? 'entry' : 'entries'}
+          {turn !== null && ` · ${turn} ${turn === 1 ? 'turn' : 'turns'}`}
+        </p>
+        <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
           {virtual.getVirtualItems().map((item) => {
             const row = rows[item.index]
             return (
@@ -954,24 +1008,15 @@ function ThreadBody({
             )
           })}
         </div>
-        <div className="flex max-w-[880px] flex-col gap-2.5 pt-2 pb-4">
-          {agent && <AgentTail status={agent} toolOutput={tool.text} />}
+        <div className="flex flex-col gap-3 pt-2 pb-4">
+          {agent && <AgentTail status={agent} toolOutput={tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
-          {agent?.state === 'awaiting_input' && <PlanCard thread={thread} />}
+          {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
         </div>
-        <div className="sticky bottom-0 z-10 mt-auto max-w-[880px] bg-bg pt-1 pb-3 md:pb-4">
-          <AgentDock
-            thread={thread}
-            status={agent}
-            preset={preset}
-            onPreset={setPreset}
-            draft={draft}
-            onDraft={setDraft}
-            people={people}
-            turn={turn}
-          />
+        <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 md:pb-5">
+          <AgentDock thread={thread} status={agent} preset={preset} onPreset={setPreset} draft={draft} onDraft={setDraft} people={people} />
         </div>
       </div>
     </Page>
