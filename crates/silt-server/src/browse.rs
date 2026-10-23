@@ -801,6 +801,8 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
                     visibility: info.visibility,
                     default_agent: info.default_agent,
                     default_preset: info.default_preset,
+                    git_notes: info.git_notes,
+                    forge_comments: info.forge_comments,
                     threads: info.threads,
                     clone: None,
                     home: None,

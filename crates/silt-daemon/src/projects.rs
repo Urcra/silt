@@ -222,6 +222,8 @@ fn project(repo: &str) -> Project {
         visibility: None,
         default_agent: None,
         default_preset: None,
+        git_notes: silt_proto::GitNotes::Off,
+        forge_comments: false,
         threads: 0,
         open_mrs: 0,
         clone: None,
@@ -274,6 +276,8 @@ fn merged(servers: Vec<(String, Vec<ProjectInfo>)>, local: Vec<Project>) -> Vec<
                 visibility: info.visibility,
                 default_agent: info.default_agent,
                 default_preset: info.default_preset,
+                git_notes: info.git_notes,
+                forge_comments: info.forge_comments,
                 threads: info.threads,
                 home: None,
                 server: Some(server.clone()),
@@ -300,6 +304,8 @@ mod tests {
             visibility: None,
             default_agent: Some("claude-acp".into()),
             default_preset: None,
+            git_notes: silt_proto::GitNotes::Off,
+            forge_comments: false,
             threads,
         }
     }

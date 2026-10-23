@@ -422,6 +422,8 @@ pub struct Project {
     pub visibility: Option<Visibility>,
     pub default_agent: Option<String>,
     pub default_preset: Option<String>,
+    pub git_notes: crate::GitNotes,
+    pub forge_comments: bool,
     /// Its threads: those the person can see on the server, or those here.
     pub threads: u32,
     /// Merge requests still open into its threads, as this machine knows them.

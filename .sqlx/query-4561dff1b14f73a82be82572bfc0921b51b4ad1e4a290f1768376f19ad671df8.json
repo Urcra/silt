@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sdk_entries WHERE thread_id = ? AND file = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4561dff1b14f73a82be82572bfc0921b51b4ad1e4a290f1768376f19ad671df8"
+}

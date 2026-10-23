@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sdk_sessions SET mtime_ms = ? WHERE thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e39412330c4412874b812e31dd4a876918179b1ff1d007e034ce1cbed1eb2d44"
+}

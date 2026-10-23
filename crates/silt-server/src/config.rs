@@ -25,6 +25,25 @@ pub struct Config {
     /// Days a deleted thread stays in the trash before it is purged.
     #[serde(default = "default_trash_days")]
     pub trash_days: u32,
+    /// The forges whose pull requests get a comment naming their thread,
+    /// for projects that turn it on (ADR 0042).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forges: Vec<Forge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Forge {
+    /// The host projects name it by, such as `github.com`.
+    pub host: String,
+    pub kind: crate::forge::ForgeKind,
+    /// Its API's root; by default the forge's usual one on `host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -35,6 +54,7 @@ impl Default for Config {
             signup: Signup::default(),
             auth: Auth::default(),
             trash_days: default_trash_days(),
+            forges: Vec::new(),
         }
     }
 }
@@ -196,6 +216,10 @@ mod tests {
             issuer = "https://sso.example.com"
             client_id = "silt"
             client_secret_file = "/etc/silt/oidc"
+            [[forges]]
+            host = "codeberg.org"
+            kind = "forgejo"
+            token_file = "/etc/silt/codeberg"
             "#,
         )
         .expect("parses");
@@ -205,6 +229,7 @@ mod tests {
         assert!(config.auth.passwords);
         assert_eq!(config.auth.oidc.as_ref().map(|oidc| oidc.scopes.as_str()), Some("openid email profile"));
         assert_eq!(config.trash_days, 30);
+        assert_eq!(config.forges[0].kind, crate::forge::ForgeKind::Forgejo);
         let again: Config = toml::from_str(&config.to_toml()).expect("round trips");
         assert_eq!(again, config);
         assert!(toml::from_str::<Config>("listn = \"x\"").is_err(), "typos are caught");

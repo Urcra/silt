@@ -28,7 +28,7 @@ pub(crate) fn routes() -> Router<Server> {
 }
 
 /// The actor the server writes as for `user`, made on first use.
-async fn actor_of(server: &Server, user: UserId) -> Result<ActorId, sqlx::Error> {
+pub(crate) async fn actor_of(server: &Server, user: UserId) -> Result<ActorId, sqlx::Error> {
     if let Some(actor) =
         sqlx::query_scalar!("SELECT actor FROM server_actors WHERE user_id = ?", user).fetch_optional(server.db()).await?
     {

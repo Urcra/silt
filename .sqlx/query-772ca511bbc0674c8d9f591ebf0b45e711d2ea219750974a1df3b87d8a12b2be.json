@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sdk_sessions (user_id, project_key, session_id, family_id, thread_id, mtime_ms) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "772ca511bbc0674c8d9f591ebf0b45e711d2ea219750974a1df3b87d8a12b2be"
+}

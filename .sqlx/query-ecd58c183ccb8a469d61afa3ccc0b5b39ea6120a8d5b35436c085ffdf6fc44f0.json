@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sdk_cleared (thread_id, file, hidden) VALUES (?, ?, ?)\n             ON CONFLICT (thread_id, file) DO UPDATE SET hidden = excluded.hidden",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ecd58c183ccb8a469d61afa3ccc0b5b39ea6120a8d5b35436c085ffdf6fc44f0"
+}
