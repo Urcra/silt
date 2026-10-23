@@ -40,6 +40,8 @@ function project(server: string, repo: string, org: string | null): Project {
     visibility: null,
     default_agent: null,
     default_preset: null,
+    git_notes: 'off',
+    forge_comments: false,
     threads: 0,
     open_mrs: 0,
     clone: null,

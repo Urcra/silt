@@ -12,8 +12,8 @@ use silt_agents::{Agent, LaunchPlan, McpServer, SessionIds, Start};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    AgentStart, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary, Pulled,
-    Request, Response, Resumed, Reverted, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
+    AgentStart, BlameLine, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, InFlight, Mount, MrDetails, MrSummary,
+    Pulled, Request, Response, Resumed, Reverted, SearchFilters, SearchResult, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use silt_types::CloudSessionId;
@@ -846,6 +846,24 @@ pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into() })?;
     print!("{}", render::safe(&render::in_flight(&found)));
+    Ok(())
+}
+
+/// From the daemon when one runs or starts, else from the notes alone.
+pub fn blame(file: &str, notes_only: bool) -> Result<(), Exn<CliError>> {
+    let cwd = current_dir()?;
+    let lines: Vec<BlameLine> = if !notes_only && ensure_daemon().is_ok() {
+        call(&Request::Blame { cwd, path: file.into() })?
+    } else {
+        let repo =
+            silt_git::Repo::discover(&cwd).or_raise(|| CliError(format!("{} is not in a git repository", cwd.display())))?;
+        let path = cwd.join(file);
+        let relative = path.strip_prefix(repo.root()).unwrap_or(&path).to_string_lossy().into_owned();
+        let text = std::fs::read(&path).or_raise(|| CliError(format!("cannot read {file}")))?;
+        let disk: Vec<String> = String::from_utf8_lossy(&text).lines().map(str::to_owned).collect();
+        silt_daemon::blame_from_notes(&repo, &relative, &disk)
+    };
+    print!("{}", render::safe(&render::blame(&lines)));
     Ok(())
 }
 

@@ -5,6 +5,7 @@ mod bundle;
 mod checkout;
 pub mod conventions;
 mod filters;
+mod notes;
 mod remote;
 mod untracked;
 
@@ -19,6 +20,7 @@ use silt_types::GitOid;
 
 pub use checkout::ManagedCheckout;
 pub use filters::Filters;
+pub use notes::{BlamedLine, NOTES_REF, changed_lines};
 pub use remote::normalize_remote;
 
 #[derive(Debug, thiserror::Error)]

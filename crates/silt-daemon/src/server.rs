@@ -175,6 +175,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Listed { server, listing, requested } => core.listed(&server, listing, requested).await,
             Event::Personal(synced) => core.personal_synced(*synced).await,
+            Event::NotesSettings { server, projects } => core.notes_settings_read(&server, projects),
             Event::Control(event) => core.control_event(event).await,
         }
         if let Err(error) = core.end_turn().await {

@@ -1318,6 +1318,8 @@ async fn org_members_list_their_projects_and_owners_set_them_up() {
         name: Some(name.into()),
         default_agent: Some("claude-acp".into()),
         default_preset: Some(preset.into()),
+        git_notes: Some(silt_proto::GitNotes::Push),
+        forge_comments: Some(true),
     };
     assert_eq!(person("erin").change(settings("Mine now", "full_access")).await, StatusCode::FORBIDDEN);
     assert_eq!(world.alice.change(settings("App", "no way!")).await, StatusCode::BAD_REQUEST);
@@ -1328,17 +1330,27 @@ async fn org_members_list_their_projects_and_owners_set_them_up() {
         (project.default_agent.as_deref(), project.default_preset.as_deref()),
         (Some("claude-acp"), Some("ask_for_everything"))
     );
+    assert_eq!((project.git_notes, project.forge_comments), (silt_proto::GitNotes::Push, true));
 
-    let cleared =
-        OrgChange::ProjectSettings { repo: REPO.into(), name: Some(String::new()), default_agent: None, default_preset: None };
+    let cleared = OrgChange::ProjectSettings {
+        repo: REPO.into(),
+        name: Some(String::new()),
+        default_agent: None,
+        default_preset: None,
+        git_notes: None,
+        forge_comments: Some(false),
+    };
     assert_eq!(world.alice.change(cleared).await, StatusCode::NO_CONTENT);
     let project = &world.alice.projects().await[0];
     assert_eq!((project.name.as_str(), project.default_agent.as_deref()), ("app", Some("claude-acp")));
+    assert_eq!((project.git_notes, project.forge_comments), (silt_proto::GitNotes::Push, false), "only what's given changes");
     let elsewhere = OrgChange::ProjectSettings {
         repo: "github.com/nobody/else".into(),
         name: None,
         default_agent: None,
         default_preset: None,
+        git_notes: None,
+        forge_comments: None,
     };
     assert_eq!(world.alice.change(elsewhere).await, StatusCode::NOT_FOUND);
 }

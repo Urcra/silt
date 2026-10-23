@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT hidden FROM sdk_cleared WHERE thread_id = ? AND file = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "hidden",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sdk_cleared",
+            "name": "hidden"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "87ae4aac6db69541c78b5ed6f6c56877b90c0d3dc037dd331b52afe1368e9492"
+}

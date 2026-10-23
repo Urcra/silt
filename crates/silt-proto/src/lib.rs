@@ -209,6 +209,11 @@ pub struct ProjectInfo {
     pub visibility: Option<Visibility>,
     pub default_agent: Option<String>,
     pub default_preset: Option<String>,
+    #[serde(default)]
+    pub git_notes: GitNotes,
+    /// Whether its threads' pull requests get a comment from the server.
+    #[serde(default)]
+    pub forge_comments: bool,
     /// How many of its threads the caller can see.
     pub threads: u32,
 }
@@ -317,6 +322,42 @@ pub struct PushReply {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullReply {
     pub deltas: Vec<(u64, Delta)>,
+}
+
+/// Whether a project's commits get Silt's git notes (ADR 0042).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum GitNotes {
+    #[default]
+    Off,
+    /// Written in each clone, and left there.
+    Local,
+    /// Written, and `refs/notes/silt` pushed to origin.
+    Push,
+}
+
+impl std::fmt::Display for GitNotes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Off => "off",
+            Self::Local => "local",
+            Self::Push => "push",
+        })
+    }
+}
+
+impl std::str::FromStr for GitNotes {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text.trim() {
+            "off" | "false" | "no" | "" => Ok(Self::Off),
+            "local" | "true" | "yes" => Ok(Self::Local),
+            "push" => Ok(Self::Push),
+            _ => Err(format!("git notes are off, local or push, not {text:?}")),
+        }
+    }
 }
 
 /// Who sees a thread or a project's threads (ADR 0013). Written as
@@ -807,6 +848,10 @@ pub enum OrgChange {
         default_agent: Option<String>,
         #[serde(default)]
         default_preset: Option<String>,
+        #[serde(default)]
+        git_notes: Option<GitNotes>,
+        #[serde(default)]
+        forge_comments: Option<bool>,
     },
 }
 

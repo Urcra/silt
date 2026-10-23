@@ -41,6 +41,7 @@ pub async fn sync_once(data_dir: &Path, thread: Option<&str>) -> Result<Synced, 
             all.into_iter().collect()
         }
     };
+    core.read_notes_settings().await;
     {
         let _turn = turn_in_time(&lock).await?;
         for family in &families {

@@ -844,6 +844,37 @@ fn a_commit_is_found_with_the_thread_and_turn_that_made_it() {
 }
 
 #[test]
+fn commits_get_silts_note_and_blame_reads_the_log_or_the_notes() {
+    let env = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    git(&env.repo, &["config", "silt.notes", "local"]);
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+# Notes")));
+    git(&env.repo, &["add", "."]);
+    git(&env.repo, &["commit", "-qm", "farewell, helper and notes"]);
+    let note = || {
+        let output =
+            Command::new("git").args(["notes", "--ref=silt", "show", "HEAD"]).current_dir(&env.repo).output().expect("git");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    assert!(eventually(|| note().starts_with("silt-note 1\n")), "no note on the commit");
+    let note = note();
+    assert!(note.contains("turn 1 Add a farewell and a helper\n") && note.contains("turn 2 Now a note\n"), "{note}");
+    assert!(note.contains("file src/main.rs\n2 turn 1 agent claude-code\n"), "{note}");
+    assert!(note.contains("file NOTES.md\n1 turn 2 agent claude-code\n"), "{note}");
+    assert!(note.contains(" person\n"), "the hand edit is the person's: {note}");
+
+    let from_log = env.stdout(&["blame", "src/main.rs"]);
+    let lines: Vec<&str> = from_log.lines().collect();
+    assert_eq!(lines.len(), 2, "{from_log}");
+    assert!(!lines[0].contains(" t1 ") && lines[0].ends_with("| fn main() {}"), "git's line: {from_log}");
+    assert!(lines[1].contains(" t1 ") && lines[1].contains("claude-code") && lines[1].contains("Add a farewell"), "{from_log}");
+
+    let from_notes = env.stdout(&["blame", "--notes", "src/main.rs"]);
+    assert_eq!(from_notes, from_log, "the notes say what the log says");
+}
+
+#[test]
 fn diffs_start_from_the_base_asked_for() {
     let env = Env::new();
     let first = String::from_utf8_lossy(

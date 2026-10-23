@@ -195,6 +195,19 @@ fn attribution_names_the_inserting_actor() {
 }
 
 #[test]
+fn attribution_at_a_version_leaves_out_later_characters() {
+    let mut replicas = from_base("ab", &[A]);
+    let base = replicas[0].frontier().clone();
+    replicas[0].insert(1, "X").expect("a");
+    let replica = &replicas[0];
+    let at_base = replica.doc().attribution_at_vv(&replica.graph().version_vector(&base));
+    let now = replica.doc().attribution_at_vv(&replica.graph().version_vector(replica.frontier()));
+    let chars = |attribution: Vec<(char, CharId)>| attribution.into_iter().map(|(ch, _)| ch).collect::<String>();
+    assert_eq!(chars(at_base), "ab");
+    assert_eq!(now, replica.doc().attribution());
+}
+
+#[test]
 fn redelivery_is_idempotent() {
     let mut replicas = from_base("abc", &[A, B]);
     replicas[0].insert(1, "X").expect("a");
