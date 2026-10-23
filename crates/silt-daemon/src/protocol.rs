@@ -89,6 +89,15 @@ pub enum Request {
     Import {
         candidate: ImportCandidate,
     },
+    /// The folders the agents' sessions on disk ran in, for a first open
+    /// (ADR 0044).
+    FoundFolders,
+    /// Imports every session on disk not yet imported that ran under one
+    /// of `paths`, or anywhere without any. How many it imported.
+    ImportFound {
+        #[serde(default)]
+        paths: Vec<PathBuf>,
+    },
     /// Sends imported threads kept on this machine to `server`, or the
     /// default one: `threads`, those of `project`, or with neither all.
     Send {
@@ -564,6 +573,31 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
+/// A folder the agents' sessions ran in: a clone's root, or the folder
+/// itself outside any git repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct FoundFolder {
+    pub path: PathBuf,
+    /// The normalized origin, empty without one.
+    pub repo: String,
+    /// Threads start only in a git repository; outside one, its sessions
+    /// can still be imported.
+    pub git: bool,
+    /// Whether this machine knows it as a clone already.
+    pub added: bool,
+    /// Sessions not imported yet, by agent name, most first.
+    pub sessions: Vec<FoundSessions>,
+    pub last_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct FoundSessions {
+    pub agent: String,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportedThread {
     pub thread: String,
@@ -753,6 +787,9 @@ pub enum Preset {
     AskForEverything,
     /// Nothing asks.
     FullAccess,
+    /// Every prompt asks for a plan first; reads and searches go through,
+    /// and anything else asks (ADR 0044).
+    Plan,
 }
 
 impl Preset {
@@ -761,11 +798,14 @@ impl Preset {
             Self::AskBeforeCommands => "ask_before_commands",
             Self::AskForEverything => "ask_for_everything",
             Self::FullAccess => "full_access",
+            Self::Plan => "plan",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [Self::AskBeforeCommands, Self::AskForEverything, Self::FullAccess].into_iter().find(|preset| preset.as_str() == name)
+        [Self::AskBeforeCommands, Self::AskForEverything, Self::FullAccess, Self::Plan]
+            .into_iter()
+            .find(|preset| preset.as_str() == name)
     }
 }
 
@@ -1095,6 +1135,8 @@ mod tests {
             TextKind::decl(&config),
             ThreadSummary::decl(&config),
             TurnInfo::decl(&config),
+            FoundFolder::decl(&config),
+            FoundSessions::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

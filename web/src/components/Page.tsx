@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useContext } from 'react'
+import { InSettings } from '../settingsContext'
 import { cx } from '../ui'
 
 /**
- * A view inside the shell (ADR 0039): its header with title, a mono line of
+ * A view inside the shell (ADR 0044): its 48 px header with title, a mono line of
  * what it is and its actions, its body, and an inspector on the right
  * where it has one. `width` keeps forms and reading to a column.
  */
@@ -36,27 +37,41 @@ export function Page({
   sheet?: { open: boolean; onClose: () => void }
 }) {
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
+  const embedded = useContext(InSettings)
+  if (embedded)
+    return (
+      <div className="flex min-w-0 flex-col gap-3" data-page={label}>
+        {(title || actions) && (
+          <div className="flex flex-wrap items-center gap-2.5">
+            {title && <h2 className="text-sm font-medium">{title}</h2>}
+            {meta && <span className="min-w-0 font-mono text-2xs text-fg-2">{meta}</span>}
+            {actions && <span className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</span>}
+          </div>
+        )}
+        {children}
+      </div>
+    )
   return (
     <div className="flex min-h-full flex-1 flex-col lg:flex-row">
       <div className="flex min-w-0 flex-1 flex-col" data-page={label}>
         {(title || actions) && (
-          <header className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-4 py-2.5 md:px-6">
-            {title && <h1 className="text-lg font-medium">{title}</h1>}
+          <header className="flex min-h-12 flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line-subtle px-4 py-1.5 md:pr-3 md:pl-5">
+            {title && <h1 className="text-[15px] font-medium">{title}</h1>}
             {meta && <span className="min-w-0 font-mono text-2xs text-fg-2">{meta}</span>}
             {actions && <span className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</span>}
           </header>
         )}
-        <div className={cx('w-full flex-1', column, !flush && 'px-4 py-4 pb-8 md:px-6')}>{children}</div>
+        <div className={cx('w-full flex-1', column, flush ? 'flex flex-col' : 'px-4 py-4 pb-8 md:px-6')}>{children}</div>
       </div>
       {inspector && (
         <aside
           aria-label={inspectorLabel}
           className={cx(
-            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-[calc(100dvh-64px)] lg:overflow-y-auto lg:border-l',
+            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-l',
             inspectorWide ? 'lg:w-[min(42vw,640px)]' : 'lg:w-[360px]',
             sheet
               ? sheet.open
-                ? 'fixed inset-x-0 top-10 bottom-0 z-30 overflow-y-auto bg-bg lg:static lg:z-auto'
+                ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:static lg:z-auto'
                 : 'hidden lg:flex'
               : 'border-t lg:border-t-0',
           )}

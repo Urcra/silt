@@ -28,7 +28,8 @@ interface Group {
 /** A workspace's letter on a tile of its own colour, as the boards draw it. */
 function Badge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
   const shades = ['bg-[var(--tobacco-500)]', 'bg-[var(--slate-600)]', 'bg-[var(--olive-600)]', 'bg-[var(--amber-700)]', 'bg-[var(--rust-600)]']
-  const shade = shades[[...name].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % shades.length]
+  // Not by port, which a server started for a test or a tunnel picks anew.
+  const shade = shades[[...name.replace(/:\d+$/, '')].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % shades.length]
   return (
     <span
       aria-hidden="true"
@@ -142,18 +143,16 @@ export function WorkspaceSwitcher() {
     <>
       <Popover
         label="Switch workspace"
-        className="relative block"
+        className="relative block min-w-0"
         triggerLabel={`workspace: ${current.long}`}
-        triggerClassName="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-fg-1 hover:bg-surface-2"
+        triggerClassName="flex h-6 max-w-[170px] items-center gap-1 rounded-sm border border-line px-2 text-left text-xs text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
         panelClassName="w-[340px] max-w-[calc(100vw-20px)] p-1.5"
         trigger={
           <>
-            <Badge name={current.name} local={current.workspace.kind === 'local'} size={22} />
-            <span className="flex min-w-0 flex-1 flex-col leading-tight">
-              <b className="truncate font-medium">{current.name}</b>
-              <span className="truncate font-mono text-2xs text-fg-2">{host}</span>
+            <span className="truncate" title={host}>
+              {current.name}
             </span>
-            <Icon name="selector" className="text-fg-2" />
+            <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
           </>
         }
       >

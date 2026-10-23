@@ -335,7 +335,7 @@ impl Machine {
     /// unless it answers 200.
     pub fn web(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
         let url = self.stdout(&["open", "--no-browser"]);
-        let (base, token) = url.trim().split_once("/#token=").expect("a URL with a token");
+        let (base, token) = web_ui(&url);
         let mut command = Command::new("curl");
         command
             .args(["-s", "-w", "\n%{http_code}", "-X", method, "-H", "Content-Type: application/json", "-H"])
@@ -382,4 +382,11 @@ pub fn checkout_from(stderr: &[u8]) -> PathBuf {
         .find(|line| line.contains("is now here, in ") || line.contains(", in "))
         .expect("the command reports the checkout");
     PathBuf::from(line.rsplit(", in ").next().expect("path").trim_start_matches("is now here, in "))
+}
+
+/// The daemon's address and token from `silt open`'s URL, which names the
+/// project it ran in when that's a clone.
+pub fn web_ui(url: &str) -> (&str, &str) {
+    let (page, token) = url.trim().split_once("#token=").expect("a URL with a token");
+    (page.split_once("/?").map_or(page.trim_end_matches('/'), |(base, _project)| base), token)
 }

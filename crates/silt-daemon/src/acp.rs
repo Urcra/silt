@@ -296,6 +296,10 @@ impl Core {
         if text.trim().is_empty() {
             return Err(CoreError::Invalid("there is nothing to send".into()));
         }
+        // Under the Plan preset every new prompt plans first; a prompt to an
+        // agent awaiting input answers its plan instead.
+        let answering = self.acp.get(&thread).is_some_and(|run| run.state == AgentState::AwaitingInput);
+        let plan = plan || (self.preset(thread) == Preset::Plan && !answering);
         let ready = self.acp.get(&thread).is_some_and(|run| matches!(run.state, AgentState::Idle | AgentState::AwaitingInput));
         if !ready {
             if plan {

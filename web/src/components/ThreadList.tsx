@@ -8,67 +8,62 @@ import { useNow } from '../now'
 import { projectName, projects } from '../projects'
 import { keys, message } from '../query'
 import { sections } from '../sections'
-import { threadTone, threadWhere } from '../threadLook'
+import { hosted } from '../served'
+import { threadDoing, threadWhere } from '../threadLook'
 import { ago } from '../time'
-import { Dot, EmptyState, Icon, SectionLabel, Skeleton, Tabs, buttonClass, cx } from '../ui'
+import { Dot, EmptyState, Icon, Skeleton, Tabs, buttonClass, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { Page } from './Page'
+import { ThreadMark } from './ThreadMark'
 
-type Filter = 'all' | 'mine' | 'shared' | 'elsewhere'
+type Filter = 'all' | 'working' | 'mine' | 'shared' | 'elsewhere'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
+  { id: 'working', label: 'Working' },
   { id: 'mine', label: 'Mine' },
   { id: 'shared', label: 'Shared with me' },
   { id: 'elsewhere', label: 'On other devices' },
 ]
 
-/** What a needs-you card says it is, before its title. */
-function NeedsYouCard({ thread, review }: { thread: ThreadSummary; review: MrSummary | undefined }) {
+const ROW = 'flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-fg-1 hover:bg-surface-2 max-md:min-h-11'
+
+/** A thread waiting on the person: what it waits for, then where to answer it. */
+function NeedsYouRow({ thread, review }: { thread: ThreadSummary; review: MrSummary | undefined }) {
   const status = useAgentStatus(thread.id)
   const asked = status?.permissions[0]
-  const project = projectName(thread.repo || 'no remote')
-  const card = 'flex flex-col gap-1.5 rounded-md border border-line bg-elevated px-3.5 py-3 text-fg-1 hover:border-line-strong'
-  const kind = (tone: 'warn' | 'accent' | 'danger' | 'info', label: string) => (
-    <span className="inline-flex items-center gap-1.5 font-mono text-2xs font-medium tracking-[0.04em] text-fg-2 uppercase">
-      <Dot tone={tone} />
-      {label}
-    </span>
-  )
-  if (thread.review && review) {
-    return (
-      <Link to="/mr/$id" params={{ id: review.id }} className={card} aria-label={`Merge request: ${review.title}`}>
-        {kind('accent', 'Merge request')}
-        <span className="font-medium">{review.title}</span>
-        <span className="font-mono text-2xs text-fg-2">
-          <span data-volatile>
-            {short(review.fork)} → {short(review.target)}
-          </span>{' '}
-          · into {thread.title ?? 'Untitled thread'}
-        </span>
-      </Link>
-    )
-  }
+  const now = useNow()
+  const what = review
+    ? 'merge request to review'
+    : thread.agent_state === 'error'
+      ? 'agent stopped'
+      : thread.agent_state === 'awaiting_input'
+        ? 'plan to approve'
+        : asked
+          ? `asks to run ${asked.title}`
+          : 'asks you'
   return (
-    <Link to="/t/$id" params={{ id: thread.id }} className={card} aria-label={`${thread.title ?? 'Untitled thread'} needs you`}>
-      {thread.agent_state === 'error'
-        ? kind('danger', 'Agent stopped')
-        : thread.agent_state === 'awaiting_input'
-          ? kind('warn', 'Plan to approve')
-          : kind('warn', 'Agent is asking')}
-      <span className="truncate font-medium">
-        {asked ? (
-          <>
-            Allow <code className="font-mono text-xs">{asked.title}</code>?
-          </>
-        ) : (
-          (thread.title ?? 'Untitled thread')
-        )}
-      </span>
-      <span className="truncate font-mono text-2xs text-fg-2">
-        {[thread.agent, asked ? thread.title : null, project].filter(Boolean).join(' · ')}
-      </span>
-    </Link>
+    <li>
+      {review ? (
+        <Link to="/mr/$id" params={{ id: review.id }} className={ROW} aria-label={`Merge request: ${review.title}`}>
+          <Dot tone="warn" />
+          <span className="min-w-0 flex-1 truncate">{review.title}</span>
+          <span className="truncate text-xs text-accent-fg">{what}</span>
+          <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+            {ago(thread.last_ms, now)}
+          </span>
+        </Link>
+      ) : (
+        <Link to="/t/$id" params={{ id: thread.id }} className={ROW} aria-label={`${thread.title ?? 'Untitled thread'} needs you`}>
+          <Dot tone={thread.agent_state === 'error' ? 'danger' : 'warn'} />
+          <span className="min-w-0 flex-1 truncate">{thread.title ?? 'Untitled thread'}</span>
+          <span className="max-w-[50%] truncate font-mono text-xs text-accent-fg">{what}</span>
+          <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+            {ago(thread.last_ms, now)}
+          </span>
+        </Link>
+      )}
+    </li>
   )
 }
 
@@ -84,61 +79,40 @@ function ThreadRow({
   /** It holds this machine's work after its copy differed from the server's (ADR 0009). */
   recovered: boolean
 }) {
-  const where = recovered ? { label: 'Recovered', tone: 'danger' as const } : threadWhere(thread)
+  const where = recovered ? 'recovered: review it' : (threadDoing(thread) ?? threadWhere(thread).label.toLowerCase())
   const meta = [
     thread.agent,
-    `${thread.messages} ${thread.messages === 1 ? 'message' : 'messages'}`,
-    `${thread.edits} ${thread.edits === 1 ? 'edit' : 'edits'}`,
+    where,
     thread.collaborators.length > 0 && `shared with ${thread.collaborators.join(', ')}`,
-    review && 'MR open',
+    review && 'merge request open',
   ].filter(Boolean)
+  const to = recovered ? ('/t/$id/reconcile' as const) : ('/t/$id' as const)
   return (
-    <li
-      className={cx(
-        'grid grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line-subtle px-3 py-2 last:border-b-0 hover:bg-surface-2 md:grid-cols-[16px_minmax(0,1fr)_150px_90px_110px]',
-        thread.forked_from && 'md:pl-9',
-      )}
-    >
-      {thread.forked_from ? <Icon name="fork" label="Fork" className="text-fg-2" /> : <Dot tone={threadTone(thread)} />}
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <Link to="/t/$id" params={{ id: thread.id }} className="truncate font-medium text-fg-1 hover:text-accent-fg">
-          {thread.title ?? 'Untitled thread'}
-        </Link>
-        <span className="truncate font-mono text-2xs text-fg-2">
-          <Link to="/t/$id" params={{ id: thread.id }} className="hover:text-fg-1" data-volatile>
-            {short(thread.id)}
+    <li className={cx('group relative', thread.forked_from && 'pl-5')}>
+      <div className={ROW}>
+        {thread.forked_from ? <Icon name="fork" label="Fork" className="h-3.5 w-3.5 shrink-0 text-fg-2" /> : <ThreadMark thread={thread} />}
+        <span className="flex min-w-0 flex-1 flex-col gap-px">
+          <Link to={to} params={{ id: thread.id }} className="truncate after:absolute after:inset-0">
+            {thread.title ?? 'Untitled thread'}
           </Link>
-          {thread.forked_from && (
-            <>
-              {' · fork of '}
-              <span data-volatile>{short(thread.forked_from)}</span>
-            </>
-          )}
-          {meta.length > 0 && ` · ${meta.join(' · ')}`}
+          <span className="relative truncate font-mono text-2xs text-fg-2">
+            <Link to="/t/$id" params={{ id: thread.id }} className="hover:text-fg-1" data-volatile>
+              {short(thread.id)}
+            </Link>
+            {thread.forked_from && (
+              <>
+                {' · fork of '}
+                <span data-volatile>{short(thread.forked_from)}</span>
+              </>
+            )}
+            {` · ${thread.messages} ${thread.messages === 1 ? 'message' : 'messages'} · ${thread.edits} ${thread.edits === 1 ? 'edit' : 'edits'}`}
+          </span>
+        </span>
+        <span className={cx('hidden max-w-[40%] truncate text-xs md:inline', recovered || review ? 'text-accent-fg' : 'text-fg-2')}>{meta.join(' · ')}</span>
+        <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+          {ago(thread.last_ms, now)}
         </span>
       </div>
-      <span className="hidden items-center gap-1.5 text-xs md:inline-flex">
-        <Dot tone={where.tone} />
-        {where.label}
-      </span>
-      <span className="hidden font-mono text-2xs text-fg-2 md:inline" data-volatile>
-        {ago(thread.last_ms, now)}
-      </span>
-      <span className="flex justify-end">
-        {recovered ? (
-          <Link to="/t/$id/reconcile" params={{ id: thread.id }} className={buttonClass('secondary')}>
-            Review
-          </Link>
-        ) : review ? (
-          <Link to="/mr/$id" params={{ id: review.id }} className={buttonClass('secondary')}>
-            Review
-          </Link>
-        ) : (
-          <Link to="/t/$id" params={{ id: thread.id }} className={buttonClass('secondary')}>
-            Open
-          </Link>
-        )}
-      </span>
     </li>
   )
 }
@@ -152,14 +126,11 @@ function forksUnderSources(threads: ThreadSummary[]): ThreadSummary[] {
     out.push(thread)
     for (const fork of forksOf(thread.id)) add(fork)
   }
-  for (const thread of threads) if (!thread.forked_from || !listed.has(thread.forked_from)) add(thread)
+  for (const thread of [...threads].sort((a, b) => b.last_ms - a.last_ms)) if (!thread.forked_from || !listed.has(thread.forked_from)) add(thread)
   return out
 }
 
-/**
- * The workspace home (ADR 0039, the Threads board): what needs the person,
- * then every thread by project.
- */
+/** All threads (ADR 0044): a list page, what needs the person first, then every thread by project, newest first. */
 export function ThreadList() {
   useTopic('threads')
   useTopic('mrs')
@@ -174,80 +145,76 @@ export function ThreadList() {
   const me = status.data?.servers?.[0]?.user ?? ''
   const all = (threads.data ?? []).filter(shown)
   const waiting = sections(all, now).needs_you
-  const openInto = (thread: ThreadSummary) =>
-    (mrs.data ?? []).find((mr) => mr.status === 'open' && (mr.target === thread.id || mr.fork === thread.id))
+  const openInto = (thread: ThreadSummary) => (mrs.data ?? []).find((mr) => mr.status === 'open' && (mr.target === thread.id || mr.fork === thread.id))
+  const working = all.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
   const filtered = all.filter((thread) => {
+    if (filter === 'working') return thread.agent_state === 'working' || thread.agent_state === 'starting'
     if (filter === 'mine') return thread.owner === '' || thread.owner === me
     if (filter === 'shared') return thread.owner !== '' && thread.owner !== me
     if (filter === 'elsewhere') return thread.location !== 'here'
     return true
   })
-  const count = (wanted: (thread: ThreadSummary) => boolean, one: string, many: string) => {
-    const counted = waiting.filter(wanted).length
-    return counted > 0 && `${counted} ${counted === 1 ? one : many}`
-  }
-  const kinds = [
-    count((thread) => thread.review, 'approval', 'approvals'),
-    count((thread) => thread.agent_state === 'awaiting_permission', 'permission', 'permissions'),
-    count((thread) => thread.agent_state === 'awaiting_input', 'plan', 'plans'),
-    count((thread) => thread.agent_state === 'error', 'error', 'errors'),
-  ].filter(Boolean)
+  const grouped = projects(filtered)
   return (
-    <Page flush label="threads">
-      {waiting.length > 0 && (
-        <section aria-labelledby="needs-you" className="flex flex-col gap-2.5 px-4 pt-5 pb-2 md:px-6">
-          <div className="flex items-baseline gap-3">
-            <h2 id="needs-you" className="text-lg font-medium">
-              Needs you
-            </h2>
-            <span className="text-xs text-fg-2">{kinds.join(' · ')}</span>
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2.5">
-            {waiting.map((thread) => (
-              <NeedsYouCard key={thread.id} thread={thread} review={openInto(thread)} />
-            ))}
-          </div>
-        </section>
-      )}
-      <div className="mt-3 flex min-h-10 flex-wrap items-center gap-2 border-y border-line px-4 py-1.5 md:px-6">
-        <Tabs label="which threads" tabs={FILTERS} value={filter} onChange={setFilter} />
-        <span className="ml-auto flex items-center gap-2">
+    <Page
+      flush
+      label="threads"
+      title="All threads"
+      meta={threads.isSuccess ? `${grouped.length} ${grouped.length === 1 ? 'project' : 'projects'} · ${all.length} ${all.length === 1 ? 'thread' : 'threads'} · ${working} working` : undefined}
+      actions={
+        <>
           <Link to="/graph" className={buttonClass('ghost')}>
             <Icon name="fork" />
             Graph
           </Link>
-          <Link to="/new" className={buttonClass('primary')}>
-            <Icon name="plus" />
-            New thread
-          </Link>
-        </span>
-      </div>
-      <div data-testid="threads" className="px-4 pt-2 pb-6 md:px-6">
-        {threads.error && <p className="py-3 text-danger">{message(threads.error)}</p>}
-        {threads.isPending && <Skeleton className="mt-3 h-24" />}
-        {threads.isSuccess && filtered.length === 0 && (
-          <div className="mt-4">
-            <EmptyState title="Start a thread, or record one">
-              Run <code className="font-mono">silt claude</code> in a repository, or start an agent from New thread.
-            </EmptyState>
-          </div>
-        )}
-        {projects(filtered).map(([repo, inRepo]) => (
-          <section key={repo} aria-label={`${nameOf(repo)} threads`}>
-            <SectionLabel className="px-0 pt-3">{nameOf(repo)}</SectionLabel>
-            <ul className="overflow-hidden rounded-md border border-line bg-elevated">
-              {forksUnderSources(inRepo).map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  now={now}
-                  review={openInto(thread)}
-                  recovered={(status.data?.recoveries ?? []).some((recovery) => recovery.recovery === thread.id)}
-                />
+          {!hosted() && (
+            <Link to="/" className={buttonClass('primary')}>
+              <Icon name="plus" />
+              New thread
+            </Link>
+          )}
+        </>
+      }
+    >
+      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-4 px-4 pt-4 pb-8 md:px-6">
+        {waiting.length > 0 && (
+          <section aria-labelledby="needs-you" className="flex flex-col">
+            <h2 id="needs-you" className="px-2.5 pb-1 font-mono text-2xs tracking-[0.06em] text-accent-fg uppercase">
+              Needs you · {waiting.length}
+            </h2>
+            <ul>
+              {waiting.map((thread) => (
+                <NeedsYouRow key={thread.id} thread={thread} review={thread.review ? openInto(thread) : undefined} />
               ))}
             </ul>
           </section>
-        ))}
+        )}
+        <Tabs label="which threads" tabs={FILTERS} value={filter} onChange={setFilter} />
+        <div data-testid="threads" className="flex flex-col gap-4">
+          {threads.error && <p className="py-3 text-danger">{message(threads.error)}</p>}
+          {threads.isPending && <Skeleton className="mt-3 h-24" />}
+          {threads.isSuccess && filtered.length === 0 && (
+            <EmptyState title="Start a thread, or record one">
+              Run <code className="font-mono">silt claude</code> in a repository, or start an agent from New thread.
+            </EmptyState>
+          )}
+          {grouped.map(([repo, inRepo]) => (
+            <section key={repo} aria-label={`${nameOf(repo)} threads`} className="flex flex-col">
+              <h2 className="px-2.5 pb-1 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{nameOf(repo)}</h2>
+              <ul>
+                {forksUnderSources(inRepo).map((thread) => (
+                  <ThreadRow
+                    key={thread.id}
+                    thread={thread}
+                    now={now}
+                    review={openInto(thread)}
+                    recovered={(status.data?.recoveries ?? []).some((recovery) => recovery.recovery === thread.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
       </div>
     </Page>
   )

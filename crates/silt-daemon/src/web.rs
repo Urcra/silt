@@ -48,19 +48,35 @@ pub(crate) struct WebInfo {
 }
 
 impl WebInfo {
-    pub(crate) fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/#token={}", self.port, self.token)
+    pub(crate) fn url(&self, project: Option<&std::path::Path>) -> String {
+        format!("http://127.0.0.1:{}/{}#token={}", self.port, project_query(project), self.token)
     }
 
     /// A URL for a browser's command line, which other users can read: it
     /// carries a code the page trades for the token once, within a minute.
-    pub(crate) fn one_time_url(&self) -> String {
+    pub(crate) fn one_time_url(&self, project: Option<&std::path::Path>) -> String {
         let code = uuid::Uuid::new_v4().simple().to_string();
         let mut codes = self.codes.lock().expect("lock");
         codes.retain(|_, made| made.elapsed() < CODE_TTL);
         codes.insert(code.clone(), Instant::now());
-        format!("http://127.0.0.1:{}/#code={code}", self.port)
+        format!("http://127.0.0.1:{}/{}#code={code}", self.port, project_query(project))
     }
+}
+
+/// `?project=<clone>`, so the UI opens on a new thread in it (ADR 0044).
+fn project_query(project: Option<&std::path::Path>) -> String {
+    let Some(project) = project else {
+        return String::new();
+    };
+    let encoded: String = project
+        .to_string_lossy()
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => char::from(byte).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect();
+    format!("?project={encoded}")
 }
 
 /// Starts the web server on 127.0.0.1 (`SILT_WEB_PORT`, or any free port).
@@ -106,6 +122,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
+        .route("/api/found", get(found_folders))
+        .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
@@ -609,6 +627,20 @@ async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> Http
     ask(&web, Request::AddClone { path: body.path }).await
 }
 
+async fn found_folders(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::FoundFolders).await
+}
+
+#[derive(Deserialize)]
+struct ImportFound {
+    #[serde(default)]
+    paths: Vec<PathBuf>,
+}
+
+async fn import_found(State(web): State<Web>, Json(body): Json<ImportFound>) -> HttpResponse {
+    ask(&web, Request::ImportFound { paths: body.paths }).await
+}
+
 #[derive(Deserialize)]
 struct CloneProject {
     url: String,
@@ -936,12 +968,19 @@ mod tests {
         let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
         let bus = broadcast::channel(1).0;
         let web = Web { events, bus, token: info.token.clone(), port: 1, codes };
-        let url = info.one_time_url();
+        let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();
         let trade = || exchange(State(web.clone()), Json(Exchange { code: code.clone() }));
         assert_eq!(trade().await.status(), StatusCode::OK);
         assert_eq!(trade().await.status(), StatusCode::UNAUTHORIZED, "a code works once");
+    }
+
+    #[test]
+    fn an_address_names_the_project_it_opens_on() {
+        assert_eq!(project_query(None), "");
+        assert_eq!(project_query(Some(std::path::Path::new("/home/me/my code/app"))), "?project=/home/me/my%20code/app");
+        assert_eq!(project_query(Some(std::path::Path::new("/a&b=c#d"))), "?project=/a%26b%3Dc%23d");
     }
 
     #[test]

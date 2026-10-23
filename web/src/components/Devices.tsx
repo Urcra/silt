@@ -216,9 +216,9 @@ export function Devices() {
     <Page flush label="devices">
       <div className="flex flex-col gap-6 px-4 py-6 md:px-8 lg:flex-row lg:items-start">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <h1 id="your-devices" className="text-xl font-medium">
+          <h2 id="your-devices" className="text-sm font-medium">
             Your devices
-          </h1>
+          </h2>
           <p className="text-sm text-fg-2">Threads move between these. A device with a checkout can run agents; a phone can answer and review.</p>
           {devices.isPending && <Skeleton className="h-24" />}
           {devices.error && <p className="text-danger">{message(devices.error)}</p>}

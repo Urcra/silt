@@ -15,7 +15,7 @@ use silt_types::{FamilyId, ThreadId};
 
 use crate::core::{Core, CoreError, now_ms};
 use crate::homes::Home;
-use crate::protocol::{ImportCandidate, ImportedThread, Sent};
+use crate::protocol::{FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Sent};
 use crate::sessions::{Session, resolve_agent};
 
 /// Records staged before they are stored in one write.
@@ -64,6 +64,63 @@ impl Core {
         });
         found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
         Ok(found)
+    }
+
+    /// The folders the sessions not yet imported ran in, newest first: each
+    /// a clone's root, or the folder itself outside git (ADR 0044).
+    pub(crate) async fn found_folders(&self) -> Result<Vec<FoundFolder>, CoreError> {
+        let candidates = self.import_candidates(&[], None).await?;
+        let mut folders: Vec<FoundFolder> = Vec::new();
+        for candidate in candidates {
+            let Some(cwd) = candidate.cwd.as_deref().filter(|cwd| cwd.is_dir()) else {
+                continue;
+            };
+            let repo = Repo::discover(cwd).ok();
+            let path = repo.as_ref().map_or_else(|| cwd.to_owned(), |repo| repo.root().to_owned());
+            let agent =
+                resolve_agent(&candidate.agent).map_or_else(|_| candidate.agent.clone(), |agent| agent.display_name().to_owned());
+            let index = match folders.iter().position(|folder| folder.path == path) {
+                Some(index) => index,
+                None => {
+                    let repo_name = match &repo {
+                        Some(repo) => repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
+                        None => String::new(),
+                    };
+                    folders.push(FoundFolder {
+                        added: self.clones.values().any(|known| *known == path),
+                        path,
+                        repo: repo_name,
+                        git: repo.is_some(),
+                        sessions: Vec::new(),
+                        last_ms: None,
+                    });
+                    folders.len() - 1
+                }
+            };
+            let folder = &mut folders[index];
+            match folder.sessions.iter_mut().find(|sessions| sessions.agent == agent) {
+                Some(sessions) => sessions.count += 1,
+                None => folder.sessions.push(FoundSessions { agent, count: 1 }),
+            }
+            folder.last_ms = folder.last_ms.max(candidate.started_ms);
+        }
+        for folder in &mut folders {
+            folder.sessions.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.agent.cmp(&b.agent)));
+        }
+        folders.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then_with(|| a.path.cmp(&b.path)));
+        Ok(folders)
+    }
+
+    /// Imports every session not yet imported under `paths`, or all of
+    /// them; how many threads it made.
+    pub(crate) async fn import_found(&mut self, paths: &[PathBuf]) -> Result<usize, CoreError> {
+        let mut made = 0;
+        for candidate in self.import_candidates(paths, None).await? {
+            if self.import_session(candidate).await?.is_some() {
+                made += 1;
+            }
+        }
+        Ok(made)
     }
 
     async fn known_sessions(&self) -> Result<HashSet<(String, String)>, CoreError> {

@@ -142,8 +142,8 @@ export function Search() {
   }
 
   return (
-    <Page flush label="search">
-      <div className="flex flex-col gap-6 px-4 py-5 md:px-8 lg:flex-row">
+    <Page flush label="search" title="Search" meta="everything any agent said, before and after compaction">
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-5 md:px-6 lg:flex-row">
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           <form
             role="search"
@@ -153,7 +153,7 @@ export function Search() {
               void run()
             }}
           >
-            <label htmlFor="search-query" className="text-lg font-medium">
+            <label htmlFor="search-query" className="sr-only">
               Search
             </label>
             <div className="flex gap-2">

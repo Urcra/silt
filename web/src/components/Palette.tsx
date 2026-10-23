@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMatch, useNavigate } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { api, short } from '../api'
 import { useNow } from '../now'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
+import { OPEN_PALETTE, openPalette } from '../palette'
 import { type Action, formatKeys, useOfferedActions, useShortcut } from '../shortcuts'
 import { threadTone } from '../threadLook'
 import { ago } from '../time'
-import { Dialog, Dot, Icon, type IconName, Kbd, buttonClass, cx, toast } from '../ui'
+import { Dialog, Dot, Icon, type IconName, Kbd, cx, toast } from '../ui'
 import { Snippet } from './Snippet'
 
 interface Item {
@@ -24,30 +25,31 @@ interface Item {
   run: () => void
 }
 
+
 /** ⌘K: start work from what's typed, go to a thread or something said, or do an action. */
 export function Palette() {
   const [open, setOpen] = useState(false)
   useShortcut('mod+k', 'Open the command palette', () => setOpen((shown) => !shown))
+  useEffect(() => {
+    const show = () => setOpen(true)
+    window.addEventListener(OPEN_PALETTE, show)
+    return () => window.removeEventListener(OPEN_PALETTE, show)
+  }, [])
   return (
-    <>
-      <button
-        type="button"
-        aria-label="command palette"
-        onClick={() => setOpen(true)}
-        className={cx(buttonClass('secondary'), 'justify-between text-fg-2 max-md:min-w-11 max-md:justify-center max-md:border-transparent max-md:bg-transparent md:min-w-[220px]')}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <Icon name="search" />
-          <span className="hidden md:inline">Go to, run, search</span>
-        </span>
-        <span className="hidden md:inline-flex">
-          <Kbd>{formatKeys('mod+k')}</Kbd>
-        </span>
-      </button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Command palette" bare>
-        {open && <PaletteList close={() => setOpen(false)} />}
-      </Dialog>
-    </>
+    <Dialog open={open} onClose={() => setOpen(false)} title="Command palette" bare>
+      {open && <PaletteList close={() => setOpen(false)} />}
+    </Dialog>
+  )
+}
+
+/** The sidebar's Search, which opens the palette. */
+export function PaletteRow({ className }: { className?: string }) {
+  return (
+    <button type="button" aria-label="command palette" onClick={openPalette} className={className}>
+      <Icon name="search" className="h-[15px] w-[15px] shrink-0" />
+      <span className="flex-1">Search</span>
+      <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+k')}</span>
+    </button>
   )
 }
 
@@ -87,7 +89,7 @@ function PaletteList({ close }: { close: () => void }) {
                 New thread{project && <> in <span className="font-mono">{project}</span></>}: “{typed}”
               </>
             ),
-            run: () => void navigate({ to: '/new', search: { prompt: typed } }),
+            run: () => void navigate({ to: '/', search: { prompt: typed } }),
           },
           ...(here
             ? [

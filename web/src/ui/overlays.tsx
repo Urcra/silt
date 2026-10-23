@@ -4,6 +4,7 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -162,6 +163,7 @@ export function Popover({
   panelClassName,
   align = 'left',
   className,
+  openOnMount = false,
 }: {
   trigger: ReactNode
   children: ReactNode | ((close: () => void) => ReactNode)
@@ -172,6 +174,8 @@ export function Popover({
   align?: 'left' | 'right'
   /** The box around the trigger and panel; an inline block unless given. */
   className?: string
+  /** Opens as soon as it's shown, such as when a link asked for it. */
+  openOnMount?: boolean
 }) {
   // Where the panel goes, measured from the trigger as it opens; it floats
   // over the page so no scrolling box around the trigger clips it.
@@ -187,14 +191,36 @@ export function Popover({
     window.addEventListener('resize', close)
     return () => window.removeEventListener('resize', close)
   }, [open])
-  const toggle = () => {
-    if (open || !button.current) {
-      close()
-      return
-    }
+  const place = useCallback(() => {
+    if (!button.current) return
     const box = button.current.getBoundingClientRect()
     setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+  }, [align])
+  const toggle = () => {
+    if (open) close()
+    else place()
   }
+  const opened = useRef(false)
+  useEffect(() => {
+    if (!openOnMount || opened.current) return
+    opened.current = true
+    place()
+  }, [openOnMount, place])
+  // The trigger moves when what's around it settles, as when fonts load
+  // under a picker opened with the page.
+  useEffect(() => {
+    const around = button.current?.parentElement
+    if (!open || !around || typeof ResizeObserver === 'undefined') return
+    let live = true
+    const again = () => live && place()
+    const observer = new ResizeObserver(again)
+    observer.observe(around)
+    void document.fonts?.ready.then(again)
+    return () => {
+      live = false
+      observer.disconnect()
+    }
+  }, [open, place])
   return (
     <div className={className ?? 'relative inline-block'}>
       <button

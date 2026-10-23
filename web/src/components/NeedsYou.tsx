@@ -171,9 +171,8 @@ export function NeedsYou() {
   const titleOf = (thread: string) => threads.data?.find((summary) => summary.id === thread)?.title ?? 'Untitled thread'
   const replies = (inbox.data ?? []).filter((entry) => !entry.read && ['comment', 'reply', 'mention'].includes(entry.kind))
   return (
-    <Page flush label="needs you">
+    <Page flush label="needs you" title="Needs you">
       <section aria-label="waiting on you" className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
-        <h1 className="sr-only md:not-sr-only md:text-xl md:font-medium">Needs you</h1>
         {threads.isPending && <Skeleton className="h-24" />}
         {threads.error && <p className="text-danger">{message(threads.error)}</p>}
         {threads.isSuccess && waiting.length === 0 && replies.length === 0 && (
