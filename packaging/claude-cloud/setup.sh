@@ -16,7 +16,8 @@ if ! command -v silt >/dev/null; then
         printf '%s\n' "$install" | SILT_INSTALL_DIR=/usr/local/bin sh; then
         :
     else
-        cargo install --locked --git https://github.com/Urcra/silt silt-cli
+        # Recording needs no web UI, nor the tools that build it.
+        SILT_SKIP_WEB_BUILD=1 cargo install --locked --git https://github.com/Urcra/silt silt-cli
     fi
 fi
 

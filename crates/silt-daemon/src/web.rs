@@ -23,11 +23,6 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::core::Event;
 use crate::protocol::{BusEvent, BusSubscription, CommentOn, Request, Response, SearchFilters};
 
-#[derive(rust_embed::Embed)]
-#[folder = "../../web/dist"]
-#[allow_missing = true]
-struct Assets;
-
 #[derive(Clone)]
 struct Web {
     events: mpsc::UnboundedSender<Event>,
@@ -215,9 +210,9 @@ fn same_token(given: &str, expected: &str) -> bool {
 
 async fn asset(request: HttpRequest) -> HttpResponse {
     let path = request.uri().path().trim_start_matches('/');
-    let file = match Assets::get(path) {
+    let file = match silt_web::Assets::get(path) {
         Some(file) if !path.is_empty() => file,
-        _ => match Assets::get("index.html") {
+        _ => match silt_web::Assets::get("index.html") {
             Some(file) => file,
             None => {
                 return (StatusCode::NOT_FOUND, "the web UI was not built; run `pnpm -C web build` and rebuild silt")

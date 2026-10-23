@@ -38,7 +38,7 @@ fn run_agent_alone(machine: &Machine, bin: &Path, dir: &Path, args: &[&str]) {
             command.env(key, value);
         }
     }
-    let output = command.args(args).current_dir(dir).output().expect("the agent runs");
+    let output = common::output_once_released(command.args(args).current_dir(dir));
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 

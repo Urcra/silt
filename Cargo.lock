@@ -5071,7 +5071,6 @@ dependencies = [
  "notify-debouncer-full",
  "postcard",
  "reqwest",
- "rust-embed",
  "rustix",
  "serde",
  "serde_json",
@@ -5087,6 +5086,7 @@ dependencies = [
  "silt-store",
  "silt-sync",
  "silt-types",
+ "silt-web",
  "similar",
  "tempfile",
  "thiserror 2.0.21",
@@ -5172,7 +5172,6 @@ dependencies = [
  "postcard",
  "qrcode",
  "reqwest",
- "rust-embed",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5183,6 +5182,7 @@ dependencies = [
  "silt-store",
  "silt-sync",
  "silt-types",
+ "silt-web",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -5263,6 +5263,13 @@ dependencies = [
  "silt-types",
  "thiserror 2.0.21",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "silt-web"
+version = "0.0.1"
+dependencies = [
+ "rust-embed",
 ]
 
 [[package]]

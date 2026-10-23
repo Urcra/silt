@@ -520,18 +520,7 @@ fn track_attaches_to_a_session_started_without_silt() {
         .current_dir(&env.repo)
         .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
         .env("SILT_HOME", &env.silt_home);
-    // Another test forking while this script was being written can hold it
-    // open for a moment.
-    let output = (0..50)
-        .find_map(|_| match fake.output() {
-            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                None
-            }
-            other => Some(other),
-        })
-        .expect("the script was released")
-        .expect("fake claude runs");
+    let output = output_once_released(&mut fake);
     assert!(output.status.success());
 
     assert!(env.stdout(&["track"]).contains("tracking session"));
@@ -547,13 +536,13 @@ fn track_attaches_to_a_session_started_without_silt() {
 fn track_from_hook_records_the_hooks_session_once() {
     let env = Env::new();
     let session = "11111111-2222-4333-8444-777777777777";
-    let ran = Command::new(&env.fake)
-        .args(["--session-id", session])
-        .current_dir(&env.repo)
-        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
-        .env("SILT_HOME", &env.silt_home)
-        .output()
-        .expect("fake claude runs");
+    let ran = output_once_released(
+        Command::new(&env.fake)
+            .args(["--session-id", session])
+            .current_dir(&env.repo)
+            .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+            .env("SILT_HOME", &env.silt_home),
+    );
     assert!(ran.status.success());
 
     let input = serde_json::json!({
@@ -888,4 +877,19 @@ fn uncommitted_changes_are_where_a_thread_starts_not_its_edits() {
     assert!(!show.contains("notes.md"), "{show}");
     let diff = env.stdout(&["diff", &thread]);
     assert!(diff.contains("+fn farewell() {}") && !diff.contains("draft"), "{diff}");
+}
+
+/// Runs a script a test just wrote. Another test forking while it was being
+/// written can hold it open for a moment, which fails the exec.
+fn output_once_released(command: &mut Command) -> std::process::Output {
+    (0..50)
+        .find_map(|_| match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                None
+            }
+            other => Some(other),
+        })
+        .expect("the script was released")
+        .expect("the script runs")
 }
