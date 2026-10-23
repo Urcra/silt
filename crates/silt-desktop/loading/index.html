@@ -49,6 +49,7 @@
     <main>
       <h1>Silt</h1>
       <p id="status" role="status">Finding the Silt daemon…</p>
+      <p id="retry" hidden>Trying again in the background.</p>
     </main>
     <script>
       // Called by the app when it can't reach the daemon.
@@ -56,6 +57,7 @@
         const status = document.getElementById('status')
         status.textContent = message
         status.className = 'error'
+        document.getElementById('retry').hidden = false
       }
     </script>
   </body>

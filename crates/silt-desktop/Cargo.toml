@@ -30,3 +30,4 @@ serde_json = "1.0.154"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-single-instance = "2.5.4"
 thiserror = "2.0.21"
+url = "2.5.8"
