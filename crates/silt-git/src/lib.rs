@@ -5,6 +5,7 @@ mod bundle;
 mod checkout;
 pub mod conventions;
 mod filters;
+mod notes;
 mod remote;
 mod untracked;
 
@@ -19,6 +20,7 @@ use silt_types::GitOid;
 
 pub use checkout::ManagedCheckout;
 pub use filters::Filters;
+pub use notes::{BlamedLine, NOTES_REF, changed_lines};
 pub use remote::normalize_remote;
 
 #[derive(Debug, thiserror::Error)]
@@ -99,7 +101,7 @@ impl Repo {
     }
 
     /// The commit HEAD was at `time_ms`: from the reflog, else the newest
-    /// commit HEAD has from before then, else HEAD's own (ADR 0042).
+    /// commit HEAD has from before then, else HEAD's own (ADR 0043).
     pub fn commit_at(&self, time_ms: i64) -> Result<Option<GitOid>, GitError> {
         let seconds = time_ms.div_euclid(1000);
         let reflog = self.git(&["reflog", "show", "--date=unix", "--format=%H %gd", "HEAD"], None).unwrap_or_default();

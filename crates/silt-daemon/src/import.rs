@@ -1,5 +1,5 @@
 //! Importing the sessions agents already have on disk, each into a thread
-//! of its own kept on this machine until sent (ADR 0042).
+//! of its own kept on this machine until sent (ADR 0043).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -216,7 +216,7 @@ impl Core {
 
     /// Gives a thread with a genesis that never had a file the genesis
     /// commit's tree, as a new thread starts with, before it is
-    /// checked out: imported threads leave it until needed (ADR 0042).
+    /// checked out: imported threads leave it until needed (ADR 0043).
     pub(crate) async fn import_tree_if_missing(&mut self, thread: ThreadId, repo: &Repo) -> Result<(), CoreError> {
         let family_id = self.threads[&thread].family;
         // Trashed files stay in the tree, so a thread that deleted every
@@ -244,7 +244,7 @@ impl Core {
     }
 
     /// Sends imported threads kept on this machine to a server signed in
-    /// to (ADR 0042): `threads`, those of `project`, or with neither all.
+    /// to (ADR 0043): `threads`, those of `project`, or with neither all.
     pub(crate) async fn send(
         &mut self,
         threads: &[String],

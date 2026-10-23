@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use silt_daemon::protocol::{
-    CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary,
+    BlameLine, CommentLocation, CommentView, HistoryPage, InFlight, MrDetails, MrSummary, SearchResult, ShowLine, ThreadSummary,
 };
 
 /// Text that came from other people, fit for a terminal: control characters
@@ -166,6 +166,25 @@ pub fn in_flight(found: &[InFlight]) -> String {
     for item in found {
         let owner = if item.owner.is_empty() { "you" } else { item.owner.as_str() };
         let _ = writeln!(out, "{}  {owner:<10} {}", short(&item.thread), item.files.join(", "));
+    }
+    out
+}
+
+pub fn blame(lines: &[BlameLine]) -> String {
+    const PROMPT_CHARS: usize = 32;
+    let mut out = String::new();
+    for line in lines {
+        let who = match (&line.thread, line.turn) {
+            (Some(thread), Some(turn)) => format!("{} t{turn}", short(thread)),
+            (Some(thread), None) => short(thread).to_owned(),
+            (None, _) => line
+                .commit
+                .as_deref()
+                .map_or_else(|| "not committed".to_owned(), |commit| commit[..commit.len().min(8)].to_owned()),
+        };
+        let author = line.author.as_deref().unwrap_or("");
+        let prompt: String = line.prompt.as_deref().unwrap_or("").chars().take(PROMPT_CHARS).collect();
+        let _ = writeln!(out, "{:>4} {who:<16} {author:<12} {prompt:<PROMPT_CHARS$} | {}", line.line, line.text);
     }
     out
 }

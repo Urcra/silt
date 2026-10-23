@@ -5127,6 +5127,7 @@ dependencies = [
  "serde",
  "silt-crdt",
  "silt-types",
+ "similar",
  "thiserror 2.0.21",
 ]
 
@@ -5179,6 +5180,7 @@ dependencies = [
  "silt-crdt",
  "silt-log",
  "silt-proto",
+ "silt-redact",
  "silt-store",
  "silt-sync",
  "silt-types",

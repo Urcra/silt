@@ -241,6 +241,15 @@ enum Command {
         #[arg(default_value = ".")]
         path: String,
     },
+    /// Each line of a file with the thread, turn and prompt that wrote it:
+    /// from the log when a thread here has the file, else from the commits'
+    /// notes in refs/notes/silt
+    Blame {
+        file: String,
+        /// Read only the notes, as a clone without Silt would
+        #[arg(long)]
+        notes: bool,
+    },
     /// Run or administer a self-hosted sync server
     Server {
         #[command(subcommand)]
@@ -453,6 +462,12 @@ enum ProjectCommand {
         /// ask_before_commands, ask_for_everything or full_access
         #[arg(long)]
         preset: Option<String>,
+        /// Git notes on its threads' commits: off, local, or push to origin too
+        #[arg(long)]
+        git_notes: Option<silt_proto::GitNotes>,
+        /// Whether the server comments on its threads' pull requests: on or off
+        #[arg(long, value_parser = admin::parse_on_off)]
+        forge_comments: Option<bool>,
     },
     /// Choose where this clone's project's new threads sync: a server this
     /// machine is signed in to, or `local` to keep them on this machine.
@@ -713,9 +728,18 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Project { command: ProjectCommand::Home { home } } => {
             admin::project_here().and_then(|repo| commands::project_home(repo, home))
         }
-        Command::Project { command: ProjectCommand::Set { name, agent, preset } } => admin::project_here().and_then(|repo| {
-            admin::org_change(OrgChange::ProjectSettings { repo, name, default_agent: agent, default_preset: preset })
-        }),
+        Command::Project { command: ProjectCommand::Set { name, agent, preset, git_notes, forge_comments } } => {
+            admin::project_here().and_then(|repo| {
+                admin::org_change(OrgChange::ProjectSettings {
+                    repo,
+                    name,
+                    default_agent: agent,
+                    default_preset: preset,
+                    git_notes,
+                    forge_comments,
+                })
+            })
+        }
         Command::Log { commit: None } => commands::log(),
         Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
@@ -724,6 +748,7 @@ fn run() -> Result<(), Exn<CliError>> {
             commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
         }
         Command::InFlight { path } => commands::in_flight(&path),
+        Command::Blame { file, notes } => commands::blame(&file, notes),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
         Command::Comment { thread, file, lines, entry, reply: Some(comment), text }

@@ -77,7 +77,7 @@ pub enum Request {
     /// Re-reads the server settings after `silt auth login`.
     Reload,
     Status,
-    /// The sessions on disk not yet recorded or imported (ADR 0042), of
+    /// The sessions on disk not yet recorded or imported (ADR 0043), of
     /// `agent` or all, that ran under one of `paths` or anywhere.
     ImportCandidates {
         #[serde(default)]
@@ -223,6 +223,11 @@ pub enum Request {
     },
     /// Other threads of the repository at `cwd` that changed `path`.
     InFlight {
+        cwd: PathBuf,
+        path: String,
+    },
+    /// Who wrote each line of `path`, as seen from `cwd` (ADR 0042).
+    Blame {
         cwd: PathBuf,
         path: String,
     },
@@ -549,7 +554,7 @@ pub struct FilePage {
     pub limit: usize,
 }
 
-/// A session on disk that Silt hasn't recorded (ADR 0042).
+/// A session on disk that Silt hasn't recorded (ADR 0043).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportCandidate {
     pub agent: String,
@@ -684,6 +689,34 @@ pub struct InFlight {
     pub owner: String,
     pub files: Vec<String>,
     pub last_ms: i64,
+}
+
+/// A line of a file and where it came from (ADR 0042).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlameLine {
+    /// From 1, as the file is on disk.
+    pub line: u32,
+    pub text: String,
+    pub source: BlameSource,
+    /// The commit git blame names; none for a line not committed.
+    pub commit: Option<String>,
+    pub thread: Option<String>,
+    pub turn: Option<usize>,
+    pub prompt: Option<String>,
+    /// `person` or the agent's name.
+    pub author: Option<String>,
+    pub time_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlameSource {
+    /// The family's log on this machine.
+    Log,
+    /// The commit's note in `refs/notes/silt`.
+    Notes,
+    /// Git alone: Silt knows nothing of the line.
+    Git,
 }
 
 /// Deltas for the browser's replica (ADR 0014).
@@ -1001,6 +1034,7 @@ mod tests {
             silt_proto::PresenceReply::decl(&config),
             silt_proto::ThreadStatus::decl(&config),
             silt_proto::Visibility::decl(&config),
+            silt_proto::GitNotes::decl(&config),
             AgentChoice::decl(&config),
             AgentChoiceItem::decl(&config),
             AgentChoices::decl(&config),

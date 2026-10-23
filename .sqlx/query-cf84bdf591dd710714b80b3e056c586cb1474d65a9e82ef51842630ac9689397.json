@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.family_id, s.thread_id FROM sdk_sessions s JOIN threads t ON t.id = s.thread_id\n         WHERE s.user_id = ? AND s.project_key = ? AND s.session_id = ? AND t.deleted_ms IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sdk_sessions",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sdk_sessions",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cf84bdf591dd710714b80b3e056c586cb1474d65a9e82ef51842630ac9689397"
+}

@@ -27,6 +27,7 @@ silt-agents = { path = "../silt-agents" }
 silt-crdt = { path = "../silt-crdt" }
 silt-log = { path = "../silt-log" }
 silt-proto = { path = "../silt-proto" }
+silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
 silt-sync = { path = "../silt-sync" }
 silt-types = { path = "../silt-types" }

@@ -1,5 +1,6 @@
 mod acp;
 mod attribution;
+mod blame;
 mod bus;
 mod capture;
 pub mod capture_lock;
@@ -17,6 +18,7 @@ mod import;
 mod lifecycle;
 mod live;
 mod load;
+mod notes;
 pub mod paths;
 mod personal;
 mod presets;
@@ -38,6 +40,7 @@ mod views;
 mod watch;
 mod web;
 
+pub use blame::blame_from_notes;
 pub use capture::{Captured, capture_here};
 pub use core::CoreError;
 pub use recorder::{NewRun, Recorder};

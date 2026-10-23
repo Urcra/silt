@@ -315,8 +315,9 @@ pub(crate) async fn change(
             }
             tx.commit().await?;
         }
-        OrgChange::ProjectSettings { repo, name, default_agent, default_preset } => {
-            crate::projects::change_settings(db, caller.user, &repo, name, default_agent, default_preset).await?;
+        OrgChange::ProjectSettings { repo, name, default_agent, default_preset, git_notes, forge_comments } => {
+            let change = crate::projects::SettingsChange { name, default_agent, default_preset, git_notes, forge_comments };
+            crate::projects::change_settings(db, caller.user, &repo, change).await?;
         }
     }
     Ok(StatusCode::NO_CONTENT)

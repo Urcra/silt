@@ -412,6 +412,14 @@ pub fn parse_visibility(text: &str) -> Result<Visibility, String> {
     text.parse()
 }
 
+pub fn parse_on_off(text: &str) -> Result<bool, String> {
+    match text {
+        "on" | "true" | "yes" => Ok(true),
+        "off" | "false" | "no" => Ok(false),
+        _ => Err(format!("on or off, not {text:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

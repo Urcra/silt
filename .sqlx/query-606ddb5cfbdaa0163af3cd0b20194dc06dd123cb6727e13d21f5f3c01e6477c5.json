@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.session_id, s.mtime_ms FROM sdk_sessions s JOIN threads t ON t.id = s.thread_id\n         WHERE s.user_id = ? AND s.project_key = ? AND t.deleted_ms IS NULL ORDER BY s.mtime_ms DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sdk_sessions",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "mtime_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sdk_sessions",
+            "name": "mtime_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "606ddb5cfbdaa0163af3cd0b20194dc06dd123cb6727e13d21f5f3c01e6477c5"
+}

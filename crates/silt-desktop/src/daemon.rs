@@ -2,9 +2,11 @@
 //! to the daemon or starts it (ADR 0041).
 
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use exn::{Exn, ResultExt};
 use tauri::Url;
@@ -70,6 +72,91 @@ pub fn open_web(program: &Path) -> Result<Url, Exn<DesktopError>> {
     web_url(&String::from_utf8_lossy(&output.stdout)).or_raise(|| DesktopError::Run(shown))
 }
 
+/// What a look at the UI found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// It answers, or is too busy to: either way, it runs.
+    Up,
+    /// Nothing listens there any more.
+    Gone,
+    /// It refuses the window's token: a daemon started again on a fixed
+    /// `SILT_WEB_PORT`, with a new token.
+    Stale,
+}
+
+/// A request that only the web layer answers when the token is wrong, so a
+/// refused token shows at once however busy the daemon is.
+pub fn status_request(ui: &Url) -> Option<String> {
+    let token = ui.fragment()?.strip_prefix("token=")?;
+    let port = ui.port()?;
+    Some(format!(
+        "GET /api/status HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    ))
+}
+
+/// The answer from the start of an HTTP response.
+pub fn answer_of(response: &[u8]) -> Answer {
+    let line = response.split(|byte| *byte == b'\n').next().unwrap_or_default();
+    match line.split(|byte| *byte == b' ').nth(1) {
+        Some(b"401") => Answer::Stale,
+        Some(_) => Answer::Up,
+        None => Answer::Gone,
+    }
+}
+
+/// Looks at the UI at `ui`. A daemon that takes longer than `wait` to answer
+/// is busy, not gone.
+pub fn check(ui: &Url, wait: Duration) -> Answer {
+    let (Some(request), Some(port)) = (status_request(ui), ui.port()) else {
+        return Answer::Gone;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), wait) else {
+        return Answer::Gone;
+    };
+    if stream.set_read_timeout(Some(wait)).is_err() || stream.write_all(request.as_bytes()).is_err() {
+        return Answer::Gone;
+    }
+    let mut start = [0; 16];
+    let mut read = 0;
+    while read < start.len() {
+        match stream.read(&mut start[read..]) {
+            Ok(0) => break,
+            Ok(more) => read += more,
+            Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Answer::Up,
+            Err(_) => break,
+        }
+    }
+    answer_of(&start[..read])
+}
+
+/// How long to wait before running `silt open` again after `failures`
+/// failed tries in a row.
+pub fn backoff(failures: u32) -> Duration {
+    const FIRST: Duration = Duration::from_millis(500);
+    const MOST: Duration = Duration::from_secs(10);
+    FIRST.saturating_mul(2u32.saturating_pow(failures)).min(MOST)
+}
+
+/// Where the window goes on a new address for the UI: the page it was on,
+/// if it was on the UI.
+pub fn same_page_on(shown: Option<&Url>, old: Option<&Url>, new: &Url) -> Url {
+    let mut moved = new.clone();
+    if let (Some(shown), Some(old)) = (shown, old)
+        && shown.origin() == old.origin()
+    {
+        moved.set_path(shown.path());
+        moved.set_query(shown.query());
+    }
+    moved
+}
+
+/// Whether going from `shown` to `moved` only changes the fragment, which a
+/// browser takes as a move within the page: the page must then be reloaded
+/// to read its new token.
+pub fn only_the_fragment_moves(shown: &Url, moved: &Url) -> bool {
+    shown[..url::Position::AfterQuery] == moved[..url::Position::AfterQuery]
+}
+
 /// Whether the window may go to `to`: the daemon's UI, or this app's own
 /// starting page. Anything else, such as a link in a transcript, belongs in
 /// the browser.
@@ -115,6 +202,81 @@ mod tests {
         assert!(!inside("http://localhost:4321/"));
         assert!(!inside("https://github.com/"));
         assert!(!stays_in_app(None, &Url::parse("http://127.0.0.1:4321/").expect("url")));
+    }
+
+    #[test]
+    fn the_status_request_carries_the_token_to_the_ui_s_own_host() {
+        let ui = Url::parse("http://127.0.0.1:4321/#token=abc").expect("url");
+        let request = status_request(&ui).expect("a request");
+        assert!(request.starts_with("GET /api/status HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nHost: 127.0.0.1:4321\r\n"));
+        assert!(request.contains("\r\nAuthorization: Bearer abc\r\n"));
+        assert!(request.ends_with("\r\n\r\n"));
+        assert_eq!(status_request(&Url::parse("http://127.0.0.1:4321/").expect("url")), None);
+    }
+
+    #[test]
+    fn a_refused_token_is_stale_and_no_answer_is_gone() {
+        assert_eq!(answer_of(b"HTTP/1.1 200 OK\r\n"), Answer::Up);
+        assert_eq!(answer_of(b"HTTP/1.1 502 Bad"), Answer::Up);
+        assert_eq!(answer_of(b"HTTP/1.1 401 Unauthorized\r\n"), Answer::Stale);
+        assert_eq!(answer_of(b""), Answer::Gone);
+    }
+
+    #[test]
+    fn retries_back_off_to_ten_seconds() {
+        let delays: Vec<_> = (0..7).map(|failures| backoff(failures).as_millis()).collect();
+        assert_eq!(delays, [500, 1000, 2000, 4000, 8000, 10_000, 10_000]);
+        assert_eq!(backoff(u32::MAX), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_new_address_keeps_the_page_the_window_was_on() {
+        let url = |text: &str| Url::parse(text).expect("url");
+        let old = url("http://127.0.0.1:4321/#token=old");
+        let new = url("http://127.0.0.1:5555/#token=new");
+        let shown = url("http://127.0.0.1:4321/t/abc?tab=changes");
+        assert_eq!(same_page_on(Some(&shown), Some(&old), &new).as_str(), "http://127.0.0.1:5555/t/abc?tab=changes#token=new");
+        let starting = url("tauri://localhost/index.html");
+        assert_eq!(same_page_on(Some(&starting), Some(&old), &new), new);
+        assert_eq!(same_page_on(Some(&shown), None, &new), new);
+    }
+
+    #[test]
+    fn a_new_token_on_the_same_page_needs_a_reload() {
+        let url = |text: &str| Url::parse(text).expect("url");
+        let shown = url("http://127.0.0.1:4321/t/abc");
+        assert!(only_the_fragment_moves(&shown, &url("http://127.0.0.1:4321/t/abc#token=new")));
+        assert!(!only_the_fragment_moves(&shown, &url("http://127.0.0.1:5555/t/abc#token=new")));
+        assert!(!only_the_fragment_moves(&shown, &url("http://127.0.0.1:4321/t/abc?tab=x#token=new")));
+    }
+
+    /// A UI on a free port that answers each request with `reply`, or
+    /// never, and its address.
+    fn serve(reply: Option<&'static str>) -> Url {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                match reply {
+                    Some(reply) => {
+                        let _ = stream.write_all(reply.as_bytes());
+                    }
+                    None => std::thread::sleep(Duration::from_secs(5)),
+                }
+            }
+        });
+        Url::parse(&format!("http://127.0.0.1:{port}/#token=abc")).expect("url")
+    }
+
+    #[test]
+    fn the_check_tells_a_running_ui_from_a_restarted_or_stopped_one() {
+        let wait = Duration::from_millis(300);
+        assert_eq!(check(&serve(Some("HTTP/1.1 200 OK\r\n\r\n")), wait), Answer::Up);
+        assert_eq!(check(&serve(Some("HTTP/1.1 401 Unauthorized\r\n\r\n")), wait), Answer::Stale);
+        assert_eq!(check(&serve(None), wait), Answer::Up, "busy");
+        let free = std::net::TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("addr").port();
+        assert_eq!(check(&Url::parse(&format!("http://127.0.0.1:{free}/#token=abc")).expect("url"), wait), Answer::Gone);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Importing the sessions agents already have on disk (ADR 0042): each as
+//! Importing the sessions agents already have on disk (ADR 0043): each as
 //! a thread kept on this machine, searchable and continued like a recorded
 //! one, until `silt send` sends it, redacted.
 

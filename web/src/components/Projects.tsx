@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
 import { PRESETS } from '../agentState'
-import { api, type Project } from '../api'
+import { api, type GitNotes, type Project } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { Button, EmptyState, Input, Select, Skeleton, Tag, buttonClass, toast } from '../ui'
@@ -103,7 +103,7 @@ function Defaults({ projects }: { projects: Project[] }) {
   const [repo, setRepo] = useState('')
   const project = owned.find((candidate) => candidate.repo === repo) ?? owned[0]
   if (!project) return null
-  const save = (change: { default_agent?: string | null; default_preset?: string | null }) =>
+  const save = (change: { default_agent?: string | null; default_preset?: string | null; git_notes?: GitNotes; forge_comments?: boolean }) =>
     api
       .orgChange({
         change: 'project_settings',
@@ -111,6 +111,8 @@ function Defaults({ projects }: { projects: Project[] }) {
         name: null,
         default_agent: change.default_agent !== undefined ? change.default_agent : project.default_agent,
         default_preset: change.default_preset !== undefined ? change.default_preset : project.default_preset,
+        git_notes: change.git_notes ?? null,
+        forge_comments: change.forge_comments ?? null,
       })
       .then(
         () => {
@@ -171,6 +173,21 @@ function Defaults({ projects }: { projects: Project[] }) {
               {preset.label}
             </option>
           ))}
+        </Select>
+        <label htmlFor="defaults-notes" className="text-fg-2">
+          Git notes
+        </label>
+        <Select id="defaults-notes" value={project.git_notes} onChange={(event) => void save({ git_notes: event.target.value as GitNotes })} className="text-xs">
+          <option value="off">Off</option>
+          <option value="local">On each commit, kept in the clone</option>
+          <option value="push">On each commit, pushed to origin</option>
+        </Select>
+        <label htmlFor="defaults-forge" className="text-fg-2">
+          Pull requests
+        </label>
+        <Select id="defaults-forge" value={project.forge_comments ? 'on' : 'off'} onChange={(event) => void save({ forge_comments: event.target.value === 'on' })} className="text-xs">
+          <option value="off">No comment from Silt</option>
+          <option value="on">One comment naming the thread</option>
         </Select>
         <span className="text-fg-2">New checkouts</span>
         <Mock id="add.prepare">

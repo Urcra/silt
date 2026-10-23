@@ -740,6 +740,41 @@ impl Family {
         self.file_at(inode, &vv)
     }
 
+    /// The lines of the text file at `path` as of `vv`, each with the id of
+    /// its latest inserted character: `None` for a line wholly from git.
+    /// `None` when no file was there, or one Silt never edited as text.
+    pub fn lines_at(&self, path: &str, vv: &VersionVector) -> Option<Vec<(String, Option<DeltaId>)>> {
+        let inode = *self.tree().at(|id| vv.contains(id)).paths().get(path)?;
+        let (_, FileContent::Text(doc)) = self.files.get(&inode)?.content_at(|id| vv.contains(id))? else {
+            return None;
+        };
+        let mut lines = Vec::new();
+        let (mut text, mut latest) = (String::new(), None::<DeltaId>);
+        for (ch, id) in doc.attribution_at_vv(vv) {
+            let id = match id {
+                silt_crdt::CharId::Delta(id) => Some(id),
+                silt_crdt::CharId::Base { .. } => None,
+            };
+            if ch == '\n' {
+                // A newline usually comes with the line after it, so it
+                // only speaks for a line with nothing else.
+                let source = if text.is_empty() { id } else { latest.take() };
+                lines.push((std::mem::take(&mut text), source));
+                continue;
+            }
+            if let Some(id) = id
+                && latest.is_none_or(|latest| Stamp::from(id) > Stamp::from(latest))
+            {
+                latest = Some(id);
+            }
+            text.push(ch);
+        }
+        if !text.is_empty() {
+            lines.push((text, latest));
+        }
+        Some(lines)
+    }
+
     pub fn text_doc(&self, inode: InodeId) -> Option<&TextDoc> {
         match &self.files.get(&inode)?.content {
             FileContent::Text(doc) => Some(doc),

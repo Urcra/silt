@@ -130,7 +130,7 @@ pub struct SessionRecord {
     pub checkout_id: CheckoutId,
 }
 
-/// A session that ran before Silt recorded it, imported whole (ADR 0042).
+/// A session that ran before Silt recorded it, imported whole (ADR 0043).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRecord {
     pub agent: String,

@@ -1,5 +1,5 @@
 # Builds static `silt` binaries for Linux from a tag and publishes them,
-# with their checksums, on the tag's release (ADR 0042). scripts/install.sh
+# with their checksums, on the tag's release (ADR 0043). scripts/install.sh
 # installs them.
 name: release
 

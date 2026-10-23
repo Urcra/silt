@@ -163,6 +163,13 @@ impl Facts {
     }
 }
 
+/// The threads whose visibility isn't private, whoever asks: what may be
+/// named outside Silt, as on a pull request (ADR 0042).
+pub(crate) async fn not_private(db: &SqlitePool, forks: &HashMap<ThreadId, ThreadId>) -> Result<HashSet<ThreadId>, sqlx::Error> {
+    let facts = Facts::load(db, UserId(0), forks).await?;
+    Ok(facts.threads.keys().filter(|thread| facts.effective(**thread).1 != Visibility::Private).copied().collect())
+}
+
 impl Viewer {
     /// `forks` maps each fork to its source.
     pub(crate) async fn load(

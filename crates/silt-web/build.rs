@@ -1,5 +1,5 @@
 //! Builds the web UI into `web/dist` when it isn't there, so that `cargo
-//! install --git` gives the whole app (ADR 0042). A checkout that has it,
+//! install --git` gives the whole app (ADR 0043). A checkout that has it,
 //! as the gate's and the release workflow's do, is left as it is.
 //! `SILT_SKIP_WEB_BUILD=1` builds `silt` without the UI.
 

@@ -83,6 +83,11 @@ pub enum Event {
         event: crate::acp::AcpEvent,
     },
     Control(crate::control::ControlEvent),
+    /// A server's projects and their git notes settings (ADR 0042).
+    NotesSettings {
+        server: String,
+        projects: Vec<(String, silt_proto::GitNotes)>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -175,7 +180,7 @@ pub struct Core {
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
     /// The time the conversation deltas being staged carry, while a session
-    /// that ran before is imported (ADR 0042); else they carry now.
+    /// that ran before is imported (ADR 0043); else they carry now.
     pub(crate) recorded_at: Option<i64>,
     /// Whether an [`Event::IndexPending`] waits in the queue. One at a time,
     /// so a request queued behind a pull waits for one batch of rows, not
@@ -222,6 +227,7 @@ pub struct Core {
     pub(crate) known_secrets: HashSet<String>,
     /// When each server's listing was last asked for, by URL.
     pub(crate) last_listings: HashMap<String, Instant>,
+    pub(crate) notes_settings: crate::notes::NotesSettings,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -461,6 +467,7 @@ impl Core {
             redactor: redactor(data_dir),
             known_secrets: HashSet::new(),
             last_listings: HashMap::new(),
+            notes_settings: crate::notes::NotesSettings::default(),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -641,6 +648,7 @@ impl Core {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_for_link(thread, &query)))
             }
             Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
+            Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
@@ -764,6 +772,7 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        self.drive_notes_settings();
         if self.resident {
             self.drive_control().await;
         }
@@ -1614,8 +1623,10 @@ impl Core {
         let family = self.families.get_mut(&family_id).expect("checkout's family is loaded");
         let op = Op::Git(GitOp::Committed { commit: head, branch });
         let delta = family.delta(actor, thread, Author::User, now_ms(), family.thread_head(thread), op);
+        let recorded = delta.span.first();
         family.apply(delta.clone(), &mut HashMap::new())?;
         self.persist(family_id, &[delta]).await?;
+        self.note_commit(family_id, thread, self.checkouts[&id].record.path.clone(), head, recorded);
         repo.protect(&thread.to_string(), head)?;
         self.record_bundle(family_id, thread, &repo, head, known.as_slice()).await?;
         self.heads.insert(id, head);

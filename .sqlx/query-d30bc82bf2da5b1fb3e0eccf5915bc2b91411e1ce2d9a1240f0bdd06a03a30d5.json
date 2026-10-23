@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET git_notes = ? WHERE repo = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d30bc82bf2da5b1fb3e0eccf5915bc2b91411e1ce2d9a1240f0bdd06a03a30d5"
+}

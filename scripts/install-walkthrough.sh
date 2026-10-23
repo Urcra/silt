@@ -2,7 +2,7 @@
 # Follows docs/guide/index.md and docs/guide/import.md on a fresh
 # container: installs `silt` with scripts/install.sh from a release built
 # here, then imports the Claude Code sessions already on disk and finds
-# them with `silt search` (ADR 0042). Every command run from the guide must
+# them with `silt search` (ADR 0043). Every command run from the guide must
 # appear in it verbatim.
 #
 # Usage: scripts/install-walkthrough.sh [path/to/static/silt]

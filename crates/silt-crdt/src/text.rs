@@ -498,6 +498,17 @@ impl TextDoc {
         attribution
     }
 
+    /// The character id of each character visible at `vv`, in order.
+    pub fn attribution_at_vv(&self, vv: &VersionVector) -> Vec<(char, CharId)> {
+        let mut attribution = Vec::new();
+        for fragment in self.fragments.iter() {
+            let first = fragment.first_char();
+            let visible = &self.chars_of(fragment)[..fragment.visible_len_at(vv)];
+            attribution.extend(visible.iter().zip(0..).map(|(ch, offset)| (*ch, first.offset(offset))));
+        }
+        attribution
+    }
+
     /// Checks that `event` is well formed and fits the document as of its
     /// parents, which must already be in `graph`. It moves the prepare
     /// version to those parents to measure the text there, hence `&mut`;

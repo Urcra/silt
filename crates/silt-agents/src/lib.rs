@@ -257,7 +257,7 @@ pub trait Agent: Send + Sync {
     /// The newest session started in `cwd` no earlier than `since_ms` whose
     /// id isn't in `known`.
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found>;
-    /// Every session on disk, for importing (ADR 0042). An agent that can
+    /// Every session on disk, for importing (ADR 0043). An agent that can
     /// only be asked per directory is asked in each of `dirs`.
     fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
         Vec::new()

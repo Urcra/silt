@@ -33,11 +33,13 @@ use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 pub mod accounts;
 mod app;
 pub mod backup;
+mod bridge;
 mod browse;
 mod collab;
 pub mod config;
 mod control;
 mod devices;
+pub mod forge;
 mod git;
 mod inbox;
 mod index;
@@ -51,6 +53,7 @@ mod presence;
 mod projects;
 mod push;
 mod relayed;
+mod session_store;
 mod sign_in;
 mod visibility;
 mod writes;
@@ -213,6 +216,8 @@ struct Shared {
     mr_views: Mutex<HashMap<(UserId, String), (std::time::Instant, serde_json::Value)>>,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
+    /// Families whose pull request comments may need an update (ADR 0042).
+    bridge: Option<bridge::Jobs>,
 }
 
 #[derive(Clone)]
@@ -264,7 +269,14 @@ impl Server {
         tx.commit().await?;
         let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
         let vapid = push::load_or_make_key(data_dir)?;
-        Ok(Self {
+        let (bridge, jobs) = match config.forges.is_empty() {
+            true => (None, None),
+            false => {
+                let (bridge, jobs) = tokio::sync::mpsc::unbounded_channel();
+                (Some(bridge), Some(jobs))
+            }
+        };
+        let server = Self {
             shared: Arc::new(Shared {
                 db,
                 blobs: BlobStore::new(data_dir.join("blobs")),
@@ -286,10 +298,15 @@ impl Server {
                 link_misses: std::sync::Mutex::new(Vec::new()),
                 mr_views: Mutex::new(HashMap::new()),
                 passwords: accounts::PasswordChecks::default(),
+                bridge,
                 config,
                 http,
             }),
-        })
+        };
+        if let Some(jobs) = jobs {
+            bridge::start(Arc::downgrade(&server.shared), jobs);
+        }
+        Ok(server)
     }
 
     pub fn config(&self) -> &Config {
@@ -339,6 +356,7 @@ impl Server {
             .merge(relayed::device_routes())
             .merge(pairing::device_routes())
             .merge(links::device_routes())
+            .merge(session_store::routes())
             .layer(middleware::from_fn_with_state(self.clone(), authenticate));
         let api = Router::new()
             .route("/v1/login", post(login))
@@ -799,6 +817,9 @@ async fn push(
     });
     if !stored.is_empty() {
         server.wake_pulls(family);
+        if let Some(bridge) = server.shared.bridge.as_ref().filter(|_| bridge::touches(&stored)) {
+            let _ = bridge.send(family);
+        }
         if let Err(error) = server.notify(&stored, caller).await {
             tracing::warn!(%error, "could not write notifications");
         }

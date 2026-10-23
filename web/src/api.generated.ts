@@ -19,7 +19,7 @@ export type Startable = { id: string, name: string, };
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
-export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "links", org: string, on: boolean, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, };
+export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "links", org: string, on: boolean, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, git_notes: GitNotes | null, forge_comments: boolean | null, };
 
 export type OrgInfo = { name: string, role: OrgRole, 
 /**
@@ -52,6 +52,8 @@ people: Array<Presence>, };
 export type ThreadStatus = "active" | "idle" | "merged";
 
 export type Visibility = string;
+
+export type GitNotes = "off" | "local" | "push";
 
 export type AgentChoice = { id: string, name: string, description: string, };
 
@@ -422,7 +424,7 @@ export type Project = {
 /**
  * The normalized remote that names it.
  */
-repo: string, name: string, org: string | null, origin_url: string | null, visibility: Visibility | null, default_agent: string | null, default_preset: string | null, 
+repo: string, name: string, org: string | null, origin_url: string | null, visibility: Visibility | null, default_agent: string | null, default_preset: string | null, git_notes: GitNotes, forge_comments: boolean, 
 /**
  * Its threads: those the person can see on the server, or those here.
  */

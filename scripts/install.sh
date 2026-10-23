@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the `silt` binary from a GitHub release (ADR 0042):
+# Installs the `silt` binary from a GitHub release (ADR 0043):
 #   curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh | sh
 #
 #   SILT_VERSION       a release tag such as v0.1.0; the latest by default
