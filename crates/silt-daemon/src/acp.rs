@@ -122,7 +122,7 @@ impl Core {
             self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect();
         clones.sort_by(|a, b| a.repo.cmp(&b.repo));
         AgentChoices {
-            agents: registry::all(&self.data_dir)
+            agents: registry::installed_here(&self.data_dir)
                 .into_iter()
                 .map(|agent| AgentChoice { id: agent.id, name: agent.name, description: agent.description })
                 .collect(),
