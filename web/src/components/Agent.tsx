@@ -5,6 +5,7 @@ import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset
 import { readAttachment } from '../attachments'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, running } from '../agentState'
 import { useNow } from '../now'
+import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
@@ -127,6 +128,14 @@ function useTurnClock(status: AgentStatus | null): string | null {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+/** Esc stops the turn while the agent works and asks nothing; a question or a permission takes Esc while open. */
+function StopKey({ onCancel }: { onCancel: () => void }) {
+  useShortcut('escape', 'Stop the turn', () => {
+    if (!document.querySelector('dialog[open]')) onCancel()
+  })
+  return <Kbd>Esc</Kbd>
+}
+
 /** What the agent is doing now, before it is recorded: its thinking, its words, the running tool's output, and how long it's been at it. */
 export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatus; toolOutput: string; onCancel: () => void }) {
   const clock = useTurnClock(status)
@@ -154,7 +163,7 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
         </pre>
       )}
       {working(status) && (
-        <div role="status" className="flex items-center gap-2.5 text-xs text-fg-2">
+        <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
           <Spinner />
           <span className="text-fg-1">{status.state === 'awaiting_permission' ? 'Waiting on you' : 'Working'}</span>
           {clock && (
@@ -162,8 +171,15 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
               {clock}
             </span>
           )}
-          <button type="button" onClick={onCancel} className="ml-auto hover:text-fg-1 max-md:min-h-11">
-            Stop the turn
+          {status.context && (
+            <span className="font-mono" data-volatile title="How much of the agent's context window the session uses">
+              · {tokens(status.context.used)} of {tokens(status.context.size)} context
+            </span>
+          )}
+          <button type="button" onClick={onCancel} aria-label="Stop the turn" className="ml-auto flex items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
+            <span className="max-md:hidden">Stop the turn</span>
+            <span className="md:hidden">Stop</span>
+            {status.state === 'working' && <StopKey onCancel={onCancel} />}
           </button>
         </div>
       )}
@@ -257,7 +273,7 @@ export function AgentDock({
 
   const statusLine = live ? (
     <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
-      {status.agent} {STATE_PHRASE[status.state]}
+      {status.agent} {(status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission' ? 'is asking you a question' : STATE_PHRASE[status.state]}
     </span>
   ) : elsewhere?.agent ? (
     <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
@@ -383,8 +399,8 @@ export function AgentDock({
   ) : (
     live && (
       <>
-        {turning && (
-          <Button variant="ghost" disabled={!draft.trim()} onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
+        {turning && draft.trim() && (
+          <Button variant="ghost" onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
             Steer now
           </Button>
         )}
@@ -426,8 +442,12 @@ export function AgentDock({
               : 'Draft the next prompt; everyone here sees it'
             : status.state === 'awaiting_input'
               ? 'Or say what to change in the plan'
-              : turning
-                ? 'Steer it now, or queue a prompt for when this turn ends'
+              : (status.questions?.length ?? 0) > 0
+                ? 'Answer above, or steer it'
+                : turning
+                  ? narrow
+                    ? 'Steer, or queue a prompt'
+                    : 'Steer it now, or queue a prompt for when this turn ends'
                 : `Ask ${status.agent}, or attach files for context`
         }
         above={above}

@@ -50,8 +50,9 @@ pub(crate) struct Index {
 /// page the hosted app shows (ADR 0034).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct History {
-    /// Each entry's delta, kind, text and time, in order.
-    pub(crate) entries: Vec<(DeltaId, String, String, i64)>,
+    /// Each entry with its delta, in order; its index and whether it was
+    /// rewound are set as a page is read.
+    pub(crate) entries: Vec<(DeltaId, silt_proto::view::HistoryEntry)>,
     /// When each of the thread's turns began.
     pub(crate) prompts: Vec<i64>,
     /// The thread's own conversation, in order, where reverts find the
@@ -68,8 +69,8 @@ impl History {
         self.conversation.push(id);
         match conv {
             ConvOp::Merged { from, title, summary, .. } => {
-                let (kind, text) = crate::browse::merged_text(*from, title, summary);
-                self.entries.push((id, kind, text, delta.time_ms));
+                let shown = crate::browse::merged_text(*from, title, summary);
+                self.entries.push((id, crate::browse::history_entry(shown, delta.thread, delta.time_ms)));
             }
             ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. } => self.prompts.push(delta.time_ms),
             // As `silt_log::rewound_in` finds them.
@@ -159,8 +160,9 @@ impl Index {
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
                         rows.push(Row::Text { thread, kind: entry.kind().to_owned(), body, time_ms });
                     }
-                    if let Some((kind, text)) = crate::browse::entry_text(entry) {
-                        self.histories.entry(thread).or_default().entries.push((delta.span.first(), kind, text, time_ms));
+                    if let Some(shown) = silt_agents::tool::shown(entry) {
+                        let entry = crate::browse::history_entry(shown, thread, time_ms);
+                        self.histories.entry(thread).or_default().entries.push((delta.span.first(), entry));
                     }
                 }
                 None

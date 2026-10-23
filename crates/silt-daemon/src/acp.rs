@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use silt_acp::registry::{self, AgentInfo};
-use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Start, Update};
+use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Question, Start, Update};
 use silt_agents::acp;
 use silt_log::{Author, ConvOp, Op};
 use silt_proto::AgentState;
@@ -19,7 +19,8 @@ use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
 use crate::protocol::{
-    AgentChoice, AgentChoices, AgentStatus, CloneInfo, PermissionAsked, Preset, PromptAttachment, StartOptions, TextKind,
+    AgentChoice, AgentChoices, AgentStatus, CloneInfo, ContextUse, PermissionAsked, Preset, PromptAttachment, StartOptions,
+    TextKind,
 };
 use crate::sessions::NewSession;
 
@@ -41,6 +42,9 @@ pub(crate) struct AcpRun {
     text: String,
     thought: String,
     asking: Vec<Permission>,
+    /// Questions the agent asked and waits on.
+    questions: Vec<Question>,
+    context: Option<ContextUse>,
     error: Option<String>,
     /// Each running tool call's output so far, to tell browsers what's new.
     tool_output: HashMap<String, String>,
@@ -75,6 +79,16 @@ const PLAN_FIRST: &str = "Before you change anything, write a plan for this and 
                           that change them until I approve the plan.";
 
 impl AcpRun {
+    /// The state shown for the run: a working agent with a request or a
+    /// question open waits on the person (ADR 0022).
+    fn shown(&self) -> AgentState {
+        match self.state {
+            // Awaiting input stays the plan's to approve.
+            AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() => AgentState::AwaitingPermission,
+            other => other,
+        }
+    }
+
     fn plan_mode(&self) -> Option<&str> {
         self.modes.as_ref().and_then(silt_acp::plan_mode).map(|mode| mode.id.as_str())
     }
@@ -96,13 +110,64 @@ pub enum AcpEvent {
     Agent(silt_acp::Event),
 }
 
-/// The state shown for a run: a working agent with a request open waits on
-/// the person (ADR 0022).
-fn shown_state(state: AgentState, asking: bool) -> AgentState {
-    match state {
-        AgentState::Working if asking => AgentState::AwaitingPermission,
-        other => other,
+/// The tool call id a question is recorded under.
+fn question_call(id: u64) -> String {
+    format!("question-{id}")
+}
+
+/// A question as Claude Code's `AskUserQuestion` records one, so it reads
+/// back alike whichever agent asked it.
+fn question_input(question: &Question) -> serde_json::Value {
+    let single = question.fields.len() == 1;
+    let asked: Vec<serde_json::Value> = question
+        .fields
+        .iter()
+        .map(|field| {
+            let text =
+                if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
+            serde_json::json!({
+                "header": field.title,
+                "question": text,
+                "multiSelect": field.multi,
+                "options": field
+                    .options
+                    .iter()
+                    .map(|choice| serde_json::json!({"label": choice.label, "description": choice.description}))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({"questions": asked})
+}
+
+/// The answers to `question` as Claude Code words them in its result, by
+/// each choice's label; refused when a field isn't asked or a value isn't
+/// offered.
+fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result<String, CoreError> {
+    let single = question.fields.len() == 1;
+    let mut said = Vec::new();
+    for (key, values) in answers {
+        let field = question
+            .fields
+            .iter()
+            .find(|field| field.key == *key)
+            .ok_or_else(|| CoreError::Invalid(format!("the agent didn't ask for {key}")))?;
+        if !field.multi && values.len() > 1 {
+            return Err(CoreError::Invalid(format!("{} takes one answer", field.title)));
+        }
+        let labels = values
+            .iter()
+            .map(|value| match field.options.iter().find(|choice| choice.value == *value) {
+                Some(choice) => Ok(choice.label.clone()),
+                None if field.options.is_empty() => Ok(value.clone()),
+                None => Err(CoreError::Invalid(format!("the agent didn't offer {value} for {}", field.title))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let asked =
+            if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
+        said.push(format!("\"{asked}\"=\"{}\"", labels.join(", ")));
     }
+    Ok(format!("User has answered your questions: {}. You can now continue with the user's answers in mind.", said.join(", ")))
 }
 
 fn silt_exe() -> PathBuf {
@@ -216,6 +281,8 @@ impl Core {
                 text: String::new(),
                 thought: String::new(),
                 asking: Vec::new(),
+                questions: Vec::new(),
+                context: None,
                 error: None,
                 tool_output: HashMap::new(),
                 steering: None,
@@ -389,7 +456,12 @@ impl Core {
             prompt = format!("{primer}\n\n{prompt}");
         }
         let attached = self.record_attachments(thread, &attachments).await?;
-        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached)).await?;
+        let images: Vec<(String, String)> = attachments
+            .iter()
+            .filter(|attachment| attachment.mime.starts_with("image/"))
+            .map(|attachment| (attachment.mime.clone(), BASE64.encode(&attachment.data)))
+            .collect();
+        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &images)).await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
@@ -428,7 +500,7 @@ impl Core {
     /// How the thread's agent stands: as it runs here, or as last stored.
     pub(crate) fn agent_state(&self, thread: ThreadId) -> Option<AgentState> {
         match self.acp.get(&thread) {
-            Some(run) => Some(shown_state(run.state, !run.asking.is_empty())),
+            Some(run) => Some(run.shown()),
             None => self.agent_runs.get(&thread).and_then(|stored| AgentState::parse(&stored.state)),
         }
     }
@@ -443,7 +515,7 @@ impl Core {
         let stored = self.agent_runs.get(&thread);
         let record = silt_store::AgentRunRecord {
             agent: run.info.name.clone(),
-            state: shown_state(run.state, !run.asking.is_empty()).as_str().to_owned(),
+            state: run.shown().as_str().to_owned(),
             error: run.error.clone(),
             preset: stored.map_or_else(|| "ask_before_commands".to_owned(), |stored| stored.preset.clone()),
             mode: stored.and_then(|stored| stored.mode.clone()),
@@ -471,6 +543,54 @@ impl Core {
             Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
             None => run.asking.push(permission),
         }
+    }
+
+    /// Records a question the agent asked as its tool call, and leaves it
+    /// for the person.
+    async fn question_asked(&mut self, thread: ThreadId, question: Question) -> Result<(), CoreError> {
+        self.flush_acp(thread).await?;
+        let input = question_input(&question);
+        self.record_acp(thread, &acp::tool_call(&question_call(question.id), "AskUserQuestion", "other", Some(&input))).await?;
+        self.acp.get_mut(&thread).expect("caller checked").questions.push(question);
+        Ok(())
+    }
+
+    /// Answers the question `id` with each field's chosen values, or
+    /// declines it, and records the answer as its tool's result.
+    pub(crate) async fn acp_reply(
+        &mut self,
+        selector: &str,
+        id: u64,
+        answers: Option<Vec<(String, Vec<String>)>>,
+    ) -> Result<&'static str, CoreError> {
+        let thread = self.find_thread(selector)?;
+        self.running(thread)?;
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        let question = run
+            .questions
+            .iter()
+            .find(|asked| asked.id == id)
+            .ok_or_else(|| CoreError::Invalid("the agent isn't waiting for that answer".into()))?;
+        let said = match &answers {
+            Some(answers) => Some(answer_text(question, answers)?),
+            None => None,
+        };
+        run.questions.retain(|asked| asked.id != id);
+        send(run, Command::AnswerQuestion { id, answers });
+        let result = said.unwrap_or_else(|| "The question was declined.".to_owned());
+        self.record_acp(thread, &acp::tool_result(&question_call(id), "completed", Some(&result))).await?;
+        self.agent_changed(thread).await;
+        Ok("ok")
+    }
+
+    /// Closes the questions a turn left open, unanswered.
+    async fn questions_dropped(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let dropped = std::mem::take(&mut self.acp.get_mut(&thread).expect("caller checked").questions);
+        for question in dropped {
+            let line = acp::tool_result(&question_call(question.id), "completed", Some("The question went unanswered."));
+            self.record_acp(thread, &line).await?;
+        }
+        Ok(())
     }
 
     pub(crate) fn preset(&self, thread: ThreadId) -> Preset {
@@ -549,7 +669,7 @@ impl Core {
         let run = self.acp.get(&thread)?;
         Some(AgentStatus {
             agent: run.info.name.clone(),
-            state: shown_state(run.state, !run.asking.is_empty()),
+            state: run.shown(),
             streaming: run.text.clone(),
             thinking: run.thought.clone(),
             permissions: run
@@ -557,6 +677,8 @@ impl Core {
                 .iter()
                 .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
+            questions: run.questions.iter().map(Into::into).collect(),
+            context: run.context,
             error: run.error.clone(),
             modes: run.modes.as_ref().map(Into::into),
             settings: run.settings.iter().map(Into::into).collect(),
@@ -629,6 +751,8 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
+            AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
+            AcpEvent::Agent(silt_acp::Event::Context { used, size }) => run.context = Some(ContextUse { used, size }),
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
@@ -647,6 +771,7 @@ impl Core {
                 };
                 run.asking.clear();
                 run.tool_kinds.clear();
+                self.questions_dropped(thread).await?;
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
@@ -656,7 +781,9 @@ impl Core {
                 run.state = AgentState::Stopped;
                 run.handle = None;
                 run.asking.clear();
-                if let Some(id) = run.session.clone() {
+                let session = run.session.clone();
+                self.questions_dropped(thread).await?;
+                if let Some(id) = session {
                     self.close_open_tool(&id).await?;
                     if let Some(session) = self.session_mut(&id) {
                         session.live = false;
@@ -737,9 +864,9 @@ impl Core {
                     self.record_acp(thread, &acp::tool_result(&id, status, output.as_deref())).await?;
                 }
             }
-            Update::Plan(entries) => {
+            Update::Plan(steps) => {
                 self.flush_acp(thread).await?;
-                self.record_acp(thread, &acp::plan(&entries)).await?;
+                self.record_acp(thread, &acp::plan(&steps)).await?;
             }
         }
         Ok(())
@@ -953,10 +1080,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_working_agent_with_a_request_open_waits_on_the_person() {
-        assert_eq!(shown_state(AgentState::Working, true), AgentState::AwaitingPermission);
-        assert_eq!(shown_state(AgentState::Working, false), AgentState::Working);
-        assert_eq!(shown_state(AgentState::Idle, true), AgentState::Idle);
+    fn a_question_is_answered_in_its_choices_words() {
+        let question = Question {
+            id: 1,
+            message: "What should it count?".into(),
+            fields: vec![silt_acp::QuestionField {
+                key: "count".into(),
+                title: "Progress".into(),
+                description: None,
+                options: vec![
+                    silt_acp::QuestionChoice { value: "acked".into(), label: "Bytes acknowledged".into(), description: None },
+                    silt_acp::QuestionChoice {
+                        value: "sent".into(),
+                        label: "Bytes sent".into(),
+                        description: Some("Smooth".into()),
+                    },
+                ],
+                multi: false,
+            }],
+        };
+        let said = answer_text(&question, &[("count".into(), vec!["acked".into()])]).unwrap();
+        let entry = silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: said, is_error: false };
+        let shown = silt_agents::tool::shown(entry).unwrap();
+        assert_eq!(shown.outcome.unwrap().answers[0].answer, "Bytes acknowledged");
+        assert!(answer_text(&question, &[("count".into(), vec!["nope".into()])]).is_err());
+        assert!(answer_text(&question, &[("other".into(), vec!["acked".into()])]).is_err());
+        assert_eq!(question_input(&question)["questions"][0]["options"][1]["description"], "Smooth");
     }
 
     #[test]

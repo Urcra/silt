@@ -327,6 +327,105 @@ pub struct HistoryEntry {
     /// A revert rewound it (ADR 0029).
     #[serde(default)]
     pub rewound: bool,
+    /// On a `tool_call`: what the tool does, read from its input.
+    #[serde(default)]
+    pub tool: Option<ToolView>,
+    /// On a `tool_result`: the call it answers and how it ended.
+    #[serde(default)]
+    pub outcome: Option<ToolOutcome>,
+    /// On an `image`: the picture the entry before it carried.
+    #[serde(default)]
+    pub image: Option<ImageView>,
+    /// On a `usage`: what one of the agent's messages cost.
+    #[serde(default)]
+    pub usage: Option<UsageView>,
+    /// On a `plan`, or a `tool_call` that writes one: its steps.
+    #[serde(default)]
+    pub plan: Option<Vec<PlanStepView>>,
+}
+
+/// A step of an agent's plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PlanStepView {
+    pub text: String,
+    /// `pending`, `in_progress` or `completed`.
+    pub status: String,
+}
+
+/// A picture a prompt or a tool's result carried, as its agent recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ImageView {
+    pub media_type: String,
+    /// Base64; empty when it was too large to show.
+    pub data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct UsageView {
+    /// The message it counts; one message may be recorded more than once.
+    pub message: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub input: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub output: u64,
+}
+
+/// A question an agent asked, with the choices it offered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct QuestionView {
+    /// A word or two naming it, such as `Progress`.
+    pub header: Option<String>,
+    pub question: String,
+    pub multi_select: bool,
+    pub options: Vec<ChoiceView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ChoiceView {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// What the person answered to one question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AnswerView {
+    pub question: String,
+    pub answer: String,
+}
+
+/// A tool call as a thread shows it, the same for every agent (ADR 0044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ToolView {
+    pub id: String,
+    pub name: String,
+    /// `execute`, `read`, `search`, `edit`, `question`, `fetch` or `other`.
+    pub kind: String,
+    /// The command it ran, the file it read or changed, or what it looked for.
+    pub subject: Option<String>,
+    /// Where a search looked, or what a command was for.
+    pub detail: Option<String>,
+    /// What a question tool asked.
+    #[serde(default)]
+    pub questions: Vec<QuestionView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ToolOutcome {
+    /// The id of the call it answers.
+    pub call: String,
+    pub failed: bool,
+    pub exit_code: Option<i32>,
+    /// A question tool's answers.
+    #[serde(default)]
+    pub answers: Vec<AnswerView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

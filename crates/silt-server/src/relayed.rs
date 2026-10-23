@@ -301,6 +301,8 @@ async fn live(
             "streaming": "",
             "thinking": "",
             "permissions": report.permissions,
+            "questions": [],
+            "context": null,
             "error": null,
             "modes": null,
             "settings": [],

@@ -9,10 +9,11 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionConfigId, SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, ToolCallContent,
+    CancelNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
+    ElicitationCapabilities, ElicitationFormCapabilities, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio,
+    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionConfigId, SessionConfigValueId, SessionId, SessionModeId, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest, ToolCallContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde_json::Value;
@@ -48,6 +49,12 @@ pub enum Command {
         id: u64,
         option: Option<String>,
     },
+    /// The person's answer to a question: each field's chosen values, or
+    /// none to decline it.
+    AnswerQuestion {
+        id: u64,
+        answers: Option<Vec<(String, Vec<String>)>>,
+    },
     SetMode(String),
     /// Picks one of a setting's choices, such as a model.
     SetSetting {
@@ -63,9 +70,19 @@ pub enum Update {
     UserText(String),
     AgentText(String),
     Thought(String),
-    ToolCall { id: String, title: String, kind: String, input: Option<Value> },
-    ToolUpdate { id: String, status: Option<String>, output: Option<String> },
-    Plan(Vec<String>),
+    ToolCall {
+        id: String,
+        title: String,
+        kind: String,
+        input: Option<Value>,
+    },
+    ToolUpdate {
+        id: String,
+        status: Option<String>,
+        output: Option<String>,
+    },
+    /// The agent's plan: each step and its status.
+    Plan(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +99,117 @@ pub struct Permission {
     /// Each option's kind, by its id (`allow_once`, `allow_always`,
     /// `reject_once`, `reject_always`).
     pub option_kinds: Vec<(String, String)>,
+}
+
+/// A question the agent asks the person: an ACP form (elicitation) whose
+/// fields are choices or free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub id: u64,
+    pub message: String,
+    pub fields: Vec<QuestionField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionField {
+    /// The key its answer goes under.
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// Its choices; none for free text.
+    pub options: Vec<QuestionChoice>,
+    /// More than one choice may be taken.
+    pub multi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionChoice {
+    /// What the answer sends.
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+impl Question {
+    /// Reads a form request's fields; a URL elicitation, which sends the
+    /// person to a page, isn't one Silt can show.
+    fn of(id: u64, request: &CreateElicitationRequest) -> Option<Self> {
+        let raw = serde_json::to_value(request).ok()?;
+        (raw.get("mode")?.as_str()? == "form").then_some(())?;
+        let schema = raw.get("requestedSchema")?;
+        let required: Vec<&str> =
+            schema.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+        let mut fields: Vec<QuestionField> = schema
+            .get("properties")?
+            .as_object()?
+            .iter()
+            .map(|(key, property)| {
+                let text = |value: &Value, name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
+                let multi = property.get("type").and_then(Value::as_str) == Some("array");
+                let choices = if multi { property.get("items").unwrap_or(&Value::Null) } else { property };
+                QuestionField {
+                    key: key.clone(),
+                    title: text(property, "title").unwrap_or_else(|| key.clone()),
+                    description: text(property, "description"),
+                    options: choices_of(choices),
+                    multi,
+                }
+            })
+            .collect();
+        // Required fields first, in the order the schema names them.
+        fields.sort_by_key(|field| required.iter().position(|key| *key == field.key).unwrap_or(usize::MAX));
+        Some(Self { id, message: request.message.clone(), fields })
+    }
+}
+
+/// A schema's choices: `oneOf`/`anyOf` with titles and descriptions, else a
+/// plain `enum`.
+fn choices_of(schema: &Value) -> Vec<QuestionChoice> {
+    let titled = schema.get("oneOf").or_else(|| schema.get("anyOf")).and_then(Value::as_array);
+    if let Some(titled) = titled {
+        return titled
+            .iter()
+            .filter_map(|choice| {
+                let value = choice.get("const")?.as_str()?.to_owned();
+                let text = |key: &str| choice.get(key).and_then(Value::as_str).map(str::to_owned);
+                Some(QuestionChoice {
+                    label: text("title").unwrap_or_else(|| value.clone()),
+                    description: text("description"),
+                    value,
+                })
+            })
+            .collect();
+    }
+    schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|value| QuestionChoice { value: value.to_owned(), label: value.to_owned(), description: None })
+        .collect()
+}
+
+/// The response that gives `answers`, or declines.
+fn answered(answers: Option<Vec<(String, Vec<String>)>>, multi: &HashMap<String, bool>) -> CreateElicitationResponse {
+    let value = match answers {
+        Some(answers) => {
+            let content: serde_json::Map<String, Value> = answers
+                .into_iter()
+                .map(|(key, mut values)| {
+                    let value = if multi.get(&key).copied().unwrap_or(false) {
+                        Value::from(values)
+                    } else {
+                        Value::from(values.pop().unwrap_or_default())
+                    };
+                    (key, value)
+                })
+                .collect();
+            serde_json::json!({"action": "accept", "content": content})
+        }
+        None => serde_json::json!({"action": "decline"}),
+    };
+    serde_json::from_value(value).expect("an accept or decline action")
 }
 
 /// Why a turn ended.
@@ -159,6 +287,12 @@ pub enum Event {
     /// The agent turned down a mode or setting.
     Refused(String),
     Permission(Permission),
+    Question(Question),
+    /// How much of its context window the session uses, in tokens.
+    Context {
+        used: u64,
+        size: u64,
+    },
     TurnEnded {
         reason: StopReason,
     },
@@ -219,6 +353,7 @@ fn event_of(update: SessionUpdate) -> Option<Event> {
     match update {
         SessionUpdate::CurrentModeUpdate(update) => Some(Event::ModeChanged(update.current_mode_id.0.to_string())),
         SessionUpdate::ConfigOptionUpdate(update) => Some(Event::Settings(settings_of(update.config_options))),
+        SessionUpdate::UsageUpdate(update) => Some(Event::Context { used: update.used, size: update.size }),
         update => simplify(update).map(Event::Update),
     }
 }
@@ -244,12 +379,16 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
                 .and_then(tool_output)
                 .or_else(|| update.fields.raw_output.as_ref().map(Value::to_string)),
         },
-        SessionUpdate::Plan(plan) => Update::Plan(plan.entries.into_iter().map(|entry| entry.content).collect()),
+        SessionUpdate::Plan(plan) => {
+            Update::Plan(plan.entries.into_iter().map(|entry| (entry.content, label(&entry.status))).collect())
+        }
         _ => return None,
     })
 }
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
+/// Questions waiting on the person, with which of their fields take several choices.
+type Asking = Arc<Mutex<HashMap<u64, (Responder<CreateElicitationResponse>, HashMap<String, bool>)>>>;
 
 async fn run(
     start: Start,
@@ -278,7 +417,11 @@ async fn run(
 
     let replaying = Arc::new(AtomicBool::new(false));
     let waiting: Waiting = Arc::default();
+    let asking: Asking = Arc::default();
     let next_id = Arc::new(AtomicU64::new(1));
+    let question_ids = next_id.clone();
+    let questioned = events.clone();
+    let held = asking.clone();
     let mcp_servers: Vec<McpServer> = start
         .mcp
         .iter()
@@ -318,8 +461,29 @@ async fn run(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |request: CreateElicitationRequest, responder, _connection| {
+                let id = question_ids.fetch_add(1, Ordering::SeqCst);
+                match Question::of(id, &request) {
+                    Some(question) => {
+                        let multi = question.fields.iter().map(|field| (field.key.clone(), field.multi)).collect();
+                        held.lock().expect("lock").insert(id, (responder, multi));
+                        let _ = questioned.send(Event::Question(question));
+                    }
+                    None => responder.respond(answered(None, &HashMap::new()))?,
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(transport, async move |connection: ConnectionTo<Agent>| {
-            let init = connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task().await?;
+            // Silt shows a form of choices and text as a question; it has no browser to send the person to.
+            let capabilities =
+                ClientCapabilities::new().elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
+            let init = connection
+                .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
+                .block_task()
+                .await?;
             let agent = init.agent_info.as_ref().map_or_else(|| start.program.clone(), |info| info.name.clone());
             let accepts = Accepts::of(&init.agent_capabilities.prompt_capabilities);
             let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
@@ -396,6 +560,12 @@ async fn run(
                         for responder in parked {
                             responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled))?;
                         }
+                        let asked: Vec<_> = asking.lock().expect("lock").drain().map(|(_, (responder, _))| responder).collect();
+                        for responder in asked {
+                            responder.respond(
+                                serde_json::from_value(serde_json::json!({"action": "cancel"})).expect("a cancel action"),
+                            )?;
+                        }
                     }
                     Command::Answer { id, option } => {
                         let responder = waiting.lock().expect("lock").remove(&id);
@@ -405,6 +575,12 @@ async fn run(
                                 None => RequestPermissionOutcome::Cancelled,
                             };
                             responder.respond(RequestPermissionResponse::new(outcome))?;
+                        }
+                    }
+                    Command::AnswerQuestion { id, answers } => {
+                        let held = asking.lock().expect("lock").remove(&id);
+                        if let Some((responder, multi)) = held {
+                            responder.respond(answered(answers, &multi))?;
                         }
                     }
                     Command::SetMode(mode) => {

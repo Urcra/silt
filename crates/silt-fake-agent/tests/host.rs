@@ -36,8 +36,10 @@ async fn a_session_streams_asks_permission_and_loads_again() {
 
     assert!(agent.send(prompt("add acp")));
     let mut seen = Vec::new();
+    let mut context = None;
     loop {
         match next(&mut events).await {
+            Event::Context { used, size } => context = Some((used, size)),
             Event::Permission(permission) => {
                 assert_eq!(permission.title, "Edit src/main.rs");
                 assert!(agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) }));
@@ -50,6 +52,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
             other => panic!("unexpected {other:?}"),
         }
     }
+    assert_eq!(context, Some((53_000, 200_000)));
     assert!(seen.contains(&Update::Thought("Thinking about the prompt.".into())));
     assert!(
         seen.iter().any(
@@ -105,11 +108,44 @@ async fn cancelling_answers_the_pending_permission_request() {
     loop {
         match next(&mut events).await {
             Event::TurnEnded { .. } => break,
-            Event::Update(_) => {}
+            Event::Update(_) | Event::Context { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }
     assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\n");
+    agent.send(Command::Stop);
+}
+
+#[tokio::test]
+async fn a_question_is_asked_as_a_form_and_answered_with_a_choice() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), Vec::new()), sender);
+    assert!(matches!(next(&mut events).await, Event::Ready { .. }));
+    agent.send(prompt("Ask me what to count"));
+    let question = loop {
+        match next(&mut events).await {
+            Event::Question(question) => break question,
+            Event::Update(_) | Event::Context { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(question.message, "What should the progress bar count?");
+    let field = &question.fields[0];
+    assert_eq!((field.key.as_str(), field.multi, field.options.len()), ("count", false, 3));
+    assert_eq!(field.options[1].label, "Bytes sent on the socket");
+    assert_eq!(field.options[1].description.as_deref(), Some("Smooth, but can run ahead of the server"));
+    agent.send(Command::AnswerQuestion { id: question.id, answers: Some(vec![("count".into(), vec!["sent".into()])]) });
+    let mut said = Vec::new();
+    loop {
+        match next(&mut events).await {
+            Event::Update(Update::AgentText(text)) => said.push(text),
+            Event::TurnEnded { .. } => break,
+            Event::Update(_) | Event::Context { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(said, ["Counting sent."]);
     agent.send(Command::Stop);
 }
 
@@ -144,7 +180,7 @@ async fn modes_and_settings_come_with_the_session_and_change_on_request() {
             Event::ModeChanged(mode) => assert_eq!(mode, "plan"),
             Event::Update(Update::AgentText(text)) => said.push(text),
             Event::TurnEnded { .. } => break,
-            Event::Update(_) => {}
+            Event::Update(_) | Event::Context { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }

@@ -339,6 +339,7 @@ impl GeminiReader {
                             id: call_id.clone(),
                             name,
                             input: call.get("args").cloned().unwrap_or(Value::Null),
+                            kind: None,
                         });
                     }
                     if let Some(result) = call.get("result").filter(|result| !result.is_null()) {
@@ -618,7 +619,12 @@ mod tests {
             entries,
             vec![
                 Entry::User { text: "list files in src".into() },
-                Entry::ToolCall { id: "ls_1".into(), name: "list_directory".into(), input: json!({"dir_path": "src"}) },
+                Entry::ToolCall {
+                    id: "ls_1".into(),
+                    name: "list_directory".into(),
+                    input: json!({"dir_path": "src"}),
+                    kind: None
+                },
                 Entry::ToolResult { tool_use_id: "ls_1".into(), text: "main.rs".into(), is_error: false },
                 Entry::Thinking { text: "Looking: at src".into() },
                 Entry::Assistant { text: "There is one file.".into() },

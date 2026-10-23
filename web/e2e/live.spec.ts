@@ -171,6 +171,17 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await alice.getByRole('button', { name: 'Send' }).click()
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(alice.getByText('I was not allowed to edit.')).toBeVisible()
+  // A question waits in the transcript where it was asked, answered by a choice.
+  await alice.getByLabel('draft').fill('Ask me what to count')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  const question = alice.getByRole('region', { name: 'question' }).last()
+  await expect(question).toContainText('What should the progress bar count?')
+  await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is asking you a question')
+  await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('asks you')
+  await question.getByRole('radio', { name: /Bytes sent on the socket/ }).click()
+  await expect(alice.getByText('Counting sent.')).toBeVisible()
+  await expect(question).toContainText('answered')
+  await expect(question.getByRole('listitem').filter({ hasText: 'Bytes sent on the socket' })).toHaveClass(/bg-accent-tint/)
 
   const changed = () =>
     alice.evaluate(async (thread) => {

@@ -17,7 +17,7 @@ import { useActions } from '../shortcuts'
 import { threadTone, threadWhere } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { type Row, duration, piecesOf, rowsOf, toolOf, toolSummary } from '../transcript'
+import { type Piece, type Row, duration, kindOf, piecesOf, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
 import {
   Avatar,
   Button,
@@ -45,6 +45,9 @@ import { Markdown } from './Markdown'
 import { Mock } from './Mock'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
+import { CommandCard, ImageThumb, PlanSteps, QuestionCard, StepRow } from './ToolSteps'
+import { LiveQuestions } from '../liveQuestions'
+import { DETAILS, TranscriptDetail, leaveDraft, takeDraft, useDetailChoice, type Detail } from '../detail'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -116,8 +119,43 @@ interface EntryProps {
   onChanged: () => Promise<unknown>
 }
 
+/** Copies what a message says, and for a prompt, forks from the turn before it with the prompt in the fork's draft to edit. */
+function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: string; turn: number | undefined }) {
+  const navigate = useNavigate()
+  const [copied, setCopied] = useState(false)
+  const action = 'invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:visible'
+  const copy = () =>
+    void navigator.clipboard?.writeText(entry.text).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      () => undefined,
+    )
+  const edit = () =>
+    api.fork(thread, turn! - 1).then(
+      (made) => {
+        leaveDraft(made.thread, entry.text)
+        void navigate({ to: '/t/$id', params: { id: made.thread } })
+      },
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <>
+      <button type="button" aria-label={copied ? 'copied' : `copy entry ${entry.index}`} title="Copy" className={action} onClick={copy}>
+        <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
+      </button>
+      {entry.kind === 'user' && turn !== undefined && turn > 1 && !hosted() && (
+        <button type="button" aria-label={`edit from turn ${turn}`} title="Edit this prompt in a fork from the turn before it" className={action} onClick={() => void edit()}>
+          <Icon name="edit" className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </>
+  )
+}
+
 /** One entry of the history, with its comments and a way to comment on it. */
-function Entry({ entry, children, thread, comments, anchor, onComment, onChanged }: EntryProps & { entry: HistoryEntry; children: ReactNode }) {
+function Entry({ entry, children, thread, comments, anchor, onComment, onChanged, turn }: EntryProps & { entry: HistoryEntry; children: ReactNode; turn?: number }) {
   const [commenting, setCommenting] = useState(false)
   const here = comments.filter((comment) => comment.location.at === 'entry' && comment.location.index === entry.index)
   const highlighted = anchor.entry === entry.index
@@ -132,14 +170,24 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
       {entry.rewound && entry.kind === 'user' && <p className="text-xs text-fg-2 italic">rewound by a revert</p>}
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">{children}</div>
-        <button
-          type="button"
-          aria-label={`comment on entry ${entry.index}`}
-          className="invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible"
-          onClick={() => setCommenting(true)}
+        {/* In the gutter on a desktop, so every card in a turn is as wide as the others. */}
+        <span
+          className={cx(
+            'flex shrink-0 items-center gap-0.5 md:absolute md:top-0 md:left-full md:ml-1 md:flex-col',
+            // A phone shows no comment button, so only messages keep the column.
+            entry.kind !== 'user' && entry.kind !== 'assistant' && 'max-md:hidden',
+          )}
         >
-          <Icon name="comment" className="h-3.5 w-3.5" />
-        </button>
+          {(entry.kind === 'user' || entry.kind === 'assistant') && <MessageActions entry={entry} thread={thread} turn={turn} />}
+          <button
+            type="button"
+            aria-label={`comment on entry ${entry.index}`}
+            className="invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:hidden"
+            onClick={() => setCommenting(true)}
+          >
+            <Icon name="comment" className="h-3.5 w-3.5" />
+          </button>
+        </span>
       </div>
       {here.length > 0 && (
         <div className="mt-1.5 flex flex-col gap-2 rounded-md bg-accent-tint px-3 py-2.5">
@@ -192,16 +240,26 @@ function thoughtFor(entries: HistoryEntry[]): string | null {
   return next ? duration(entries[first].time_ms, next.time_ms) : null
 }
 
+/** How many of a run's tool calls failed. */
+function failedIn(entries: HistoryEntry[]): number {
+  return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed).length
+}
+
 /** A run of the agent's work (ADR 0044): its thinking folded by how long it took, its tool calls folded in one card, and its edits as diffs. */
 function ToolFold({ entries, ...props }: EntryProps & { entries: HistoryEntry[] }) {
   const thinking = entries.filter((entry) => entry.kind === 'thinking')
   const tools = entries.filter((entry) => entry.kind !== 'thinking')
   const edits = tools.map((entry) => ({ entry, change: changeOf(entry) })).filter((edit) => edit.change !== null)
+  // An edit shows as its diff card, so the fold leaves it and its result out, and counts only what it holds.
+  const carded = new Set(edits.map((edit) => edit.entry))
+  const steps = stepsOf(tools).filter((step) => !(step.call && carded.has(step.call)))
+  const folded = steps.flatMap((step) => [step.call, step.result, ...step.images].filter((entry): entry is HistoryEntry => entry !== null))
   const took = thoughtFor(entries)
+  const verbose = useContext(TranscriptDetail) === 'verbose'
   return (
-    <div className="flex flex-col gap-2.5">
+    <div key={String(verbose)} className="flex flex-col gap-2.5">
       {thinking.length > 0 && (
-        <details className="group/think border-l-2 border-line pl-3 text-xs text-fg-2">
+        <details open={verbose} className="group/think border-l-2 border-line pl-3 text-xs text-fg-2">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
             <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
             {took ? `Thought for ${took}` : 'Thought it through'}
@@ -215,26 +273,24 @@ function ToolFold({ entries, ...props }: EntryProps & { entries: HistoryEntry[] 
           </div>
         </details>
       )}
-      {tools.length > 0 && (
-        <details data-testid="tools" className="group/tools rounded-md border border-line bg-elevated text-xs">
+      {steps.length > 0 && (
+        <details data-testid="tools" open={verbose} className="group/tools rounded-md border border-line bg-elevated text-xs">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
             <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/tools:rotate-90" />
-            <Icon name="terminal" className="h-3.5 w-3.5" />
-            {toolSummary(tools)}
+            {toolSummary(folded)}
+            {failedIn(folded) > 0 && <span className="text-danger">· {failedIn(folded)} failed</span>}
           </summary>
           <div className="flex flex-col border-t border-line-subtle">
-            {tools.map((entry) => (
-              <div key={entry.index} className="border-b border-line-subtle px-3 py-1.5 last:border-b-0">
-                <Entry entry={entry} {...props}>
-                  <span className="flex items-start gap-2">
-                    {entry.kind === 'tool_call' && <Icon name="check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" />}
-                    <span className={cx('min-w-0 flex-1', entry.kind !== 'tool_call' && 'pl-[22px]')}>
-                      <EntryText entry={entry} />
-                    </span>
-                  </span>
-                </Entry>
-              </div>
-            ))}
+            {steps.map((step) => {
+              const anchor = step.call ?? step.result!
+              return (
+                <div key={anchor.index} className="border-b border-line-subtle px-3 py-1.5 last:border-b-0">
+                  <Entry entry={anchor} {...props}>
+                    <StepRow step={step} open={verbose} />
+                  </Entry>
+                </div>
+              )
+            })}
           </div>
         </details>
       )}
@@ -292,6 +348,7 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
             </>
           )}
           {took && <> · {took}</>}
+          {row.tokens > 0 && <> · {tokens(row.tokens)} tokens</>}
         </span>
         {files && files.length > 0 && (
           <button
@@ -336,8 +393,10 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   )
 }
 
-function TranscriptRow({ row, ...props }: EntryProps & { row: Row }) {
+/** `running`: the turn is still under way, so it has no totals or actions yet. */
+function TranscriptRow({ row, running = false, ...props }: EntryProps & { row: Row; running?: boolean }) {
   const [summary, setSummary] = useState(false)
+  const detail = useContext(TranscriptDetail)
   if (row.kind === 'origin') {
     return (
       <div className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
@@ -370,24 +429,60 @@ function TranscriptRow({ row, ...props }: EntryProps & { row: Row }) {
   }
   const pieces = piecesOf(row.entries)
   const rewound = row.prompt?.rewound ?? row.entries.some((entry) => entry.rewound)
-  return (
-    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="py-3">
-      <div className="flex min-w-0 flex-col gap-3.5">
-        {row.prompt && (
-          <Entry entry={row.prompt} {...props}>
-            <EntryText entry={row.prompt} />
-          </Entry>
-        )}
-        {pieces.map((piece) =>
+  // Compact folds a turn's work under one line, leaving its last reply showing.
+  const last = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
+  const folded = detail === 'compact' && Boolean(row.turn) && last >= 0 && pieces.length > 1
+  const work = folded ? pieces.filter((_, index) => index !== last) : []
+  const reply = folded ? [pieces[last]] : []
+  const final = row.entries[row.entries.length - 1]
+  const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
+  const drawn = (piece: Piece) =>
           piece.kind === 'tools' ? (
             <ToolFold key={piece.entries[0].index} entries={piece.entries} {...props} />
+          ) : piece.kind === 'plan' ? (
+            <Entry key={piece.entry.index} entry={piece.entry} {...props}>
+              <PlanSteps entry={piece.entry} />
+            </Entry>
+          ) : piece.kind === 'step' ? (
+            <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
+              {kindOf(piece.step.call!) === 'question' ? <QuestionCard step={piece.step} /> : <CommandCard step={piece.step} />}
+            </Entry>
           ) : (
             <Entry key={piece.entry.index} entry={piece.entry} {...props}>
               <EntryText entry={piece.entry} />
             </Entry>
-          ),
+          )
+  return (
+    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="py-3">
+      <div className="flex min-w-0 flex-col gap-3.5">
+        {row.prompt && (
+          <Entry entry={row.prompt} turn={row.turn?.number} {...props}>
+            <EntryText entry={row.prompt} />
+            {row.images.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap justify-end gap-2">
+                {row.images.map((image) => (
+                  <ImageThumb key={image.index} entry={image} from="in the prompt" />
+                ))}
+              </div>
+            )}
+          </Entry>
         )}
-        {row.turn && <TurnBar thread={props.thread} turn={row.turn} row={row} rewound={rewound} />}
+        {folded ? (
+          <>
+            <details className="group/worked text-xs text-fg-2">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
+                <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/worked:rotate-90" />
+                {worked ? `Worked for ${worked}` : 'Worked'}
+                {toolSummary(row.entries) && <span>· {toolSummary(row.entries)}</span>}
+              </summary>
+              <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">{work.map(drawn)}</div>
+            </details>
+            {reply.map(drawn)}
+          </>
+        ) : (
+          pieces.map(drawn)
+        )}
+        {row.turn && !running && <TurnBar thread={props.thread} turn={row.turn} row={row} rewound={rewound} />}
       </div>
     </div>
   )
@@ -400,10 +495,59 @@ function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
 }
 
 /** Fork the thread here, or offer a fork's work back to its source as a merge request. */
+/** A fork's work offered back to its source as a merge request, by its title. */
+function OfferForm({ thread, onError }: { thread: string; onError: (failure: unknown) => void }) {
+  const navigate = useNavigate()
+  const [title, setTitle] = useState('')
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        api.offerMergeRequest(thread, title).then((mr) => {
+          toast(`Offered "${mr.title}"`, 'ok')
+          void navigate({ to: '/mr/$id', params: { id: mr.id } })
+        }, onError)
+      }}
+    >
+      <Input aria-label="merge request title" autoFocus placeholder="What it does" value={title} onChange={(event) => setTitle(event.target.value)} />
+      <Button type="submit" variant="primary" disabled={!title.trim()}>
+        Offer
+      </Button>
+    </form>
+  )
+}
+
+/** What the thread changed, over the composer: how much, a way to review it, and for a fork, offering it back. */
+function ChangesBar({ thread, files, totals, forked, onReview }: { thread: string; files: number; totals: { added: number; removed: number }; forked: boolean; onReview: () => void }) {
+  const [offering, setOffering] = useState(false)
+  return (
+    <div role="group" aria-label="changes" className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
+      <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
+      <span>
+        {files} {files === 1 ? 'file' : 'files'} changed
+      </span>
+      <Counts added={totals.added} removed={totals.removed} />
+      <span className="ml-auto flex items-center gap-1.5">
+        <Button size="sm" variant="ghost" onClick={onReview}>
+          Review
+        </Button>
+        {forked &&
+          (offering ? (
+            <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
+          ) : (
+            <Button size="sm" variant="primary" icon="merge" onClick={() => setOffering(true)}>
+              Create merge request
+            </Button>
+          ))}
+      </span>
+    </div>
+  )
+}
+
 function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   const navigate = useNavigate()
   const [offering, setOffering] = useState(false)
-  const [title, setTitle] = useState('')
   const [error, setError] = useState<string>()
   const failed = (failure: unknown) => setError(message(failure))
   const fork = () => {
@@ -424,31 +568,28 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
           <span className="max-lg:sr-only">Offer as merge request</span>
         </Button>
       )}
-      {offering && (
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setError(undefined)
-            api.offerMergeRequest(thread, title).then((mr) => {
-              toast(`Offered "${mr.title}"`, 'ok')
-              void navigate({ to: '/mr/$id', params: { id: mr.id } })
-            }, failed)
-          }}
-        >
-          <Input aria-label="merge request title" autoFocus placeholder="What it does" value={title} onChange={(event) => setTitle(event.target.value)} />
-          <Button type="submit" variant="primary" disabled={!title.trim()}>
-            Offer
-          </Button>
-        </form>
-      )}
+      {offering && <OfferForm thread={thread} onError={failed} />}
       {error && <p className="w-full text-sm text-danger">{error}</p>}
     </>
   )
 }
 
 /** The header's More (ADR 0044): the commands that pick the thread up in a terminal, with which agent, Join live, the graph and the details. */
-function ThreadMore({ thread, summary, here, onDetails }: { thread: string; summary: ThreadSummary | undefined; here: number; onDetails: () => void }) {
+function ThreadMore({
+  thread,
+  summary,
+  here,
+  onDetails,
+  detail,
+  onDetail,
+}: {
+  thread: string
+  summary: ThreadSummary | undefined
+  here: number
+  onDetails: () => void
+  detail: Detail
+  onDetail: (detail: Detail) => void
+}) {
   const [agent, setAgent] = useState('')
   const commands = [`silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`, `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`]
   return (
@@ -462,6 +603,23 @@ function ThreadMore({ thread, summary, here, onDetails }: { thread: string; summ
     >
       {(close) => (
         <>
+          <p className="px-1 pb-0.5 text-2xs text-fg-2">How much of each turn the transcript shows</p>
+          <span role="radiogroup" aria-label="transcript detail" className="mx-1 flex rounded-sm border border-line p-0.5">
+            {DETAILS.map((choice) => (
+              <button
+                key={choice.id}
+                type="button"
+                role="radio"
+                aria-checked={detail === choice.id}
+                title={choice.says}
+                onClick={() => onDetail(choice.id)}
+                className={cx('flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11', detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </span>
+          <div className="my-1 border-t border-line-subtle" />
           <p className="px-1 pb-0.5 text-2xs text-fg-2">Continue in a terminal, in a clone of the repository</p>
           <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
             with
@@ -532,9 +690,13 @@ function ThreadHeader({
   waiting,
   onChanges,
   onDetails,
+  detail,
+  onDetail,
 }: {
   thread: string
   summary: ThreadSummary | undefined
+  detail: Detail
+  onDetail: (detail: Detail) => void
   people: { user: string; device: string }[]
   changes: { added: number; removed: number } | null
   panelOpen: boolean
@@ -545,16 +707,18 @@ function ThreadHeader({
   onDetails: () => void
 }) {
   const where = summary ? threadWhere(summary) : null
+  const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
+  const branch = commits.data?.findLast((commit) => commit.branch)?.branch
   // Where it is and what records it; who started it and the rest are in Details.
   const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
   return (
     <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle px-4 md:pr-3 md:pl-5">
       <DrawerButton />
-      <h1 className="max-w-[50%] min-w-0 shrink-0 truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
+      <h1 className="max-w-[50%] min-w-16 shrink truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
         {summary?.title ?? 'Thread'}
       </h1>
       {waiting && (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
           <Dot tone="warn" />
           Waiting on you
         </span>
@@ -569,6 +733,12 @@ function ThreadHeader({
           {short(thread)}
           {meta.map((part) => ` · ${part}`)}
         </span>
+        {branch && (
+          <span className="inline-flex min-w-0 shrink items-center gap-1 font-mono text-2xs text-fg-2" title="The branch its latest commit went on">
+            <Icon name="branch" className="h-3 w-3 shrink-0" />
+            <span className="truncate">{branch}</span>
+          </span>
+        )}
         {summary?.forked_from && (
           <span className="shrink-0 text-2xs text-fg-2">
             Fork of{' '}
@@ -593,7 +763,7 @@ function ThreadHeader({
           <span className="max-md:sr-only">Changes</span>
           {changes && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
-        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} />
+        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} />
       </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
@@ -847,6 +1017,14 @@ function ThreadBody({
   const [panel, setPanel] = useState(true)
   const [sheet, setSheet] = useState(false)
   const [draft, setDraft] = useState('')
+  const [detail, setDetail] = useDetailChoice()
+  // A prompt to edit, left by Edit on the thread this one was forked from.
+  const [leftFor, setLeftFor] = useState<string>()
+  if (leftFor !== thread) {
+    setLeftFor(thread)
+    const left = takeDraft(thread)
+    if (left) setDraft(left)
+  }
   const navigate = useNavigate()
   const hash = useRouterState({ select: (state) => state.location.hash })
   // A short id in the address becomes the full one, so the sidebar marks the thread.
@@ -858,7 +1036,10 @@ function ThreadBody({
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
   const clearDraft = useCallback(() => setDraft(''), [])
   useClearSentDraft(lastPrompt, draft, clearDraft)
-  useActions([{ id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) }])
+  useActions([
+    { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
+    ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
+  ])
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
@@ -893,7 +1074,24 @@ function ThreadBody({
     },
   }
 
+  const showChanges = () => {
+    const phone = window.matchMedia('(max-width: 1023px)').matches
+    if (phone) {
+      setTab('changes')
+      setSheet(true)
+      return
+    }
+    if (!panel || tab !== 'changes') {
+      setTab('changes')
+      setPanel(true)
+    } else setPanel(false)
+  }
+  const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
+  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission'
+
   return (
+    <TranscriptDetail.Provider value={detail}>
+    <LiveQuestions.Provider value={agent ? { thread, questions: agent.questions ?? [] } : null}>
     <Page
       flush
       label="thread"
@@ -964,18 +1162,9 @@ function ThreadBody({
         changes={totals}
         panelOpen={panel}
         waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
-        onChanges={() => {
-          const phone = window.matchMedia('(max-width: 1023px)').matches
-          if (phone) {
-            setTab('changes')
-            setSheet(true)
-            return
-          }
-          if (!panel || tab !== 'changes') {
-            setTab('changes')
-            setPanel(true)
-          } else setPanel(false)
-        }}
+        detail={detail}
+        onDetail={setDetail}
+        onChanges={showChanges}
         onDetails={() => {
           setTab('details')
           setPanel(true)
@@ -1003,7 +1192,7 @@ function ThreadBody({
                 className="absolute left-0 w-full"
                 style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
               >
-                <TranscriptRow row={row} {...entryProps} />
+                <TranscriptRow row={row} running={turnRunning && item.index === rows.length - 1} {...entryProps} />
               </div>
             )
           })}
@@ -1016,10 +1205,15 @@ function ThreadBody({
           {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
         </div>
         <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 md:pb-5">
+          {files && files.length > 0 && totals && !busy && (
+            <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} onReview={showChanges} />
+          )}
           <AgentDock thread={thread} status={agent} preset={preset} onPreset={setPreset} draft={draft} onDraft={setDraft} people={people} />
         </div>
       </div>
     </Page>
+    </LiveQuestions.Provider>
+    </TranscriptDetail.Provider>
   )
 }
 

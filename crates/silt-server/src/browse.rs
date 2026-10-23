@@ -10,7 +10,7 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use silt_agents::{Entry, Transcripts};
+use silt_agents::Transcripts;
 use silt_log::{
     CommentTarget, ConvOp, Delta, GraphEvent, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in,
 };
@@ -164,52 +164,41 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
     let rewound = silt_log::rewound_in(log, thread);
     let mut out = Vec::new();
     for delta in log.iter().filter(|delta| delta.thread == thread) {
-        let texts: Vec<(String, String)> = match &delta.op {
+        let shown: Vec<silt_agents::tool::Shown> = match &delta.op {
             Op::Conv(ConvOp::Native { session, file, line }) => {
                 let file = match file {
                     SessionFile::Main => "main".to_owned(),
                     SessionFile::Subagent(name) => format!("subagent:{name}"),
                 };
-                transcripts.entries(&session.agent, &session.id, &file, line).into_iter().filter_map(entry_text).collect()
+                transcripts
+                    .entries(&session.agent, &session.id, &file, line)
+                    .into_iter()
+                    .filter_map(silt_agents::tool::shown)
+                    .collect()
             }
             Op::Conv(ConvOp::Merged { from, title, summary, .. }) => vec![merged_text(*from, title, summary)],
             _ => Vec::new(),
         };
-        for (kind, text) in texts {
-            let index = out.len();
-            out.push((
-                delta.span.first(),
-                HistoryEntry {
-                    index,
-                    thread: thread.to_string(),
-                    origin: "own".into(),
-                    kind,
-                    text,
-                    time_ms: delta.time_ms,
-                    rewound: rewound.contains(&delta.span.first()),
-                },
-            ));
+        for shown in shown {
+            let mut entry = history_entry(shown, thread, delta.time_ms);
+            entry.index = out.len();
+            entry.rewound = rewound.contains(&delta.span.first());
+            out.push((delta.span.first(), entry));
         }
     }
     out
 }
 
 /// The kind and text a history shows for one entry of a transcript, if any.
-pub(crate) fn entry_text(entry: Entry) -> Option<(String, String)> {
-    match entry {
-        Entry::Other { .. } => None,
-        Entry::ToolCall { name, input, .. } => Some(("tool_call".to_owned(), format!("{name} {input}"))),
-        Entry::Compaction { summary } => Some((
-            "compaction".to_owned(),
-            summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
-        )),
-        other => Some((other.kind().to_owned(), other.into_searchable_text().unwrap_or_default())),
-    }
+/// A history entry of `thread` from what its history shows; its index
+/// and whether a revert rewound it are the caller's to set.
+pub(crate) fn history_entry(shown: silt_agents::tool::Shown, thread: ThreadId, time_ms: i64) -> HistoryEntry {
+    shown.into_entry(0, thread.to_string(), "own", time_ms, false)
 }
 
 /// The entry a history shows for a merge into the thread.
-pub(crate) fn merged_text(from: ThreadId, title: &str, summary: &str) -> (String, String) {
-    ("merge".to_owned(), format!("merged \"{title}\" from fork {from}: {summary}"))
+pub(crate) fn merged_text(from: ThreadId, title: &str, summary: &str) -> silt_agents::tool::Shown {
+    silt_agents::tool::Shown::plain("merge", format!("merged \"{title}\" from fork {from}: {summary}"))
 }
 
 /// The title it was given, or else the first line of its first prompt.
@@ -332,15 +321,7 @@ async fn history(
     let limit = page.limit.unwrap_or(total);
     let entries = (offset..)
         .zip(history.entries.iter().skip(offset).take(limit))
-        .map(|(index, (delta, kind, text, time_ms))| HistoryEntry {
-            index,
-            thread: row.id.to_string(),
-            origin: "own".into(),
-            kind: kind.clone(),
-            text: text.clone(),
-            time_ms: *time_ms,
-            rewound: history.rewound.contains(delta),
-        })
+        .map(|(index, (delta, entry))| HistoryEntry { index, rewound: history.rewound.contains(delta), ..entry.clone() })
         .collect();
     Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
 }
@@ -364,8 +345,8 @@ fn indexed_turns(history: &crate::index::History) -> Vec<TurnInfo> {
         .zip(&history.prompts)
         .map(|(number, &began)| {
             // The latest prompt said at or before the mark.
-            let prompt = entries.iter().rposition(|(_, kind, _, time_ms)| kind == "user" && *time_ms <= began);
-            TurnInfo { number, entry: prompt, prompt: prompt.map(|at| entries[at].2.clone()).unwrap_or_default() }
+            let prompt = entries.iter().rposition(|(_, entry)| entry.kind == "user" && entry.time_ms <= began);
+            TurnInfo { number, entry: prompt, prompt: prompt.map(|at| entries[at].1.text.clone()).unwrap_or_default() }
         })
         .collect()
 }
@@ -858,7 +839,9 @@ mod tests {
         let kept: Vec<_> = history
             .entries
             .iter()
-            .map(|(delta, kind, text, time_ms)| (*delta, kind.clone(), text.clone(), *time_ms, history.rewound.contains(delta)))
+            .map(|(delta, entry)| {
+                (*delta, entry.kind.clone(), entry.text.clone(), entry.time_ms, history.rewound.contains(delta))
+            })
             .collect();
         let expected: Vec<_> = read
             .iter()

@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange, DeviceView, FileEdit,
-    HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink, Project, ReplyView,
-    SearchFilters, SearchResult, ShowLine, StateChange, ThreadLink, ThreadSummary, TurnInfo,
+    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
+    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink,
+    PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, ThreadLink,
+    ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 
 /// One request per line on the daemon socket, answered by one response line.
@@ -499,6 +500,13 @@ pub enum Request {
         #[serde(default)]
         option: Option<String>,
     },
+    /// Answers a question with each field's chosen values, or declines it.
+    AcpReply {
+        thread: String,
+        id: u64,
+        #[serde(default)]
+        answers: Option<Vec<(String, Vec<String>)>>,
+    },
     AcpStop {
         thread: String,
     },
@@ -818,6 +826,10 @@ pub struct AgentStatus {
     pub streaming: String,
     pub thinking: String,
     pub permissions: Vec<PermissionAsked>,
+    /// Questions the agent asked and waits on.
+    pub questions: Vec<QuestionAsked>,
+    /// How much of its context window the session uses, when it says.
+    pub context: Option<ContextUse>,
     pub error: Option<String>,
     /// The agent's modes, when it has any.
     pub modes: Option<AgentModes>,
@@ -936,6 +948,74 @@ pub struct PermissionAsked {
     pub options: Vec<(String, String)>,
 }
 
+/// Tokens of a context window used, of its size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ContextUse {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub used: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub size: u64,
+}
+
+/// A question the agent waits on, as a form of fields to fill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct QuestionAsked {
+    pub id: u64,
+    pub message: String,
+    pub fields: Vec<QuestionFieldAsked>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct QuestionFieldAsked {
+    /// The key its answer goes under.
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// Its choices; none for a free answer.
+    pub options: Vec<ChoiceAsked>,
+    pub multi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ChoiceAsked {
+    /// What answering with it sends.
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+impl From<&silt_acp::Question> for QuestionAsked {
+    fn from(question: &silt_acp::Question) -> Self {
+        Self {
+            id: question.id,
+            message: question.message.clone(),
+            fields: question
+                .fields
+                .iter()
+                .map(|field| QuestionFieldAsked {
+                    key: field.key.clone(),
+                    title: field.title.clone(),
+                    description: field.description.clone(),
+                    options: field
+                        .options
+                        .iter()
+                        .map(|choice| ChoiceAsked {
+                            value: choice.value.clone(),
+                            label: choice.label.clone(),
+                            description: choice.description.clone(),
+                        })
+                        .collect(),
+                    multi: field.multi,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AgentChoices {
@@ -984,7 +1064,7 @@ pub enum BusEvent {
     /// The thread's family has new deltas; `deltas` is its log's length.
     Thread { thread: String, deltas: usize },
     /// The agent the web UI started in the thread; `None` once it's gone.
-    Agent { thread: String, status: Option<AgentStatus> },
+    Agent { thread: String, status: Option<Box<AgentStatus>> },
     /// The thread's queue of prompts changed.
     Queue { thread: String },
     /// A piece of what the agent says, thinks or a tool prints, as it comes.
@@ -1082,6 +1162,10 @@ mod tests {
             AgentSetting::decl(&config),
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
+            QuestionAsked::decl(&config),
+            ContextUse::decl(&config),
+            QuestionFieldAsked::decl(&config),
+            ChoiceAsked::decl(&config),
             BusEvent::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
@@ -1105,6 +1189,14 @@ mod tests {
             FileEdit::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),
+            ToolView::decl(&config),
+            ToolOutcome::decl(&config),
+            ImageView::decl(&config),
+            UsageView::decl(&config),
+            PlanStepView::decl(&config),
+            QuestionView::decl(&config),
+            ChoiceView::decl(&config),
+            AnswerView::decl(&config),
             HistoryHit::decl(&config),
             HistoryPage::decl(&config),
             InFlight::decl(&config),

@@ -755,6 +755,7 @@ impl Core {
             Request::AcpAnswer { thread, id, option } => {
                 to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }).await)
             }
+            Request::AcpReply { thread, id, answers } => to_response(self.acp_reply(&thread, id, answers).await),
             Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop).await),
             Request::Shutdown => Response::ok("shutting down"),
         };

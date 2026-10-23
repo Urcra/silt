@@ -297,6 +297,8 @@ impl Core {
                 .iter()
                 .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
+            questions: Vec::new(),
+            context: None,
             error: None,
             modes: None,
             settings: Vec::new(),
@@ -329,6 +331,12 @@ impl Core {
             Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
             Request::AcpCancel { thread } => (thread, RemoteCommand::Cancel),
             Request::AcpAnswer { thread, id, option } => (thread, RemoteCommand::Answer { id: *id, option: option.clone() }),
+            Request::AcpReply { thread, .. } => {
+                let thread = self.find_thread(thread).ok()?;
+                return self
+                    .elsewhere_of(thread)
+                    .map(|_| Elsewhere::Refuse("answer the agent's question on the machine running it"));
+            }
             Request::AcpStop { thread } => (thread, RemoteCommand::Stop),
             Request::AcpMode { thread, mode } => (thread, RemoteCommand::Mode { mode: mode.clone() }),
             Request::AcpSetting { thread, id, value } => {

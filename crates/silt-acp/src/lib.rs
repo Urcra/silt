@@ -7,6 +7,8 @@ mod modes;
 mod prompt;
 pub mod registry;
 
-pub use host::{AgentHandle, Command, Event, HostError, Permission, Start, StopReason, Update, start};
+pub use host::{
+    AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, Update, start,
+};
 pub use modes::{Choice, Modes, Setting, plan_mode};
 pub use prompt::{Accepts, Attachment};

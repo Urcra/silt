@@ -287,7 +287,7 @@ test('a thread waiting on a permission', async ({ page }) => {
   await startFake(page, 'Add a hello line to main', 'Ask for everything')
   await shoot(page, 'thread-waiting', async (shown) => {
     await expect(shown.getByRole('group', { name: 'permission' })).toBeVisible()
-    await expect(shown.getByText('Waiting on you').first()).toBeVisible()
+    await expect(shown.getByText('Waiting on you').filter({ visible: true }).first()).toBeVisible()
   })
 })
 
@@ -295,5 +295,13 @@ test('a plan to approve', async ({ page }) => {
   await startFake(page, 'Retry the upload twice', 'Plan')
   await shoot(page, 'thread-plan', async (shown) => {
     await expect(shown.getByRole('group', { name: 'plan' })).toBeVisible()
+  })
+})
+
+test('a question waiting on you', async ({ page }) => {
+  await startFake(page, 'Ask me what to count')
+  await shoot(page, 'thread-question', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'question' })).toContainText('waiting on you')
+    await expect(shown.getByText('Waiting on you').filter({ visible: true }).first()).toBeVisible()
   })
 })

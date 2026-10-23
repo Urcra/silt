@@ -100,6 +100,7 @@ pub fn read_line(line: &str) -> Read {
                     id: field("toolCallId"),
                     name: field("name"),
                     input: request.get("arguments").cloned().unwrap_or(Value::Null),
+                    kind: None,
                 });
             }
         }
@@ -422,7 +423,10 @@ mod tests {
         let reads: Vec<Read> = lines.iter().map(|line| read_line(line)).collect();
         let entries: Vec<Entry> = reads.iter().flat_map(|read| read.entries.clone()).collect();
         assert_eq!(entries[1], Entry::User { text: "List files".into() });
-        assert_eq!(entries[2], Entry::ToolCall { id: "call_1".into(), name: "bash".into(), input: json!({"command": "ls"}) });
+        assert_eq!(
+            entries[2],
+            Entry::ToolCall { id: "call_1".into(), name: "bash".into(), input: json!({"command": "ls"}), kind: None }
+        );
         assert_eq!(entries[3], Entry::ToolResult { tool_use_id: "call_1".into(), text: "a.txt".into(), is_error: false });
         assert_eq!(entries[4], Entry::Assistant { text: "There is a.txt.".into() });
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
