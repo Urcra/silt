@@ -139,14 +139,13 @@ done
 "#;
 
 async fn install_hooks(root: &Path) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
     let hooks = root.with_file_name("git-hooks");
     let hook = hooks.join("pre-receive");
     if tokio::fs::read_to_string(&hook).await.ok().as_deref() != Some(PRE_RECEIVE) {
         tokio::fs::create_dir_all(&hooks).await?;
         let staged = hooks.join(".pre-receive.new");
         tokio::fs::write(&staged, PRE_RECEIVE).await?;
-        tokio::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).await?;
+        silt_os::make_executable(&staged)?;
         tokio::fs::rename(&staged, &hook).await?;
     }
     Ok(hooks)

@@ -6,7 +6,6 @@
 
 use std::fs;
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -237,6 +236,6 @@ fn quiet_agent(root: &Path) -> Result<PathBuf, Exn<BenchError>> {
     let failed = || BenchError("cannot write the agent".into());
     let path = root.join("claude-bin");
     fs::write(&path, "#!/bin/sh\nexit 0\n").or_raise(failed)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).or_raise(failed)?;
+    silt_os::make_executable(&path).or_raise(failed)?;
     Ok(path)
 }

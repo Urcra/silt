@@ -155,8 +155,6 @@ fn bundles_carry_commits_origin_does_not_have() {
 #[test]
 fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
     use silt_git::conventions::{LinkOutcome, PrepareOutcome, link_shared_paths, run_prepare};
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = source_repo();
     let root = dir.path();
     fs::create_dir_all(root.join(".agents")).expect("mkdir");
@@ -164,7 +162,7 @@ fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
     fs::write(root.join(".agents/linked"), "node_modules\n.env\ncache\na.txt\n").expect("write");
     fs::write(root.join(".agents/prepare"), "#!/bin/sh\npwd > prepared.txt\necho \"$SILT_THREAD\" >> prepared.txt\n")
         .expect("write");
-    fs::set_permissions(root.join(".agents/prepare"), fs::Permissions::from_mode(0o755)).expect("chmod");
+    silt_os::make_executable(&root.join(".agents/prepare")).expect("chmod");
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "conventions"]);
     fs::create_dir_all(root.join("node_modules/left-pad")).expect("mkdir");

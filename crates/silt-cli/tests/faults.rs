@@ -2,6 +2,8 @@
 //! runs, a session still keeps every turn mark and credits each edit to
 //! its tool, and sessions of one family left without a daemon record side
 //! by side.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

@@ -1,5 +1,7 @@
 //! Repository conventions on managed checkouts: `.agents/prepare` runs and
 //! `.agents/linked` paths are shared on every mount.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

@@ -3257,6 +3257,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cde48f36530cbd91b65f050101e6c056d6eb743cea2a8f0f19beef69c6742ff8"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "jwt-simple"
 version = "0.12.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4956,10 +4966,10 @@ dependencies = [
  "agent-client-protocol",
  "base64 0.23.1",
  "futures",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "silt-os",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4978,6 +4988,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "silt-os",
  "silt-proto",
  "silt-types",
  "tempfile",
@@ -4997,6 +5008,7 @@ dependencies = [
  "silt-agents",
  "silt-daemon",
  "silt-log",
+ "silt-os",
  "silt-store",
  "silt-types",
  "tempfile",
@@ -5032,6 +5044,7 @@ dependencies = [
  "silt-daemon",
  "silt-git",
  "silt-mcp",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-server",
@@ -5072,7 +5085,6 @@ dependencies = [
  "notify-debouncer-full",
  "postcard",
  "reqwest",
- "rustix",
  "serde",
  "serde_json",
  "silt-acp",
@@ -5082,6 +5094,7 @@ dependencies = [
  "silt-git",
  "silt-log",
  "silt-mcp",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-store",
@@ -5113,6 +5126,7 @@ name = "silt-git"
 version = "0.0.1"
 dependencies = [
  "gix",
+ "silt-os",
  "silt-types",
  "tempfile",
  "thiserror 2.0.21",
@@ -5137,6 +5151,18 @@ name = "silt-mcp"
 version = "0.0.1"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "silt-os"
+version = "0.0.1"
+dependencies = [
+ "junction",
+ "rustix",
+ "tempfile",
+ "tokio",
+ "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5180,6 +5206,7 @@ dependencies = [
  "silt-agents",
  "silt-crdt",
  "silt-log",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-store",
@@ -6441,6 +6468,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "which"
+version = "8.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

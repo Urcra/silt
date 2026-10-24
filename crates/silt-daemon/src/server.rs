@@ -1,6 +1,5 @@
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,9 +7,7 @@ use std::time::Duration;
 
 use silt_store::Store;
 use silt_types::ActorId;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
@@ -62,6 +59,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     // to other users covers every file in it, whatever its own mode; a
     // process-wide umask would also reach files written into checkouts.
     crate::paths::make_private(data_dir)?;
+    #[cfg(unix)]
     if let Some(dir) = socket.parent() {
         crate::paths::make_private(dir)?;
     }
@@ -89,24 +87,9 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
 
     // Taking requests before everything is loaded: they wait in the queue
     // for the load, and come before the rescans it queues (ADR 0034).
-    if socket.exists() {
-        fs::remove_file(socket)?;
-    }
-    let listener =
-        UnixListener::bind(socket).map_err(|source| RunError::Listen { path: socket.display().to_string(), source })?;
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     let accept_events = events.clone();
     let (answered, mut answered_rx) = mpsc::unbounded_channel();
-    let me = crate::paths::uid();
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            // Whoever reaches the socket controls the daemon, so only this
-            // user's own processes may.
-            if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
-                tokio::spawn(serve(stream, accept_events.clone(), answered.clone()));
-            }
-        }
-    });
+    listen(socket, accept_events, answered)?;
     // Without a turn, so hooks capturing meanwhile don't wait on a long
     // load; what they store is taken in at the first turn.
     let mut core = match Core::load(store, actor, data_dir, events.clone()).await {
@@ -194,10 +177,58 @@ fn hold_until_exit(lock: fs::File) {
     std::mem::forget(lock);
 }
 
+/// Takes connections on the socket, from this user's own processes only:
+/// whoever reaches it controls the daemon.
+#[cfg(unix)]
+fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    if socket.exists() {
+        fs::remove_file(socket)?;
+    }
+    let listener = tokio::net::UnixListener::bind(socket)
+        .map_err(|source| RunError::Listen { path: socket.display().to_string(), source })?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
+    let me = silt_os::uid();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
+                tokio::spawn(serve(stream, events.clone(), answered.clone()));
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Takes connections on the pipe, which only this user can open. Each
+/// client gets the waiting instance, and a new one waits for the next.
+#[cfg(windows)]
+fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
+    let listen_error = |source| RunError::Listen { path: socket.display().to_string(), source };
+    let name = socket.as_os_str().to_owned();
+    let mut waiting = silt_os::pipe::serve(&name, true).map_err(listen_error)?;
+    tokio::spawn(async move {
+        while waiting.connect().await.is_ok() {
+            let next = match silt_os::pipe::serve(&name, false) {
+                Ok(next) => next,
+                Err(error) => {
+                    warn!(%error, "could not wait for the next client");
+                    break;
+                }
+            };
+            tokio::spawn(serve(std::mem::replace(&mut waiting, next), events.clone(), answered.clone()));
+        }
+    });
+    Ok(())
+}
+
 /// Serves one connection. `answered` hears when a shutdown request has been
 /// answered, since the daemon exits, and drops this task, right after.
-async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) {
-    let (read, mut write) = stream.into_split();
+async fn serve(
+    stream: impl AsyncRead + AsyncWrite + Send + 'static,
+    events: mpsc::UnboundedSender<Event>,
+    answered: mpsc::UnboundedSender<()>,
+) {
+    let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let request = serde_json::from_str::<Request>(&line);
@@ -226,7 +257,7 @@ async fn serve(stream: UnixStream, events: mpsc::UnboundedSender<Event>, answere
     }
 }
 
-async fn write_response(write: &mut OwnedWriteHalf, response: &Response) -> io::Result<()> {
+async fn write_response(write: &mut (impl AsyncWrite + Unpin), response: &Response) -> io::Result<()> {
     let mut encoded = serde_json::to_vec(response)?;
     encoded.push(b'\n');
     write.write_all(&encoded).await?;

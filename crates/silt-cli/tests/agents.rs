@@ -1,6 +1,8 @@
 //! Agents other than Claude Code (ADR 0012), with scripted stand-ins that
 //! write each agent's own session format: sessions are found and recorded,
 //! continue natively on another machine, and move between agents.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

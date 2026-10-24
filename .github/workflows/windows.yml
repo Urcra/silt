@@ -1,0 +1,36 @@
+# Windows comes before macOS (ADR 0045): clippy and the tests on GitHub's
+# Windows runners, for the workspace and the desktop app. The tests whose
+# agents are shell-script stand-ins run on Linux only, until the stand-ins
+# are a Rust program.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-2025
+    env:
+      # The tests don't need the web UI, and building it needs wasm-bindgen.
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: rustup show
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace
+
+      - name: Desktop app
+        working-directory: crates/silt-desktop
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked

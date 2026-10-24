@@ -1,6 +1,8 @@
 //! Git notes on a project's commits (ADR 0042): written once the project
 //! asks for them, pushed to origin with `push`, and read by `silt blame` in
 //! another clone.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

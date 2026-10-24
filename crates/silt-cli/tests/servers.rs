@@ -1,5 +1,7 @@
 //! One machine signed in to two servers (ADR 0032): each thread syncs with
 //! its own server, and nothing of it reaches the other.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

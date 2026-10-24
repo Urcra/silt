@@ -1,5 +1,6 @@
 mod admin;
 mod commands;
+mod desktop;
 mod mcp;
 mod recording;
 mod reference;
@@ -650,7 +651,14 @@ pub(crate) fn explain(error: &Exn<CliError>) -> String {
 }
 
 fn run() -> Result<(), Exn<CliError>> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if cfg!(windows)
+        && !matches!(cli.command, Command::Open { .. })
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        desktop::refuse_wsl_folder(&cwd).map_err(commands::fail)?;
+    }
+    match cli.command {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),

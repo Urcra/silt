@@ -1,9 +1,12 @@
 //! Silt's desktop app: the local daemon's web UI in a window (ADR 0041).
 //! Recording never depends on it. The daemon runs on its own, and closing
-//! the window leaves it and its agents running.
+//! the window leaves it and its agents running. On Windows the window also
+//! shows WSL distributions' daemons (ADR 0045).
 
+mod backends;
 mod daemon;
 
+use std::collections::HashMap;
 use std::env;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,28 +14,79 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use exn::Exn;
+use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use crate::backends::{Backend, Target};
 use crate::daemon::{Answer, DesktopError};
 
 const MAIN: &str = "main";
 
 fn main() {
-    // Shared by the window's handlers: where the daemon's UI is, once known.
+    // Shared by the window's handlers: where the daemon's UI is, once known,
+    // and which backend and project the window should show.
     let ui: Arc<Mutex<Option<Url>>> = Arc::default();
+    let known = Arc::new(known_backends());
+    let first = link_in(env::args(), &known).unwrap_or_default();
+    let target = Arc::new(Mutex::new(first));
+    let (linked, linked_known) = (target.clone(), known.clone());
+    let (picked, menu_known) = (target.clone(), known.clone());
     tauri::Builder::default()
-        // A second launch shows the window that's already open.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        // A second launch, a `silt://` link among them, shows the window
+        // that's already open.
+        .plugin(tauri_plugin_single_instance::init(move |app, argv, _| {
+            if let Some(wanted) = link_in(argv, &linked_known) {
+                *linked.lock().expect("lock") = wanted;
+            }
+            show(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .on_menu_event(move |_, event| {
+            if let Some(backend) = Backend::parse(event.id().as_ref()).filter(|backend| menu_known.contains(backend)) {
+                *picked.lock().expect("lock") = Target { backend, project: None };
+            }
+        })
         .setup(move |app| {
-            open_window(app.handle(), ui)?;
+            if known.len() > 1 {
+                backend_menu(app.handle(), &known)?;
+            }
+            open_window(app.handle(), ui, target)?;
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("the desktop app could not start");
 }
 
-fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>) -> tauri::Result<WebviewWindow> {
+/// This computer, and on Windows each WSL distribution. A distribution's
+/// `silt` is looked for only once it's picked, so the app doesn't start
+/// every distribution.
+fn known_backends() -> Vec<Backend> {
+    let mut known = vec![Backend::Native];
+    if cfg!(windows) {
+        let mut list = Command::new("wsl.exe");
+        list.args(["--list", "--quiet"]);
+        let found = daemon::output_of(list).map(|output| backends::distributions(&output)).unwrap_or_default();
+        known.extend(found.into_iter().map(Backend::Wsl));
+    }
+    known
+}
+
+/// The target a `silt://` link among `args` names.
+fn link_in(args: impl IntoIterator<Item = String>, known: &[Backend]) -> Option<Target> {
+    args.into_iter().filter_map(|arg| Url::parse(&arg).ok()).find_map(|link| backends::target_of(&link, known))
+}
+
+fn backend_menu(app: &AppHandle, known: &[Backend]) -> tauri::Result<()> {
+    let backends = known
+        .iter()
+        .fold(SubmenuBuilder::new(app, "Backend"), |menu, backend| menu.text(backend.id(), backend.label()))
+        .build()?;
+    app.set_menu(MenuBuilder::new(app).item(&backends).build()?)?;
+    Ok(())
+}
+
+fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>, target: Arc<Mutex<Target>>) -> tauri::Result<WebviewWindow> {
     let started = AtomicBool::new(false);
     let navigating = ui.clone();
     let loading = ui.clone();
@@ -55,7 +109,8 @@ fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>) -> tauri::Result<We
         .on_page_load(move |window, payload| {
             if payload.event() == PageLoadEvent::Finished && !started.swap(true, Ordering::SeqCst) {
                 let ui = loading.clone();
-                std::thread::spawn(move || keep_ui(&window, &ui));
+                let target = target.clone();
+                std::thread::spawn(move || keep_ui(&window, &ui, &target));
             }
         })
         .build()
@@ -67,16 +122,23 @@ const CHECK_WAIT: Duration = Duration::from_secs(3);
 
 /// Finds or starts the daemon and loads its UI, then keeps it loaded: when
 /// the daemon stops or starts again on a new address, it's found or started
-/// again and the window follows it to the same page. Until the UI first
+/// again and the window follows it to the same page. When another backend
+/// or project is asked for, the window goes there. Until the UI first
 /// loads, the starting page says why it hasn't.
-fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>) {
+fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Target>) {
     let exe = env::current_exe().ok();
     let program = daemon::silt_program(env::var_os("SILT_BIN"), exe.as_deref(), |path| path.is_file());
+    let mut wsl_silt: HashMap<String, String> = HashMap::new();
+    let mut showing: Option<Target> = None;
     let mut lost = true;
     let mut failures = 0;
     loop {
+        let wanted = target.lock().expect("lock").clone();
         let known = ui.lock().expect("lock").clone();
-        if !lost && let Some(known) = &known {
+        if !lost
+            && showing.as_ref() == Some(&wanted)
+            && let Some(known) = &known
+        {
             match daemon::check(known, CHECK_WAIT) {
                 Answer::Up => std::thread::sleep(CHECK_EVERY),
                 answer => {
@@ -89,8 +151,10 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>) {
         let Ok(shown) = window.url() else {
             return;
         };
-        let opened = daemon::open_web(&program).and_then(|new| {
-            let moved = daemon::same_page_on(Some(&shown), known.as_ref(), &new);
+        // Another backend or project starts on its own page.
+        let carried = if showing.as_ref() == Some(&wanted) { known.as_ref() } else { None };
+        let opened = command_for(&wanted, &program, &mut wsl_silt).and_then(daemon::open_web).and_then(|new| {
+            let moved = daemon::same_page_on(Some(&shown), carried, &new);
             eprintln!("silt-desktop: showing {}{}", new.origin().ascii_serialization(), moved.path());
             *ui.lock().expect("lock") = Some(new);
             let reload = daemon::only_the_fragment_moves(&shown, &moved);
@@ -101,11 +165,12 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>) {
         });
         match opened {
             Ok(()) => {
+                showing = Some(wanted);
                 lost = false;
                 failures = 0;
             }
             Err(error) => {
-                if known.is_none() {
+                if known.is_none() || showing.as_ref() != Some(&wanted) {
                     let message = serde_json::to_string(&explain(&error)).expect("a string");
                     if window.eval(format!("showError({message})")).is_err() {
                         return;
@@ -117,6 +182,25 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>) {
             }
         }
     }
+}
+
+/// The command that asks the target's `silt` for its UI. A distribution's
+/// `silt` is found once and remembered.
+fn command_for(
+    target: &Target,
+    program: &std::path::Path,
+    wsl_silt: &mut HashMap<String, String>,
+) -> Result<Command, Exn<DesktopError>> {
+    let Backend::Wsl(distribution) = &target.backend else {
+        return Ok(backends::open_web(target, program, ""));
+    };
+    if !wsl_silt.contains_key(distribution) {
+        let found = daemon::output_of(backends::find_silt(distribution))
+            .and_then(|stdout| backends::found_silt(&String::from_utf8_lossy(&stdout)))
+            .ok_or_else(|| Exn::new(DesktopError::NoSiltIn(distribution.clone())))?;
+        wsl_silt.insert(distribution.clone(), found);
+    }
+    Ok(backends::open_web(target, program, &wsl_silt[distribution]))
 }
 
 fn show(app: &AppHandle) {
@@ -134,7 +218,16 @@ fn open_in_browser(url: &Url) {
     }
     let url = url.to_string();
     std::thread::spawn(move || {
-        let _ = Command::new("xdg-open").arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        // rundll32 hands the address to the default browser without cmd,
+        // which would split it at its `&`.
+        let mut opener = if cfg!(windows) {
+            let mut opener = Command::new("rundll32");
+            opener.arg("url.dll,FileProtocolHandler");
+            opener
+        } else {
+            Command::new("xdg-open")
+        };
+        let _ = opener.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     });
 }
 

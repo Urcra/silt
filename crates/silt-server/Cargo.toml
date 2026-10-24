@@ -26,6 +26,7 @@ sha2 = "0.11.1"
 silt-agents = { path = "../silt-agents" }
 silt-crdt = { path = "../silt-crdt" }
 silt-log = { path = "../silt-log" }
+silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }
 silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }

@@ -1,6 +1,8 @@
 //! Drives the real `silt` binary with a scripted stand-in for Claude Code
 //! that writes its transcript where Claude would, fires the hooks and edits
 //! a file inside a tool call.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Write;

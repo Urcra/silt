@@ -82,9 +82,7 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
     }
     // The service user may own an existing directory, so only a new one is
     // made private here.
-    std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
-        .create(&data)
-        .or_raise(|| CliError(format!("cannot create {}", data.display())))?;
+    silt_os::create_private_dir(&data).or_raise(|| CliError(format!("cannot create {}", data.display())))?;
     // Replacing a config keeps what these options don't set, sign-in
     // providers above all.
     let mut config = if config_path.exists() {
@@ -138,7 +136,7 @@ pub fn server_init(options: InitOptions) -> Result<(), Exn<CliError>> {
 /// Gives the data dir to the service's user, which runs the server: run as
 /// root, init has made it root's.
 fn hand_over(data: &Path, user: &str) {
-    if !rustix::process::geteuid().is_root() {
+    if !silt_os::is_root() {
         return;
     }
     let owner = format!("{user}:{user}");

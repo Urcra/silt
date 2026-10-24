@@ -412,6 +412,14 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
+/// A program's path as the first word of a hook command. On Windows an
+/// agent may run hooks through cmd, PowerShell or Git Bash, and plain double
+/// quotes mean the same to all three when the path holds none of their
+/// special characters.
+pub fn program_quote(path: &str) -> String {
+    if cfg!(windows) && !path.contains(['"', '$', '`', '%', '\n']) { format!("\"{path}\"") } else { shell_quote(path) }
+}
+
 /// Links each skill directory into `dir` under its directory name, made
 /// safe as a file name. Of skills sharing a name the first is kept, as Silt
 /// lists the repository's before the personal ones.
@@ -440,16 +448,7 @@ pub(crate) fn link_skills(dir: &Path, skills: &[PathBuf]) -> std::io::Result<()>
 
 /// Makes `link` point at `target`, a directory or a file.
 pub(crate) fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    return std::os::unix::fs::symlink(target, link);
-    #[cfg(windows)]
-    return if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    };
-    #[cfg(not(any(unix, windows)))]
-    return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, format!("can't link {} here", link.display())));
+    silt_os::link(target, link)
 }
 
 /// A transcript's first line, which agents start with a record of where

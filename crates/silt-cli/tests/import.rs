@@ -1,6 +1,8 @@
 //! Importing the sessions agents already have on disk (ADR 0043): each as
 //! a thread kept on this machine, searchable and continued like a recorded
 //! one, until `silt send` sends it, redacted.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

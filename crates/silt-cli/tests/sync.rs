@@ -1,5 +1,7 @@
 //! Two machines and a Silt server, all real processes: a thread recorded on
 //! a laptop continues on a home machine with its conversation and files.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

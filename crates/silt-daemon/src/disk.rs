@@ -1,6 +1,5 @@
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use silt_store::BlobStore;
@@ -75,9 +74,7 @@ pub fn stat(root: &Path, path: &str) -> io::Result<Option<(u64, i64, bool)>> {
         Err(error) => return Err(error),
     };
     match fs::symlink_metadata(&full) {
-        Ok(metadata) if metadata.is_file() => {
-            Ok(Some((metadata.len(), mtime_ns(&metadata), metadata.permissions().mode() & 0o111 != 0)))
-        }
+        Ok(metadata) if metadata.is_file() => Ok(Some((metadata.len(), mtime_ns(&metadata), silt_os::is_executable(&metadata)))),
         Ok(_) => Ok(None),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -122,7 +119,7 @@ pub fn read(root: &Path, path: &str) -> io::Result<Option<RawFile>> {
     Ok(Some(RawFile {
         hash: BlobStore::hash(&bytes),
         mtime_ns: mtime_ns(&metadata),
-        executable: metadata.permissions().mode() & 0o111 != 0,
+        executable: silt_os::is_executable(&metadata),
         bytes,
     }))
 }
@@ -146,13 +143,20 @@ pub fn replace(
     let temporary = dir.join(format!(".{file_name}.silt-tmp"));
     let mut file = fs::File::create(&temporary)?;
     io::Write::write_all(&mut file, bytes)?;
-    let mode = match fs::metadata(&full) {
-        Ok(metadata) => metadata.permissions().mode(),
-        Err(_) => file.metadata()?.permissions().mode(),
-    };
-    // Executable where readable, as git checks out an executable file.
-    let mode = if executable { mode | ((mode & 0o444) >> 2) } else { mode & !0o111 };
-    file.set_permissions(fs::Permissions::from_mode(mode))?;
+    // Windows has no executable bit; git keeps a file's mode there.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = match fs::metadata(&full) {
+            Ok(metadata) => metadata.permissions().mode(),
+            Err(_) => file.metadata()?.permissions().mode(),
+        };
+        // Executable where readable, as git checks out an executable file.
+        let mode = if executable { mode | ((mode & 0o444) >> 2) } else { mode & !0o111 };
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
     file.sync_all()?;
     drop(file);
     let current = match fs::read(&full) {
@@ -195,8 +199,10 @@ mod tests {
         Ok(replace(root, path, bytes, executable, |_| true)?.expect("an unconditional write happens"))
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_rewritten_file_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().expect("temp dir");
         write(dir.path(), "secret.env", b"a\n", false).expect("writes");
         let path = dir.path().join("secret.env");
@@ -225,7 +231,8 @@ mod tests {
         let written = write(dir.path(), "a/b/run.sh", b"#!/bin/sh\n", true).expect("writes");
         let read_back = read(dir.path(), "a/b/run.sh").expect("reads").expect("exists");
         assert_eq!(read_back.hash, written.hash);
-        assert!(read_back.executable && read_back.is_text());
+        assert!(read_back.is_text());
+        assert_eq!(read_back.executable, cfg!(unix), "Windows has no executable bit");
         assert!(read(dir.path(), "missing").expect("reads").is_none());
         remove(dir.path(), "a/b/run.sh").expect("removes");
         remove(dir.path(), "a/b/run.sh").expect("removing twice is fine");
@@ -246,7 +253,7 @@ mod tests {
         let outside = tempfile::tempdir().expect("temp dir");
         assert!(write(dir.path(), ".git/hooks/pre-commit", b"x", true).is_err());
         assert!(write(dir.path(), "a/../../escape", b"x", false).is_err());
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).expect("symlink");
+        silt_os::link(outside.path(), &dir.path().join("linked")).expect("symlink");
         assert!(write(dir.path(), "linked/planted", b"x", false).is_err());
         assert!(!outside.path().join("planted").exists());
         std::fs::write(outside.path().join("secret"), "s").expect("writes");

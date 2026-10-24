@@ -1,6 +1,8 @@
 //! Two users on one Silt server, all real processes: Bob forks Alice's
 //! in-progress thread with its conversation, pulls her newer work, and
 //! offers his back with merge requests that Alice approves or declines.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

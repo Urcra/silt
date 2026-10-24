@@ -1,5 +1,7 @@
 //! The daemon remembers the clones it worked in across restarts, so the web
 //! UI can start agents in new threads of them.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

@@ -1,6 +1,8 @@
 //! A Silt server as the session store of an Agent SDK app (ADR 0042): what
 //! one host appends, another loads, and the person's machines see the
 //! session as a thread.
+// The agents these tests drive are shell-script stand-ins.
+#![cfg(unix)]
 
 mod common;
 

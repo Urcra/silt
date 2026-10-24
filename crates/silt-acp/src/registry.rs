@@ -246,12 +246,42 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
             text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
         })
         .unwrap_or_default();
+    // What Windows programs can't start without, or find nothing without.
+    const WINDOWS: [&str; 22] = [
+        "SystemRoot",
+        "SystemDrive",
+        "windir",
+        "ComSpec",
+        "PATHEXT",
+        "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
+        "PUBLIC",
+        "OS",
+        "PROCESSOR_ARCHITECTURE",
+        "NUMBER_OF_PROCESSORS",
+    ];
+    // Windows' variable names ignore case: its `PATH` is usually `Path`.
+    let named = |names: &[&str], name: &str| {
+        names.iter().any(|listed| if cfg!(windows) { listed.eq_ignore_ascii_case(name) } else { *listed == name })
+    };
     std::env::vars_os()
         .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
-            TOOLS.contains(&name.as_str())
+            named(&TOOLS, name)
+                || (cfg!(windows) && named(&WINDOWS, name))
                 || name.starts_with("LC_")
-                || SHARED.contains(&name.as_str())
+                || named(&SHARED, name)
                 || name.starts_with("XDG_")
                 || vendor.iter().any(|prefix| name.starts_with(prefix))
                 || listed.contains(name)
@@ -344,14 +374,7 @@ fn downloaded(agent: &AgentInfo, data_dir: &Path) -> bool {
 
 /// Whether `program` names an executable, directly or on `path`.
 fn resolves(program: &str, path: &std::ffi::OsStr) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    let executable = |candidate: &Path| {
-        candidate.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    };
-    if program.contains('/') {
-        return executable(Path::new(program));
-    }
-    !program.is_empty() && std::env::split_paths(path).any(|dir| executable(&dir.join(program)))
+    silt_os::find_program(program, path).is_some()
 }
 
 /// The text at `url`, or none when it can't be had; the bundled snapshot
@@ -490,12 +513,7 @@ async fn stage(archive: &str, cmd: &str, sha256: Option<&str>, staging: &Path, u
     if !real.starts_with(&root) || !metadata.is_file() {
         return Err(RegistryError::UnsafeEntry(archive.to_owned()));
     }
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(permissions.mode() | 0o700);
-        tokio::fs::set_permissions(&program, permissions).await?;
-    }
+    silt_os::make_executable(&program)?;
     let program_digest = digest(&tokio::fs::read(&program).await?);
     tokio::fs::write(unpacked.join(".silt-program-sha256"), program_digest).await?;
     Ok(())
@@ -573,6 +591,7 @@ mod tests {
         assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_agents_installed_here_are_offered() {
         use std::os::unix::fs::PermissionsExt as _;

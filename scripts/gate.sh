@@ -15,6 +15,14 @@ cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
+# Windows (ADR 0045), cross-checked when its target and MinGW are installed;
+# CI's Windows job runs the tests there.
+if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu && command -v x86_64-w64-mingw32-gcc >/dev/null; then
+    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+else
+    echo "gate: skipping the Windows check, as the x86_64-pc-windows-gnu target or MinGW isn't installed" >&2
+fi
+
 # The desktop app is its own workspace, as it needs WebKitGTK (ADR 0041).
 if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
     (
