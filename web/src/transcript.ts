@@ -99,12 +99,13 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
   }
   const plans = entries.filter((entry) => entry.plan)
   const plan = plans[plans.length - 1]
-  const hidden = new Set(plans.filter((entry) => entry.kind === 'plan'))
-  if (plan) {
-    hidden.delete(plan)
-    const result = steps.find((step) => step.call === plan)?.result
-    if (result) hidden.add(result)
+  // The turn's plan shows once, as it stood last; its earlier versions and their results leave the folds.
+  const hidden = new Set<HistoryEntry>()
+  for (const entry of plans) {
+    if (entry === plan) continue
+    hidden.add(entry)
   }
+  for (const step of steps) if (step.call?.plan && step.result) hidden.add(step.result)
   const pieces: Piece[] = []
   for (const entry of entries) {
     const last = pieces[pieces.length - 1]
@@ -265,4 +266,10 @@ export function imageSize(base64: string): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** A long command as its card's one line says it: each URL shrinks to its last segment, `…/upload`; the whole command is its title. */
+export function shortCommand(command: string, max = 64): string {
+  if (command.length <= max) return command
+  return command.replace(/\bhttps?:\/\/\S+/g, (url) => `…/${url.replace(/\/+$/, '').split('/').pop()}`)
 }

@@ -1118,7 +1118,7 @@ function ThreadBody({
 
   return (
     <TranscriptDetail.Provider value={detail}>
-    <LiveQuestions.Provider value={agent ? { thread, questions: agent.questions ?? [] } : null}>
+    <LiveQuestions.Provider value={agent ? { thread, agent: agent.agent, questions: agent.questions ?? [] } : null}>
     <Page
       flush
       label="thread"

@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
-import { duration, imageSize, kindOf, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
+import { duration, imageSize, kindOf, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
 import { TranscriptDetail } from '../detail'
 import { Button, Dialog, Icon, Kbd, cx } from '../ui'
 
@@ -133,20 +133,28 @@ export function CommandCard({ step }: { step: ToolStep }) {
   const call = step.call!
   const outcome = step.result?.outcome
   const output = step.result?.text ?? ''
+  // A command that passed is its header line; a failed one, or one still running, shows its output, as Verbose shows every one's.
+  const verbose = useContext(TranscriptDetail) === 'verbose'
+  const [open, setOpen] = useState(verbose || !step.result || Boolean(outcome?.failed))
   const tail = tailOf(output)
   const command = call.tool?.subject ?? toolOf(call.text).name
   return (
     <div data-testid="command" className="overflow-hidden rounded-md border border-line bg-elevated text-xs">
-      <div className={cx('flex items-center gap-2 px-3 py-1.5', output.trim() && 'border-b border-line-subtle')}>
+      <div className={cx('flex items-center gap-2 px-3 py-1.5', open && output.trim() && 'border-b border-line-subtle')}>
         <Mark step={step} />
-        <span className="min-w-0 flex-1 font-mono break-words">
+        <span className="min-w-0 flex-1 font-mono break-words" title={command}>
           <span className="text-fg-2">$ </span>
-          {command}
+          {shortCommand(command)}
         </span>
         <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : 'text-fg-2')}>{commandStatus(step)}</span>
+        {output.trim() && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
+            {open ? 'Hide output' : 'Output'}
+          </button>
+        )}
       </div>
-      {call.tool?.detail && <p className="px-3 pt-1.5 text-fg-2">{call.tool.detail}</p>}
-      {output.trim() && (
+      {open && call.tool?.detail && <p className="px-3 pt-1.5 text-fg-2">{call.tool.detail}</p>}
+      {open && output.trim() && (
         <div className="flex flex-col gap-1 px-3 py-2">
           <pre className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
             {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
@@ -329,6 +337,10 @@ export function QuestionCard({ step }: { step: ToolStep }) {
   if (asked && live)
     return (
       <section aria-label="question" data-testid="question" className="flex flex-col gap-3 rounded-md border border-warn bg-elevated px-3 py-2.5 text-xs">
+        <span className="flex items-center gap-2 text-fg-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-warn" />
+          {live.agent} asks
+        </span>
         <AnswerForm thread={live.thread} asked={asked} />
       </section>
     )
@@ -342,7 +354,7 @@ export function QuestionCard({ step }: { step: ToolStep }) {
             <div key={question.question} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               {question.header && <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>}
               <span className="font-medium">{question.question}</span>
-              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered' : 'not answered'}</span>
+              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered by you' : 'not answered'}</span>
               {answer !== undefined && (
                 <span className="flex w-full items-center gap-1.5">
                   <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-ok" />
@@ -367,7 +379,7 @@ export function QuestionCard({ step }: { step: ToolStep }) {
             <div className="flex items-baseline gap-2">
               {question.header && <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>}
               <span className="text-sm font-medium">{question.question}</span>
-              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered' : step.result ? 'not answered' : 'waiting'}</span>
+              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered by you' : step.result ? 'not answered' : 'waiting'}</span>
             </div>
             <ul className="flex flex-col gap-0.5">
               {question.options.map((option) => {

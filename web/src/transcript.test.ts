@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { HistoryEntry } from './api'
-import { imageSize, piecesOf, rowsOf, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
+import { imageSize, piecesOf, rowsOf, shortCommand, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
 
 const entry = (index: number, kind: string, text: string, origin = 'own'): HistoryEntry =>
   ({ index, thread: 't', origin, kind, text, time_ms: index * 1000, rewound: false }) as HistoryEntry
@@ -54,14 +54,14 @@ test('each call gets the result that answers it, and the run is summed up by kin
   expect(tailOf('one\ntwo\nthree\nfour\nfive\n', 2)).toEqual({ lines: ['four', 'five'], hidden: 3 })
 })
 
-test('a turn shows its plan as it stood last, and earlier ones fold away', () => {
+test('a turn shows its plan once, as it stood last', () => {
   const plan = (index: number, status: string): HistoryEntry =>
     ({ ...entry(index, 'plan', 'Fix it'), plan: [{ text: 'Fix it', status }] }) as HistoryEntry
   const todo = { ...call(2, 'p', 'other', ''), plan: [{ text: 'Fix it', status: 'completed' }] } as HistoryEntry
   const entries = [plan(0, 'pending'), entry(1, 'assistant', 'On it.'), todo, result(3, 'p', 'Todos have been modified'), plan(4, 'in_progress')]
   const pieces = piecesOf(entries)
-  expect(pieces.map((piece) => piece.kind)).toEqual(['entry', 'tools', 'plan'])
-  expect(pieces[2].kind === 'plan' && pieces[2].entry.index).toBe(4)
+  expect(pieces.map((piece) => piece.kind)).toEqual(['entry', 'plan'])
+  expect(pieces[1].kind === 'plan' && pieces[1].entry.index).toBe(4)
   expect(piecesOf(entries.slice(0, 4)).map((piece) => piece.kind)).toEqual(['entry', 'plan'])
 })
 
@@ -77,4 +77,9 @@ test('a command says how its tests went, and an image how big it is', () => {
   expect(testsOf('==== 1 failed, 3 passed in 0.12s ====')).toEqual({ passed: 3, failed: 1 })
   expect(testsOf('Capturing screenshot into upload.png')).toBeNull()
   expect(imageSize('A'.repeat(4 * 1024))).toBe('3 KB')
+})
+
+test('a long command shrinks its URLs to their last segment', () => {
+  expect(shortCommand('npx playwright screenshot http://localhost:5173/upload upload.png')).toBe('npx playwright screenshot …/upload upload.png')
+  expect(shortCommand('cargo test upload')).toBe('cargo test upload')
 })
