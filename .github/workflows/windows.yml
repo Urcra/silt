@@ -27,7 +27,15 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test --locked --workspace --no-fail-fast
+        run: cargo test --locked --workspace --exclude silt-cli --no-fail-fast
+
+      # One at a time, each failure printed as it happens: a test that hangs
+      # is the last one named, and the timeout still shows the ones before.
+      - name: CLI tests
+        timeout-minutes: 30
+        run: |
+          cargo build --locked -p silt-fake-agent
+          cargo test --locked -p silt-cli --no-fail-fast -- --nocapture --test-threads=1
 
       # install.ps1 against a release made of this build, as a tag would.
       - name: install.ps1
