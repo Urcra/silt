@@ -263,8 +263,12 @@ pub fn session_instructions(rules: &[RulesFile], skills: &[Skill], native: Nativ
     let mut out = String::new();
     let missing: Vec<&RulesFile> = rules.iter().filter(|file| !native.rules.contains(&file.name.as_str())).collect();
     for file in missing {
-        let shown = file.path.strip_prefix(checkout).unwrap_or(&file.path);
-        out.push_str(&format!("# Project rules from {}\n\n{}\n\n", shown.display(), file.text.trim()));
+        // As the repository names it, `/`-separated on Windows too.
+        let shown = file.path.strip_prefix(checkout).map_or_else(
+            |_| file.path.display().to_string(),
+            |inside| inside.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+        );
+        out.push_str(&format!("# Project rules from {shown}\n\n{}\n\n", file.text.trim()));
     }
     let offered: Vec<&Skill> =
         skills.iter().filter(|skill| skill.model_invocable && !natively_loaded(skill, native, checkout)).collect();
@@ -357,7 +361,7 @@ mod tests {
         write(&root.join("crates/core/src/x.rs"), "");
         let rules = discover_rules(root, &root.join("crates/core/src"), None);
         let names: Vec<String> =
-            rules.iter().map(|file| file.path.strip_prefix(root).expect("inside").display().to_string()).collect();
+            rules.iter().map(|file| file.path.strip_prefix(root).expect("inside").to_string_lossy().replace('\\', "/")).collect();
         assert_eq!(names, vec!["AGENTS.md", "crates/AGENTS.md"]);
 
         let claude = NativeConventions {

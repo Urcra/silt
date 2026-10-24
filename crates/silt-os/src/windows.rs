@@ -7,7 +7,10 @@ use std::os::windows::process::CommandExt as _;
 use std::path::{Component, Path, Prefix};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LocalFree,
+    SetHandleInformation,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -16,8 +19,11 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, GetDriveTypeW};
+use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+use windows_sys::Win32::System::Diagnostics::Debug::{DebugActiveProcess, DebugActiveProcessStop, DebugSetProcessKillOnExit};
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, GetCurrentProcess, OpenProcessToken,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess, OpenProcessToken,
+    PROCESS_TERMINATE, TerminateProcess,
 };
 
 const DRIVE_REMOTE: u32 = 4;
@@ -144,10 +150,49 @@ pub fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// This process's standard handles, made not inheritable for as long as it
+/// lives. Windows hands a child every inheritable handle of its parent, so
+/// a daemon started from a command whose output a caller reads through a
+/// pipe would hold that pipe open, and the caller would wait for it as long
+/// as the daemon runs.
+struct Uninherited(Vec<(HANDLE, u32)>);
+
+impl Uninherited {
+    fn std_handles() -> Self {
+        let mut kept = Vec::new();
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: plain queries and flag changes on this process's own handles.
+            unsafe {
+                let handle = GetStdHandle(which);
+                let mut flags = 0;
+                if !handle.is_null()
+                    && handle != INVALID_HANDLE_VALUE
+                    && GetHandleInformation(handle, &mut flags) != 0
+                    && flags & HANDLE_FLAG_INHERIT != 0
+                    && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) != 0
+                {
+                    kept.push((handle, flags & HANDLE_FLAG_INHERIT));
+                }
+            }
+        }
+        Self(kept)
+    }
+}
+
+impl Drop for Uninherited {
+    fn drop(&mut self) {
+        for (handle, flags) in &self.0 {
+            // SAFETY: restores the flag this value cleared on its own handle.
+            unsafe { SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags) };
+        }
+    }
+}
+
 pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<std::process::Child> {
     // A hidden console of its own rather than none, so the programs it runs,
     // git above all, don't each open a window.
     let detached = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    let _uninherited = Uninherited::std_handles();
     match command.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB).spawn() {
         // A job that doesn't allow breaking away: the daemon stays in it,
         // and a hook starts it again if the job ends (ADR 0036).
@@ -168,6 +213,42 @@ pub fn kill_tree(pid: u32) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+pub fn kill(pid: u32) -> io::Result<()> {
+    // SAFETY: a handle for terminating, closed by `Handle`.
+    let process = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+    if process.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let process = Handle(process);
+    // SAFETY: the handle was opened with PROCESS_TERMINATE.
+    if unsafe { TerminateProcess(process.0, 1) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Windows has no SIGSTOP: a debugger attaching stops every thread of the
+/// process until it detaches.
+pub fn suspend(pid: u32) -> io::Result<()> {
+    // SAFETY: plain calls on a process id.
+    unsafe {
+        if DebugActiveProcess(pid) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Detaching, or this process ending, leaves it running.
+        DebugSetProcessKillOnExit(0);
+    }
+    Ok(())
+}
+
+pub fn resume(pid: u32) -> io::Result<()> {
+    // SAFETY: a plain call on a process id this thread debugs.
+    if unsafe { DebugActiveProcessStop(pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 pub fn link(target: &Path, link: &Path) -> io::Result<()> {
@@ -231,6 +312,18 @@ pub mod pipe {
         options.first_pipe_instance(first).reject_remote_clients(true);
         // SAFETY: `attributes` and the descriptor it points at outlive the call.
         unsafe { options.create_with_security_attributes_raw(name, (&raw mut attributes).cast()) }
+    }
+
+    /// The process serving the pipe `name`: the daemon, for tests and tools
+    /// that need to stop it.
+    pub fn server_pid(name: &Path) -> io::Result<u32> {
+        let file = connect(name)?;
+        let mut pid = 0;
+        // SAFETY: the handle is the open pipe's; `pid` is written on success.
+        if unsafe { GetNamedPipeServerProcessId(file.as_raw_handle(), &mut pid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(pid)
     }
 
     /// Opens the pipe, waiting while every instance is busy, and refuses one

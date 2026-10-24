@@ -62,7 +62,9 @@ fn run() -> Step {
         if !records(&text).iter().any(|record| has(record, "cwd", &here)) {
             return Err(Failed(3, format!("events not restored for {here}")));
         }
-        if !read(&dir.join("workspace.yaml")).contains(&*here) {
+        // Silt quotes it as YAML takes a JSON string; Copilot writes it bare.
+        let workspace = read(&dir.join("workspace.yaml"));
+        if !workspace.contains(&*here) && !workspace.contains(&json!(here).to_string()) {
             return Err(Failed(3, "workspace not restored".into()));
         }
         expect_words(&text, "session")?;

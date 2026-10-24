@@ -89,6 +89,22 @@ pub fn find_program(program: &str, path: &OsStr) -> Option<PathBuf> {
     which::which_in(program, Some(path), cwd).ok()
 }
 
+/// Ends the process `pid` at once, as `kill -KILL` does.
+pub fn kill(pid: u32) -> io::Result<()> {
+    imp::kill(pid)
+}
+
+/// Stops every thread of the process `pid` until [`resume`], as `kill -STOP`
+/// does. On Windows the calling thread holds the process as its debugger,
+/// so `resume` must come from the same thread.
+pub fn suspend(pid: u32) -> io::Result<()> {
+    imp::suspend(pid)
+}
+
+pub fn resume(pid: u32) -> io::Result<()> {
+    imp::resume(pid)
+}
+
 /// Makes `link` point at `target`. Where Windows refuses a symlink without
 /// Developer Mode, a directory gets a junction and a file a copy.
 pub fn link(target: &Path, link: &Path) -> io::Result<()> {

@@ -627,11 +627,13 @@ mod tests {
         let paths =
             restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
+        // The old directory's prefix becomes the new one, on Windows too.
+        let saved = format!("saved to {}/tool-results/t1.txt", paths.tool_results.parent().expect("the session's").display());
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
             format!(
-                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\",\"sessionId\":\"abc\"}}\n{{\"cwd\":\"/home/b/repo/src\"}}\n{{\"result\":\"saved to {}\"}}\n",
-                paths.tool_results.join("t1.txt").display()
+                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\",\"sessionId\":\"abc\"}}\n{{\"cwd\":\"/home/b/repo/src\"}}\n{}\n",
+                json!({ "result": saved })
             )
         );
         assert_eq!(fs::read(paths.tool_results.join("t1.txt")).expect("attachment"), b"big output");

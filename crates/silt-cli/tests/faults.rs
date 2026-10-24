@@ -2,14 +2,12 @@
 //! runs, a session still keeps every turn mark and credits each edit to
 //! its tool, and sessions of one family left without a daemon record side
 //! by side.
-// Stopping the daemon mid-tool uses Unix signals.
-#![cfg(unix)]
 
 mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Output, Stdio};
 
 use common::{Machine, Server, eventually, origin, thread_of};
 
@@ -51,7 +49,8 @@ fn finished(child: Child) -> Output {
 }
 
 /// The machine's daemon process, found by its command line and `SILT_HOME`.
-fn daemon_pid(machine: &Machine) -> String {
+#[cfg(unix)]
+fn daemon_pid(machine: &Machine) -> u32 {
     let home = format!("SILT_HOME={}", machine.silt_home.display());
     fs::read_dir("/proc")
         .expect("lists processes")
@@ -63,17 +62,21 @@ fn daemon_pid(machine: &Machine) -> String {
             let daemon = args.windows(2).any(|pair| pair == [b"daemon".as_slice(), b"run".as_slice()]);
             let environ = fs::read(entry.path().join("environ")).ok()?;
             let ours = environ.split(|byte| *byte == 0).any(|variable| variable == home.as_bytes());
-            (daemon && ours).then(|| pid.to_string())
+            (daemon && ours).then_some(pid)
         })
         .expect("the daemon runs")
 }
 
-fn signal(pid: &str, signal: &str) {
-    assert!(Command::new("kill").args([signal, pid]).status().expect("kill").success());
+/// The machine's daemon process: the one serving its pipe.
+#[cfg(windows)]
+fn daemon_pid(machine: &Machine) -> u32 {
+    let status = machine.stdout(&["daemon", "status"]);
+    let pipe = status.trim().strip_prefix("running (").and_then(|rest| rest.strip_suffix(')')).expect("the daemon runs");
+    silt_os::pipe::server_pid(Path::new(pipe)).expect("the pipe's server")
 }
 
 fn kill_daemon(machine: &Machine) {
-    signal(&daemon_pid(machine), "-KILL");
+    silt_os::kill(daemon_pid(machine)).expect("kills");
     assert!(eventually(|| machine.stdout(&["daemon", "status"]).trim() == "not running"));
 }
 
@@ -119,16 +122,16 @@ fn a_daemon_stopped_while_a_tool_runs_loses_nothing() {
     // writes holds everyone up, which no capture survives.
     let pid = daemon_pid(laptop);
     loop {
-        signal(&pid, "-STOP");
+        silt_os::suspend(pid).expect("stops");
         if capture_lock_free(laptop) {
             break;
         }
-        signal(&pid, "-CONT");
+        silt_os::resume(pid).expect("goes on");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     let_go(&marker);
     let finished = finished(agent);
-    signal(&pid, "-CONT");
+    silt_os::resume(pid).expect("goes on");
     assert!(!String::from_utf8_lossy(&finished.stderr).contains("error"));
 
     let thread = thread_of(laptop);

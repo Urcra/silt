@@ -60,9 +60,9 @@ fn copilot_sessions_are_restored_found_and_read_back() {
     let (home, (_dir, cwd)) = (tempfile::tempdir().expect("temp dir"), cwd());
     let id = "6c1f0000-0000-4000-8000-000000000002";
     let transcript = silt_agents::copilot::restore_into(home.path(), &cwd, &cwd, &recorded(agent, &cwd, id)).expect("restores");
-    assert!(
-        fs::read_to_string(transcript.with_file_name("workspace.yaml")).expect("workspace").contains(&*cwd.to_string_lossy())
-    );
+    // Quoted as YAML takes a JSON string, so Windows' backslashes come doubled.
+    let quoted = serde_json::to_string(&cwd.to_string_lossy()).expect("a string");
+    assert!(fs::read_to_string(transcript.with_file_name("workspace.yaml")).expect("workspace").contains(&quoted));
     finds_as_a_new_run(|since, known| silt_agents::copilot::discover_in(home.path(), &cwd, since, known), id, &transcript);
     assert_eq!(
         read_back(agent, &transcript),

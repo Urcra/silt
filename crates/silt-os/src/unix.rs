@@ -58,6 +58,23 @@ pub fn kill_tree(pid: u32) {
     }
 }
 
+fn signal(pid: u32, signal: rustix::process::Signal) -> io::Result<()> {
+    let pid = rustix::process::Pid::from_raw(pid.cast_signed()).ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+    rustix::process::kill_process(pid, signal).map_err(io::Error::from)
+}
+
+pub fn kill(pid: u32) -> io::Result<()> {
+    signal(pid, rustix::process::Signal::KILL)
+}
+
+pub fn suspend(pid: u32) -> io::Result<()> {
+    signal(pid, rustix::process::Signal::STOP)
+}
+
+pub fn resume(pid: u32) -> io::Result<()> {
+    signal(pid, rustix::process::Signal::CONT)
+}
+
 pub fn link(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
