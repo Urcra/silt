@@ -247,3 +247,22 @@ export function tokens(count: number): string {
   if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`
   return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 }
+
+/** How many tests a command's output says passed and failed, as cargo, pytest and vitest sum them up. */
+export function testsOf(output: string): { passed: number; failed: number } | null {
+  const summary = output
+    .split('\n')
+    .reverse()
+    .find((line) => /\b\d+ passed\b/.test(line) && /\b(test result|tests?|passed|failed)\b/i.test(line))
+  if (!summary) return null
+  const count = (word: string) => Number(new RegExp(`\\b(\\d+) ${word}\\b`).exec(summary)?.[1] ?? 0)
+  return { passed: count('passed'), failed: count('failed') }
+}
+
+/** How big a base64 image is, as people say it: `182 KB`. */
+export function imageSize(base64: string): string {
+  const bytes = Math.floor((base64.length * 3) / 4)
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}

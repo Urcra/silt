@@ -66,12 +66,14 @@ impl Core {
                 HistorySource::Inherited => "inherited",
                 HistorySource::Upstream => "upstream",
             };
+            // As the agent stamped its line, else when it was recorded.
+            let time_ms = match &delta.op {
+                Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
+                _ => delta.time_ms,
+            };
             for shown in entry_texts(&mut transcripts, delta) {
                 let index = entries.len();
-                entries.push((
-                    delta.span.first(),
-                    shown.into_entry(index, delta.thread.to_string(), origin, delta.time_ms, rewound),
-                ));
+                entries.push((delta.span.first(), shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound)));
             }
         }
         entries

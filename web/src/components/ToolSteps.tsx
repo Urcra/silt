@@ -2,7 +2,8 @@ import { useContext, useEffect, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
-import { kindOf, tailOf, toolOf, type ToolStep } from '../transcript'
+import { duration, imageSize, kindOf, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
+import { TranscriptDetail } from '../detail'
 import { Button, Dialog, Icon, Kbd, cx } from '../ui'
 
 /** A picture a prompt or a tool carried, small, opening at full size. */
@@ -12,8 +13,9 @@ export function ImageThumb({ entry, from }: { entry: HistoryEntry; from: string 
   if (!image) return null
   if (!image.data) return <span className="text-2xs text-fg-2">An image too large to show here ({image.media_type})</span>
   const src = `data:${image.media_type};base64,${image.data}`
+  const kind = image.media_type.replace(/^image\//, '').toUpperCase()
   return (
-    <>
+    <figure className="flex w-fit flex-col gap-1">
       <button
         type="button"
         aria-label={`open the image ${from}`}
@@ -22,10 +24,13 @@ export function ImageThumb({ entry, from }: { entry: HistoryEntry; from: string 
       >
         <img src={src} alt={`An image ${from}`} className="block max-h-44 max-w-[320px] object-contain" />
       </button>
+      <figcaption className="text-2xs text-fg-2">
+        {kind} · {imageSize(image.data)} · {from}
+      </figcaption>
       <Dialog open={open} onClose={() => setOpen(false)} title={`An image ${from}`} wide>
         <img src={src} alt={`An image ${from}`} className="max-h-[75vh] w-full object-contain" />
       </Dialog>
-    </>
+    </figure>
   )
 }
 
@@ -106,6 +111,22 @@ export function StepRow({ step, open: opened = false }: { step: ToolStep; open?:
   )
 }
 
+/** How a command ended, as its card says it: `failed · exit 101 · 1 of 2 failed · 3s`, `passed 2 of 2 · 3s`, `1 image`. */
+function commandStatus(step: ToolStep): string {
+  const outcome = step.result?.outcome
+  if (!step.result) return 'running'
+  const tests = testsOf(step.result.text)
+  const total = tests && tests.passed + tests.failed
+  const parts = [
+    outcome?.failed ? 'failed' : null,
+    outcome?.failed && outcome.exit_code !== null ? `exit ${outcome.exit_code}` : null,
+    tests ? (tests.failed > 0 ? `${tests.failed} of ${total} failed` : `passed ${tests.passed} of ${total}`) : null,
+    step.call ? duration(step.call.time_ms, step.result.time_ms) : null,
+    step.images.length > 0 ? `${step.images.length} ${step.images.length === 1 ? 'image' : 'images'}` : null,
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : 'done'
+}
+
 /** A command the agent ran: the command, how it ended, its output's last lines and any pictures it made. */
 export function CommandCard({ step }: { step: ToolStep }) {
   const [all, setAll] = useState(false)
@@ -122,9 +143,7 @@ export function CommandCard({ step }: { step: ToolStep }) {
           <span className="text-fg-2">$ </span>
           {command}
         </span>
-        <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : 'text-fg-2')}>
-          {outcome?.failed ? ['failed', outcome.exit_code !== null && `exit ${outcome.exit_code}`].filter(Boolean).join(' · ') : step.result ? 'done' : 'running'}
-        </span>
+        <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : 'text-fg-2')}>{commandStatus(step)}</span>
       </div>
       {call.tool?.detail && <p className="px-3 pt-1.5 text-fg-2">{call.tool.detail}</p>}
       {output.trim() && (
@@ -301,6 +320,9 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
 /** A question the agent asked, with the choices it offered and the one taken; while the agent waits on it, the form to answer it. */
 export function QuestionCard({ step }: { step: ToolStep }) {
   const live = useContext(LiveQuestions)
+  const verbose = useContext(TranscriptDetail) === 'verbose'
+  // Once answered, the answer is what matters; the choices are a click away, or open in Verbose.
+  const [showing, setShowing] = useState(verbose)
   const questions: QuestionView[] = step.call?.tool?.questions ?? []
   const answers = step.result?.outcome?.answers ?? []
   const asked = !step.result && live?.questions.find((question) => step.call?.tool?.id === `question-${question.id}`)
@@ -311,6 +333,30 @@ export function QuestionCard({ step }: { step: ToolStep }) {
       </section>
     )
   if (questions.length === 0) return <StepRow step={step} />
+  if (step.result && !showing)
+    return (
+      <section aria-label="question" data-testid="question" className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-2 text-xs">
+        {questions.map((question) => {
+          const answer = answers.find((each) => each.question === question.question)?.answer
+          return (
+            <div key={question.question} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              {question.header && <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>}
+              <span className="font-medium">{question.question}</span>
+              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered' : 'not answered'}</span>
+              {answer !== undefined && (
+                <span className="flex w-full items-center gap-1.5">
+                  <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-ok" />
+                  <span className="text-fg-1">{answer}</span>
+                </span>
+              )}
+            </div>
+          )
+        })}
+        <button type="button" onClick={() => setShowing(true)} className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11">
+          Show the choices
+        </button>
+      </section>
+    )
   return (
     <section aria-label="question" data-testid="question" className="flex flex-col gap-3 rounded-md border border-line bg-elevated px-3 py-2.5 text-xs">
       {questions.map((question) => {

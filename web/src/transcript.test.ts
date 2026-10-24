@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { HistoryEntry } from './api'
-import { piecesOf, rowsOf, stepsOf, tailOf, toolSummary } from './transcript'
+import { imageSize, piecesOf, rowsOf, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
 
 const entry = (index: number, kind: string, text: string, origin = 'own'): HistoryEntry =>
   ({ index, thread: 't', origin, kind, text, time_ms: index * 1000, rewound: false }) as HistoryEntry
@@ -69,4 +69,12 @@ test('a call still waiting for its result says what it is doing, while its turn 
   const entries = [call(0, 'a', 'read', 'src/lib.rs'), result(1, 'a', 'fn x() {}'), call(2, 'b', 'edit', 'src/main.rs')]
   expect(toolSummary(entries, true)).toBe('Read 1 file, editing 1 file')
   expect(toolSummary(entries)).toBe('Read 1 file, edited 1 file')
+})
+
+test('a command says how its tests went, and an image how big it is', () => {
+  expect(testsOf('running 2 tests\ntest result: ok. 2 passed; 0 failed; 0 ignored')).toEqual({ passed: 2, failed: 0 })
+  expect(testsOf('test result: FAILED. 1 passed; 1 failed')).toEqual({ passed: 1, failed: 1 })
+  expect(testsOf('==== 1 failed, 3 passed in 0.12s ====')).toEqual({ passed: 3, failed: 1 })
+  expect(testsOf('Capturing screenshot into upload.png')).toBeNull()
+  expect(imageSize('A'.repeat(4 * 1024))).toBe('3 KB')
 })

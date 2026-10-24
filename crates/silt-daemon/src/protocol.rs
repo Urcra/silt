@@ -511,6 +511,11 @@ pub enum Request {
     AcpStop {
         thread: String,
     },
+    /// Pushes the thread's branch and answers the forge's page for a new
+    /// pull request of it.
+    OpenPullRequest {
+        thread: String,
+    },
     /// Compresses chunks stored uncompressed and gives the space deleted
     /// rows left back to the disk, holding the store meanwhile.
     Compact,

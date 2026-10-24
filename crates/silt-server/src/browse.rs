@@ -179,8 +179,9 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
             Op::Conv(ConvOp::Merged { from, title, summary, .. }) => vec![merged_text(*from, title, summary)],
             _ => Vec::new(),
         };
+        let time_ms = entry_time(delta);
         for shown in shown {
-            let mut entry = history_entry(shown, thread, delta.time_ms);
+            let mut entry = history_entry(shown, thread, time_ms);
             entry.index = out.len();
             entry.rewound = rewound.contains(&delta.span.first());
             out.push((delta.span.first(), entry));
@@ -192,6 +193,15 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
 /// The kind and text a history shows for one entry of a transcript, if any.
 /// A history entry of `thread` from what its history shows; its index
 /// and whether a revert rewound it are the caller's to set.
+/// When a delta's entries happened: as its agent stamped the line, else
+/// when it was recorded.
+fn entry_time(delta: &silt_log::Delta) -> i64 {
+    match &delta.op {
+        Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
+        _ => delta.time_ms,
+    }
+}
+
 pub(crate) fn history_entry(shown: silt_agents::tool::Shown, thread: ThreadId, time_ms: i64) -> HistoryEntry {
     shown.into_entry(0, thread.to_string(), "own", time_ms, false)
 }

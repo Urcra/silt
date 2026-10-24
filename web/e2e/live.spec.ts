@@ -181,6 +181,8 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await question.getByRole('radio', { name: /Bytes sent on the socket/ }).click()
   await expect(alice.getByText('Counting sent.')).toBeVisible()
   await expect(question).toContainText('answered')
+  await expect(question).toContainText('Bytes sent on the socket')
+  await question.getByRole('button', { name: 'Show the choices' }).click()
   await expect(question.getByRole('listitem').filter({ hasText: 'Bytes sent on the socket' })).toHaveClass(/bg-accent-tint/)
   // Or answered in your own words, which the agent hears as a steer.
   await alice.getByLabel('draft').fill('Ask me again')
@@ -726,6 +728,11 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: hello')).toBeVisible()
   await expect(page.getByRole('group', { name: 'permission' })).toHaveCount(0)
+  // What it changed sits over the composer; with nothing committed on a branch, Create PR says why it can't yet.
+  const changed = page.getByRole('group', { name: 'what the thread changed' })
+  await expect(changed).toContainText('1 file changed')
+  await changed.getByRole('button', { name: 'Create PR' }).click()
+  await expect(page.getByText(/isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)).toBeVisible()
 })
 
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {

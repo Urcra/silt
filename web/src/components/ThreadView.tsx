@@ -519,9 +519,27 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
   )
 }
 
-/** What the thread changed, over the composer: how much, a way to review it, and for a fork, offering it back. */
+/** What the thread changed, over the composer: how much, a way to review it, a pull request on the forge, and for a fork, offering it back. */
 function ChangesBar({ thread, files, totals, forked, onReview }: { thread: string; files: number; totals: { added: number; removed: number }; forked: boolean; onReview: () => void }) {
   const [offering, setOffering] = useState(false)
+  const [pushing, setPushing] = useState(false)
+  // The tab opens on the click, so no popup blocker stops it, and goes to the forge once the push is done.
+  const createPr = () => {
+    const tab = window.open('', '_blank')
+    setPushing(true)
+    api.openPullRequest(thread).then(
+      (url) => {
+        setPushing(false)
+        if (tab) tab.location.href = url
+        else window.location.assign(url)
+      },
+      (failure: unknown) => {
+        setPushing(false)
+        tab?.close()
+        toast(message(failure), 'danger')
+      },
+    )
+  }
   return (
     <div role="group" aria-label="what the thread changed" className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
@@ -537,10 +555,15 @@ function ChangesBar({ thread, files, totals, forked, onReview }: { thread: strin
           (offering ? (
             <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
           ) : (
-            <Button size="sm" variant="primary" icon="merge" onClick={() => setOffering(true)}>
+            <Button size="sm" variant={hosted() ? 'primary' : 'secondary'} icon="merge" onClick={() => setOffering(true)}>
               Create merge request
             </Button>
           ))}
+        {!hosted() && !offering && (
+          <Button size="sm" variant="primary" icon="external" disabled={pushing} onClick={createPr} title="Pushes the thread's branch to origin and opens the forge's page for its pull request">
+            {pushing ? 'Pushing…' : 'Create PR'}
+          </Button>
+        )}
       </span>
     </div>
   )
