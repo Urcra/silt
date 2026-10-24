@@ -5119,6 +5119,7 @@ dependencies = [
  "silt-acp",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

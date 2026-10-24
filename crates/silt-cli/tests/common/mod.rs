@@ -1,6 +1,6 @@
 //! Real processes for multi-machine tests: a Silt server, and machines
 //! with their own Silt and Claude Code homes, a clone and a scripted
-//! stand-in for Claude Code, `silt-fake-claude`, which runs everywhere.
+//! stand-ins for the agent CLIs, `silt-fake-agent`'s programs, which run everywhere.
 #![allow(dead_code, reason = "each test file uses part of the harness")]
 
 use std::fs;
@@ -9,15 +9,27 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-pub mod fakes;
-
-/// The stand-in for Claude Code, `silt-fake-claude`, built beside `silt` by
-/// `cargo build` or `cargo test` of the workspace.
-pub fn fake_claude() -> PathBuf {
+/// The stand-in for an agent CLI, `silt-fake-<agent>`, built beside `silt`
+/// by `cargo build` or `cargo test` of the workspace.
+pub fn fake_agent(agent: &str) -> PathBuf {
     let silt = Path::new(env!("CARGO_BIN_EXE_silt"));
-    let fake = silt.with_file_name(format!("silt-fake-claude{}", std::env::consts::EXE_SUFFIX));
+    let fake = silt.with_file_name(format!("silt-fake-{agent}{}", std::env::consts::EXE_SUFFIX));
     assert!(fake.is_file(), "{} isn't built; run `cargo build -p silt-fake-agent`", fake.display());
     fake
+}
+
+pub fn fake_claude() -> PathBuf {
+    fake_agent("claude")
+}
+
+/// `path` with links resolved, as a shell's `pwd` names it: on Windows
+/// without the `\\?\` prefix `canonicalize` adds, which agents never see.
+pub fn canonical(path: &Path) -> PathBuf {
+    let real = path.canonicalize().expect("canonical");
+    match real.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(plain) if cfg!(windows) && !plain.starts_with("UNC") => PathBuf::from(plain),
+        _ => real,
+    }
 }
 
 /// A directory for one test's machines: under `/tmp` on Unix, which keeps
@@ -189,22 +201,11 @@ impl Machine {
         git(root, &["clone", "-q", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
         let fake = fake_claude();
         let agents = home.join("agents");
-        // The other agents' stand-ins are shell scripts, so Unix only.
-        #[cfg(unix)]
-        for (name, script) in [
-            ("codex", fakes::FAKE_CODEX),
-            ("gemini", fakes::FAKE_GEMINI),
-            ("copilot", fakes::FAKE_COPILOT),
-            ("opencode", fakes::FAKE_OPENCODE),
-        ] {
-            use std::os::unix::fs::PermissionsExt as _;
+        for name in ["codex", "gemini", "copilot", "opencode"] {
             fs::create_dir_all(agents.join(name)).expect("mkdir");
-            let bin = agents.join(format!("{name}-bin"));
-            fs::write(&bin, script).expect("write fake agent");
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         fs::create_dir_all(agents.join("logs")).expect("mkdir");
-        let machine = Self { silt_home, claude_dir, repo: home.join("repo").canonicalize().expect("canonical"), fake, agents };
+        let machine = Self { silt_home, claude_dir, repo: canonical(&home.join("repo")), fake, agents };
         let code = server.pairing_code_for(user);
         machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
         machine
@@ -227,10 +228,10 @@ impl Machine {
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
-            .env("SILT_CODEX_BIN", self.agents.join("codex-bin"))
-            .env("SILT_GEMINI_BIN", self.agents.join("gemini-bin"))
-            .env("SILT_COPILOT_BIN", self.agents.join("copilot-bin"))
-            .env("SILT_OPENCODE_BIN", self.agents.join("opencode-bin"))
+            .env("SILT_CODEX_BIN", fake_agent("codex"))
+            .env("SILT_GEMINI_BIN", fake_agent("gemini"))
+            .env("SILT_COPILOT_BIN", fake_agent("copilot"))
+            .env("SILT_OPENCODE_BIN", fake_agent("opencode"))
             .env("CODEX_HOME", self.agents.join("codex"))
             .env("GEMINI_CLI_HOME", self.agents.join("gemini"))
             .env("COPILOT_HOME", self.agents.join("copilot"))

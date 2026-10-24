@@ -1,7 +1,6 @@
 # Windows comes before macOS (ADR 0045): clippy and the tests on GitHub's
-# Windows runners, for the workspace and the desktop app. The tests whose
-# agents are shell-script stand-ins run on Linux only, until the stand-ins
-# are a Rust program.
+# Windows runners, for the workspace and the desktop app, install.ps1, the
+# desktop installer, and an aarch64 build.
 name: windows
 
 on:
@@ -63,3 +62,19 @@ jobs:
           Copy-Item ../../target/debug/silt.exe binaries/silt-x86_64-pc-windows-msvc.exe
           npx --yes @tauri-apps/cli@2.12.4 build --debug --config tauri.release.conf.json --bundles nsis
           Get-ChildItem target/debug/bundle/nsis/*.exe
+
+  # Release builds include aarch64; this keeps it building between tags.
+  arm64:
+    runs-on: windows-11-arm
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show
+      - name: Build
+        run: cargo build --locked -p silt-cli
+      - name: Runs
+        run: target/debug/silt.exe --version

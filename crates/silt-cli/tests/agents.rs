@@ -1,8 +1,6 @@
 //! Agents other than Claude Code (ADR 0012), with scripted stand-ins that
 //! write each agent's own session format: sessions are found and recorded,
 //! continue natively on another machine, and move between agents.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -18,7 +16,7 @@ struct World {
 }
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-agents").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-agents");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);
@@ -26,6 +24,8 @@ fn world() -> World {
     World { laptop, home, server, root }
 }
 
+// A hangup or termination is a Unix signal.
+#[cfg(unix)]
 #[test]
 fn a_wrapper_told_to_stop_ends_the_agent_and_its_session() {
     use std::os::unix::fs::PermissionsExt as _;

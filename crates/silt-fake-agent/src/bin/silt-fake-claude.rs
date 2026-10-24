@@ -8,6 +8,11 @@
 //! `FAKE_IN_TOOL` it touches that file during the edit and waits for
 //! `<it>.go`. `FAKE_TRANSLATED` skips the tool result check, for a session
 //! translated from another agent.
+//!
+//! `FAKE_SCRIPT` picks another session for the single-machine tests:
+//! `short`, one turn ending in a compaction, after `FAKE_PAUSE` seconds;
+//! `tools`, two turns with tools of every kind Silt treats apart and an
+//! edit by hand between them.
 
 use std::env;
 use std::fs;
@@ -17,6 +22,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use silt_fake_agent::{Failed, Step, append, exit, expect_words, io, records, write};
 
 struct Run {
     session: String,
@@ -26,22 +32,8 @@ struct Run {
     transcript: PathBuf,
 }
 
-/// Exits the fake with a code a test can tell apart, as the shell stand-in
-/// did.
-struct Failed(u8, String);
-
-type Step = Result<(), Failed>;
-
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(Failed(code, message)) => {
-            if !message.is_empty() {
-                eprintln!("{message}");
-            }
-            ExitCode::from(code)
-        }
-    }
+    exit(run())
 }
 
 fn run() -> Step {
@@ -56,6 +48,10 @@ fn run() -> Step {
                 resume = true;
             }
             "--settings" => settings = args.next().and_then(|text| serde_json::from_str(&text).ok()),
+            "--mcp-config" => {
+                let config = env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_default();
+                write(&config.join("mcp-config.json"), args.next().unwrap_or_default().as_bytes())?;
+            }
             "--append-system-prompt" => {
                 let text = args.next().unwrap_or_default();
                 if let Some(logs) = &log_dir {
@@ -84,7 +80,12 @@ fn run() -> Step {
     let dir = config.join("projects").join(slug);
     let transcript = dir.join(format!("{session}.jsonl"));
     let run = Run { session, settings, cwd, dir, transcript };
-    if resume { resumed(&run, &config) } else { first(&run) }
+    match (resume, env::var("FAKE_SCRIPT").as_deref()) {
+        (true, _) => resumed(&run, &config),
+        (false, Ok("short")) => short(&run),
+        (false, Ok("tools")) => tools(&run),
+        (false, _) => first(&run),
+    }
 }
 
 fn first(run: &Run) -> Step {
@@ -96,12 +97,12 @@ fn first(run: &Run) -> Step {
         "sessionId": run.session,
         "message": {"role": "user", "content": "Please add a farewell line to main"},
     }))?;
-    run.hook("UserPromptSubmit", "toolu_1", None)?;
+    run.hook("UserPromptSubmit", &run.edit("UserPromptSubmit", "toolu_1"), None)?;
     run.say(&tool_use("toolu_1"))?;
-    run.hook("PreToolUse", "toolu_1", None)?;
+    run.hook("PreToolUse", &run.edit("PreToolUse", "toolu_1"), None)?;
     in_tool()?;
     append(&run.cwd.join("src").join("main.rs"), "fn farewell() {}\n")?;
-    run.hook("PostToolUse", "toolu_1", None)?;
+    run.hook("PostToolUse", &run.edit("PostToolUse", "toolu_1"), None)?;
     let results = run.dir.join(&run.session).join("tool-results");
     fs::create_dir_all(&results).map_err(io)?;
     let saved = results.join("t1.txt");
@@ -118,12 +119,12 @@ fn first(run: &Run) -> Step {
             {"type": "text", "text": "Done: farewell added. I used ghp_abcdefghijklmnopqrstuvwxyz0123 to fetch it."},
         ]},
     }))?;
-    run.hook("Stop", "toolu_1", None)
+    run.hook("Stop", &run.edit("Stop", "toolu_1"), None)
 }
 
 fn resumed(run: &Run, config: &Path) -> Step {
     let text = fs::read_to_string(&run.transcript).unwrap_or_default();
-    let records: Vec<Value> = text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+    let records = records(&text);
     let cwd = run.cwd.to_string_lossy();
     if !records.iter().any(|record| record["cwd"].as_str() == Some(&cwd)) {
         return Err(Failed(3, format!("transcript not restored for {cwd}")));
@@ -144,29 +145,24 @@ fn resumed(run: &Run, config: &Path) -> Step {
     if !records.iter().any(|record| record["sessionId"].as_str() == Some(&run.session)) {
         return Err(Failed(5, "session id not rewritten".into()));
     }
-    for needle in env::var("FAKE_EXPECT").unwrap_or_default().split_whitespace() {
-        let needle = needle.replace('-', " ");
-        if !text.contains(&needle) {
-            return Err(Failed(6, format!("transcript lacks {needle}\n{text}")));
-        }
-    }
+    expect_words(&text, "transcript")?;
     write(&config.join("last-session"), run.session.as_bytes())?;
     let said = env::var("FAKE_SAY").unwrap_or_else(|_| "Continuing at home: add a home line".into());
     run.say(&json!({"type": "user", "message": {"role": "user", "content": said}}))?;
-    run.hook("UserPromptSubmit", "toolu_2", Some(&config.join("last-hook-output")))?;
+    run.hook("UserPromptSubmit", &run.edit("UserPromptSubmit", "toolu_2"), Some(&config.join("last-hook-output")))?;
     run.say(&tool_use("toolu_2"))?;
-    run.hook("PreToolUse", "toolu_2", None)?;
+    run.hook("PreToolUse", &run.edit("PreToolUse", "toolu_2"), None)?;
     in_tool()?;
     let line = env::var("FAKE_LINE").unwrap_or_else(|_| "fn home() {}".into());
     append(&run.cwd.join("src").join("main.rs"), &format!("{line}\n"))?;
-    run.hook("PostToolUse", "toolu_2", None)?;
+    run.hook("PostToolUse", &run.edit("PostToolUse", "toolu_2"), None)?;
     run.say(&json!({
         "type": "user",
         "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "toolu_2", "content": "edited", "is_error": false},
         ]},
     }))?;
-    run.hook("Stop", "toolu_2", None)
+    run.hook("Stop", &run.edit("Stop", "toolu_2"), None)
 }
 
 impl Run {
@@ -174,11 +170,23 @@ impl Run {
         append(&self.transcript, &format!("{record}\n"))
     }
 
-    /// Runs the hook the settings give for `event`, as Claude Code does: a
-    /// program with `args`, or a command for the shell, with the hook's
-    /// input on stdin and its output where `output` says. Without settings
-    /// there's no hook at all.
-    fn hook(&self, event: &str, tool_use: &str, output: Option<&Path>) -> Step {
+    /// A hook's input about the edit of `src/main.rs` in `tool_use`.
+    fn edit(&self, event: &str, tool_use: &str) -> Value {
+        json!({
+            "session_id": self.session,
+            "hook_event_name": event,
+            "tool_name": "Edit",
+            "tool_use_id": tool_use,
+            "tool_input": {"file_path": self.cwd.join("src").join("main.rs")},
+        })
+    }
+
+    /// Runs the hook the settings give for the event `input` names, as
+    /// Claude Code does: a program with `args`, or a command for the shell,
+    /// with `input` on stdin and its output where `output` says. Without
+    /// settings there's no hook at all; settings without this event's hook
+    /// fail.
+    fn hook(&self, event: &str, input: &Value, output: Option<&Path>) -> Step {
         let Some(settings) = &self.settings else {
             return Ok(());
         };
@@ -198,13 +206,6 @@ impl Run {
                 command
             }
         };
-        let input = json!({
-            "session_id": self.session,
-            "hook_event_name": event,
-            "tool_name": "Edit",
-            "tool_use_id": tool_use,
-            "tool_input": {"file_path": self.cwd.join("src").join("main.rs")},
-        });
         if let Some(output) = output {
             command.stdout(fs::File::create(output).map_err(io)?);
         }
@@ -216,6 +217,95 @@ impl Run {
             code => Err(Failed(code.and_then(|code| u8::try_from(code).ok()).unwrap_or(1), String::new())),
         }
     }
+
+    /// A hook's input about `tool` (`""` and `null` between tools).
+    fn about(&self, event: &str, tool: &str, tool_use: &str, tool_input: &Value) -> Value {
+        json!({"session_id": self.session, "hook_event_name": event, "tool_name": tool, "tool_use_id": tool_use, "tool_input": tool_input})
+    }
+
+    fn reply(&self, text: &str) -> Step {
+        self.say(&json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}))
+    }
+
+    fn prompt(&self, text: &str) -> Step {
+        self.say(&json!({"type": "user", "message": {"role": "user", "content": text}}))?;
+        self.hook("UserPromptSubmit", &self.about("UserPromptSubmit", "", "", &Value::Null), None)
+    }
+
+    fn start(&self, id: &str, tool: &str, input: &Value) -> Step {
+        self.say(&json!({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": tool, "input": input}]},
+        }))?;
+        self.hook("PreToolUse", &self.about("PreToolUse", tool, id, input), None)
+    }
+
+    fn finish(&self, id: &str, tool: &str, input: &Value) -> Step {
+        self.hook("PostToolUse", &self.about("PostToolUse", tool, id, input), None)?;
+        self.say(&json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok", "is_error": false}]},
+        }))
+    }
+}
+
+/// One turn that edits `src/main.rs`, then a compaction.
+fn short(run: &Run) -> Step {
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    let hook =
+        |event: &str| json!({"session_id": run.session, "hook_event_name": event, "tool_name": "Edit", "tool_use_id": "toolu_1"});
+    run.say(&json!({"type": "ai-title", "aiTitle": "Add a greeting", "sessionId": "x"}))?;
+    run.say(&json!({"type": "user", "message": {"role": "user", "content": "Please add a farewell line to main"}}))?;
+    run.hook("UserPromptSubmit", &hook("UserPromptSubmit"), None)?;
+    let pause = env::var("FAKE_PAUSE").ok().and_then(|pause| pause.parse::<f64>().ok()).unwrap_or(0.0);
+    std::thread::sleep(Duration::from_secs_f64(pause));
+    run.say(&json!({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Adding it now."},
+            {"type": "tool_use", "id": "toolu_1", "name": "Edit", "input": {"file_path": "src/main.rs"}},
+        ]},
+    }))?;
+    run.hook("PreToolUse", &hook("PreToolUse"), None)?;
+    append(&run.cwd.join("src").join("main.rs"), "fn farewell() {}\n")?;
+    run.hook("PostToolUse", &hook("PostToolUse"), None)?;
+    run.say(&json!({
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "edited", "is_error": false}]},
+    }))?;
+    run.reply("Done: farewell added.")?;
+    run.reply("Decision: farewell stays in main.rs instead of its own module, to keep the binary single-file.")?;
+    run.say(&json!({"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}))?;
+    run.say(&json!({"type": "user", "isCompactSummary": true, "message": {"role": "user", "content": "Summary: farewell was added to main."}}))?;
+    run.hook("Stop", &hook("Stop"), None)
+}
+
+/// Two turns with an edit, a read, a command and a write, and a hand edit
+/// between them.
+fn tools(run: &Run) -> Step {
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    let main = json!({"file_path": "src/main.rs"});
+    let stop = || run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None);
+    run.prompt("Add a farewell and a helper")?;
+    run.start("toolu_1", "Edit", &main)?;
+    append(&run.cwd.join("src").join("main.rs"), "fn farewell() {}\n")?;
+    run.finish("toolu_1", "Edit", &main)?;
+    run.start("toolu_2", "Read", &main)?;
+    run.finish("toolu_2", "Read", &main)?;
+    let make = json!({"command": "make helper"});
+    run.start("toolu_3", "Bash", &make)?;
+    write(&run.cwd.join("src").join("helper.rs"), b"pub fn help() {}\n")?;
+    run.finish("toolu_3", "Bash", &make)?;
+    run.reply("Added both.")?;
+    stop()?;
+    append(&run.cwd.join("src").join("helper.rs"), "// by hand\n")?;
+    run.prompt("Now a note")?;
+    let notes = json!({"file_path": run.cwd.join("NOTES.md")});
+    run.start("toolu_4", "Write", &notes)?;
+    write(&run.cwd.join("NOTES.md"), b"# Notes\n")?;
+    run.finish("toolu_4", "Write", &notes)?;
+    run.reply("Noted.")?;
+    stop()
 }
 
 fn tool_use(id: &str) -> Value {
@@ -247,16 +337,4 @@ fn in_tool() -> Step {
         std::thread::sleep(Duration::from_millis(50));
     }
     Ok(())
-}
-
-fn append(path: &Path, text: &str) -> Step {
-    fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| file.write_all(text.as_bytes())).map_err(io)
-}
-
-fn write(path: &Path, bytes: &[u8]) -> Step {
-    fs::write(path, bytes).map_err(io)
-}
-
-fn io(error: std::io::Error) -> Failed {
-    Failed(1, error.to_string())
 }

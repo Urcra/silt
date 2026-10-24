@@ -1,12 +1,9 @@
 //! Repository conventions on managed checkouts: `.agents/prepare` runs and
 //! `.agents/linked` paths are shared on every mount.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 
 use common::{Machine, Server, checkout_from, eventually, git, origin, thread_of};
 
@@ -20,14 +17,14 @@ struct World {
 const PREPARE: &str = "#!/bin/sh\necho \"prepared $SILT_THREAD\" >> node_modules/prepare.log\necho prepare-ran\n";
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-conv").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-conv");
     let origin = origin(root.path());
     let seed = root.path().join("seed");
     fs::create_dir_all(seed.join(".agents")).expect("mkdir");
     fs::write(seed.join(".gitignore"), "node_modules/\n").expect("write");
     fs::write(seed.join(".agents/linked"), "# dependencies\nnode_modules\n").expect("write");
     fs::write(seed.join(".agents/prepare"), PREPARE).expect("write");
-    fs::set_permissions(seed.join(".agents/prepare"), fs::Permissions::from_mode(0o755)).expect("chmod");
+    silt_os::make_executable(&seed.join(".agents/prepare")).expect("chmod");
     git(&seed, &["add", "."]);
     git(&seed, &["commit", "-q", "-m", "conventions"]);
     git(&seed, &["push", "-q", &origin.to_string_lossy(), "main"]);
@@ -105,7 +102,7 @@ fn git_status(dir: &std::path::Path) -> String {
 
 #[test]
 fn skills_and_rules_reach_every_agent() {
-    let root = tempfile::Builder::new().prefix("silt-skills").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-skills");
     let origin = origin(root.path());
     let seed = root.path().join("seed");
     fs::create_dir_all(seed.join(".agents/skills/review")).expect("mkdir");
