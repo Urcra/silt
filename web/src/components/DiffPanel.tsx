@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type CommentView } from '../api'
 import { keys, message } from '../query'
 import { linesOf, reviewPrompt } from '../review'
@@ -38,7 +38,18 @@ export function DiffPanel({
   wide?: boolean
 }) {
   const [view, setView] = useState<View>('thread')
-  const [layout, setLayout] = useState<DiffLayout>(wide ? 'split' : 'unified')
+  // Side by side only where both sides fit, until the person picks.
+  const [picked, setPicked] = useState<DiffLayout>()
+  const [width, setWidth] = useState(0)
+  const section = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const element = section.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 0))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const layout: DiffLayout = picked ?? (wide && width >= SPLIT_WIDTH ? 'split' : 'unified')
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
   const [sent, setSent] = useState<string>()
@@ -60,11 +71,11 @@ export function DiffPanel({
     api.prompt(thread, prompt).then((how) => setSent(how === 'queued' ? 'Queued for the agent' : 'Sent to the agent'))
 
   return (
-    <section aria-label="changes" className="flex flex-col gap-3">
+    <section ref={section} aria-label="changes" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Tabs label="compare" tabs={VIEWS} value={view} onChange={setView} />
         <span className="ml-auto">
-          <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setLayout} />
+          <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
         </span>
       </div>
       {view === 'other' && (
@@ -129,6 +140,8 @@ export function DiffPanel({
 /** Files shown in a page of the changes panel: a change touching thousands
  * comes a page at a time. */
 const FILES_PAGE = 50
+/** How wide the panel must be for a diff side by side, in pixels. */
+const SPLIT_WIDTH = 760
 
 /** How many files a page of a diff holds. */
 function filesIn(diff: string): number {

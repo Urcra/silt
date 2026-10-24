@@ -10,6 +10,7 @@ import { appHref, filePath } from '../permalink'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { useNow } from '../now'
+import { useMedia } from '../media'
 import { MainScroll } from '../scroll'
 import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
@@ -246,7 +247,8 @@ function failedIn(entries: HistoryEntry[]): number {
 }
 
 /** A run of the agent's work (ADR 0044): its thinking folded by how long it took, its tool calls folded in one card, and its edits as diffs. */
-function ToolFold({ entries, ...props }: EntryProps & { entries: HistoryEntry[] }) {
+/** `live`: the turn is still running, so a call without its result is still under way. */
+function ToolFold({ entries, live = false, ...props }: EntryProps & { entries: HistoryEntry[]; live?: boolean }) {
   const thinking = entries.filter((entry) => entry.kind === 'thinking')
   const tools = entries.filter((entry) => entry.kind !== 'thinking')
   const edits = tools.map((entry) => ({ entry, change: changeOf(entry) })).filter((edit) => edit.change !== null)
@@ -277,7 +279,7 @@ function ToolFold({ entries, ...props }: EntryProps & { entries: HistoryEntry[] 
         <details data-testid="tools" open={verbose} className="group/tools rounded-md border border-line bg-elevated text-xs">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
             <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/tools:rotate-90" />
-            {toolSummary(folded)}
+            {toolSummary(folded, live)}
             {failedIn(folded) > 0 && <span className="text-danger">· {failedIn(folded)} failed</span>}
           </summary>
           <div className="flex flex-col border-t border-line-subtle">
@@ -438,7 +440,7 @@ function TranscriptRow({ row, running = false, ...props }: EntryProps & { row: R
   const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
   const drawn = (piece: Piece) =>
           piece.kind === 'tools' ? (
-            <ToolFold key={piece.entries[0].index} entries={piece.entries} {...props} />
+            <ToolFold key={piece.entries[0].index} entries={piece.entries} live={running} {...props} />
           ) : piece.kind === 'plan' ? (
             <Entry key={piece.entry.index} entry={piece.entry} {...props}>
               <PlanSteps entry={piece.entry} />
@@ -470,10 +472,9 @@ function TranscriptRow({ row, running = false, ...props }: EntryProps & { row: R
         {folded ? (
           <>
             <details className="group/worked text-xs text-fg-2">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
-                <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/worked:rotate-90" />
-                {worked ? `Worked for ${worked}` : 'Worked'}
-                {toolSummary(row.entries) && <span>· {toolSummary(row.entries)}</span>}
+              <summary className="cursor-pointer list-none hover:text-fg-1 max-md:min-h-11">
+                <Icon name="chevronRight" className="mr-1.5 inline h-3 w-3 align-[-1px] transition-transform group-open/worked:rotate-90" />
+                <span className="text-fg-1">{worked ? `Worked for ${worked}` : 'Worked'}</span> · {toolSummary(row.entries)}
               </summary>
               <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">{work.map(drawn)}</div>
             </details>
@@ -522,7 +523,7 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
 function ChangesBar({ thread, files, totals, forked, onReview }: { thread: string; files: number; totals: { added: number; removed: number }; forked: boolean; onReview: () => void }) {
   const [offering, setOffering] = useState(false)
   return (
-    <div role="group" aria-label="changes" className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
+    <div role="group" aria-label="what the thread changed" className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
         {files} {files === 1 ? 'file' : 'files'} changed
@@ -760,8 +761,9 @@ function ThreadHeader({
           title="What the thread changed, beside the conversation (D)"
           className="aria-pressed:border-accent aria-pressed:bg-accent-tint aria-pressed:text-accent-fg"
         >
+          <Icon name="file" className="h-3.5 w-3.5 md:hidden" />
           <span className="max-md:sr-only">Changes</span>
-          {changes && <Counts added={changes.added} removed={changes.removed} />}
+          {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} />
       </span>
@@ -1015,6 +1017,8 @@ function ThreadBody({
   const [tab, setTab] = useState<InspectorTab>('changes')
   // Beside the conversation on a desktop, open on Changes (ADR 0044) until closed.
   const [panel, setPanel] = useState(true)
+  // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
+  const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
   const [draft, setDraft] = useState('')
   const [detail, setDetail] = useDetailChoice()
@@ -1062,7 +1066,6 @@ function ThreadBody({
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
   const files = diff.data === undefined ? null : parseFiles(diff.data)
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
-  const turn = (turns.data ?? []).length || null
   const entryProps: EntryProps = {
     thread,
     comments: comments.data ?? [],
@@ -1087,7 +1090,8 @@ function ThreadBody({
     } else setPanel(false)
   }
   const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
-  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission'
+  // A plan waiting for approval is still that turn's to finish.
+  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input'
 
   return (
     <TranscriptDetail.Provider value={detail}>
@@ -1109,7 +1113,7 @@ function ThreadBody({
                   id: 'changes',
                   label: (
                     <>
-                      Changes {totals && <Counts added={totals.added} removed={totals.removed} />}
+                      Changes {totals && (totals.added > 0 || totals.removed > 0) && <Counts added={totals.added} removed={totals.removed} />}
                     </>
                   ),
                 },
@@ -1160,7 +1164,7 @@ function ThreadBody({
         summary={summary}
         people={people}
         changes={totals}
-        panelOpen={panel}
+        panelOpen={panel && desktop}
         waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
         detail={detail}
         onDetail={setDetail}
@@ -1177,10 +1181,6 @@ function ThreadBody({
             <CloudSession thread={summary} />
           </div>
         )}
-        <p className="pt-3 font-mono text-2xs text-fg-3">
-          {total} {total === 1 ? 'entry' : 'entries'}
-          {turn !== null && ` · ${turn} ${turn === 1 ? 'turn' : 'turns'}`}
-        </p>
         <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
           {virtual.getVirtualItems().map((item) => {
             const row = rows[item.index]
@@ -1198,13 +1198,13 @@ function ThreadBody({
           })}
         </div>
         <div className="flex flex-col gap-3 pt-2 pb-4">
-          {agent && <AgentTail status={agent} toolOutput={tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
           {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
+          {agent && <AgentTail status={agent} toolOutput={tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
         </div>
-        <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 md:pb-5">
+        <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
           {files && files.length > 0 && totals && !busy && (
             <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} onReview={showChanges} />
           )}

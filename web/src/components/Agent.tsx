@@ -9,7 +9,7 @@ import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Icon, IconButton, Kbd, Spinner, cx } from '../ui'
+import { Button, Dot, Icon, Kbd, Spinner, cx } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
@@ -164,7 +164,8 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
       )}
       {working(status) && (
         <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
-          <Spinner />
+          {/* Blocked on the person, not busy: no spinner. */}
+          {status.state === 'awaiting_permission' ? <Dot tone="warn" /> : <Spinner />}
           <span className="text-fg-1">{status.state === 'awaiting_permission' ? 'Waiting on you' : 'Working'}</span>
           {clock && (
             <span className="font-mono" data-volatile>
@@ -176,11 +177,12 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
               · {tokens(status.context.used)} of {tokens(status.context.size)} context
             </span>
           )}
-          <button type="button" onClick={onCancel} aria-label="Stop the turn" className="ml-auto flex items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
-            <span className="max-md:hidden">Stop the turn</span>
-            <span className="md:hidden">Stop</span>
-            {status.state === 'working' && <StopKey onCancel={onCancel} />}
-          </button>
+          {/* The composer's round button stops the turn; here only its key is named. */}
+          {status.state === 'working' && (
+            <span className="ml-auto flex items-center gap-1.5 pointer-coarse:hidden">
+              <StopKey onCancel={onCancel} /> to stop
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -384,7 +386,11 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
         />
       )}
-      {live && <IconButton icon="stop" label="Stop agent" onClick={() => act(api.stopAgent(thread))} />}
+      {live && (
+        <Button variant="ghost" size="sm" aria-label="Stop agent" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
+          Stop agent
+        </Button>
+      )}
     </>
   )
 
@@ -405,7 +411,7 @@ export function AgentDock({
           </Button>
         )}
         {turning && !draft.trim() ? (
-          <RoundButton quiet label="Cancel turn" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
+          <RoundButton quiet label="Cancel turn" title="Stop the turn (Esc)" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
         ) : (
           <RoundButton
             label={ready(status) ? 'Send' : 'Queue'}

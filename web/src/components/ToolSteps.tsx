@@ -80,20 +80,22 @@ function measure(step: ToolStep): string | null {
 export function StepRow({ step, open: opened = false }: { step: ToolStep; open?: boolean }) {
   const [open, setOpen] = useState(opened)
   const result = step.result
+  // A plan's result only tells the model it was saved; its steps show on the plan.
+  const output = result && result.text.trim() && !step.call?.plan ? result.text : null
   return (
     <div className="flex flex-col gap-1">
       <span className="flex items-start gap-2">
         <Mark step={step} />
         <span className="min-w-0 flex-1">{step.call ? <Said call={step.call} /> : <span className="text-fg-2">A tool&apos;s output</span>}</span>
         {measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>}
-        {result && result.text.trim() && !step.call?.plan && (
+        {output && (
           <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
             {open ? 'Hide output' : 'Output'}
           </button>
         )}
       </span>
-      {open && result && (
-        <pre className="ml-[22px] max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{result.text}</pre>
+      {open && output && (
+        <pre className="ml-[22px] max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{output}</pre>
       )}
       {step.images.map((image) => (
         <span key={image.index} className="ml-[22px]">
@@ -190,6 +192,17 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
     return () => window.removeEventListener('keydown', onKey)
   })
   const complete = asked.fields.every((field) => (chosen[field.key] ?? []).some((value) => value.trim()))
+  const [own, setOwn] = useState('')
+  // A form's choices take no free text, so your own answer steers the agent: the daemon closes the question with it and prompts with it.
+  const answerOwn = () => {
+    setError(undefined)
+    setSending(true)
+    api.steer(thread, own.trim()).catch((failure: unknown) => {
+      setSending(false)
+      setError(message(failure))
+    })
+  }
+  const choosing = asked.fields.some((field) => field.options.length > 0)
   return (
     <div className="flex flex-col gap-3">
       {asked.fields.map((field, fieldIndex) => (
@@ -197,7 +210,10 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
           <div className="flex items-baseline gap-2">
             <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{field.title}</span>
             <span className="text-sm font-medium">{asked.fields.length === 1 ? asked.message : (field.description ?? field.title)}</span>
-            <span className="ml-auto shrink-0 text-warn">waiting on you</span>
+            <span className="ml-auto shrink-0 text-warn">
+              {asked.fields.length > 1 && <span className="mr-2 font-mono text-fg-2">{fieldIndex + 1} of {asked.fields.length}</span>}
+              waiting on you
+            </span>
           </div>
           {field.options.length === 0 ? (
             <input
@@ -238,6 +254,30 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
           )}
         </div>
       ))}
+      {choosing && (
+        <form
+          className="flex items-center gap-2 rounded-sm border border-dashed border-line px-2 py-1"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (own.trim()) answerOwn()
+          }}
+        >
+          <Icon name="edit" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+          <input
+            aria-label="something else"
+            className="min-w-0 flex-1 bg-transparent py-0.5 text-xs placeholder:text-fg-2 focus:outline-none"
+            placeholder="Something else: type your own answer"
+            value={own}
+            disabled={sending}
+            onChange={(event) => setOwn(event.target.value)}
+          />
+          {own.trim() && (
+            <Button size="sm" variant="primary" type="submit" disabled={sending}>
+              Answer
+            </Button>
+          )}
+        </form>
+      )}
       <span className="flex flex-wrap items-center gap-1.5">
         {!single && (
           <Button variant="primary" disabled={!complete || sending} onClick={() => send(chosen)}>
@@ -249,7 +289,7 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
         </Button>
         {asked.fields[0]!.options.length > 1 && (
           <span className="text-fg-2 pointer-coarse:hidden">
-            1–{Math.min(asked.fields[0]!.options.length, 9)} {single ? 'answers' : 'picks'}
+            1–{Math.min(asked.fields[0]!.options.length, 9)} to pick
           </span>
         )}
         {error && <span className="text-danger">{error}</span>}

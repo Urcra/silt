@@ -54,7 +54,7 @@ result toolu_4 AskUserQuestion '"User has answered your questions: \"What should
 tool toolu_9 TodoWrite '{"todos":[{"content":"Send the upload in chunks","status":"in_progress","activeForm":"Sending the upload in chunks"},{"content":"Report each acknowledged chunk","status":"pending","activeForm":"Reporting each acknowledged chunk"},{"content":"Check the bar mid-upload","status":"pending","activeForm":"Checking the bar mid-upload"}]}'
 result toolu_9 TodoWrite '"Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress."'
 
-tool toolu_5 Edit '{"file_path":"src/upload.rs","old_string":"    send(data);\n    progress(read);","new_string":"    for chunk in data.chunks(CHUNK) {\n        let acked = send(chunk);\n        progress(acked);\n    }"}'
+tool toolu_5 Edit '{"file_path":"src/upload.rs","old_string":"    let read = data.len();\n    send(data);\n    progress(read);","new_string":"    for chunk in data.chunks(CHUNK) {\n        let acked = send(chunk);\n        progress(acked);\n    }"}'
 cat > src/upload.rs <<'EOF'
 pub fn upload(data: &[u8]) {
     for chunk in data.chunks(CHUNK) {

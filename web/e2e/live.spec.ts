@@ -182,6 +182,17 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByText('Counting sent.')).toBeVisible()
   await expect(question).toContainText('answered')
   await expect(question.getByRole('listitem').filter({ hasText: 'Bytes sent on the socket' })).toHaveClass(/bg-accent-tint/)
+  // Or answered in your own words, which the agent hears as a steer.
+  await alice.getByLabel('draft').fill('Ask me again')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  const again = alice.getByRole('region', { name: 'question' }).last()
+  await expect(again).toContainText('waiting on you')
+  await again.getByLabel('something else').fill('Packets acknowledged')
+  await again.getByRole('button', { name: 'Answer' }).click()
+  await expect(again).toContainText('answered')
+  await expect(again).toContainText('Packets acknowledged')
+  await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
+  await expect(alice.getByText(/I was not allowed to edit/).last()).toBeVisible()
 
   const changed = () =>
     alice.evaluate(async (thread) => {
@@ -246,6 +257,13 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   await expect(there.getByRole('group', { name: 'permission' })).toBeVisible()
   await there.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(machine.getByText('I was not allowed to edit.')).toBeVisible()
+  // A question the agent asks there is answered here, in place, through the server.
+  await there.getByLabel('draft').fill('Ask me from the browser')
+  await there.getByRole('button', { name: 'Send' }).click()
+  const question = there.getByRole('region', { name: 'question' }).last()
+  await expect(question).toContainText('waiting on you', { timeout: 15_000 })
+  await question.getByRole('radio', { name: /Chunks completed/ }).click()
+  await expect(machine.getByText('Counting chunks.')).toBeVisible()
   await expect(async () => {
     await hosted.goto(`${live.server}/app/`)
     await expect(waiting).toHaveCount(0, { timeout: 1_000 })

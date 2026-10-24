@@ -37,9 +37,11 @@ async fn a_session_streams_asks_permission_and_loads_again() {
     assert!(agent.send(prompt("add acp")));
     let mut seen = Vec::new();
     let mut context = None;
+    let mut used = None;
     loop {
         match next(&mut events).await {
             Event::Context { used, size } => context = Some((used, size)),
+            Event::TurnUsage { input, output } => used = Some((input, output)),
             Event::Permission(permission) => {
                 assert_eq!(permission.title, "Edit src/main.rs");
                 assert!(agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) }));
@@ -53,6 +55,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
         }
     }
     assert_eq!(context, Some((53_000, 200_000)));
+    assert_eq!(used, Some((1_600, 240)));
     assert!(seen.contains(&Update::Thought("Thinking about the prompt.".into())));
     assert!(
         seen.iter().any(
@@ -108,7 +111,7 @@ async fn cancelling_answers_the_pending_permission_request() {
     loop {
         match next(&mut events).await {
             Event::TurnEnded { .. } => break,
-            Event::Update(_) | Event::Context { .. } => {}
+            Event::Update(_) | Event::Context { .. } | Event::TurnUsage { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -126,7 +129,7 @@ async fn a_question_is_asked_as_a_form_and_answered_with_a_choice() {
     let question = loop {
         match next(&mut events).await {
             Event::Question(question) => break question,
-            Event::Update(_) | Event::Context { .. } => {}
+            Event::Update(_) | Event::Context { .. } | Event::TurnUsage { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     };
@@ -141,7 +144,7 @@ async fn a_question_is_asked_as_a_form_and_answered_with_a_choice() {
         match next(&mut events).await {
             Event::Update(Update::AgentText(text)) => said.push(text),
             Event::TurnEnded { .. } => break,
-            Event::Update(_) | Event::Context { .. } => {}
+            Event::Update(_) | Event::Context { .. } | Event::TurnUsage { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -180,7 +183,7 @@ async fn modes_and_settings_come_with_the_session_and_change_on_request() {
             Event::ModeChanged(mode) => assert_eq!(mode, "plan"),
             Event::Update(Update::AgentText(text)) => said.push(text),
             Event::TurnEnded { .. } => break,
-            Event::Update(_) | Event::Context { .. } => {}
+            Event::Update(_) | Event::Context { .. } | Event::TurnUsage { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }

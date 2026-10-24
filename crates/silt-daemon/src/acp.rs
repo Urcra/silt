@@ -110,6 +110,34 @@ pub enum AcpEvent {
     Agent(silt_acp::Event),
 }
 
+/// A question as browsers and other devices are told it.
+pub(crate) fn question_asked(question: &Question) -> crate::protocol::QuestionAsked {
+    use crate::protocol::{ChoiceAsked, QuestionFieldAsked};
+    crate::protocol::QuestionAsked {
+        id: question.id,
+        message: question.message.clone(),
+        fields: question
+            .fields
+            .iter()
+            .map(|field| QuestionFieldAsked {
+                key: field.key.clone(),
+                title: field.title.clone(),
+                description: field.description.clone(),
+                options: field
+                    .options
+                    .iter()
+                    .map(|choice| ChoiceAsked {
+                        value: choice.value.clone(),
+                        label: choice.label.clone(),
+                        description: choice.description.clone(),
+                    })
+                    .collect(),
+                multi: field.multi,
+            })
+            .collect(),
+    }
+}
+
 /// The tool call id a question is recorded under.
 fn question_call(id: u64) -> String {
     format!("question-{id}")
@@ -168,6 +196,15 @@ fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result
         said.push(format!("\"{asked}\"=\"{}\"", labels.join(", ")));
     }
     Ok(format!("User has answered your questions: {}. You can now continue with the user's answers in mind.", said.join(", ")))
+}
+
+/// An answer in the person's own words, as Claude Code words a result.
+fn own_answer(question: &Question, text: &str) -> String {
+    format!(
+        "User has answered your questions: \"{}\"=\"{}\". You can now continue with the user's answers in mind.",
+        question.message,
+        text.trim()
+    )
 }
 
 fn silt_exe() -> PathBuf {
@@ -403,8 +440,17 @@ impl Core {
             return self.acp_prompt(&thread.to_string(), text, false).await;
         }
         let run = self.acp.get_mut(&thread).expect("checked above");
-        run.steering = Some(text.to_owned());
+        // Steering while the agent asks answers its question in your own words.
+        let asked = std::mem::take(&mut run.questions);
+        run.steering = Some(match asked.first() {
+            Some(question) => format!("to your question \"{}\": {text}", question.message),
+            None => text.to_owned(),
+        });
         send(run, Command::Cancel);
+        for question in asked {
+            let said = own_answer(&question, text);
+            self.record_acp(thread, &acp::tool_result(&question_call(question.id), "completed", Some(&said))).await?;
+        }
         self.agent_changed(thread).await;
         Ok("steering")
     }
@@ -677,7 +723,7 @@ impl Core {
                 .iter()
                 .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
-            questions: run.questions.iter().map(Into::into).collect(),
+            questions: run.questions.iter().map(question_asked).collect(),
             context: run.context,
             error: run.error.clone(),
             modes: run.modes.as_ref().map(Into::into),
@@ -753,6 +799,10 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
             AcpEvent::Agent(silt_acp::Event::Context { used, size }) => run.context = Some(ContextUse { used, size }),
+            AcpEvent::Agent(silt_acp::Event::TurnUsage { input, output }) => {
+                let id = uuid::Uuid::now_v7().simple().to_string();
+                self.record_acp(thread, &acp::usage(&id, input, output)).await?;
+            }
             AcpEvent::Agent(silt_acp::Event::TurnEnded { reason }) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
@@ -1106,6 +1156,9 @@ mod tests {
         assert!(answer_text(&question, &[("count".into(), vec!["nope".into()])]).is_err());
         assert!(answer_text(&question, &[("other".into(), vec!["acked".into()])]).is_err());
         assert_eq!(question_input(&question)["questions"][0]["options"][1]["description"], "Smooth");
+        let entry =
+            silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: own_answer(&question, " Packets "), is_error: false };
+        assert_eq!(silt_agents::tool::shown(entry).unwrap().outcome.unwrap().answers[0].answer, "Packets");
     }
 
     #[test]

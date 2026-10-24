@@ -288,6 +288,11 @@ pub enum Event {
     Refused(String),
     Permission(Permission),
     Question(Question),
+    /// What the turn that just ended took, in tokens, when the agent says.
+    TurnUsage {
+        input: u64,
+        output: u64,
+    },
     /// How much of its context window the session uses, in tokens.
     Context {
         used: u64,
@@ -542,6 +547,10 @@ async fn run(
                         connection.spawn(async move {
                             match sent.block_task().await {
                                 Ok(response) => {
+                                    if let Some(usage) = &response.usage {
+                                        let _ = ended
+                                            .send(Event::TurnUsage { input: usage.input_tokens, output: usage.output_tokens });
+                                    }
                                     let _ = ended.send(Event::TurnEnded { reason: StopReason::of(response.stop_reason) });
                                 }
                                 Err(error) => {

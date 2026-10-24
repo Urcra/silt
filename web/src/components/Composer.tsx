@@ -64,7 +64,7 @@ export function ComposerBox({
       />
       {below}
       <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-        <span className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">{tools}</span>
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1 *:shrink-0">{tools}</span>
         <span className="flex shrink-0 items-center gap-2">{actions}</span>
       </div>
     </div>

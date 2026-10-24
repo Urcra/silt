@@ -7,6 +7,7 @@ pub use silt_proto::view::{
     PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, ThreadLink,
     ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
+pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked};
 
 /// One request per line on the daemon socket, answered by one response line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -956,64 +957,6 @@ pub struct ContextUse {
     pub used: u64,
     #[cfg_attr(test, ts(type = "number"))]
     pub size: u64,
-}
-
-/// A question the agent waits on, as a form of fields to fill.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct QuestionAsked {
-    pub id: u64,
-    pub message: String,
-    pub fields: Vec<QuestionFieldAsked>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct QuestionFieldAsked {
-    /// The key its answer goes under.
-    pub key: String,
-    pub title: String,
-    pub description: Option<String>,
-    /// Its choices; none for a free answer.
-    pub options: Vec<ChoiceAsked>,
-    pub multi: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct ChoiceAsked {
-    /// What answering with it sends.
-    pub value: String,
-    pub label: String,
-    pub description: Option<String>,
-}
-
-impl From<&silt_acp::Question> for QuestionAsked {
-    fn from(question: &silt_acp::Question) -> Self {
-        Self {
-            id: question.id,
-            message: question.message.clone(),
-            fields: question
-                .fields
-                .iter()
-                .map(|field| QuestionFieldAsked {
-                    key: field.key.clone(),
-                    title: field.title.clone(),
-                    description: field.description.clone(),
-                    options: field
-                        .options
-                        .iter()
-                        .map(|choice| ChoiceAsked {
-                            value: choice.value.clone(),
-                            label: choice.label.clone(),
-                            description: choice.description.clone(),
-                        })
-                        .collect(),
-                    multi: field.multi,
-                })
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

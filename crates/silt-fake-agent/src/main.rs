@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
     RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode,
     SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind, UsageUpdate,
+    ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 
@@ -262,7 +262,7 @@ async fn main() -> Result<()> {
                         .entry(session.to_string())
                         .or_default()
                         .extend([(true, prompt), (false, reply)]);
-                    responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    responder.respond(PromptResponse::new(StopReason::EndTurn).usage(Usage::new(1_840, 1_600, 240)))
                 })
             },
             agent_client_protocol::on_receive_request!(),

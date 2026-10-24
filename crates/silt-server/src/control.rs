@@ -581,6 +581,7 @@ mod tests {
             agent: "claude".into(),
             state: AgentState::AwaitingPermission,
             permissions: Vec::new(),
+            questions: Vec::new(),
             queued: 2,
             preset: "full_access".into(),
         };
@@ -619,6 +620,7 @@ mod tests {
                 })
                 .into_iter()
                 .collect(),
+            questions: Vec::new(),
             queued,
             preset: String::new(),
         }

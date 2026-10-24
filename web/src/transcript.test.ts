@@ -64,3 +64,9 @@ test('a turn shows its plan as it stood last, and earlier ones fold away', () =>
   expect(pieces[2].kind === 'plan' && pieces[2].entry.index).toBe(4)
   expect(piecesOf(entries.slice(0, 4)).map((piece) => piece.kind)).toEqual(['entry', 'plan'])
 })
+
+test('a call still waiting for its result says what it is doing, while its turn runs', () => {
+  const entries = [call(0, 'a', 'read', 'src/lib.rs'), result(1, 'a', 'fn x() {}'), call(2, 'b', 'edit', 'src/main.rs')]
+  expect(toolSummary(entries, true)).toBe('Read 1 file, editing 1 file')
+  expect(toolSummary(entries)).toBe('Read 1 file, edited 1 file')
+})

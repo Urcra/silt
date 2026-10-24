@@ -50,6 +50,10 @@ test('a busy thread, compact and verbose', async ({ page }) => {
     await page.getByRole('button', { name: 'More for this thread' }).click()
     await page.getByRole('radiogroup', { name: 'transcript detail' }).getByRole('radio', { name: label }).click()
     await page.keyboard.press('Escape')
+    // No hover or focus left over from the menu in the shot.
+    await page.mouse.move(1430, 1790)
+    await page.waitForTimeout(300)
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   }
   await detail('Compact')
   await expect(page.getByText(/^Worked/)).toBeVisible()

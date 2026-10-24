@@ -70,6 +70,11 @@ pub fn plan(steps: &[(String, String)]) -> String {
     json!({"t": "plan", "entries": entries}).to_string()
 }
 
+/// What a turn took, in tokens; `id` names the record, as one message's.
+pub fn usage(id: &str, input: u64, output: u64) -> String {
+    json!({"t": "usage", "id": id, "input": input, "output": output}).to_string()
+}
+
 pub fn stop(reason: &str) -> String {
     json!({"t": "stop", "reason": reason}).to_string()
 }
@@ -124,6 +129,11 @@ pub fn read_line(line: &str) -> Read {
                 .collect();
             read.entries.push(Entry::Plan { steps });
         }
+        "usage" => read.entries.push(Entry::Usage {
+            message: field("id"),
+            input: record["input"].as_u64().unwrap_or(0),
+            output: record["output"].as_u64().unwrap_or(0),
+        }),
         "stop" => {
             read.marks.push(Mark::Stopped);
             read.entries.push(Entry::Other { kind: "stop".into() });
@@ -192,6 +202,7 @@ mod tests {
             tool_call("c1", "Edit src/main.rs", "edit", Some(&json!({"path": "src/main.rs"}))),
             tool_result("c1", "completed", Some("edited")),
             message("Done"),
+            usage("u1", 1600, 240),
             stop("end_turn"),
         ];
         let reads: Vec<Read> = lines.iter().map(|line| read_line(line)).collect();
@@ -200,6 +211,7 @@ mod tests {
         assert_eq!(entries[0], Entry::User { text: "add acp".into() });
         assert_eq!(entries[1], Entry::Thinking { text: "planning".into() });
         assert_eq!(entries[4], Entry::Assistant { text: "Done".into() });
+        assert_eq!(entries[5], Entry::Usage { message: "u1".into(), input: 1600, output: 240 });
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(marks.first(), Some(&Mark::PromptSubmitted));
         assert_eq!(marks.last(), Some(&Mark::Stopped));
