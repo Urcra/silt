@@ -281,7 +281,7 @@ impl Run<'_> {
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
         let _scratch = Scratch(scratch.clone());
-        let home = env::var_os("HOME").map(PathBuf::from);
+        let home = silt_os::home_dir();
         let native = self.agent.native();
         let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
         let rules = agent_conventions::discover_rules(self.checkout, self.cwd, home.as_deref());
@@ -298,7 +298,8 @@ impl Run<'_> {
                     self.checkout.to_string_lossy().into_owned(),
                 ],
             },
-            hook_command: format!("{} hook", silt_agents::program_quote(&exe.to_string_lossy())),
+            hook_command: format!("{} hook", silt_agents::shell_quote(&exe.to_string_lossy())),
+            hook_program: exe.clone(),
             instructions: agent_conventions::session_instructions(&rules, &skills, native, self.checkout),
             skills: agent_conventions::skills_to_give(&skills, native, self.checkout)
                 .into_iter()

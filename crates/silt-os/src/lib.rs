@@ -95,6 +95,14 @@ pub fn link(target: &Path, link: &Path) -> io::Result<()> {
     imp::link(target, link)
 }
 
+/// The user's home: `$HOME`, else on Windows `%USERPROFILE%`, where the
+/// agents keep `.claude`, `.codex` and the rest.
+pub fn home_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    let home = if cfg!(windows) { home.or_else(|| std::env::var_os("USERPROFILE")) } else { home };
+    home.filter(|home| !home.is_empty()).map(PathBuf::from)
+}
+
 /// Whether this process runs as the superuser.
 pub fn is_root() -> bool {
     imp::is_root()

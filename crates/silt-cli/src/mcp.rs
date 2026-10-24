@@ -48,7 +48,7 @@ fn number_arg(arguments: &Value, name: &str) -> Option<usize> {
 
 impl DaemonTools {
     fn skills(&self) -> Vec<Skill> {
-        let home = env::var_os("HOME").map(PathBuf::from);
+        let home = silt_os::home_dir();
         conventions::discover_skills(&self.checkout, home.as_deref())
     }
 

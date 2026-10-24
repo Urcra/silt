@@ -627,6 +627,7 @@ impl Core {
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
             Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::Unwritten { thread } => to_response(self.find_thread(&thread).map(|thread| self.unwritten(thread))),
             Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
             Request::Graph { query } => Response::ok(self.graph(&query)),
@@ -1145,6 +1146,18 @@ impl Core {
     /// were last recorded; those are returned to be ingested first.
     pub(crate) async fn perform(&mut self, checkout_id: CheckoutId, actions: Vec<DiskAction>) -> Result<Vec<String>, CoreError> {
         self.perform_with(checkout_id, actions, false).await
+    }
+
+    /// The thread's files a checkout here doesn't write. Case folds where any
+    /// of the thread's checkouts here says so, and by default on Windows.
+    pub(crate) fn unwritten(&self, thread: ThreadId) -> Vec<String> {
+        let Some(family) = self.families.get(&self.threads[&thread].family) else {
+            return Vec::new();
+        };
+        let mut checkouts = self.checkouts.values().filter(|checkout| checkout.record.thread == thread).peekable();
+        let folds_case =
+            if checkouts.peek().is_some() { checkouts.any(|checkout| checkout.repo.ignores_case()) } else { cfg!(windows) };
+        silt_checkout::unwritten(family.thread_view(thread).paths().keys().map(String::as_str), folds_case)
     }
 
     /// Where the filesystem folds case, paths of the thread that differ only

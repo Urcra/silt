@@ -2,7 +2,7 @@
 //! runs, a session still keeps every turn mark and credits each edit to
 //! its tool, and sessions of one family left without a daemon record side
 //! by side.
-// The agents these tests drive are shell-script stand-ins.
+// Stopping the daemon mid-tool uses Unix signals.
 #![cfg(unix)]
 
 mod common;
@@ -20,7 +20,7 @@ struct World {
 }
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-faults").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-faults");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);

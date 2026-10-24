@@ -17,7 +17,7 @@ pub fn data_dir() -> PathBuf {
     if let Some(data) = env::var_os("XDG_DATA_HOME") {
         return PathBuf::from(data).join("silt");
     }
-    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let home = silt_os::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".local").join("share").join("silt")
 }
 

@@ -114,6 +114,8 @@ export const api = {
     request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
+  /** The thread's files this machine's checkouts don't write (ADR 0045); a daemon's only. */
+  unwritten: (id: string) => request<string[]>('GET', `${thread(id)}/unwritten`),
   fileAt: (id: string, path: string, at?: string) =>
     request<FileAt>('GET', `${thread(id)}/files/at?path=${encodeURIComponent(path)}${at ? `&at=${encodeURIComponent(at)}` : ''}`),
   graph: (query: GraphQuery) => {

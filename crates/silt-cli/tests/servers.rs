@@ -1,7 +1,5 @@
 //! One machine signed in to two servers (ADR 0032): each thread syncs with
 //! its own server, and nothing of it reaches the other.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -22,7 +20,7 @@ struct World {
 }
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-servers").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-servers");
     let origin = origin(root.path());
     let work = Server::start(&root.path().join("work"));
     let oss = Server::start(&root.path().join("oss"));

@@ -349,14 +349,29 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
             .to_string(),
     )?;
     crate::link_skills(&dir.join("skills"), &plan.skills)?;
-    let command = |bash: String| json!([{"type": "command", "bash": bash, "timeoutSec": 30}]);
+    // Copilot runs `powershell` on Windows and `bash` elsewhere.
+    let command =
+        |bash: String, powershell: String| json!([{"type": "command", "bash": bash, "powershell": powershell, "timeoutSec": 30}]);
     let mut hooks = serde_json::Map::new();
     if let Some(instructions) = &plan.instructions {
         let context = dir.join("session-start.json");
         fs::write(&context, json!({ "additionalContext": instructions }).to_string())?;
-        hooks.insert("sessionStart".into(), command(format!("cat {}", crate::shell_quote(&context.to_string_lossy()))));
+        let context = context.to_string_lossy();
+        hooks.insert(
+            "sessionStart".into(),
+            command(
+                format!("cat {}", crate::shell_quote(&context)),
+                format!("Get-Content -Raw -LiteralPath {}", crate::powershell_quote(&context)),
+            ),
+        );
     }
-    hooks.insert("userPromptSubmitted".into(), command(format!("{} --agent copilot UserPromptSubmit", plan.hook_command)));
+    hooks.insert(
+        "userPromptSubmitted".into(),
+        command(
+            format!("{} --agent copilot UserPromptSubmit", plan.hook_command),
+            format!("& {} hook --agent copilot UserPromptSubmit", crate::powershell_quote(&plan.hook_program.to_string_lossy())),
+        ),
+    );
     fs::create_dir_all(dir.join("hooks"))?;
     fs::write(dir.join("hooks/hooks.json"), json!({"version": 1, "hooks": hooks}).to_string())?;
     Ok(dir)

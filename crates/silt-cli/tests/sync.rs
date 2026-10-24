@@ -1,7 +1,5 @@
 //! Two machines and a Silt server, all real processes: a thread recorded on
 //! a laptop continues on a home machine with its conversation and files.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -23,7 +21,7 @@ struct World {
 /// An origin with one pushed commit, and a laptop clone with one more that
 /// only the laptop has.
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-sync").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-sync");
     let origin = origin(root.path());
 
     let server = Server::start(&root.path().join("server"));
@@ -165,9 +163,18 @@ fn dir_contains(dir: &Path, needle: &[u8]) -> bool {
     })
 }
 
+/// Copies the directory `from` to `to`, as `cp -a` would.
 fn copy_dir(from: &Path, to: &Path) {
-    let status = Command::new("cp").arg("-a").arg(from).arg(to).status().expect("cp runs");
-    assert!(status.success());
+    fs::create_dir_all(to).expect("mkdir");
+    for entry in fs::read_dir(from).expect("lists") {
+        let entry = entry.expect("an entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("copies");
+        }
+    }
 }
 
 #[test]

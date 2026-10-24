@@ -8,3 +8,4 @@ node_modules/
 .playwright-mcp/
 .claude/worktrees/
 /crates/silt-desktop/target
+/crates/silt-desktop/binaries

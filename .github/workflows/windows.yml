@@ -27,10 +27,39 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --no-fail-fast
+
+      # install.ps1 against a release made of this build, as a tag would.
+      - name: install.ps1
+        shell: pwsh
+        run: |
+          cargo build --locked -p silt-cli
+          $release = Join-Path $env:RUNNER_TEMP 'release'
+          New-Item -ItemType Directory $release | Out-Null
+          Compress-Archive -Path target/debug/silt.exe -DestinationPath "$release/silt-x86_64-pc-windows-msvc.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "$release/silt-x86_64-pc-windows-msvc.zip").Hash.ToLowerInvariant()
+          Set-Content "$release/SHA256SUMS" "$hash  silt-x86_64-pc-windows-msvc.zip"
+          $env:SILT_DOWNLOAD_URL = ([System.Uri] $release).AbsoluteUri
+          $env:SILT_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'bin'
+          ./scripts/install.ps1
+          & "$env:SILT_INSTALL_DIR/silt.exe" --version
 
       - name: Desktop app
         working-directory: crates/silt-desktop
         run: |
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
+
+      # The installer as a release makes it, unsigned, with this build's
+      # silt.exe beside the app.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Desktop installer
+        working-directory: crates/silt-desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force binaries | Out-Null
+          Copy-Item ../../target/debug/silt.exe binaries/silt-x86_64-pc-windows-msvc.exe
+          npx --yes @tauri-apps/cli@2.12.4 build --debug --config tauri.release.conf.json --bundles nsis
+          Get-ChildItem target/debug/bundle/nsis/*.exe

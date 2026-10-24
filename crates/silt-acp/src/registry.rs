@@ -60,6 +60,8 @@ fn platform() -> Option<&'static str> {
         ("linux", "x86_64") => Some("linux-x86_64"),
         ("macos", "aarch64") => Some("darwin-aarch64"),
         ("macos", "x86_64") => Some("darwin-x86_64"),
+        ("windows", "aarch64") => Some("windows-aarch64"),
+        ("windows", "x86_64") => Some("windows-x86_64"),
         _ => None,
     }
 }
@@ -147,12 +149,22 @@ impl Distributions {
         }
         let mut binary = self.binary;
         match platform().and_then(|platform| binary.remove(platform)) {
-            Some(build) => {
-                Distribution::Binary { archive: build.archive, cmd: build.cmd, args: build.args, sha256: build.sha256 }
-            }
+            Some(build) => Distribution::Binary {
+                archive: build.archive,
+                cmd: in_archive(&build.cmd),
+                args: build.args,
+                sha256: build.sha256,
+            },
             None => Distribution::Unavailable,
         }
     }
+}
+
+/// A registry command as a path inside the unpacked archive: entries write
+/// `./goose`, and Windows ones `./goose-package\\goose.exe`.
+fn in_archive(cmd: &str) -> String {
+    let cmd = cmd.replace('\\', "/");
+    cmd.strip_prefix("./").map_or_else(|| cmd.clone(), str::to_owned)
 }
 
 /// The agents in a registry document.
@@ -490,8 +502,11 @@ async fn stage(archive: &str, cmd: &str, sha256: Option<&str>, staging: &Path, u
         command.current_dir(unpacked);
         command
     };
-    let unpacked_ok = if name.ends_with(".zip") {
+    // Windows has no `unzip`, but its `tar` reads zips.
+    let unpacked_ok = if name.ends_with(".zip") && !cfg!(windows) {
         unpack("unzip").arg("-q").arg(&file).arg("-d").arg(unpacked).status().await?.success()
+    } else if name.ends_with(".zip") {
+        unpack("tar").arg("-xf").arg(&file).arg("-C").arg(unpacked).status().await?.success()
     } else if [".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tbz2"].iter().any(|suffix| name.ends_with(suffix)) {
         unpack("tar").arg("-xf").arg(&file).arg("-C").arg(unpacked).arg("--no-same-owner").status().await?.success()
     } else {
@@ -544,6 +559,15 @@ mod tests {
         }
         let unverified = command(&agent("ok", "agent", None), dir.path()).await;
         assert!(matches!(unverified, Err(RegistryError::Unverified(_))), "{unverified:?}");
+    }
+
+    #[test]
+    fn registry_commands_become_paths_in_the_archive() {
+        assert_eq!(in_archive("./goose"), "goose");
+        assert_eq!(in_archive("./goose-package\\goose.exe"), "goose-package/goose.exe");
+        assert_eq!(in_archive("harn.exe"), "harn.exe");
+        assert!(is_plain_relative(&in_archive("./dist-package/cursor-agent")));
+        assert!(!is_plain_relative(&in_archive("./../escape")));
     }
 
     #[test]

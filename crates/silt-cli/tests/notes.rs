@@ -1,8 +1,6 @@
 //! Git notes on a project's commits (ADR 0042): written once the project
 //! asks for them, pushed to origin with `push`, and read by `silt blame` in
 //! another clone.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -28,7 +26,7 @@ fn noted(git_dir: &std::path::Path) -> Vec<String> {
 
 #[test]
 fn notes_reach_origin_once_the_project_says_push_and_blame_reads_them_elsewhere() {
-    let root = tempfile::Builder::new().prefix("silt-notes").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-notes");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);

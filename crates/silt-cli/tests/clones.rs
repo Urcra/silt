@@ -1,7 +1,5 @@
 //! The daemon remembers the clones it worked in across restarts, so the web
 //! UI can start agents in new threads of them.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -27,7 +25,7 @@ fn known_clones(machine: &Machine) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn clones_are_remembered_across_restarts() {
-    let root = tempfile::Builder::new().prefix("silt-clones").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-clones");
     let origin = origin(root.path());
     let _server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &_server);
@@ -41,7 +39,7 @@ fn clones_are_remembered_across_restarts() {
 
 #[test]
 fn only_one_daemon_runs_per_data_directory() {
-    let root = tempfile::Builder::new().prefix("silt-one-daemon").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-one-daemon");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);

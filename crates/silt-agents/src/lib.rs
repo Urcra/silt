@@ -175,6 +175,10 @@ pub struct LaunchPlan {
     pub mcp: McpServer,
     /// Shell command that forwards hook events: `<command> <Event>`.
     pub hook_command: String,
+    /// The `silt` that command runs, for agents that can start a program
+    /// without a shell, which Windows needs: its agents pick Git Bash or
+    /// PowerShell, and the two read a quoted path differently.
+    pub hook_program: PathBuf,
     /// Rules and skills the agent doesn't read by itself.
     pub instructions: Option<String>,
     /// A directory Silt may use for per-run configuration files.
@@ -374,7 +378,7 @@ pub(crate) fn agent_home(variable: &str, dir: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    silt_os::home_dir()
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -412,12 +416,9 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-/// A program's path as the first word of a hook command. On Windows an
-/// agent may run hooks through cmd, PowerShell or Git Bash, and plain double
-/// quotes mean the same to all three when the path holds none of their
-/// special characters.
-pub fn program_quote(path: &str) -> String {
-    if cfg!(windows) && !path.contains(['"', '$', '`', '%', '\n']) { format!("\"{path}\"") } else { shell_quote(path) }
+/// `text` as one argument for PowerShell's call operator, `& '<path>'`.
+pub fn powershell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
 }
 
 /// Links each skill directory into `dir` under its directory name, made

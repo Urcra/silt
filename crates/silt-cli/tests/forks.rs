@@ -1,8 +1,6 @@
 //! Two users on one Silt server, all real processes: Bob forks Alice's
 //! in-progress thread with its conversation, pulls her newer work, and
 //! offers his back with merge requests that Alice approves or declines.
-// The agents these tests drive are shell-script stand-ins.
-#![cfg(unix)]
 
 mod common;
 
@@ -22,7 +20,7 @@ struct Team {
 }
 
 fn team() -> Team {
-    let root = tempfile::Builder::new().prefix("silt-forks").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-forks");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let alice = Machine::new_for(root.path(), "alice-laptop", "alice", &origin, &server);

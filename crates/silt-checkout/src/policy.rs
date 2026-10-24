@@ -25,6 +25,22 @@ fn is_writable_anywhere(path: &str) -> bool {
     normal_outside_git && !in_silt_data && !path.starts_with('/')
 }
 
+/// The paths of a thread that a checkout here leaves unwritten: those the
+/// write policy refuses, and where the file system folds case, each path
+/// but the first, in path order, of those differing only in case, as they
+/// would be one file (ADR 0045).
+pub fn unwritten<'a>(paths: impl IntoIterator<Item = &'a str>, folds_case: bool) -> Vec<String> {
+    let mut paths: Vec<&str> = paths.into_iter().collect();
+    paths.sort_unstable();
+    paths.dedup();
+    let mut seen = std::collections::HashSet::new();
+    paths
+        .into_iter()
+        .filter(|path| !is_writable(path) || (folds_case && !seen.insert(path.to_lowercase())))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// `.git` named through an NTFS stream, which Windows opens as `.git`
 /// itself; git's `core.protectNTFS` refuses it everywhere, and so does Silt.
 fn is_git_dir_stream(component: &str) -> bool {
@@ -128,5 +144,17 @@ mod tests {
         assert_eq!(is_writable("aux.txt"), !cfg!(windows));
         assert_eq!(is_writable("a:b"), !cfg!(windows));
         assert!(is_writable("src/main.rs"));
+    }
+
+    #[test]
+    fn unwritten_paths_are_the_refused_and_the_later_of_a_case_clash() {
+        let paths = ["src/Main.rs", "src/main.rs", ".git/config", "README.md", "aux.txt"];
+        let mut expected = vec![".git/config", "src/main.rs"];
+        if cfg!(windows) {
+            expected.push("aux.txt");
+        }
+        expected.sort_unstable();
+        assert_eq!(unwritten(paths, true), expected);
+        assert_eq!(unwritten(paths, false), expected.iter().copied().filter(|path| *path != "src/main.rs").collect::<Vec<_>>());
     }
 }
