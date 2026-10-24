@@ -5,10 +5,11 @@ import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset
 import { readAttachment } from '../attachments'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, running } from '../agentState'
 import { useNow } from '../now'
+import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Icon, IconButton, Kbd, Spinner, cx } from '../ui'
+import { Button, Dot, Icon, Kbd, Spinner, cx } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
@@ -127,6 +128,14 @@ function useTurnClock(status: AgentStatus | null): string | null {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+/** Esc stops the turn while the agent works and asks nothing; a question or a permission takes Esc while open. */
+function StopKey({ onCancel }: { onCancel: () => void }) {
+  useShortcut('escape', 'Stop the turn', () => {
+    if (!document.querySelector('dialog[open]')) onCancel()
+  })
+  return <Kbd>Esc</Kbd>
+}
+
 /** What the agent is doing now, before it is recorded: its thinking, its words, the running tool's output, and how long it's been at it. */
 export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatus; toolOutput: string; onCancel: () => void }) {
   const clock = useTurnClock(status)
@@ -154,17 +163,26 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
         </pre>
       )}
       {working(status) && (
-        <div role="status" className="flex items-center gap-2.5 text-xs text-fg-2">
-          <Spinner />
+        <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
+          {/* Blocked on the person, not busy: no spinner. */}
+          {status.state === 'awaiting_permission' ? <Dot tone="warn" /> : <Spinner />}
           <span className="text-fg-1">{status.state === 'awaiting_permission' ? 'Waiting on you' : 'Working'}</span>
           {clock && (
             <span className="font-mono" data-volatile>
               {clock}
             </span>
           )}
-          <button type="button" onClick={onCancel} className="ml-auto hover:text-fg-1 max-md:min-h-11">
-            Stop the turn
-          </button>
+          {status.context && (
+            <span className="font-mono" data-volatile title="How much of the agent's context window the session uses">
+              · {tokens(status.context.used)} of {tokens(status.context.size)} context
+            </span>
+          )}
+          {/* The composer's round button stops the turn; here only its key is named. */}
+          {status.state === 'working' && (
+            <span className="ml-auto flex items-center gap-1.5 pointer-coarse:hidden">
+              <StopKey onCancel={onCancel} /> to stop
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -257,7 +275,7 @@ export function AgentDock({
 
   const statusLine = live ? (
     <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
-      {status.agent} {STATE_PHRASE[status.state]}
+      {status.agent} {(status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission' ? 'is asking you a question' : STATE_PHRASE[status.state]}
     </span>
   ) : elsewhere?.agent ? (
     <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
@@ -368,7 +386,11 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
         />
       )}
-      {live && <IconButton icon="stop" label="Stop agent" onClick={() => act(api.stopAgent(thread))} />}
+      {live && (
+        <Button variant="ghost" size="sm" aria-label="Stop agent" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
+          Stop agent
+        </Button>
+      )}
     </>
   )
 
@@ -383,13 +405,13 @@ export function AgentDock({
   ) : (
     live && (
       <>
-        {turning && (
-          <Button variant="ghost" disabled={!draft.trim()} onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
+        {turning && draft.trim() && (
+          <Button variant="ghost" onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
             Steer now
           </Button>
         )}
         {turning && !draft.trim() ? (
-          <RoundButton quiet label="Cancel turn" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
+          <RoundButton quiet label="Cancel turn" title="Stop the turn (Esc)" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
         ) : (
           <RoundButton
             label={ready(status) ? 'Send' : 'Queue'}
@@ -426,8 +448,12 @@ export function AgentDock({
               : 'Draft the next prompt; everyone here sees it'
             : status.state === 'awaiting_input'
               ? 'Or say what to change in the plan'
-              : turning
-                ? 'Steer it now, or queue a prompt for when this turn ends'
+              : (status.questions?.length ?? 0) > 0
+                ? 'Answer above, or steer it'
+                : turning
+                  ? narrow
+                    ? 'Steer, or queue a prompt'
+                    : 'Steer it now, or queue a prompt for when this turn ends'
                 : `Ask ${status.agent}, or attach files for context`
         }
         above={above}

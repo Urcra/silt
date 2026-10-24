@@ -354,6 +354,8 @@ struct Fields {
 #[derive(Deserialize)]
 struct Message {
     content: Option<Value>,
+    id: Option<String>,
+    usage: Option<Value>,
 }
 
 impl Fields {
@@ -363,7 +365,11 @@ impl Fields {
             compact_summary: value.get("isCompactSummary").cloned(),
             meta: value.get("isMeta").cloned(),
             subtype: value.get("subtype").cloned(),
-            message: value.get("message").map(|message| Message { content: message.get("content").cloned() }),
+            message: value.get("message").map(|message| Message {
+                content: message.get("content").cloned(),
+                id: message.get("id").and_then(Value::as_str).map(str::to_owned),
+                usage: message.get("usage").cloned(),
+            }),
         }
     }
 }
@@ -373,7 +379,10 @@ impl Fields {
 fn entries(fields: Fields) -> Vec<Entry> {
     let flag = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool) == Some(true);
     let kind = fields.kind.as_ref().and_then(Value::as_str).unwrap_or("unknown").to_owned();
-    let content = fields.message.and_then(|message| message.content);
+    let (content, usage) = match fields.message {
+        Some(message) => (message.content, message.id.zip(message.usage)),
+        None => (None, None),
+    };
     match kind.as_str() {
         "user" if flag(&fields.compact_summary) => vec![Entry::Compaction { summary: Some(block_text(content)) }],
         "system" if fields.subtype.as_ref().and_then(Value::as_str) == Some("compact_boundary") => {
@@ -382,7 +391,18 @@ fn entries(fields: Fields) -> Vec<Entry> {
         // What Claude Code adds as the user's turn, such as a skill's text,
         // hook feedback or a note on an image, which nobody typed.
         "user" if flag(&fields.meta) => vec![Entry::Other { kind: "meta".into() }],
-        role @ ("user" | "assistant") => message_entries(role, content),
+        role @ ("user" | "assistant") => {
+            let mut entries = message_entries(role, content);
+            if let Some((message, usage)) = usage.filter(|_| role == "assistant") {
+                let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+                let input = count("input_tokens") + count("cache_read_input_tokens") + count("cache_creation_input_tokens");
+                let output = count("output_tokens");
+                if input + output > 0 {
+                    entries.push(Entry::Usage { message, input, output });
+                }
+            }
+            entries
+        }
         other => vec![Entry::Other { kind: other.to_owned() }],
     }
 }
@@ -393,7 +413,9 @@ fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
         Some(Value::Array(blocks)) => blocks,
         _ => return Vec::new(),
     };
-    blocks
+    // A message's images follow its words, so a prompt's text comes first.
+    let mut images = Vec::new();
+    let mut entries: Vec<Entry> = blocks
         .into_iter()
         .filter_map(|block| {
             let Value::Object(mut block) = block else {
@@ -401,6 +423,10 @@ fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
             };
             let kind = block.get("type")?.as_str()?.to_owned();
             match kind.as_str() {
+                "image" => {
+                    images.extend(image(&block));
+                    None
+                }
                 "text" => Some(text_entry(role, take_string(&mut block, "text"))),
                 "thinking" => {
                     Some(take_string(&mut block, "thinking")).filter(|text| !text.is_empty()).map(|text| Entry::Thinking { text })
@@ -409,16 +435,41 @@ fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
                     id: take_string(&mut block, "id"),
                     name: take_string(&mut block, "name"),
                     input: block.remove("input").unwrap_or(Value::Null),
+                    kind: None,
                 }),
-                "tool_result" => Some(Entry::ToolResult {
-                    tool_use_id: take_string(&mut block, "tool_use_id"),
-                    is_error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
-                    text: block_text(block.remove("content")),
-                }),
+                "tool_result" => {
+                    let content = block.remove("content");
+                    if let Some(Value::Array(parts)) = &content {
+                        images.extend(
+                            parts
+                                .iter()
+                                .filter_map(Value::as_object)
+                                .filter(|part| part.get("type").and_then(Value::as_str) == Some("image"))
+                                .filter_map(image),
+                        );
+                    }
+                    Some(Entry::ToolResult {
+                        tool_use_id: take_string(&mut block, "tool_use_id"),
+                        is_error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                        text: block_text(content),
+                    })
+                }
                 other => Some(Entry::Other { kind: format!("{role}_{other}") }),
             }
         })
-        .collect()
+        .collect();
+    entries.extend(images);
+    entries
+}
+
+/// An image block's picture, when it carries its bytes rather than a link.
+fn image(block: &serde_json::Map<String, Value>) -> Option<Entry> {
+    let source = block.get("source")?;
+    (source.get("type")?.as_str()? == "base64").then_some(())?;
+    Some(Entry::Image {
+        media_type: source.get("media_type")?.as_str()?.to_owned(),
+        data: source.get("data")?.as_str()?.to_owned(),
+    })
 }
 
 fn text_entry(role: &str, text: String) -> Entry {
@@ -517,7 +568,12 @@ mod tests {
             vec![
                 Entry::Thinking { text: "look at lexer.rs".into() },
                 Entry::Assistant { text: "On it.".into() },
-                Entry::ToolCall { id: "toolu_1".into(), name: "Edit".into(), input: json!({"file_path": "src/lexer.rs"}) },
+                Entry::ToolCall {
+                    id: "toolu_1".into(),
+                    name: "Edit".into(),
+                    input: json!({"file_path": "src/lexer.rs"}),
+                    kind: None
+                },
             ]
         );
 

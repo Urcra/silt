@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, PoisonError};
 
+use silt_agents::tool::Shown;
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
 use silt_log::{Author, ConvOp, Delta, Family, GraphEvent, HistorySource, Op, TurnMark};
@@ -65,20 +66,14 @@ impl Core {
                 HistorySource::Inherited => "inherited",
                 HistorySource::Upstream => "upstream",
             };
-            for (kind, text) in entry_texts(&mut transcripts, delta) {
+            // As the agent stamped its line, else when it was recorded.
+            let time_ms = match &delta.op {
+                Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
+                _ => delta.time_ms,
+            };
+            for shown in entry_texts(&mut transcripts, delta) {
                 let index = entries.len();
-                entries.push((
-                    delta.span.first(),
-                    HistoryEntry {
-                        index,
-                        thread: delta.thread.to_string(),
-                        origin: origin.to_owned(),
-                        kind,
-                        text,
-                        time_ms: delta.time_ms,
-                        rewound,
-                    },
-                ));
+                entries.push((delta.span.first(), shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound)));
             }
         }
         entries
@@ -270,7 +265,7 @@ impl Core {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
         let mut transcripts = Transcripts::default();
         silt_log::turn_end_by(family.log(), thread, turn, |delta| {
-            entry_texts(&mut transcripts, delta).iter().any(|(kind, _)| kind == "user")
+            entry_texts(&mut transcripts, delta).iter().any(|shown| shown.kind == "user")
         })
     }
 
@@ -386,9 +381,9 @@ impl Core {
         let mut last_prompt: Option<(usize, String)> = None;
         let mut transcripts = Transcripts::default();
         for item in family.history(thread) {
-            for (kind, text) in entry_texts(&mut transcripts, item.delta) {
-                if kind == "user" {
-                    last_prompt = Some((entries, text));
+            for shown in entry_texts(&mut transcripts, item.delta) {
+                if shown.kind == "user" {
+                    last_prompt = Some((entries, shown.text));
                 }
                 entries += 1;
             }
@@ -415,7 +410,7 @@ impl Core {
                 time_ms: item.delta.time_ms,
                 prompt: item.source == HistorySource::Own
                     && matches!(item.delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })),
-                compaction: entry_texts(&mut transcripts, item.delta).iter().any(|(kind, _)| kind == "compaction"),
+                compaction: entry_texts(&mut transcripts, item.delta).iter().any(|shown| shown.kind == "compaction"),
             })
             .collect();
         Some(Timeline { items })
@@ -478,24 +473,15 @@ fn subject(repo: &silt_git::Repo, commit: &str) -> Option<String> {
     (!subject.is_empty()).then_some(subject)
 }
 
-fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<(String, String)> {
+fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<Shown> {
     match &delta.op {
-        Op::Conv(ConvOp::Native { .. }) => native_entries(transcripts, delta)
-            .into_iter()
-            .filter_map(|entry| match entry {
-                Entry::Other { .. } => None,
-                Entry::ToolCall { name, input, .. } => Some(("tool_call".to_owned(), format!("{name} {input}"))),
-                Entry::Compaction { summary } => Some((
-                    "compaction".to_owned(),
-                    summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()),
-                )),
-                other => Some((other.kind().to_owned(), other.into_searchable_text().unwrap_or_default())),
-            })
-            .collect(),
-        Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
-            vec![("merge".to_owned(), format!("merged \"{title}\" from fork {from}: {summary}"))]
+        Op::Conv(ConvOp::Native { .. }) => {
+            native_entries(transcripts, delta).into_iter().filter_map(silt_agents::tool::shown).collect()
         }
-        Op::Merge { from, mr: None } => vec![("pull".to_owned(), format!("pulled newer work from thread {from}"))],
+        Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
+            vec![Shown::plain("merge", format!("merged \"{title}\" from fork {from}: {summary}"))]
+        }
+        Op::Merge { from, mr: None } => vec![Shown::plain("pull", format!("pulled newer work from thread {from}"))],
         _ => Vec::new(),
     }
 }

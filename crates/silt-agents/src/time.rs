@@ -29,6 +29,14 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// When an agent's transcript line says it happened, for the agents that
+/// stamp their lines (Claude Code, Codex): a line is captured after it's
+/// written, and an imported one long after.
+pub fn line_time(line: &str) -> Option<i64> {
+    let record: serde_json::Value = serde_json::from_str(line).ok()?;
+    parse_timestamp(record.get("timestamp")?.as_str()?)
+}
+
 /// Milliseconds since the epoch of an RFC 3339 time in UTC, such as
 /// `2025-10-20T12:00:00.123Z`, as agents write them.
 pub fn parse_timestamp(text: &str) -> Option<i64> {
@@ -65,6 +73,15 @@ pub fn file_stamp(ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_stamped_line_says_when_it_happened() {
+        let line = r#"{"type":"user","timestamp":"2026-01-02T03:04:05.250Z","message":{}}"#;
+        assert_eq!(line_time(line), parse_timestamp("2026-01-02T03:04:05.250Z"));
+        assert_eq!(line_time(r#"{"t":"message","text":"hi"}"#), None);
+        assert_eq!(line_time("not json"), None);
+    }
+
     use super::*;
 
     #[test]

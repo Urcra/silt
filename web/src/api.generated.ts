@@ -79,7 +79,15 @@ export type AgentStatus = { agent: string, state: AgentState,
 /**
  * What the agent is saying or thinking right now, not recorded yet.
  */
-streaming: string, thinking: string, permissions: Array<PermissionAsked>, error: string | null, 
+streaming: string, thinking: string, permissions: Array<PermissionAsked>, 
+/**
+ * Questions the agent asked and waits on.
+ */
+questions: Array<QuestionAsked>, 
+/**
+ * How much of its context window the session uses, when it says.
+ */
+context: ContextUse | null, error: string | null, 
 /**
  * The agent's modes, when it has any.
  */
@@ -96,6 +104,26 @@ takes_images: boolean,
  * Files other than text and images.
  */
 takes_files: boolean, };
+
+export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
+
+export type ContextUse = { used: number, size: number, };
+
+export type QuestionFieldAsked = { 
+/**
+ * The key its answer goes under.
+ */
+key: string, title: string, description: string | null, 
+/**
+ * Its choices; none for a free answer.
+ */
+options: Array<ChoiceAsked>, multi: boolean, };
+
+export type ChoiceAsked = { 
+/**
+ * What answering with it sends.
+ */
+value: string, label: string, description: string | null, };
 
 export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
 
@@ -322,7 +350,83 @@ kind: string, text: string, time_ms: number,
 /**
  * A revert rewound it (ADR 0029).
  */
-rewound: boolean, };
+rewound: boolean, 
+/**
+ * On a `tool_call`: what the tool does, read from its input.
+ */
+tool: ToolView | null, 
+/**
+ * On a `tool_result`: the call it answers and how it ended.
+ */
+outcome: ToolOutcome | null, 
+/**
+ * On an `image`: the picture the entry before it carried.
+ */
+image: ImageView | null, 
+/**
+ * On a `usage`: what one of the agent's messages cost.
+ */
+usage: UsageView | null, 
+/**
+ * On a `plan`, or a `tool_call` that writes one: its steps.
+ */
+plan: Array<PlanStepView> | null, };
+
+export type ToolView = { id: string, name: string, 
+/**
+ * `execute`, `read`, `search`, `edit`, `question`, `fetch` or `other`.
+ */
+kind: string, 
+/**
+ * The command it ran, the file it read or changed, or what it looked for.
+ */
+subject: string | null, 
+/**
+ * Where a search looked, or what a command was for.
+ */
+detail: string | null, 
+/**
+ * What a question tool asked.
+ */
+questions: Array<QuestionView>, };
+
+export type ToolOutcome = { 
+/**
+ * The id of the call it answers.
+ */
+call: string, failed: boolean, exit_code: number | null, 
+/**
+ * A question tool's answers.
+ */
+answers: Array<AnswerView>, };
+
+export type ImageView = { media_type: string, 
+/**
+ * Base64; empty when it was too large to show.
+ */
+data: string, };
+
+export type UsageView = { 
+/**
+ * The message it counts; one message may be recorded more than once.
+ */
+message: string, input: number, output: number, };
+
+export type PlanStepView = { text: string, 
+/**
+ * `pending`, `in_progress` or `completed`.
+ */
+status: string, };
+
+export type QuestionView = { 
+/**
+ * A word or two naming it, such as `Progress`.
+ */
+header: string | null, question: string, multi_select: boolean, options: Array<ChoiceView>, };
+
+export type ChoiceView = { label: string, description: string | null, };
+
+export type AnswerView = { question: string, answer: string, };
 
 export type HistoryHit = { 
 /**

@@ -30,6 +30,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/agent/steer", post(steer))
         .route("/app/api/threads/{id}/agent/cancel", post(cancel))
         .route("/app/api/threads/{id}/agent/answer", post(answer))
+        .route("/app/api/threads/{id}/agent/reply", post(reply))
         .route("/app/api/threads/{id}/agent/stop", post(stop))
         .route("/app/api/threads/{id}/agent/preset", post(preset))
         .route("/app/api/threads/{id}/agent/mode", post(mode))
@@ -301,6 +302,8 @@ async fn live(
             "streaming": "",
             "thinking": "",
             "permissions": report.permissions,
+            "questions": report.questions,
+            "context": null,
             "error": null,
             "modes": null,
             "settings": [],
@@ -436,6 +439,24 @@ async fn answer(
     Json(body): Json<AnswerBody>,
 ) -> Result<Json<Value>, Refused> {
     relayed(&server, browser, &id, RemoteCommand::Answer { id: body.id, option: body.option }, false).await
+}
+
+#[derive(Deserialize)]
+struct ReplyBody {
+    id: u64,
+    /// Each field's chosen values; none declines the question.
+    #[serde(default)]
+    answers: Option<std::collections::BTreeMap<String, Vec<String>>>,
+}
+
+async fn reply(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<ReplyBody>,
+) -> Result<Json<Value>, Refused> {
+    let answers = body.answers.map(|answers| answers.into_iter().collect());
+    relayed(&server, browser, &id, RemoteCommand::Reply { id: body.id, answers }, false).await
 }
 
 #[derive(Deserialize)]

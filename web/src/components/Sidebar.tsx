@@ -55,9 +55,9 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
 }
 
 /** What a thread waiting on the person waits for, in a word or two. */
-function waitsFor(thread: ThreadSummary): string {
+function waitsFor(thread: ThreadSummary, asks: boolean): string {
   if (thread.agent_state === 'awaiting_input') return 'plan to approve'
-  if (thread.agent_state === 'awaiting_permission') return 'asks to run'
+  if (thread.agent_state === 'awaiting_permission') return asks ? 'asks you' : 'asks to run'
   if (thread.agent_state === 'error') return 'stopped'
   return 'review'
 }
@@ -75,7 +75,7 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
   return (
     <li role="group" aria-label={`${title} needs you`}>
       <ul>
-        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread)}</span>} />
+        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0)}</span>} />
       </ul>
       {asked && (
         <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">

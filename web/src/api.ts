@@ -194,6 +194,11 @@ export const api = {
   cancelTurn: (id: string) => request<string>('POST', `${thread(id)}/agent/cancel`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
+  /** Answers a question the agent waits on, each field by its chosen values; none declines it. */
+  answerQuestion: (id: string, question: number, answers: Record<string, string[]> | null) =>
+    request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),
+  /** Pushes the thread's branch; answers the forge's page for its new pull request. */
+  openPullRequest: (id: string) => request<string>('POST', `${thread(id)}/pull-request`),
   stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
   steer: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/steer`, { text }),
   setPreset: (id: string, preset: Preset) => request<string>('POST', `${thread(id)}/agent/preset`, { preset }),

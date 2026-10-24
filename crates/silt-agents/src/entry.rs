@@ -16,11 +16,32 @@ pub enum Entry {
         id: String,
         name: String,
         input: serde_json::Value,
+        /// The kind its agent gave it, where it gives one (ACP agents do).
+        #[serde(default)]
+        kind: Option<String>,
     },
     ToolResult {
         tool_use_id: String,
         text: String,
         is_error: bool,
+    },
+    /// An image a prompt or a tool's result carries, base64-encoded as the
+    /// agent recorded it.
+    Image {
+        media_type: String,
+        data: String,
+    },
+    /// What a message of the agent's cost, in tokens; an agent may record
+    /// one message over several lines, each naming it.
+    Usage {
+        message: String,
+        input: u64,
+        output: u64,
+    },
+    /// The agent's plan as it now stands: each step and its status
+    /// (`pending`, `in_progress` or `completed`).
+    Plan {
+        steps: Vec<(String, String)>,
     },
     /// The agent compacted its context here; earlier entries stay available.
     Compaction {
@@ -46,6 +67,9 @@ impl Entry {
             Self::Thinking { .. } => "thinking",
             Self::ToolCall { .. } => "tool_call",
             Self::ToolResult { .. } => "tool_result",
+            Self::Image { .. } => "image",
+            Self::Usage { .. } => "usage",
+            Self::Plan { .. } => "plan",
             Self::Compaction { .. } => "compaction",
             Self::Other { kind } => kind,
         }
@@ -58,8 +82,9 @@ impl Entry {
                 Some(text.clone())
             }
             Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
+            Self::Plan { steps } => Some(plan_text(steps)),
             Self::Compaction { summary } => summary.clone(),
-            Self::Other { .. } => None,
+            Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
         }
     }
 
@@ -71,8 +96,13 @@ impl Entry {
                 Some(text)
             }
             Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
+            Self::Plan { steps } => Some(plan_text(&steps)),
             Self::Compaction { summary } => summary,
-            Self::Other { .. } => None,
+            Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
         }
     }
+}
+
+fn plan_text(steps: &[(String, String)]) -> String {
+    steps.iter().map(|(step, _)| step.as_str()).collect::<Vec<_>>().join("\n")
 }

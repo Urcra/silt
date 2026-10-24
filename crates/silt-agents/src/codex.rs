@@ -199,7 +199,7 @@ pub fn read_line(line: &str) -> Read {
                 _ => ("local_shell".to_owned(), payload.get("action").cloned().unwrap_or(Value::Null)),
             };
             read.marks.push(Mark::ToolStarted { tool_use_id: id.clone(), tool: name.clone() });
-            read.entries.push(Entry::ToolCall { id, name, input });
+            read.entries.push(Entry::ToolCall { id, name, input, kind: None });
         }
         ("response_item", "function_call_output" | "custom_tool_call_output") => {
             let id = field("call_id");
@@ -430,7 +430,7 @@ mod tests {
         let read = read_line(call);
         assert_eq!(
             read.entries,
-            vec![Entry::ToolCall { id: "call_1".into(), name: "shell".into(), input: json!({"command": ["ls"]}) }]
+            vec![Entry::ToolCall { id: "call_1".into(), name: "shell".into(), input: json!({"command": ["ls"]}), kind: None }]
         );
         assert_eq!(read.marks, vec![Mark::ToolStarted { tool_use_id: "call_1".into(), tool: "shell".into() }]);
         let output = r#"{"timestamp":"t","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"README.md\n"}}"#;

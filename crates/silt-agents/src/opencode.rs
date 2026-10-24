@@ -139,6 +139,7 @@ impl Reader for OpenCodeReader {
                     id: id.clone(),
                     name: tool,
                     input: state.get("input").cloned().unwrap_or(Value::Null),
+                    kind: None,
                 });
                 read.entries.push(Entry::ToolResult {
                     tool_use_id: id,

@@ -128,6 +128,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
+        .route("/api/threads/{id}/agent/reply", post(agent_reply))
+        .route("/api/threads/{id}/pull-request", post(pull_request))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
@@ -691,6 +693,23 @@ struct AgentAnswer {
 async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentAnswer>) -> HttpResponse {
     let request = Request::AcpAnswer { thread, id: body.id, option: body.option };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct AgentReply {
+    id: u64,
+    /// Each field's chosen values; none declines the question.
+    #[serde(default)]
+    answers: Option<std::collections::BTreeMap<String, Vec<String>>>,
+}
+
+async fn agent_reply(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentReply>) -> HttpResponse {
+    let answers = body.answers.map(|answers| answers.into_iter().collect());
+    ask(&web, Request::AcpReply { thread, id: body.id, answers }).await
+}
+
+async fn pull_request(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::OpenPullRequest { thread }).await
 }
 
 async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {

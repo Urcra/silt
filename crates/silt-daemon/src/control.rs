@@ -130,6 +130,7 @@ impl Core {
                     .into_iter()
                     .map(|asked| AskedPermission { id: asked.id, title: asked.title, options: asked.options })
                     .collect(),
+                questions: status.questions,
                 queued,
                 preset: serde_json::to_value(self.preset(thread))
                     .ok()
@@ -225,6 +226,7 @@ impl Core {
             RemoteCommand::Queue { text } => Request::QueueAdd { thread, text },
             RemoteCommand::Steer { text } => Request::AcpSteer { thread, text },
             RemoteCommand::Answer { id, option } => Request::AcpAnswer { thread, id, option },
+            RemoteCommand::Reply { id, answers } => Request::AcpReply { thread, id, answers },
             RemoteCommand::Cancel => Request::AcpCancel { thread },
             RemoteCommand::Stop => Request::AcpStop { thread },
             RemoteCommand::Preset { preset: chosen } => Request::AgentPreset { thread, preset: preset(chosen)? },
@@ -297,6 +299,8 @@ impl Core {
                 .iter()
                 .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
                 .collect(),
+            questions: running.agent.questions.clone(),
+            context: None,
             error: None,
             modes: None,
             settings: Vec::new(),
@@ -329,6 +333,7 @@ impl Core {
             Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
             Request::AcpCancel { thread } => (thread, RemoteCommand::Cancel),
             Request::AcpAnswer { thread, id, option } => (thread, RemoteCommand::Answer { id: *id, option: option.clone() }),
+            Request::AcpReply { thread, id, answers } => (thread, RemoteCommand::Reply { id: *id, answers: answers.clone() }),
             Request::AcpStop { thread } => (thread, RemoteCommand::Stop),
             Request::AcpMode { thread, mode } => (thread, RemoteCommand::Mode { mode: mode.clone() }),
             Request::AcpSetting { thread, id, value } => {

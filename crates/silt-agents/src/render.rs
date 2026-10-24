@@ -37,10 +37,18 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
                 let label = if *is_error { "Tool error" } else { "Tool result" };
                 push(Role::Assistant, format!("[{label}: {}]", clip(text)));
             }
+            Entry::Plan { steps } => {
+                let steps: Vec<String> = steps.iter().map(|(step, status)| format!("- [{status}] {step}")).collect();
+                push(Role::Assistant, format!("[Plan:\n{}]", steps.join("\n")));
+            }
             Entry::Compaction { summary: Some(summary) } => {
                 push(Role::User, format!("Summary of the earlier conversation:\n{summary}"));
             }
-            Entry::Thinking { .. } | Entry::Compaction { summary: None } | Entry::Other { .. } => {}
+            Entry::Thinking { .. }
+            | Entry::Image { .. }
+            | Entry::Usage { .. }
+            | Entry::Compaction { summary: None }
+            | Entry::Other { .. } => {}
         }
     }
     if messages.first().is_some_and(|(role, _)| *role == Role::Assistant) {
@@ -119,7 +127,7 @@ mod tests {
             Entry::Assistant { text: "Hello".into() },
             Entry::User { text: "Fix the lexer".into() },
             Entry::Assistant { text: "Looking.".into() },
-            Entry::ToolCall { id: "t1".into(), name: "Read".into(), input: json!({"file_path": "lexer.rs"}) },
+            Entry::ToolCall { id: "t1".into(), name: "Read".into(), input: json!({"file_path": "lexer.rs"}), kind: None },
             Entry::ToolResult { tool_use_id: "t1".into(), text: "fn lex() {}".into(), is_error: false },
             Entry::Other { kind: "hook".into() },
             Entry::User { text: "Thanks".into() },

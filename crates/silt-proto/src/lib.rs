@@ -9,7 +9,7 @@ pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
 /// rewound turns (ADR 0029). 6: a thread names its cloud session (ADR 0040).
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -995,6 +995,9 @@ pub struct AgentReport {
     /// What it waits on the person to answer.
     #[serde(default)]
     pub permissions: Vec<AskedPermission>,
+    /// Questions it waits on the person to answer.
+    #[serde(default)]
+    pub questions: Vec<QuestionAsked>,
     /// Prompts waiting their turn.
     #[serde(default)]
     pub queued: u32,
@@ -1011,6 +1014,36 @@ pub struct AskedPermission {
     pub title: String,
     /// Option ids and labels.
     pub options: Vec<(String, String)>,
+}
+
+/// A question the agent waits on, as a form of fields to fill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct QuestionAsked {
+    pub id: u64,
+    pub message: String,
+    pub fields: Vec<QuestionFieldAsked>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct QuestionFieldAsked {
+    /// The key its answer goes under.
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// Its choices; none for a free answer.
+    pub options: Vec<ChoiceAsked>,
+    pub multi: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ChoiceAsked {
+    /// What answering with it sends.
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
 }
 
 /// Every agent a daemon runs, and those it could start; sent when they
@@ -1058,6 +1091,12 @@ pub enum RemoteCommand {
         id: u64,
         #[serde(default)]
         option: Option<String>,
+    },
+    /// Answers a question with each field's chosen values, or declines it.
+    Reply {
+        id: u64,
+        #[serde(default)]
+        answers: Option<Vec<(String, Vec<String>)>>,
     },
     Cancel,
     Stop,
@@ -1112,7 +1151,7 @@ impl Capabilities {
     /// would need, for saying so.
     pub fn allow(&self, command: &RemoteCommand) -> Result<(), &'static str> {
         let (allowed, needs) = match command {
-            RemoteCommand::Answer { .. } => (self.answer_permissions, "answer permissions"),
+            RemoteCommand::Answer { .. } | RemoteCommand::Reply { .. } => (self.answer_permissions, "answer permissions"),
             RemoteCommand::Prompt { .. } | RemoteCommand::Queue { .. } | RemoteCommand::Steer { .. } | RemoteCommand::Cancel => {
                 (self.send_prompts, "send prompts")
             }

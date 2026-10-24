@@ -18,6 +18,7 @@ mod render;
 mod rewrite;
 mod tail;
 pub mod time;
+pub mod tool;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

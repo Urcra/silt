@@ -165,7 +165,7 @@ impl Core {
                 Op::Conv(ConvOp::Native { .. }) => {
                     for entry in native_entries(&mut transcripts, delta) {
                         match entry {
-                            Entry::ToolCall { id, name, input } => {
+                            Entry::ToolCall { id, name, input, .. } => {
                                 lines.push(ShowLine::ToolCall { id, name, input: input.to_string() })
                             }
                             Entry::ToolResult { tool_use_id, text, .. } => {

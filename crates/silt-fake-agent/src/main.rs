@@ -4,20 +4,22 @@
 //! made in the same process, replaying what was said, and refuses others.
 //! It has a `code` and a `plan` mode, where it only answers with a plan,
 //! and a model setting, and takes images and files, which its answer
-//! names; `FAKE_ACP_NO_MODES` leaves all that out. With
-//! `FAKE_ACP_CRASH` set it dies on a prompt.
+//! names; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
+//! `Ask me` asks a multiple-choice question instead and answers with the
+//! choice. With `FAKE_ACP_CRASH` set it dies on a prompt.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, ContentChunk, EmbeddedResourceResource, Implementation, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    AgentCapabilities, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource, Implementation,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+    PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode,
+    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
 
@@ -185,8 +187,38 @@ async fn main() -> Result<()> {
                         std::process::exit(9);
                     }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
+                    notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
                     if planning {
                         let reply = format!("Plan: {prompt}");
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                        state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
+                    if prompt.contains("Ask me") {
+                        let asked: CreateElicitationRequest = serde_json::from_value(serde_json::json!({
+                            "mode": "form",
+                            "sessionId": session.to_string(),
+                            "message": "What should the progress bar count?",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {"count": {
+                                    "type": "string",
+                                    "title": "Progress",
+                                    "oneOf": [
+                                        {"const": "acked", "title": "Bytes the server acknowledged", "description": "Accurate, but moves in steps of one chunk"},
+                                        {"const": "sent", "title": "Bytes sent on the socket", "description": "Smooth, but can run ahead of the server"},
+                                        {"const": "chunks", "title": "Chunks completed", "description": "Simplest, coarse for small files"}
+                                    ]
+                                }},
+                                "required": ["count"]
+                            }
+                        }))
+                        .expect("a form question");
+                        let answer = serde_json::to_value(worker.send_request(asked).block_task().await?).unwrap_or_default();
+                        let reply = match answer["content"]["count"].as_str() {
+                            Some(chosen) if answer["action"] == "accept" => format!("Counting {chosen}."),
+                            _ => "You didn't choose.".to_owned(),
+                        };
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                         state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
                         return responder.respond(PromptResponse::new(StopReason::EndTurn));
@@ -230,7 +262,7 @@ async fn main() -> Result<()> {
                         .entry(session.to_string())
                         .or_default()
                         .extend([(true, prompt), (false, reply)]);
-                    responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    responder.respond(PromptResponse::new(StopReason::EndTurn).usage(Usage::new(1_840, 1_600, 240)))
                 })
             },
             agent_client_protocol::on_receive_request!(),

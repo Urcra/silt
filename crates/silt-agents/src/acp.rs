@@ -29,10 +29,15 @@ pub fn session_of(line: &str) -> Option<(String, String)> {
 
 /// A prompt by `by`, naming the files attached to it; each file's content
 /// is recorded beside the session under that name.
-pub fn prompt(text: &str, by: &str, attached: &[String]) -> String {
+/// A prompt with the names of the files attached to it, and the images
+/// among them as `(media type, base64)`, kept so the history can show them.
+pub fn prompt(text: &str, by: &str, attached: &[String], images: &[(String, String)]) -> String {
     let mut record = json!({"t": "prompt", "text": text, "by": by});
     if !attached.is_empty() {
         record["attached"] = json!(attached);
+    }
+    if !images.is_empty() {
+        record["images"] = images.iter().map(|(media_type, data)| json!({"media_type": media_type, "data": data})).collect();
     }
     record.to_string()
 }
@@ -59,8 +64,15 @@ pub fn tool_result(id: &str, status: &str, output: Option<&str>) -> String {
     json!({"t": "tool_result", "id": id, "status": status, "output": output}).to_string()
 }
 
-pub fn plan(entries: &[String]) -> String {
+/// The agent's plan: each step and its status.
+pub fn plan(steps: &[(String, String)]) -> String {
+    let entries: Vec<Value> = steps.iter().map(|(step, status)| json!({"content": step, "status": status})).collect();
     json!({"t": "plan", "entries": entries}).to_string()
+}
+
+/// What a turn took, in tokens; `id` names the record, as one message's.
+pub fn usage(id: &str, input: u64, output: u64) -> String {
+    json!({"t": "usage", "id": id, "input": input, "output": output}).to_string()
 }
 
 pub fn stop(reason: &str) -> String {
@@ -77,12 +89,22 @@ pub fn read_line(line: &str) -> Read {
         "prompt" => {
             read.marks.push(Mark::PromptSubmitted);
             read.entries.push(Entry::User { text: with_attached(field("text"), &record) });
+            for image in record["images"].as_array().into_iter().flatten() {
+                if let (Some(media_type), Some(data)) = (image["media_type"].as_str(), image["data"].as_str()) {
+                    read.entries.push(Entry::Image { media_type: media_type.to_owned(), data: data.to_owned() });
+                }
+            }
         }
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
         "tool_call" => {
             read.marks.push(Mark::ToolStarted { tool_use_id: field("id"), tool: field("title") });
-            read.entries.push(Entry::ToolCall { id: field("id"), name: field("title"), input: record["input"].clone() });
+            read.entries.push(Entry::ToolCall {
+                id: field("id"),
+                name: field("title"),
+                input: record["input"].clone(),
+                kind: Some(field("kind")).filter(|kind| !kind.is_empty()),
+            });
         }
         "tool_result" => {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
@@ -92,7 +114,26 @@ pub fn read_line(line: &str) -> Read {
                 is_error: field("status") == "failed",
             });
         }
-        "plan" => read.entries.push(Entry::Other { kind: "plan".into() }),
+        "plan" => {
+            let steps = record["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| match entry {
+                    // Earlier records kept each step's words alone.
+                    Value::String(step) => Some((step.clone(), "pending".to_owned())),
+                    entry => {
+                        Some((entry["content"].as_str()?.to_owned(), entry["status"].as_str().unwrap_or("pending").to_owned()))
+                    }
+                })
+                .collect();
+            read.entries.push(Entry::Plan { steps });
+        }
+        "usage" => read.entries.push(Entry::Usage {
+            message: field("id"),
+            input: record["input"].as_u64().unwrap_or(0),
+            output: record["output"].as_u64().unwrap_or(0),
+        }),
         "stop" => {
             read.marks.push(Mark::Stopped);
             read.entries.push(Entry::Other { kind: "stop".into() });
@@ -156,11 +197,12 @@ mod tests {
     fn records_read_back_as_a_conversation() {
         let lines = [
             session("fake", "Fake agent", "s1"),
-            prompt("add acp", "alice", &[]),
+            prompt("add acp", "alice", &[], &[]),
             thought("planning"),
             tool_call("c1", "Edit src/main.rs", "edit", Some(&json!({"path": "src/main.rs"}))),
             tool_result("c1", "completed", Some("edited")),
             message("Done"),
+            usage("u1", 1600, 240),
             stop("end_turn"),
         ];
         let reads: Vec<Read> = lines.iter().map(|line| read_line(line)).collect();
@@ -169,6 +211,7 @@ mod tests {
         assert_eq!(entries[0], Entry::User { text: "add acp".into() });
         assert_eq!(entries[1], Entry::Thinking { text: "planning".into() });
         assert_eq!(entries[4], Entry::Assistant { text: "Done".into() });
+        assert_eq!(entries[5], Entry::Usage { message: "u1".into(), input: 1600, output: 240 });
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(marks.first(), Some(&Mark::PromptSubmitted));
         assert_eq!(marks.last(), Some(&Mark::Stopped));
@@ -177,8 +220,14 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_names_its_attachments() {
-        let read = read_line(&prompt("look", "alice", &["prompt-1/shot.png".into()]));
-        assert_eq!(read.entries, [Entry::User { text: "look\n\n(attached: prompt-1/shot.png)".into() }]);
+    fn a_prompt_names_its_attachments_and_keeps_its_images() {
+        let read = read_line(&prompt("look", "alice", &["prompt-1/shot.png".into()], &[("image/png".into(), "AAAA".into())]));
+        assert_eq!(
+            read.entries,
+            [
+                Entry::User { text: "look\n\n(attached: prompt-1/shot.png)".into() },
+                Entry::Image { media_type: "image/png".into(), data: "AAAA".into() }
+            ]
+        );
     }
 }
