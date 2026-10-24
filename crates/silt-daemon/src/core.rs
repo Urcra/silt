@@ -139,7 +139,7 @@ pub(crate) struct CanonicalCwd(PathBuf);
 
 impl CanonicalCwd {
     pub(crate) fn new(cwd: &Path) -> std::io::Result<Self> {
-        cwd.canonicalize().map(Self)
+        silt_os::canonicalize(cwd).map(Self)
     }
 }
 

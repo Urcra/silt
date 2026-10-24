@@ -496,7 +496,7 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
 pub fn track(agent: &str, session: Option<&str>) -> Result<(), Exn<CliError>> {
     let agent = find_agent(agent)?;
     let cwd = current_dir()?;
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let cwd = silt_os::canonicalize(&cwd).unwrap_or(cwd);
     let id = match session {
         Some(id) => id.to_owned(),
         None => {
@@ -589,7 +589,7 @@ pub fn track_from_hook(agent: &str) -> Result<(), Exn<CliError>> {
         return Err(fail("the hook input names no session_id and cwd"));
     };
     let cwd = PathBuf::from(cwd);
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let cwd = silt_os::canonicalize(&cwd).unwrap_or(cwd);
     // Claude Code sets it in a cloud session's container (ADR 0040).
     let cloud = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID").ok().and_then(|id| id.parse().ok());
     let thread = start_tracking(agent, cwd, id.to_owned(), cloud)?;

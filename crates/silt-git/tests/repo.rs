@@ -99,7 +99,8 @@ fn files_whose_names_are_not_utf8_are_left_out() {
 fn file_mode_and_case_follow_git_config() {
     let dir = repo_with_commit();
     let repo = Repo::discover(dir.path()).expect("discovers");
-    assert!(repo.tracks_file_mode());
+    // As `git init` found the file system: Windows' keeps no executable bit.
+    assert_eq!(repo.tracks_file_mode(), cfg!(unix));
     git(dir.path(), &["config", "core.fileMode", "false"]);
     git(dir.path(), &["config", "core.ignoreCase", "true"]);
     let repo = Repo::discover(dir.path()).expect("discovers");
@@ -245,7 +246,7 @@ fn age(root: &Path) {
                 fs::File::options().write(true).open(&path).expect("opens").set_modified(then).expect("ages");
             }
         }
-        fs::File::open(&dir).expect("opens").set_modified(then).expect("ages");
+        directory(&dir).set_modified(then).expect("ages");
     }
 }
 
@@ -327,4 +328,20 @@ fn the_commit_at_a_time_is_the_one_head_was_at() {
 fn now_ms() -> i64 {
     i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("after the epoch").as_millis())
         .expect("fits")
+}
+
+/// A directory opened to change its times: on Windows only with backup
+/// semantics and the right to write its attributes.
+fn directory(dir: &Path) -> fs::File {
+    let mut options = fs::File::options();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.access_mode(FILE_WRITE_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    #[cfg(not(windows))]
+    options.read(true);
+    options.open(dir).expect("opens")
 }

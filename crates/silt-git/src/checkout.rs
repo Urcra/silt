@@ -103,7 +103,7 @@ impl Repo {
 
     fn common_dir(&self) -> PathBuf {
         let common = self.repo.common_dir();
-        common.canonicalize().unwrap_or_else(|_| common.to_owned())
+        silt_os::canonicalize(common).unwrap_or_else(|_| common.to_owned())
     }
 
     fn exclude_silt_dir(&self) -> Result<(), GitError> {

@@ -81,7 +81,7 @@ impl Repo {
         let not_a_repo = || GitError::NotARepository { path: path.to_owned() };
         let repo = gix::discover(path).map_err(|_| not_a_repo())?;
         let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
-        let root = root.canonicalize().unwrap_or(root);
+        let root = silt_os::canonicalize(&root).unwrap_or(root);
         Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None), untracked: std::cell::RefCell::default() })
     }
 

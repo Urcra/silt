@@ -223,7 +223,7 @@ fn origin(at: &Path) -> Result<PathBuf, Exn<BenchError>> {
 
 fn clone(origin: &Path, to: &Path) -> Result<PathBuf, Exn<BenchError>> {
     git(Path::new("/"), &["clone", "-q", &origin.to_string_lossy(), &to.to_string_lossy()])?;
-    to.canonicalize().or_raise(|| BenchError("cannot resolve the clone".into()))
+    silt_os::canonicalize(to).or_raise(|| BenchError("cannot resolve the clone".into()))
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<(), Exn<BenchError>> {

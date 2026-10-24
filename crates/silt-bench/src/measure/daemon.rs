@@ -95,7 +95,7 @@ pub async fn measure(
 fn repo(root: &Path, name: &str, files: usize) -> Result<PathBuf, Exn<BenchError>> {
     let repo = root.join(name);
     write_repo(&repo, files).or_raise(|| BenchError(format!("cannot write the {name} repository")))?;
-    repo.canonicalize().or_raise(|| BenchError("cannot resolve the repository".into()))
+    silt_os::canonicalize(&repo).or_raise(|| BenchError("cannot resolve the repository".into()))
 }
 
 pub(super) fn session_transcript(home: &Home, cwd: &Path, session: &str) -> PathBuf {
@@ -205,7 +205,7 @@ async fn big_checkout(home: &Home, root: &Path, fixtures: &Fixtures) -> Result<(
     let repo = fixtures.big_repo().or_raise(|| BenchError("cannot write the 50k-file repository".into()))?;
     let checkout = root.join("big");
     clone_repo(&repo, &checkout).or_raise(|| BenchError("cannot clone the 50k-file repository".into()))?;
-    let checkout = checkout.canonicalize().or_raise(|| BenchError("cannot resolve the checkout".into()))?;
+    let checkout = silt_os::canonicalize(&checkout).or_raise(|| BenchError("cannot resolve the checkout".into()))?;
     let transcript = session_transcript(home, &checkout, SESSION);
     small_transcript(&transcript, &checkout, 5).or_raise(|| BenchError("cannot write the transcript".into()))?;
     let length = fs::metadata(&transcript).or_raise(|| BenchError("cannot read the transcript".into()))?.len();

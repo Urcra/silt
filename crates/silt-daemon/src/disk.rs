@@ -169,7 +169,7 @@ pub fn replace(
         return Ok(None);
     }
     fs::rename(&temporary, &full)?;
-    fs::File::open(dir)?.sync_all()?;
+    silt_os::sync_dir(dir)?;
     let metadata = fs::metadata(&full)?;
     Ok(Some(RawFile { hash: BlobStore::hash(bytes), mtime_ns: mtime_ns(&metadata), executable, bytes: bytes.to_vec() }))
 }

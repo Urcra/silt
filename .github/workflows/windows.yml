@@ -32,6 +32,7 @@ jobs:
       # One at a time, each failure printed as it happens: a test that hangs
       # is the last one named, and the timeout still shows the ones before.
       - name: CLI tests
+        if: ${{ !cancelled() }}
         timeout-minutes: 30
         run: |
           cargo build --locked -p silt-fake-agent

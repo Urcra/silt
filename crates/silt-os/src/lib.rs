@@ -50,6 +50,50 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     imp::write_private(path, bytes)
 }
 
+/// `path` with links and `..` resolved, as the file system names it. On
+/// Windows that's without the `\\?\` prefix `std::fs::canonicalize` adds,
+/// which git, agents and shells don't write: a clone found at `C:\src\app`
+/// must compare equal to the `C:\src\app` a session records.
+pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    Ok(simplified(fs::canonicalize(path)?))
+}
+
+/// A verbatim Windows path as plainly as it can be written: `\\?\C:\x` as
+/// `C:\x` and `\\?\UNC\host\share` as `\\host\share`. Paths a plain form
+/// can't hold, too long or with a reserved name, stay verbatim.
+pub fn simplified(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let plain = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_owned()
+    } else {
+        return path;
+    };
+    let fits = plain.len() < 260 && plain.split('\\').skip(1).all(|part| part.is_empty() || windows_name(part));
+    if fits { PathBuf::from(plain) } else { path }
+}
+
+/// A name Windows takes as written outside a verbatim path: no trailing dot
+/// or space, no device name.
+fn windows_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or(part).to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit());
+    !part.ends_with(['.', ' ']) && !device
+}
+
+/// Makes a rename into `dir` durable, as a directory's fsync does on Unix.
+/// Windows can't open a directory as a file, and NTFS journals renames
+/// itself, so there it does nothing.
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
+    if cfg!(windows) { Ok(()) } else { fs::File::open(dir)?.sync_all() }
+}
+
 /// Whether the file can be run as it is. Windows decides by extension, not
 /// by a bit on the file, so nothing on disk says so there.
 pub fn is_executable(metadata: &fs::Metadata) -> bool {
@@ -146,6 +190,18 @@ mod tests {
         assert!(find_program(&program.to_string_lossy(), OsStr::new("")).is_some(), "by its path");
         assert!(find_program("not-here", bin.path().as_os_str()).is_none());
         assert!(find_program("", bin.path().as_os_str()).is_none());
+    }
+
+    #[test]
+    fn verbatim_paths_are_written_plainly_when_they_can_be() {
+        let plain = |text: &str| simplified(PathBuf::from(text)).to_string_lossy().into_owned();
+        assert_eq!(plain(r"\\?\C:\Users\me\repo"), r"C:\Users\me\repo");
+        assert_eq!(plain(r"\\?\UNC\wsl.localhost\Ubuntu\home"), r"\\wsl.localhost\Ubuntu\home");
+        assert_eq!(plain(r"\\?\C:\a\aux"), r"\\?\C:\a\aux", "a device name needs the verbatim form");
+        assert_eq!(plain(r"\\?\C:\a\trailing."), r"\\?\C:\a\trailing.");
+        assert_eq!(plain(&format!(r"\\?\C:\{}", "x".repeat(300))), format!(r"\\?\C:\{}", "x".repeat(300)));
+        assert_eq!(plain("/home/me/repo"), "/home/me/repo");
+        assert_eq!(plain(r"C:\already"), r"C:\already");
     }
 
     #[test]

@@ -39,7 +39,7 @@ impl Core {
             Some(name) => vec![resolve_agent(name)?],
             None => silt_agents::AGENTS.to_vec(),
         };
-        let paths: Vec<PathBuf> = paths.iter().map(|path| path.canonicalize().unwrap_or_else(|_| path.clone())).collect();
+        let paths: Vec<PathBuf> = paths.iter().map(|path| silt_os::canonicalize(path).unwrap_or_else(|_| path.clone())).collect();
         let known = self.known_sessions().await?;
         let mut found: Vec<ImportCandidate> = Vec::new();
         // Agents listed per directory are asked last, in the directories the

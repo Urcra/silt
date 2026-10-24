@@ -18,9 +18,12 @@ impl Core {
         clone: &Path,
         task: &str,
     ) -> Result<impl Future<Output = Result<CloudLaunch, CoreError>> + Send + 'static, CoreError> {
-        let clone = clone.canonicalize().map_err(|_| CoreError::Invalid(format!("no clone at {}", clone.display())))?;
-        let Some(repo) =
-            self.clones.iter().find(|(_, path)| path.canonicalize().is_ok_and(|path| path == clone)).map(|(repo, _)| repo)
+        let clone = silt_os::canonicalize(clone).map_err(|_| CoreError::Invalid(format!("no clone at {}", clone.display())))?;
+        let Some(repo) = self
+            .clones
+            .iter()
+            .find(|(_, path)| silt_os::canonicalize(path).is_ok_and(|path| path == clone))
+            .map(|(repo, _)| repo)
         else {
             return Err(CoreError::Invalid(format!("{} isn't a project's clone on this machine", clone.display())));
         };

@@ -5244,6 +5244,7 @@ dependencies = [
  "serde_json",
  "silt-crdt",
  "silt-log",
+ "silt-os",
  "silt-types",
  "sqlx",
  "tempfile",

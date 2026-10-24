@@ -160,8 +160,9 @@ fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
     fs::create_dir_all(root.join(".agents")).expect("mkdir");
     fs::write(root.join(".gitignore"), "node_modules/\n.env\n").expect("write");
     fs::write(root.join(".agents/linked"), "node_modules\n.env\ncache\na.txt\n").expect("write");
-    fs::write(root.join(".agents/prepare"), "#!/bin/sh\npwd > prepared.txt\necho \"$SILT_THREAD\" >> prepared.txt\n")
-        .expect("write");
+    // Where it writes shows where it ran; `pwd` would name the checkout in
+    // Git for Windows' own form there.
+    fs::write(root.join(".agents/prepare"), "#!/bin/sh\necho \"ran $SILT_THREAD\" > prepared.txt\n").expect("write");
     silt_os::make_executable(&root.join(".agents/prepare")).expect("chmod");
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "conventions"]);
@@ -189,9 +190,6 @@ fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
     assert_eq!(again[0], LinkOutcome::AlreadyLinked { path: "node_modules".into() });
 
     let outcome = run_prepare(&checkout.path, &[("SILT_THREAD", "t5")]).expect("runs");
-    assert!(matches!(outcome, Some(PrepareOutcome::Ran { status, .. }) if status.success()));
-    assert_eq!(
-        fs::read_to_string(checkout.path.join("prepared.txt")).expect("prepared"),
-        format!("{}\nt5\n", checkout.path.display())
-    );
+    assert!(matches!(outcome, Some(PrepareOutcome::Ran { ref status, .. }) if status.success()), "{outcome:?}");
+    assert_eq!(fs::read_to_string(checkout.path.join("prepared.txt")).expect("prepared in the checkout"), "ran t5\n");
 }
