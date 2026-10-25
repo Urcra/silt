@@ -53,6 +53,9 @@ pub(crate) struct AcpRun {
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
+    /// Each tool call's title and input as last recorded, so an update
+    /// that says no more is left out.
+    tool_said: HashMap<String, (String, Option<serde_json::Value>)>,
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
     /// The turn running is a Plan first one.
@@ -260,6 +263,7 @@ impl Core {
                     return Err(CoreError::Invalid("an agent is already running in this thread".into()));
                 }
                 let (checkout_id, checkout) = self.checkout_for_agent(thread).await?;
+                self.take_in_what_changed_meanwhile(checkout_id).await?;
                 (thread, checkout_id, checkout)
             }
             (None, Some(clone)) => {
@@ -324,6 +328,7 @@ impl Core {
                 tool_output: HashMap::new(),
                 steering: None,
                 tool_kinds: HashMap::new(),
+                tool_said: HashMap::new(),
                 modes: None,
                 settings: Vec::new(),
                 planning: false,
@@ -821,6 +826,7 @@ impl Core {
                 };
                 run.asking.clear();
                 run.tool_kinds.clear();
+                run.tool_said.clear();
                 self.questions_dropped(thread).await?;
                 self.next_prompt(thread).await?;
             }
@@ -900,10 +906,22 @@ impl Core {
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
                 run.tool_kinds.insert(id.clone(), kind.clone());
+                run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::tool_call(&id, &title, &kind, input.as_ref())).await?;
             }
-            Update::ToolUpdate { id, status, output } => {
+            Update::ToolUpdate { id, status, output, title, input } => {
+                if let Some((said_title, said_input)) = run.tool_said.get(&id).cloned() {
+                    let title = title.unwrap_or_else(|| said_title.clone());
+                    let input = input.or_else(|| said_input.clone());
+                    if (&title, &input) != (&said_title, &said_input) {
+                        let kind = run.tool_kinds.get(&id).cloned().unwrap_or_default();
+                        run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
+                        self.flush_acp(thread).await?;
+                        self.record_acp(thread, &acp::tool_update(&id, &title, &kind, input.as_ref())).await?;
+                    }
+                }
+                let run = self.acp.get_mut(&thread).expect("caller checked");
                 if let Some(output) = &output {
                     let before = run.tool_output.insert(id.clone(), output.clone()).unwrap_or_default();
                     self.announce_tool_output(thread, &id, &before, output);

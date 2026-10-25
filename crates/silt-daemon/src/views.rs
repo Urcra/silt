@@ -15,6 +15,20 @@ use crate::homes::Home;
 use crate::protocol::{FileEdit, FilePage, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 use crate::transcripts::native_entries;
 
+/// What a thread's summary reads from its log, kept until the family's log
+/// grows: parsing every line of every conversation is the listing's cost.
+#[derive(Debug, Clone)]
+pub(crate) struct LoggedSummary {
+    title: Option<String>,
+    agent: Option<String>,
+    messages: usize,
+    edits: usize,
+    forked_from: Option<String>,
+    lease: Option<silt_types::DeviceId>,
+    last_ms: Option<i64>,
+    cloud: Option<String>,
+}
+
 impl Core {
     /// Every thread here but those in the trash.
     pub(crate) fn thread_summaries(&self) -> Vec<ThreadSummary> {
@@ -23,13 +37,7 @@ impl Core {
 
     pub(crate) fn summaries(&self, include: impl Fn(ThreadId) -> bool) -> Vec<ThreadSummary> {
         let records: Vec<&ThreadRecord> = self.thread_records().values().filter(|record| include(record.id)).collect();
-        let families: BTreeSet<FamilyId> = records.iter().map(|record| record.family).collect();
-        let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
-        for family in families {
-            for delta in self.local_log(family) {
-                by_thread.entry(delta.thread).or_default().push(delta);
-            }
-        }
+        let logged = self.logged_summaries(&records);
         let checked_out: HashSet<ThreadId> = self.checkouts.values().map(|checkout| checkout.record.thread).collect();
         let mrs = self.mr_list(None).unwrap_or_default();
         let merged: HashSet<&str> = mrs.iter().filter(|mr| mr.status == "approved").map(|mr| mr.fork.as_str()).collect();
@@ -47,14 +55,9 @@ impl Core {
         let mut summaries: Vec<ThreadSummary> = records
             .into_iter()
             .map(|record| {
-                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
-                let conversation: Vec<&Delta> = deltas.iter().copied().filter(|delta| matches!(delta.op, Op::Conv(_))).collect();
-                let lease = deltas.iter().rev().find_map(|delta| match delta.op {
-                    Op::Lease { device, .. } => Some(device),
-                    _ => None,
-                });
+                let logged = logged[&record.id].clone();
+                let lease = logged.lease;
                 let checked_out = checked_out.contains(&record.id);
-                let (first_prompt, messages) = first_prompt_and_messages(&conversation);
                 let diverged = self.syncs.get(&record.family).is_some_and(|sync| sync.diverged().is_some());
                 let location = if diverged {
                     "diverged"
@@ -68,43 +71,98 @@ impl Core {
                 ThreadSummary {
                     id: record.id.to_string(),
                     repo: if record.repo.is_empty() { record.repo_root.display().to_string() } else { record.repo.clone() },
-                    title: named_title(&conversation).or(first_prompt).or_else(|| {
-                        let family = self.families.get(&record.family)?;
-                        let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
-                        title(&inherited)
-                    }),
+                    title: logged.title,
                     created_ms: record.created_ms,
-                    agent: conversation.iter().rev().find_map(|delta| match &delta.op {
-                        Op::Conv(ConvOp::Native { session, .. }) => Some(
-                            silt_agents::agent(&session.agent)
-                                .map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()),
-                        ),
-                        _ => None,
-                    }),
-                    messages,
-                    edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+                    agent: logged.agent,
+                    messages: logged.messages,
+                    edits: logged.edits,
                     location: location.into(),
-                    forked_from: deltas.iter().find_map(|delta| match delta.op {
-                        Op::Fork { from } => Some(from.to_string()),
-                        _ => None,
-                    }),
+                    forked_from: logged.forked_from,
                     owner: record.owner.clone(),
                     collaborators: self.collaborators.get(&record.id).cloned().unwrap_or_default(),
                     writable: self.may_write(record.id),
                     agent_state: self.shown_state(record.id),
-                    last_ms: deltas.iter().map(|delta| delta.time_ms).max().unwrap_or(record.created_ms),
+                    last_ms: logged.last_ms.unwrap_or(record.created_ms),
                     merged: merged.contains(record.id.to_string().as_str()),
                     review: reviewing.contains(record.id.to_string().as_str()),
                     mine: self.personal.mine(record.id),
                     visibility: self.visibility.get(&record.id).cloned(),
                     server: self.remote_of(record.family).map(|remote| remote.config.url.clone()),
                     local_only: self.homes.get(&record.family) == Some(&crate::homes::Home::Local),
-                    cloud: silt_proto::view::cloud_session(deltas.iter().copied()),
+                    cloud: logged.cloud,
                 }
             })
             .collect();
         summaries.sort_by_key(|summary| summary.created_ms);
         summaries
+    }
+
+    /// What each of `records`' summaries reads from its log, from the cache
+    /// while its family's log hasn't grown.
+    fn logged_summaries(&self, records: &[&ThreadRecord]) -> HashMap<ThreadId, LoggedSummary> {
+        let mut cache = self.summary_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut logged = HashMap::new();
+        let mut stale: BTreeSet<FamilyId> = BTreeSet::new();
+        for record in records {
+            match cache.get(&record.id) {
+                Some((length, summary)) if *length == self.local_log_len(record.family) => {
+                    logged.insert(record.id, summary.clone());
+                }
+                _ => {
+                    stale.insert(record.family);
+                }
+            }
+        }
+        for family in stale {
+            let length = self.local_log_len(family);
+            let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
+            for delta in self.local_log(family) {
+                by_thread.entry(delta.thread).or_default().push(delta);
+            }
+            for record in records.iter().filter(|record| record.family == family) {
+                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
+                let summary = self.logged_summary(record, deltas);
+                cache.insert(record.id, (length, summary.clone()));
+                logged.insert(record.id, summary);
+            }
+        }
+        logged
+    }
+
+    fn logged_summary(&self, record: &ThreadRecord, deltas: &[&Delta]) -> LoggedSummary {
+        let conversation: Vec<&Delta> = deltas.iter().copied().filter(|delta| matches!(delta.op, Op::Conv(_))).collect();
+        let (first_prompt, messages) = first_prompt_and_messages(&conversation);
+        let forked_from = deltas.iter().find_map(|delta| match delta.op {
+            Op::Fork { from } => Some(from),
+            _ => None,
+        });
+        let inherited = || {
+            let family = self.families.get(&record.family)?;
+            let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
+            title(&inherited)
+        };
+        LoggedSummary {
+            // A fork says so until its own first prompt names it, so it isn't taken for its source.
+            title: named_title(&conversation).or(first_prompt).or_else(|| match forked_from {
+                Some(from) => Some(format!("Fork of {}", inherited().unwrap_or_else(|| from.short()))),
+                None => inherited(),
+            }),
+            agent: conversation.iter().rev().find_map(|delta| match &delta.op {
+                Op::Conv(ConvOp::Native { session, .. }) => Some(
+                    silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()),
+                ),
+                _ => None,
+            }),
+            messages,
+            edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+            forked_from: forked_from.map(|from| from.to_string()),
+            lease: deltas.iter().rev().find_map(|delta| match delta.op {
+                Op::Lease { device, .. } => Some(device),
+                _ => None,
+            }),
+            last_ms: deltas.iter().map(|delta| delta.time_ms).max(),
+            cloud: silt_proto::view::cloud_session(deltas.iter().copied()),
+        }
     }
 
     /// The thread's conversation across compactions, with the files each tool
@@ -218,7 +276,8 @@ impl Core {
                     .checked_sub(1)
                     .and_then(|index| marks.get(index))
                     .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))?;
-                let end = marks.get(turn).cloned().unwrap_or_else(|| head.clone());
+                let next = marks.get(turn).cloned().unwrap_or_else(|| head.clone());
+                let end = turn_end(family, thread, start, &next).unwrap_or(next);
                 (graph.version_vector(start), graph.version_vector(&end))
             }
             (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
@@ -390,7 +449,7 @@ impl Core {
     pub(crate) async fn search(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
         let remotes = self.asked_remotes().unwrap_or_default();
         if remotes.is_empty() && !filters.is_empty() {
-            return Err(CoreError::Invalid("search filters need a server; use `silt auth login`".into()));
+            return self.filtered_here(query, limit, filters).await;
         }
         let request = silt_proto::SearchQuery {
             q: query.to_owned(),
@@ -440,6 +499,46 @@ impl Core {
             return Ok(self.placed(found, &deltas));
         }
         let (hits, deltas) = self.local_hits(query, limit, |_| true).await?;
+        Ok(self.placed(hits, &deltas))
+    }
+
+    /// This machine's hits that `filters` keep, worked out from what it has
+    /// as a server works them out from what it has: no server needed
+    /// (ADR 0046).
+    async fn filtered_here(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
+        let summaries: HashMap<String, ThreadSummary> =
+            self.thread_summaries().into_iter().map(|summary| (summary.id.clone(), summary)).collect();
+        let now = crate::core::now_ms();
+        let status_of = |summary: &ThreadSummary| {
+            if summary.merged {
+                silt_proto::ThreadStatus::Merged
+            } else if now - summary.last_ms < silt_proto::ACTIVE_MS {
+                silt_proto::ThreadStatus::Active
+            } else {
+                silt_proto::ThreadStatus::Idle
+            }
+        };
+        let keep = |thread: ThreadId| {
+            let Some(summary) = summaries.get(&thread.to_string()) else {
+                return false;
+            };
+            filters.repo.as_ref().is_none_or(|repo| summary.repo == *repo)
+                && filters.author.as_ref().is_none_or(|author| summary.owner == *author)
+                && filters.status.is_none_or(|status| status_of(summary) == status)
+                && filters.branch.as_ref().is_none_or(|branch| {
+                    self.commits(thread).iter().any(|commit| commit.branch.as_deref() == Some(branch.as_str()))
+                })
+                && filters.file.as_ref().is_none_or(|file| !self.changed_under(thread, file).0.is_empty())
+        };
+        let (hits, deltas) = self.local_hits(query, limit, keep).await?;
+        let (hits, deltas): (Vec<_>, Vec<_>) = hits
+            .into_iter()
+            .zip(deltas)
+            .filter(|(hit, _)| {
+                let at = hit.time_ms.unwrap_or(0);
+                filters.since.is_none_or(|since| at >= since) && filters.until.is_none_or(|until| at <= until)
+            })
+            .unzip();
         Ok(self.placed(hits, &deltas))
     }
 
@@ -503,7 +602,7 @@ impl Core {
                 .entry(hit.thread.clone())
                 .or_insert_with(|| self.find_thread(&hit.thread).ok().and_then(|thread| self.timeline(thread)));
             if let Some(timeline) = timeline {
-                (hit.turn, hit.before_compaction) = timeline.place(*delta, at);
+                (hit.turn, hit.before_compaction) = timeline.place(*delta, at, hit.kind == "user");
             }
         }
         hits
@@ -724,6 +823,20 @@ fn imported_version(family: &Family, thread: ThreadId) -> Frontier {
 }
 
 /// The version at the start of each prompt.
+/// Where the turn from `start` ended, before `next`: at its agent's stop,
+/// with the agent's edits recorded just after it, as transcripts trail them.
+/// What the person did in the clone between turns isn't the turn's (ADR
+/// 0047). None when the agent didn't stop before `next`.
+fn turn_end(family: &Family, thread: ThreadId, start: &Frontier, next: &Frontier) -> Option<Frontier> {
+    let graph = family.graph();
+    let (from, to) = (graph.version_vector(start), graph.version_vector(next));
+    let within = |delta: &&Delta| delta.thread == thread && !from.contains(delta.span.first()) && to.contains(delta.span.first());
+    let in_turn: Vec<&Delta> = family.log().iter().filter(within).collect();
+    let stop = in_turn.iter().position(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::Stopped, .. })))?;
+    let late = in_turn[stop + 1..].iter().copied().filter(|delta| matches!(delta.author, Author::Agent { .. }));
+    Some(graph.minimize(std::iter::once(in_turn[stop]).chain(late).map(|delta| delta.span.last())))
+}
+
 fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
     family
         .conversation(thread)

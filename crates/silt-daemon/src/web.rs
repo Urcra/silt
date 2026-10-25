@@ -130,7 +130,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/reply", post(agent_reply))
-        .route("/api/threads/{id}/pull-request", post(pull_request))
+        .route("/api/threads/{id}/pull-request", post(pull_request).get(pull_request_blocker))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
@@ -715,6 +715,10 @@ async fn agent_reply(State(web): State<Web>, Path(thread): Path<String>, Json(bo
 
 async fn pull_request(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::OpenPullRequest { thread }).await
+}
+
+async fn pull_request_blocker(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::PullRequestBlocker { thread }).await
 }
 
 async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {

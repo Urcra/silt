@@ -215,6 +215,7 @@ fn a_client_restored_from_a_backup_recovers_its_work_in_a_fork() {
     laptop.silt(&["daemon", "start"]);
     let main = laptop.repo.join("src/main.rs");
     fs::write(&main, fs::read_to_string(&main).expect("read") + "fn synced() {}\n").expect("write");
+    laptop.next_turn();
     assert!(eventually(|| home.try_stdout(&["show", &thread]).contains("farewell")
         && laptop.stdout(&["diff", &thread]).contains("+fn synced() {}")));
     assert!(eventually(|| {
@@ -232,6 +233,7 @@ fn a_client_restored_from_a_backup_recovers_its_work_in_a_fork() {
     copy_dir(&backup, &laptop.silt_home);
     laptop.silt(&["daemon", "start"]);
     fs::write(&main, fs::read_to_string(&main).expect("read") + "fn after_restore() {}\n").expect("write");
+    laptop.next_turn();
 
     assert!(
         eventually(|| laptop.stdout(&["auth", "status"]).contains("recovery thread")),

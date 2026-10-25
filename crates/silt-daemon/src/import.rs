@@ -1,7 +1,7 @@
 //! Importing the sessions agents already have on disk, each into a thread
 //! of its own kept on this machine until sent (ADR 0043).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -13,9 +13,11 @@ use silt_log::{Delta, Family};
 use silt_store::{CheckoutId, ImportRecord, SearchRow, SessionRecord, ThreadRecord};
 use silt_types::{FamilyId, ThreadId};
 
-use crate::core::{Core, CoreError, now_ms};
+use tokio::sync::oneshot;
+
+use crate::core::{Core, CoreError, Event, now_ms};
 use crate::homes::Home;
-use crate::protocol::{FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Sent};
+use crate::protocol::{FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Response, Sent};
 use crate::sessions::{Session, resolve_agent};
 
 /// Records staged before they are stored in one write.
@@ -27,106 +29,161 @@ impl From<(&str, OnDisk)> for ImportCandidate {
     }
 }
 
+/// The sessions on disk not yet recorded or imported, of `agent` or of
+/// every agent, that ran under one of `paths` or anywhere without any.
+/// Free of the core, as listing every agent's sessions takes seconds.
+async fn candidates(
+    store: &silt_store::Store,
+    clones: &[PathBuf],
+    paths: &[PathBuf],
+    agent: Option<&str>,
+) -> Result<Vec<ImportCandidate>, CoreError> {
+    let agents: Vec<&'static dyn Agent> = match agent {
+        Some(name) => vec![resolve_agent(name)?],
+        None => silt_agents::AGENTS.to_vec(),
+    };
+    let paths: Vec<PathBuf> = paths.iter().map(|path| silt_os::canonicalize(path).unwrap_or_else(|_| path.clone())).collect();
+    let known = known_sessions(store).await?;
+    let mut found: Vec<ImportCandidate> = Vec::new();
+    // Agents listed per directory are asked last, in the directories the
+    // others' sessions ran in too.
+    let (by_directory, whole): (Vec<_>, Vec<_>) = agents.into_iter().partition(|agent| agent.capture() == Capture::Snapshot);
+    for agent in whole {
+        let listed = tokio::task::spawn_blocking(move || agent.on_disk(&[])).await?;
+        found.extend(listed.into_iter().map(|session| ImportCandidate::from((agent.id(), session))));
+    }
+    let mut dirs: BTreeSet<PathBuf> = clones.iter().cloned().collect();
+    dirs.extend(paths.iter().cloned());
+    dirs.extend(found.iter().filter_map(|candidate| candidate.cwd.clone()));
+    let dirs: Vec<PathBuf> = dirs.into_iter().collect();
+    for agent in by_directory {
+        let dirs = dirs.clone();
+        let listed = tokio::task::spawn_blocking(move || agent.on_disk(&dirs)).await?;
+        found.extend(listed.into_iter().map(|session| ImportCandidate::from((agent.id(), session))));
+    }
+    found.retain(|candidate| {
+        !known.contains(&(candidate.agent.clone(), candidate.id.clone()))
+            && (paths.is_empty() || candidate.cwd.as_deref().is_some_and(|cwd| paths.iter().any(|path| cwd.starts_with(path))))
+    });
+    found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
+    Ok(found)
+}
+
+async fn known_sessions(store: &silt_store::Store) -> Result<HashSet<(String, String)>, CoreError> {
+    let recorded = store.sessions().await?.into_iter().map(|record| (record.agent, record.session_id));
+    let imported = store.imports().await?.into_iter().map(|record| (record.agent, record.session_id));
+    Ok(recorded.chain(imported).collect())
+}
+
+/// The folders `candidates` ran in, newest first: each a clone's root, or
+/// the folder itself outside git (ADR 0044).
+fn folders_of(candidates: Vec<ImportCandidate>, clones: &[PathBuf]) -> Result<Vec<FoundFolder>, CoreError> {
+    let mut folders: Vec<FoundFolder> = Vec::new();
+    for candidate in candidates {
+        let Some(cwd) = candidate.cwd.as_deref().filter(|cwd| cwd.is_dir()) else {
+            continue;
+        };
+        let repo = Repo::discover(cwd).ok();
+        let path = repo.as_ref().map_or_else(|| cwd.to_owned(), |repo| repo.root().to_owned());
+        let agent =
+            resolve_agent(&candidate.agent).map_or_else(|_| candidate.agent.clone(), |agent| agent.display_name().to_owned());
+        let index = match folders.iter().position(|folder| folder.path == path) {
+            Some(index) => index,
+            None => {
+                let repo_name = match &repo {
+                    Some(repo) => repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
+                    None => String::new(),
+                };
+                folders.push(FoundFolder {
+                    added: clones.contains(&path),
+                    path,
+                    repo: repo_name,
+                    git: repo.is_some(),
+                    sessions: Vec::new(),
+                    last_ms: None,
+                });
+                folders.len() - 1
+            }
+        };
+        let folder = &mut folders[index];
+        match folder.sessions.iter_mut().find(|sessions| sessions.agent == agent) {
+            Some(sessions) => sessions.count += 1,
+            None => folder.sessions.push(FoundSessions { agent, count: 1 }),
+        }
+        folder.last_ms = folder.last_ms.max(candidate.started_ms);
+    }
+    for folder in &mut folders {
+        folder.sessions.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.agent.cmp(&b.agent)));
+    }
+    folders.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then_with(|| a.path.cmp(&b.path)));
+    Ok(folders)
+}
+
 impl Core {
-    /// The sessions on disk not yet recorded or imported, of `agent` or of
-    /// every agent, that ran under one of `paths` or anywhere without any.
     pub(crate) async fn import_candidates(
         &self,
         paths: &[PathBuf],
         agent: Option<&str>,
     ) -> Result<Vec<ImportCandidate>, CoreError> {
-        let agents: Vec<&'static dyn Agent> = match agent {
-            Some(name) => vec![resolve_agent(name)?],
-            None => silt_agents::AGENTS.to_vec(),
-        };
-        let paths: Vec<PathBuf> = paths.iter().map(|path| silt_os::canonicalize(path).unwrap_or_else(|_| path.clone())).collect();
-        let known = self.known_sessions().await?;
-        let mut found: Vec<ImportCandidate> = Vec::new();
-        // Agents listed per directory are asked last, in the directories the
-        // others' sessions ran in too.
-        let (by_directory, whole): (Vec<_>, Vec<_>) = agents.into_iter().partition(|agent| agent.capture() == Capture::Snapshot);
-        for agent in whole {
-            found.extend(agent.on_disk(&[]).into_iter().map(|session| ImportCandidate::from((agent.id(), session))));
-        }
-        let mut dirs: BTreeSet<PathBuf> = self.clones.values().cloned().collect();
-        dirs.extend(paths.iter().cloned());
-        dirs.extend(found.iter().filter_map(|candidate| candidate.cwd.clone()));
-        let dirs: Vec<PathBuf> = dirs.into_iter().collect();
-        for agent in by_directory {
-            let dirs = dirs.clone();
-            let listed = tokio::task::spawn_blocking(move || agent.on_disk(&dirs)).await?;
-            found.extend(listed.into_iter().map(|session| ImportCandidate::from((agent.id(), session))));
-        }
-        found.retain(|candidate| {
-            !known.contains(&(candidate.agent.clone(), candidate.id.clone()))
-                && (paths.is_empty()
-                    || candidate.cwd.as_deref().is_some_and(|cwd| paths.iter().any(|path| cwd.starts_with(path))))
-        });
-        found.sort_by(|a, b| a.started_ms.cmp(&b.started_ms).then_with(|| a.id.cmp(&b.id)));
-        Ok(found)
+        candidates(&self.store, &self.known_clones(), paths, agent).await
     }
 
-    /// The folders the sessions not yet imported ran in, newest first: each
-    /// a clone's root, or the folder itself outside git (ADR 0044).
-    pub(crate) async fn found_folders(&self) -> Result<Vec<FoundFolder>, CoreError> {
-        let candidates = self.import_candidates(&[], None).await?;
-        let mut folders: Vec<FoundFolder> = Vec::new();
-        for candidate in candidates {
-            let Some(cwd) = candidate.cwd.as_deref().filter(|cwd| cwd.is_dir()) else {
-                continue;
-            };
-            let repo = Repo::discover(cwd).ok();
-            let path = repo.as_ref().map_or_else(|| cwd.to_owned(), |repo| repo.root().to_owned());
-            let agent =
-                resolve_agent(&candidate.agent).map_or_else(|_| candidate.agent.clone(), |agent| agent.display_name().to_owned());
-            let index = match folders.iter().position(|folder| folder.path == path) {
-                Some(index) => index,
-                None => {
-                    let repo_name = match &repo {
-                        Some(repo) => repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
-                        None => String::new(),
-                    };
-                    folders.push(FoundFolder {
-                        added: self.clones.values().any(|known| *known == path),
-                        path,
-                        repo: repo_name,
-                        git: repo.is_some(),
-                        sessions: Vec::new(),
-                        last_ms: None,
-                    });
-                    folders.len() - 1
-                }
-            };
-            let folder = &mut folders[index];
-            match folder.sessions.iter_mut().find(|sessions| sessions.agent == agent) {
-                Some(sessions) => sessions.count += 1,
-                None => folder.sessions.push(FoundSessions { agent, count: 1 }),
-            }
-            folder.last_ms = folder.last_ms.max(candidate.started_ms);
-        }
-        for folder in &mut folders {
-            folder.sessions.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.agent.cmp(&b.agent)));
-        }
-        folders.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then_with(|| a.path.cmp(&b.path)));
-        Ok(folders)
+    /// The folders the sessions not yet imported ran in, answered off the
+    /// core's loop, which listing them would hold up for seconds.
+    pub(crate) fn found_folders(&self) -> impl Future<Output = Result<Vec<FoundFolder>, CoreError>> + Send + use<> {
+        let (store, clones) = (self.store.clone(), self.known_clones());
+        async move { folders_of(candidates(&store, &clones, &[], None).await?, &clones) }
+    }
+
+    fn known_clones(&self) -> Vec<PathBuf> {
+        self.clones.values().cloned().collect()
     }
 
     /// Imports every session not yet imported under `paths`, or all of
-    /// them; how many threads it made.
-    pub(crate) async fn import_found(&mut self, paths: &[PathBuf]) -> Result<usize, CoreError> {
-        let mut made = 0;
-        for candidate in self.import_candidates(paths, None).await? {
-            if self.import_session(candidate).await?.is_some() {
-                made += 1;
+    /// them, and answers how many threads it made. One session a turn of
+    /// the core's loop, so what else is asked meanwhile is answered between
+    /// them rather than after the whole history.
+    pub(crate) fn import_found(&self, paths: Vec<PathBuf>, reply: oneshot::Sender<Response>) {
+        let (store, clones, events) = (self.store.clone(), self.known_clones(), self.events.clone());
+        tokio::spawn(async move {
+            match candidates(&store, &clones, &paths, None).await {
+                Ok(left) => {
+                    let _ = events.send(Event::Importing { left: left.into(), made: 0, reply });
+                }
+                Err(error) => {
+                    let _ = reply.send(Response::error(error));
+                }
+            }
+        });
+    }
+
+    /// The next of an import's sessions, then the rest after whatever else
+    /// is waiting.
+    pub(crate) async fn import_next(
+        &mut self,
+        mut left: VecDeque<ImportCandidate>,
+        mut made: usize,
+        reply: oneshot::Sender<Response>,
+    ) {
+        if let Some(candidate) = left.pop_front() {
+            match self.import_session(candidate).await {
+                Ok(Some(_)) => made += 1,
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = reply.send(Response::error(error));
+                    return;
+                }
             }
         }
-        Ok(made)
+        if left.is_empty() {
+            let _ = reply.send(Response::ok(made));
+        } else {
+            let _ = self.events.send(Event::Importing { left, made, reply });
+        }
     }
 
     async fn known_sessions(&self) -> Result<HashSet<(String, String)>, CoreError> {
-        let recorded = self.store.sessions().await?.into_iter().map(|record| (record.agent, record.session_id));
-        let imported = self.store.imports().await?.into_iter().map(|record| (record.agent, record.session_id));
-        Ok(recorded.chain(imported).collect())
+        known_sessions(&self.store).await
     }
 
     /// Imports one session into a new thread, or `None` when it was
@@ -187,6 +244,12 @@ impl Core {
         self.recorded_at = None;
         self.sessions.retain(|session| session.record.session_id != candidate.id || session.record.thread != thread);
         let lines = read?;
+        // The folder its agent ran in is a clone the person works in, so its project
+        // can start threads; a clone already known, which a worktree's session also
+        // names, stays the one.
+        if !project.is_empty() && !self.clones.contains_key(&project) {
+            self.remember_clone(&checkout_root).await;
+        }
         self.announce(crate::protocol::BusEvent::Threads);
         Ok(Some(ImportedThread {
             thread: thread.to_string(),

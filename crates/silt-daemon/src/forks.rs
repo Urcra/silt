@@ -221,7 +221,9 @@ impl Core {
         let family = &self.families[&family_id];
         let graph = family.graph();
         let offered = graph.version_vector(&Frontier::single(request.id));
-        let target = graph.version_vector(&family.thread_head(request.target));
+        // A merged request shows what it brought, against the target as it was before.
+        let target =
+            graph.version_vector(&target_before_merge(family, &request).unwrap_or_else(|| family.thread_head(request.target)));
         let base = offered.intersection(&target);
         let ours = self.changes(family_id, &base, &target);
         let theirs = self.changes(family_id, &base, &offered);
@@ -402,10 +404,23 @@ impl Core {
     }
 }
 
+/// The target's head just before it merged `request`, for a merged one: its
+/// merge's parents are that head and the request's point.
+fn target_before_merge(family: &Family, request: &MergeRequest) -> Option<Frontier> {
+    let merge = family
+        .log()
+        .iter()
+        .find(|delta| delta.thread == request.target && matches!(delta.op, Op::Merge { mr: Some(mr), .. } if mr == request.id))?;
+    let before: Frontier = merge.parents.ids().iter().copied().filter(|parent| *parent != request.id).collect();
+    (!before.is_empty()).then_some(before)
+}
+
 /// The files and the fork's last agent message, for a merge request whose
 /// author gave no summary.
 fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> String {
-    let mut summary = match files {
+    // As code, so a path such as `calc/__init__.py` isn't read as Markdown's bold.
+    let named: Vec<String> = files.iter().map(|file| format!("`{file}`")).collect();
+    let mut summary = match &named[..] {
         [] => "No file changes.".to_owned(),
         [file] => format!("Changes {file}."),
         files => format!("Changes {} files: {}.", files.len(), files.join(", ")),
@@ -422,11 +437,22 @@ fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> Str
         _ => None,
     });
     if let Some(message) = last_message {
-        let quoted: String = message.trim().chars().take(QUOTE_CHARS).collect();
         summary.push_str("\nThe fork's agent last said: ");
-        summary.push_str(&quoted);
+        summary.push_str(&quoted(message.trim(), QUOTE_CHARS));
     }
     summary
+}
+
+/// `text`, or as much of it as fits in `limit` characters, cut at a line,
+/// else at a word, and saying so: a cut in a word, or in a Markdown list,
+/// reads as a mistake.
+fn quoted(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(limit).collect();
+    let cut = head.rfind('\n').filter(|at| *at > limit / 2).or_else(|| head.rfind(char::is_whitespace)).unwrap_or(head.len());
+    format!("{} …", head[..cut].trim_end())
 }
 
 fn files_note(files: &[String]) -> String {
@@ -578,5 +604,12 @@ mod tests {
         assert_eq!(edited[0].0, "x.rs");
         assert_ne!(edited[0].1, edited_again[0].1, "a changed file is unseen again");
         assert_eq!(deleted[0], ("x.rs".to_owned(), blake3::hash(b"").to_hex().to_string()));
+    }
+
+    #[test]
+    fn a_long_quote_is_cut_between_words_and_says_so() {
+        assert_eq!(quoted("short enough", 40), "short enough");
+        assert_eq!(quoted("I also added divide to the import line", 30), "I also added divide to the …");
+        assert_eq!(quoted("first line\nsecond line\nthird line", 25), "first line\nsecond line …");
     }
 }

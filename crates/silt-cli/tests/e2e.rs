@@ -99,6 +99,13 @@ impl Env {
         log.split_whitespace().next().expect("a thread is listed").to_owned()
     }
 
+    /// The managed checkout `silt claude --isolated` made, every edit in
+    /// which is its thread's, an agent working there or not.
+    fn isolated_checkout(&self) -> PathBuf {
+        let checkouts = self.repo.join(".silt/checkouts");
+        checkouts.join(fs::read_dir(&checkouts).expect("checkouts").flatten().next().expect("one checkout").file_name())
+    }
+
     fn transcript(&self) -> PathBuf {
         let projects = self.claude_dir.join("projects");
         let project = fs::read_dir(&projects).expect("projects").flatten().next().expect("project").path();
@@ -170,18 +177,51 @@ fn records_a_session_with_attributed_edits_and_survives_a_restart() {
     assert!(env.stdout(&["search", "farewell"]).contains(&thread));
 
     env.silt(&["daemon", "stop"]);
-    fs::write(env.repo.join("src/main.rs"), "fn main() {}\nfn farewell() {}\nfn later() {}\n").expect("edit while down");
     fs::write(
         env.transcript(),
         fs::read_to_string(env.transcript()).expect("read")
             + "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"one more thing while silt was down\"}}\n",
     )
     .expect("append while down");
-
-    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")));
     assert!(eventually(|| env.stdout(&["show", &thread]).contains("one more thing while silt was down")));
+}
+
+#[test]
+fn the_clone_is_the_person_s_again_once_its_agent_finishes_until_the_next_turn() {
+    let env = Env::new();
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["show", &thread]).contains("src/main.rs +17 -0")));
+    let before = env.stdout(&["diff", &thread]);
+
+    fs::write(env.repo.join("src/main.rs"), "fn main() {}\nfn farewell() {}\nfn later() {}\n").expect("edit by hand");
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(env.stdout(&["diff", &thread]), before, "an edit after the session isn't the thread's");
+    env.silt(&["daemon", "stop"]);
+    env.silt(&["log"]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(env.stdout(&["diff", &thread]), before, "nor once a restarted daemon rescans the clone");
+
+    let session = env.transcript().file_stem().expect("named").to_string_lossy().into_owned();
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["hook", "UserPromptSubmit"])
+        .current_dir(&env.repo)
+        .env("SILT_HOME", &env.silt_home)
+        .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("silt runs");
+    let input = format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit","prompt":"one more"}}"#);
+    hook.stdin.take().expect("piped").write_all(input.as_bytes()).expect("hook input");
+    assert!(hook.wait().expect("hook ran").success());
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")),
+        "the next turn takes in what changed meanwhile:\n{}",
+        env.stdout(&["show", &thread])
+    );
     let show = env.stdout(&["show", &thread]);
-    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "{show}");
+    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "the person's, not the agent's: {show}");
 }
 
 #[test]
@@ -438,9 +478,7 @@ fn isolated_sessions_work_in_a_managed_checkout() {
     let env = Env::new();
     env.silt(&["claude", "--isolated"]);
     let thread = env.thread();
-    let checkout = env.repo.join(".silt/checkouts").join(
-        fs::read_dir(env.repo.join(".silt/checkouts")).expect("checkouts").flatten().next().expect("one checkout").file_name(),
-    );
+    let checkout = env.isolated_checkout();
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").contains("fn farewell"));
     assert_eq!(fs::read_to_string(env.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
@@ -633,10 +671,11 @@ fn track_takes_in_a_long_session_whole() {
 #[test]
 fn a_renamed_file_keeps_its_history() {
     let env = Env::new();
-    env.silt(&["claude"]);
+    env.silt(&["claude", "--isolated"]);
     let thread = env.thread();
+    let checkout = env.isolated_checkout();
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
-    fs::rename(env.repo.join("src/main.rs"), env.repo.join("src/app.rs")).expect("rename");
+    fs::rename(checkout.join("src/main.rs"), checkout.join("src/app.rs")).expect("rename");
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("rename to src/app.rs")));
     let diff = env.stdout(&["diff", &thread]);
     assert!(diff.contains("rename from src/main.rs"), "{diff}");
@@ -649,13 +688,14 @@ fn a_renamed_file_keeps_its_history() {
 #[test]
 fn a_file_gone_and_back_elsewhere_moments_later_is_a_rename() {
     let env = Env::new();
-    env.silt(&["claude"]);
+    env.silt(&["claude", "--isolated"]);
     let thread = env.thread();
+    let checkout = env.isolated_checkout();
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
-    let bytes = fs::read(env.repo.join("src/main.rs")).expect("reads");
-    fs::remove_file(env.repo.join("src/main.rs")).expect("removes");
+    let bytes = fs::read(checkout.join("src/main.rs")).expect("reads");
+    fs::remove_file(checkout.join("src/main.rs")).expect("removes");
     std::thread::sleep(std::time::Duration::from_millis(300));
-    fs::write(env.repo.join("src/app.rs"), bytes).expect("writes");
+    fs::write(checkout.join("src/app.rs"), bytes).expect("writes");
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("rename to src/app.rs")));
     let diff = env.stdout(&["diff", &thread]);
     assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
@@ -818,12 +858,13 @@ fn diffs_start_from_the_base_asked_for() {
     )
     .trim()
     .to_owned();
-    env.silt(&["claude"]);
+    env.silt(&["claude", "--isolated"]);
     let thread = env.thread();
+    let checkout = env.isolated_checkout();
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
-    git(&env.repo, &["commit", "-qam", "farewell"]);
+    git(&checkout, &["commit", "-qam", "farewell"]);
     assert!(eventually(|| !env.stdout(&["diff", &thread, "--base", "last-commit"]).contains("farewell")));
-    let main = env.repo.join("src/main.rs");
+    let main = checkout.join("src/main.rs");
     fs::write(&main, fs::read_to_string(&main).expect("read") + "fn later() {}\n").expect("write");
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")));
 
@@ -837,8 +878,13 @@ fn diffs_start_from_the_base_asked_for() {
     assert!(String::from_utf8_lossy(&refused.stderr).contains("never was at a commit"));
 
     // Against a branch as git has it now, rather than a version of the thread.
-    let against_main = env.stdout(&["diff", &thread, "--base", "main"]);
-    assert!(against_main.contains("+fn later() {}") && !against_main.contains("+fn farewell"), "{against_main}");
+    let committed = String::from_utf8_lossy(
+        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&checkout).output().expect("git runs").stdout,
+    )
+    .trim()
+    .to_owned();
+    let against_head = env.stdout(&["diff", &thread, "--base", &format!("branch:{committed}")]);
+    assert!(against_head.contains("+fn later() {}") && !against_head.contains("+fn farewell"), "{against_head}");
     let against_first = env.stdout(&["diff", &thread, "--base", &format!("branch:{first}")]);
     assert!(against_first.contains("+fn later() {}") && against_first.contains("+fn farewell() {}"), "{against_first}");
     let nowhere = env.run(&["diff", &thread, "--base", "branch:nowhere"]);

@@ -45,6 +45,7 @@ fn notes_reach_origin_once_the_project_says_push_and_blame_reads_them_elsewhere(
     laptop.silt(&["daemon", "stop"]);
     laptop.silt(&["log"]);
     std::fs::write(laptop.repo.join("src/main.rs"), "fn main() {}\nfn farewell() {}\nfn by_hand() {}\n").expect("write");
+    laptop.next_turn();
     git(&laptop.repo, &["commit", "-qam", "with notes"]);
     let commit = rev(&laptop.repo, "HEAD");
     assert!(eventually(|| noted(&origin).contains(&commit)), "the note reached origin");

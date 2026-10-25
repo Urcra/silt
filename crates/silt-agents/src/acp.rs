@@ -60,6 +60,28 @@ pub fn tool_call(id: &str, title: &str, kind: &str, input: Option<&Value>) -> St
     json!({"t": "tool_call", "id": id, "title": title, "kind": kind, "input": input}).to_string()
 }
 
+/// What a tool call turned out to be once the agent said more of it: ACP
+/// agents announce a call with a placeholder such as "Terminal", then
+/// update it with its command. It names a call already started.
+pub fn tool_update(id: &str, title: &str, kind: &str, input: Option<&Value>) -> String {
+    json!({"t": "tool_call", "id": id, "title": title, "kind": kind, "input": input, "update": true}).to_string()
+}
+
+/// A tool's output without the one Markdown fence an agent may wrap it in,
+/// such as Claude's ```` ```console ````, which a transcript would show as text.
+fn unfenced(output: String) -> String {
+    let trimmed = output.trim();
+    let inner = trimmed
+        .strip_prefix("```")
+        .and_then(|rest| rest.strip_suffix("```"))
+        .and_then(|inner| inner.split_once('\n'))
+        .map(|(_language, body)| body.strip_suffix('\n').unwrap_or(body));
+    match inner {
+        Some(body) if !body.contains("\n```") => body.to_owned(),
+        _ => output,
+    }
+}
+
 pub fn tool_result(id: &str, status: &str, output: Option<&str>) -> String {
     json!({"t": "tool_result", "id": id, "status": status, "output": output}).to_string()
 }
@@ -98,7 +120,9 @@ pub fn read_line(line: &str) -> Read {
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
         "tool_call" => {
-            read.marks.push(Mark::ToolStarted { tool_use_id: field("id"), tool: field("title") });
+            if record["update"] != true {
+                read.marks.push(Mark::ToolStarted { tool_use_id: field("id"), tool: field("title") });
+            }
             read.entries.push(Entry::ToolCall {
                 id: field("id"),
                 name: field("title"),
@@ -110,7 +134,7 @@ pub fn read_line(line: &str) -> Read {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
             read.entries.push(Entry::ToolResult {
                 tool_use_id: field("id"),
-                text: field("output"),
+                text: unfenced(field("output")),
                 is_error: field("status") == "failed",
             });
         }
@@ -217,6 +241,24 @@ mod tests {
         assert_eq!(marks.last(), Some(&Mark::Stopped));
         assert_eq!(session_of(&lines[0]), Some(("fake".into(), "s1".into())));
         assert_eq!(session_of(&lines[1]), None);
+    }
+
+    #[test]
+    fn a_call_s_update_names_it_without_starting_it_again_and_output_loses_its_fence() {
+        let update =
+            read_line(&tool_update("c1", "`python3 -m unittest`", "execute", Some(&json!({"command": "python3 -m unittest"}))));
+        assert!(update.marks.is_empty(), "the call started when it was announced");
+        assert!(
+            matches!(&update.entries[..], [Entry::ToolCall { id, name, .. }] if id == "c1" && name == "`python3 -m unittest`")
+        );
+        let text = |output: &str| match &read_line(&tool_result("c1", "completed", Some(output))).entries[..] {
+            [Entry::ToolResult { text, .. }] => text.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(text("```console\nRan 10 tests\n\nOK\n```"), "Ran 10 tests\n\nOK");
+        assert_eq!(text("```\nExit code 2\n```"), "Exit code 2");
+        assert_eq!(text("plain output"), "plain output");
+        assert_eq!(text("```a\n1\n```\nthen\n```b\n2\n```"), "```a\n1\n```\nthen\n```b\n2\n```", "two blocks keep theirs");
     }
 
     #[test]

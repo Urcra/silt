@@ -634,6 +634,9 @@ pub struct OrgMember {
     pub role: OrgRole,
 }
 
+/// Threads written to within this long are [`ThreadStatus::Active`].
+pub const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// How a thread stands, for search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

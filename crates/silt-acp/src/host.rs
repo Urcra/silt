@@ -80,6 +80,10 @@ pub enum Update {
         id: String,
         status: Option<String>,
         output: Option<String>,
+        /// What the call turned out to be, where the agent says more of it
+        /// than it did when it announced the call.
+        title: Option<String>,
+        input: Option<Value>,
     },
     /// The agent's plan: each step and its status.
     Plan(Vec<(String, String)>),
@@ -383,6 +387,8 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
                 .as_deref()
                 .and_then(tool_output)
                 .or_else(|| update.fields.raw_output.as_ref().map(Value::to_string)),
+            title: update.fields.title,
+            input: update.fields.raw_input,
         },
         SessionUpdate::Plan(plan) => {
             Update::Plan(plan.entries.into_iter().map(|entry| (entry.content, label(&entry.status))).collect())

@@ -245,6 +245,7 @@ fn comments_follow_their_lines_and_sync_between_users() {
 
     let main = alice.repo.join("src/main.rs");
     fs::write(&main, format!("// one\n// two\n{}", read(&main))).expect("edit above the comment");
+    alice.next_turn();
     assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("src/main.rs:4")));
 
     assert!(
@@ -259,6 +260,7 @@ fn comments_follow_their_lines_and_sync_between_users() {
     assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("bob  entry 0")));
 
     fs::write(&main, "// one\n// two\nfn main() {}\n").expect("delete the commented line");
+    alice.next_turn();
     assert!(eventually(|| alice.stdout(&["comments", &thread]).contains("outdated")));
     alice.silt(&["comments", &thread, "--resolve", &bobs]);
     assert!(eventually(|| bob

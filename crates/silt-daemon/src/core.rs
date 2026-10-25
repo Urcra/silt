@@ -65,6 +65,13 @@ pub enum Event {
         token: u64,
         found: Option<silt_agents::Found>,
     },
+    /// An import's sessions still to import, one a turn, and how many
+    /// threads it made so far.
+    Importing {
+        left: std::collections::VecDeque<crate::protocol::ImportCandidate>,
+        made: usize,
+        reply: oneshot::Sender<Response>,
+    },
     Snapshotted {
         session_id: String,
         result: Result<Vec<String>, String>,
@@ -258,6 +265,9 @@ pub struct Core {
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
+    /// What each thread's summary reads from its log, with the family's log
+    /// length it was read at.
+    pub(crate) summary_cache: Mutex<HashMap<ThreadId, (usize, crate::views::LoggedSummary)>>,
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
     /// The control channel to the server (ADR 0026).
@@ -482,6 +492,7 @@ impl Core {
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
+            summary_cache: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
@@ -546,8 +557,8 @@ impl Core {
             Request::Hook { event, input } => self.hook(&event, input).await,
             Request::ImportCandidates { paths, agent } => to_response(self.import_candidates(&paths, agent.as_deref()).await),
             Request::Import { candidate } => to_response(self.import_session(candidate).await),
-            Request::FoundFolders => to_response(self.found_folders().await),
-            Request::ImportFound { paths } => to_response(self.import_found(&paths).await),
+            Request::FoundFolders => return answer_later(reply, Ok(self.found_folders())),
+            Request::ImportFound { paths } => return self.import_found(paths, reply),
             Request::Send { threads, project, server } => {
                 to_response(self.send(&threads, project.as_deref(), server.as_deref()).await)
             }
@@ -759,13 +770,18 @@ impl Core {
             Request::AcpReply { thread, id, answers } => to_response(self.acp_reply(&thread, id, answers).await),
             Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop).await),
             Request::OpenPullRequest { thread } => to_response(self.open_pull_request(&thread).await),
+            Request::PullRequestBlocker { thread } => to_response(self.pull_request_blocker(&thread).await),
             Request::Shutdown => Response::ok("shutting down"),
         };
         let _ = reply.send(response);
     }
 
     pub async fn changed(&mut self, checkout: CheckoutId, paths: Vec<PathBuf>, noticed: Instant, settled: bool) {
-        if self.checkouts.get(&checkout).is_some_and(|checkout| self.recorded_elsewhere(checkout.record.thread)) {
+        if self
+            .checkouts
+            .get(&checkout)
+            .is_some_and(|checkout| self.recorded_elsewhere(checkout.record.thread) || self.left_alone(&checkout.record))
+        {
             return;
         }
         if !settled && self.marks_from_transcripts(checkout) {
@@ -813,6 +829,31 @@ impl Core {
             && self.acp.is_empty()
             && self.draining.is_empty()
             && !self.sessions.iter().any(|session| session.live)
+    }
+
+    /// Whether the person's own clone is theirs again: its thread's agent
+    /// has finished, so what they do in it now is no part of the thread
+    /// until an agent works there again, when
+    /// [`Self::take_in_what_changed_meanwhile`] takes it in.
+    /// A managed checkout is the thread's alone, so it's always recorded.
+    pub(crate) fn left_alone(&self, checkout: &CheckoutRecord) -> bool {
+        !checkout.managed && !self.agent_at_work(checkout.thread)
+    }
+
+    /// Whether an agent works in the thread: running, starting, or awaited.
+    pub(crate) fn agent_at_work(&self, thread: ThreadId) -> bool {
+        self.running(thread).is_ok()
+            || self.pending.iter().any(|pending| pending.thread == thread)
+            || self.sessions.iter().any(|session| session.record.thread == thread && session.live)
+    }
+
+    /// Records what changed in a clone left alone while no agent worked in
+    /// it, as the person's, before an agent starts there and its edits begin.
+    pub(crate) async fn take_in_what_changed_meanwhile(&mut self, checkout: CheckoutId) -> Result<(), CoreError> {
+        match self.checkouts.get(&checkout) {
+            Some(held) if self.left_alone(&held.record) => self.rescan(checkout).await,
+            _ => Ok(()),
+        }
     }
 
     /// Whether a wrapper records the thread on its own, so its changes and
@@ -1749,7 +1790,8 @@ impl Core {
         &self,
         all: bool,
     ) -> Result<impl Future<Output = Result<Vec<crate::protocol::InboxEntry>, CoreError>> + use<>, CoreError> {
-        let remotes = self.asked_remotes()?;
+        // Notifications come from people on a server; a machine without one has none.
+        let remotes = if self.asked_server.is_none() && self.remotes.is_empty() { Vec::new() } else { self.asked_remotes()? };
         Ok(async move {
             let mut entries = Vec::new();
             let mut failed = None;

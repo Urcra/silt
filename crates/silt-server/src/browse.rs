@@ -211,13 +211,22 @@ pub(crate) fn merged_text(from: ThreadId, title: &str, summary: &str) -> silt_ag
     silt_agents::tool::Shown::plain("merge", format!("merged \"{title}\" from fork {from}: {summary}"))
 }
 
-/// The title it was given, or else the first line of its first prompt.
+/// The title it was given, or else the first line of its first prompt; a
+/// fork with neither says what it's a fork of.
 pub(crate) fn title(own: &[&Delta], first_prompt: Option<&str>) -> Option<String> {
     let given = own.iter().rev().find_map(|delta| match &delta.op {
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
     });
-    given.or_else(|| first_prompt.map(|prompt| prompt.lines().next().unwrap_or_default().chars().take(80).collect()))
+    let forked_from = || {
+        own.iter().find_map(|delta| match delta.op {
+            Op::Fork { from } => Some(format!("Fork of {}", from.short())),
+            _ => None,
+        })
+    };
+    given
+        .or_else(|| first_prompt.map(|prompt| prompt.lines().next().unwrap_or_default().chars().take(80).collect()))
+        .or_else(forked_from)
 }
 
 /// The text of the first prompt among `history`'s entries.

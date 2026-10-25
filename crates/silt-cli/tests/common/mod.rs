@@ -259,6 +259,30 @@ impl Machine {
         output
     }
 
+    /// Claude Code's next prompt in the session it last wrote here, as its
+    /// `UserPromptSubmit` hook tells Silt: what the person changed in the
+    /// clone since the agent finished joins its thread then (ADR 0047).
+    pub fn next_turn(&self) {
+        let session = fs::read_dir(self.claude_dir.join("projects"))
+            .expect("projects")
+            .flatten()
+            .flat_map(|project| fs::read_dir(project.path()).expect("project").flatten())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+            .max_by_key(|path| fs::metadata(path).and_then(|metadata| metadata.modified()).expect("modified"))
+            .and_then(|path| Some(path.file_stem()?.to_string_lossy().into_owned()))
+            .expect("a session");
+        let mut hook = self
+            .command(&["hook", "UserPromptSubmit"], &[])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("silt runs");
+        let input = format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit","prompt":"next"}}"#);
+        std::io::Write::write_all(&mut hook.stdin.take().expect("piped"), input.as_bytes()).expect("hook input");
+        assert!(hook.wait().expect("hook ran").success(), "{}", self.daemon_log());
+    }
+
     /// The end of this machine's daemon log, to show why a command failed.
     pub fn daemon_log(&self) -> String {
         let log = fs::read_to_string(self.silt_home.join("daemon.log")).unwrap_or_default();

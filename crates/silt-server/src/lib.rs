@@ -72,8 +72,7 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 const PULL_LIMIT: usize = 5000;
 const PULL_BYTES: usize = 16 << 20;
 const PAIRING_TTL_MS: i64 = 15 * 60 * 1000;
-/// Threads written to within this long are `active`.
-const ACTIVE_MS: i64 = 24 * 60 * 60 * 1000;
+use silt_proto::ACTIVE_MS;
 const SEARCH_LIMIT: u32 = 50;
 /// Largest request body anywhere but the routes that carry work: sign-in
 /// pages and the like are reachable without an account (ADR 0016).

@@ -199,35 +199,38 @@ impl Core {
             if Some(record.id) == except {
                 continue;
             }
-            let Some(family) = self.families.get(&record.family) else {
-                continue;
-            };
-            let paths = family.thread_view(record.id).paths();
-            let under: HashSet<InodeId> = paths
-                .iter()
-                .filter(|(candidate, _)| path.is_empty() || *candidate == path || candidate.starts_with(&format!("{path}/")))
-                .map(|(_, inode)| *inode)
-                .collect();
-            let names: BTreeMap<InodeId, &String> = paths.iter().map(|(name, inode)| (*inode, name)).collect();
-            let mut files = BTreeMap::new();
-            let mut last_ms = 0;
-            for delta in family.log().iter().filter(|delta| delta.thread == record.id) {
-                if let Some(inode) = touched_inode(delta).filter(|inode| under.contains(inode)) {
-                    files.insert(names[&inode].clone(), ());
-                    last_ms = last_ms.max(delta.time_ms);
-                }
-            }
+            let (files, last_ms) = self.changed_under(record.id, path);
             if !files.is_empty() {
-                found.push(InFlight {
-                    thread: record.id.to_string(),
-                    owner: record.owner.clone(),
-                    files: files.into_keys().collect(),
-                    last_ms,
-                });
+                found.push(InFlight { thread: record.id.to_string(), owner: record.owner.clone(), files, last_ms });
             }
         }
         found.sort_by_key(|item| std::cmp::Reverse(item.last_ms));
         found
+    }
+
+    /// The files under `path` (a file or a directory, `""` for all) the
+    /// thread's own deltas changed, and when it last changed one.
+    pub(crate) fn changed_under(&self, thread: ThreadId, path: &str) -> (Vec<String>, i64) {
+        let path = path.trim_start_matches("./").trim_end_matches('/');
+        let Some(family) = self.threads.get(&thread).and_then(|record| self.families.get(&record.family)) else {
+            return (Vec::new(), 0);
+        };
+        let paths = family.thread_view(thread).paths();
+        let under: HashSet<InodeId> = paths
+            .iter()
+            .filter(|(candidate, _)| path.is_empty() || *candidate == path || candidate.starts_with(&format!("{path}/")))
+            .map(|(_, inode)| *inode)
+            .collect();
+        let names: BTreeMap<InodeId, &String> = paths.iter().map(|(name, inode)| (*inode, name)).collect();
+        let mut files = BTreeMap::new();
+        let mut last_ms = 0;
+        for delta in family.log().iter().filter(|delta| delta.thread == thread) {
+            if let Some(inode) = touched_inode(delta).filter(|inode| under.contains(inode)) {
+                files.insert(names[&inode].clone(), ());
+                last_ms = last_ms.max(delta.time_ms);
+            }
+        }
+        (files.into_keys().collect(), last_ms)
     }
 }
 
@@ -410,6 +413,7 @@ impl Core {
                 time_ms: item.delta.time_ms,
                 prompt: item.source == HistorySource::Own
                     && matches!(item.delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })),
+                said: matches!(item.delta.op, Op::Conv(ConvOp::Native { .. })),
                 compaction: entry_texts(&mut transcripts, item.delta).iter().any(|shown| shown.kind == "compaction"),
             })
             .collect();
@@ -422,6 +426,8 @@ struct Moment {
     delta: silt_types::DeltaId,
     time_ms: i64,
     prompt: bool,
+    /// A line of the agent's session: something said.
+    said: bool,
     compaction: bool,
 }
 
@@ -440,12 +446,17 @@ impl Timeline {
     }
 
     /// The turn a hit belongs to, counted as `silt diff --turn` counts
-    /// them, and whether the agent compacted its context after it.
-    pub(crate) fn place(&self, delta: Option<silt_types::DeltaId>, at: i64) -> (Option<usize>, bool) {
+    /// them, and whether the agent compacted its context after it. A
+    /// prompt starts its turn whichever comes first, its line or the turn's
+    /// mark: hooks mark the turn first, ACP agents after the prompt's line.
+    pub(crate) fn place(&self, delta: Option<silt_types::DeltaId>, at: i64, prompt: bool) -> (Option<usize>, bool) {
         let Some(position) = self.position(delta, at) else {
             return (None, false);
         };
-        let started = self.items[..=position].iter().filter(|moment| moment.prompt).count();
+        let marked_after =
+            || self.items[position + 1..].iter().find(|moment| moment.prompt || moment.said).is_some_and(|moment| moment.prompt);
+        let started =
+            self.items[..=position].iter().filter(|moment| moment.prompt).count() + usize::from(prompt && marked_after());
         let compacted = self.items[position + 1..].iter().any(|moment| moment.compaction);
         ((started > 0).then_some(started), compacted)
     }
