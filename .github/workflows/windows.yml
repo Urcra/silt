@@ -7,10 +7,28 @@ name: windows
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+# Windows minutes are dear: a push to a pull request cancels the run it
+# replaces. Another label than `windows-full` starts a run of its own, whose
+# jobs all skip, so it cancels nothing.
+concurrency:
+  group: windows-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'windows-full' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+# On a pull request, the WSL handoff, the desktop installer and the aarch64
+# build wait for its `windows-full` label; on main and by hand, everything
+# runs.
+env:
+  FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full') }}
 
 jobs:
   check:
+    if: github.event.action != 'labeled' || github.event.label.name == 'windows-full'
     runs-on: windows-2025
     timeout-minutes: 90
     env:
@@ -23,6 +41,11 @@ jobs:
 
       - name: Toolchain
         run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -63,9 +86,11 @@ jobs:
       # The installer as a release makes it, unsigned, with this build's
       # silt.exe beside the app.
       - uses: actions/setup-node@v4
+        if: env.FULL == 'true'
         with:
           node-version: 22
       - name: Desktop installer
+        if: env.FULL == 'true'
         working-directory: crates/silt-desktop
         shell: pwsh
         run: |
@@ -76,6 +101,7 @@ jobs:
 
   # The Linux `silt` a WSL distribution runs in the `wsl` job.
   linux-binaries:
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full')) && (github.event.action != 'labeled' || github.event.label.name == 'windows-full')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -83,6 +109,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2.9.3
       - name: Build
         run: cargo build --locked -p silt-cli -p silt-fake-agent
       - uses: actions/upload-artifact@v4
@@ -121,6 +148,11 @@ jobs:
           MSYS2_ARG_CONV_EXCL='*' wsl.exe -d Ubuntu-24.04 --exec sh -c \
             'install -m 755 "$(wslpath -u "$1")"/silt "$(wslpath -u "$1")"/silt-fake-claude /usr/local/bin/ && silt --version' \
             _ "$(cygpath -w linux-binaries)"
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
       - name: Build
         run: cargo build --locked -p silt-cli -p silt-fake-agent
       - name: Handoff
@@ -135,6 +167,7 @@ jobs:
 
   # Release builds include aarch64; this keeps it building between tags.
   arm64:
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full')) && (github.event.action != 'labeled' || github.event.label.name == 'windows-full')
     runs-on: windows-11-arm
     timeout-minutes: 60
     env:
@@ -145,6 +178,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.3
       - name: Build
         run: cargo build --locked -p silt-cli
       - name: Runs
