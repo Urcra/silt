@@ -76,9 +76,16 @@ fn spawn_daemon() -> Result<(), Exn<CliError>> {
     let log_err = log.try_clone().or_raise(|| CliError("cannot open the daemon log".into()))?;
     let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
     // The daemon outlives this command: it starts from `/`, not from
-    // wherever this ran.
+    // wherever this ran. On Windows it gets no handles, and writes its log
+    // itself.
     silt_os::spawn_detached(
-        Command::new(exe).args(["daemon", "run"]).current_dir("/").stdin(Stdio::null()).stdout(log).stderr(log_err),
+        Command::new(exe)
+            .args(["daemon", "run"])
+            .env(DAEMON_LOG, paths::log_path())
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .stdout(log)
+            .stderr(log_err),
     )
     .or_raise(|| CliError("cannot start the Silt daemon".into()))?;
     Ok(())
@@ -130,11 +137,20 @@ fn wait_for_busy_daemon() -> Result<Waited, Exn<CliError>> {
     Err(fail(format!("the Silt daemon runs but does not answer; see {}", paths::log_path().display())))
 }
 
+/// Set for a daemon started in the background: where it logs when it has
+/// no stderr of its own.
+const DAEMON_LOG: &str = "SILT_DAEMON_LOG";
+
 pub fn daemon_run() -> Result<(), Exn<CliError>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()))
-        .with_writer(io::stderr)
-        .init();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()));
+    let log = env::var_os(DAEMON_LOG)
+        .filter(|_| cfg!(windows))
+        .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok());
+    match log {
+        Some(log) => subscriber.with_ansi(false).with_writer(std::sync::Mutex::new(log)).init(),
+        None => subscriber.with_writer(io::stderr).init(),
+    }
     let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
     runtime
         .block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path()))

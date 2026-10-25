@@ -25,11 +25,7 @@ pub fn fake_claude() -> PathBuf {
 /// `path` with links resolved, as a shell's `pwd` names it: on Windows
 /// without the `\\?\` prefix `canonicalize` adds, which agents never see.
 pub fn canonical(path: &Path) -> PathBuf {
-    let real = path.canonicalize().expect("canonical");
-    match real.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
-        Some(plain) if cfg!(windows) && !plain.starts_with("UNC") => PathBuf::from(plain),
-        _ => real,
-    }
+    silt_os::canonicalize(path).expect("canonical")
 }
 
 /// A directory for one test's machines: under `/tmp` on Unix, which keeps

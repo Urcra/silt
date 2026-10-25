@@ -25,13 +25,16 @@ pub fn data_dir() -> PathBuf {
 #[cfg(unix)]
 const SOCKET_PATH_LIMIT: usize = 100;
 
+pub fn socket_path() -> PathBuf {
+    socket_path_in(&data_dir())
+}
+
 /// The daemon's socket: in the data dir when its path is short enough, else
 /// in the runtime dir under a name derived from the data dir. Without a
 /// runtime dir it goes in a directory of this user's own under the shared
 /// temporary directory, never straight into it.
 #[cfg(unix)]
-pub fn socket_path() -> PathBuf {
-    let data = data_dir();
+pub fn socket_path_in(data: &Path) -> PathBuf {
     let preferred = data.join("daemon.sock");
     if preferred.as_os_str().len() <= SOCKET_PATH_LIMIT {
         return preferred;
@@ -44,8 +47,8 @@ pub fn socket_path() -> PathBuf {
 /// The daemon's pipe, named after the data dir, so each data dir, and each
 /// test's, has its own.
 #[cfg(windows)]
-pub fn socket_path() -> PathBuf {
-    PathBuf::from(format!(r"\\.\pipe\silt-{:016x}", fnv1a(data_dir().as_os_str().as_encoded_bytes())))
+pub fn socket_path_in(data: &Path) -> PathBuf {
+    PathBuf::from(format!(r"\\.\pipe\silt-{:016x}", fnv1a(data.as_os_str().as_encoded_bytes())))
 }
 
 /// Makes `dir`, or an existing one, reachable by this user alone. One owned

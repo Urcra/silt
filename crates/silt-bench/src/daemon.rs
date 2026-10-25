@@ -28,7 +28,7 @@ impl Home {
     }
 
     pub fn socket(&self) -> PathBuf {
-        self.data.join("daemon.sock")
+        silt_daemon::paths::socket_path_in(&self.data)
     }
 
     pub fn command(&self, cwd: &Path) -> Command {

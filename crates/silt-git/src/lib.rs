@@ -392,9 +392,12 @@ const HARDENED: &[&str] = &["-c", "core.hooksPath=/dev/null", "-c", "core.fsmoni
 /// On Windows `/dev/null` would be a directory on the current drive, which
 /// anyone could make; `NUL` can't be a directory. Paths past 260
 /// characters, which deep `node_modules` reach, need `core.longpaths`
-/// (ADR 0045).
+/// (ADR 0045). Git for Windows turns `core.autocrlf` on, which would give
+/// managed checkouts other bytes than the repository's and than the
+/// family's other machines.
 #[cfg(windows)]
-const HARDENED: &[&str] = &["-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true"];
+const HARDENED: &[&str] =
+    &["-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true", "-c", "core.autocrlf=false"];
 
 pub(crate) fn run_git_with(
     dir: &Path,

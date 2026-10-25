@@ -106,8 +106,9 @@ pub fn make_executable(path: &Path) -> io::Result<()> {
 }
 
 /// Starts `command` so it outlives this process and whatever started it:
-/// its own process group, and on Windows out of this console and job.
-pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<std::process::Child> {
+/// its own process group, and on Windows out of this console and job. On
+/// Windows it inherits no handles, so its stdio is not `command`'s.
+pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<()> {
     imp::spawn_detached(command)
 }
 

@@ -44,8 +44,8 @@ pub fn make_executable(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700 | ((mode & 0o044) >> 2)))
 }
 
-pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<std::process::Child> {
-    command.process_group(0).spawn()
+pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<()> {
+    command.process_group(0).spawn().map(drop)
 }
 
 pub fn own_group(command: &mut tokio::process::Command) {

@@ -7,10 +7,7 @@ use std::os::windows::process::CommandExt as _;
 use std::path::{Component, Path, Prefix};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LocalFree,
-    SetHandleInformation,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -19,11 +16,10 @@ use windows_sys::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, GetDriveTypeW};
-use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::{DebugActiveProcess, DebugActiveProcessStop, DebugSetProcessKillOnExit};
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, GetCurrentProcess, OpenProcess, OpenProcessToken,
-    PROCESS_TERMINATE, TerminateProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_INFORMATION, PROCESS_TERMINATE, STARTUPINFOW, TerminateProcess,
 };
 
 const DRIVE_REMOTE: u32 = 4;
@@ -150,55 +146,116 @@ pub fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// This process's standard handles, made not inheritable for as long as it
-/// lives. Windows hands a child every inheritable handle of its parent, so
-/// a daemon started from a command whose output a caller reads through a
-/// pipe would hold that pipe open, and the caller would wait for it as long
-/// as the daemon runs.
-struct Uninherited(Vec<(HANDLE, u32)>);
-
-impl Uninherited {
-    fn std_handles() -> Self {
-        let mut kept = Vec::new();
-        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-            // SAFETY: plain queries and flag changes on this process's own handles.
-            unsafe {
-                let handle = GetStdHandle(which);
-                let mut flags = 0;
-                if !handle.is_null()
-                    && handle != INVALID_HANDLE_VALUE
-                    && GetHandleInformation(handle, &mut flags) != 0
-                    && flags & HANDLE_FLAG_INHERIT != 0
-                    && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) != 0
-                {
-                    kept.push((handle, flags & HANDLE_FLAG_INHERIT));
-                }
-            }
-        }
-        Self(kept)
+/// Starts `command` with `CreateProcessW` itself, as `Command` always lets a
+/// child inherit every inheritable handle: a daemon started from a command
+/// whose output a caller reads through a pipe would hold that pipe, and the
+/// caller would wait for it as long as the daemon runs. The child gets no
+/// handles of this process's, so the stdio set on `command` is not used.
+pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<()> {
+    let mut line = Vec::new();
+    push_quoted(&mut line, command.get_program());
+    for arg in command.get_args() {
+        line.push(u16::from(b' '));
+        push_quoted(&mut line, arg);
     }
-}
-
-impl Drop for Uninherited {
-    fn drop(&mut self) {
-        for (handle, flags) in &self.0 {
-            // SAFETY: restores the flag this value cleared on its own handle.
-            unsafe { SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags) };
-        }
-    }
-}
-
-pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<std::process::Child> {
+    line.push(0);
+    let dir = command.get_current_dir().map(|dir| wide(dir.as_os_str()));
+    let environment = environment_block(command);
     // A hidden console of its own rather than none, so the programs it runs,
     // git above all, don't each open a window.
-    let detached = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
-    let _uninherited = Uninherited::std_handles();
-    match command.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB).spawn() {
+    let detached = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
+    match create_process(&mut line, dir.as_deref(), environment.as_deref(), detached | CREATE_BREAKAWAY_FROM_JOB) {
         // A job that doesn't allow breaking away: the daemon stays in it,
         // and a hook starts it again if the job ends (ADR 0036).
-        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed()) => command.creation_flags(detached).spawn(),
-        spawned => spawned,
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed()) => {
+            create_process(&mut line, dir.as_deref(), environment.as_deref(), detached)
+        }
+        started => started,
     }
+}
+
+fn create_process(line: &mut [u16], dir: Option<&[u16]>, environment: Option<&[u16]>, flags: u32) -> io::Result<()> {
+    // SAFETY: zeroed is a valid value of these plain C structs.
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or(u32::MAX);
+    // SAFETY: as above.
+    let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the strings are NUL-terminated and outlive the call, the
+    // command line is writable as CreateProcessW asks, and the handles it
+    // returns are closed here.
+    unsafe {
+        if CreateProcessW(
+            ptr::null(),
+            line.as_mut_ptr(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            flags,
+            environment.map_or(ptr::null(), |block| block.as_ptr().cast()),
+            dir.map_or(ptr::null(), <[u16]>::as_ptr),
+            &startup,
+            &mut process,
+        ) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    Ok(())
+}
+
+/// `arg` as the C runtime, and so Rust, splits a command line back.
+fn push_quoted(line: &mut Vec<u16>, arg: &OsStr) {
+    const QUOTE: u16 = 0x22;
+    const BACKSLASH: u16 = 0x5C;
+    let arg: Vec<u16> = arg.encode_wide().collect();
+    if !arg.is_empty() && !arg.iter().any(|&char| char == QUOTE || char == u16::from(b' ') || char == u16::from(b'\t')) {
+        line.extend(arg);
+        return;
+    }
+    line.push(QUOTE);
+    let mut backslashes = 0;
+    for char in arg {
+        if char == BACKSLASH {
+            backslashes += 1;
+        } else {
+            if char == QUOTE {
+                line.extend(std::iter::repeat_n(BACKSLASH, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        line.push(char);
+    }
+    line.extend(std::iter::repeat_n(BACKSLASH, backslashes));
+    line.push(QUOTE);
+}
+
+/// This process's environment with `command`'s changes, sorted as Windows
+/// wants it; `None` when there are none, and the child inherits it as is.
+fn environment_block(command: &std::process::Command) -> Option<Vec<u16>> {
+    command.get_envs().next()?;
+    let key = |name: &OsStr| name.to_string_lossy().to_uppercase();
+    let mut vars: std::collections::BTreeMap<String, (std::ffi::OsString, std::ffi::OsString)> =
+        std::env::vars_os().map(|(name, value)| (key(&name), (name, value))).collect();
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => vars.insert(key(name), (name.to_owned(), value.to_owned())),
+            None => vars.remove(&key(name)),
+        };
+    }
+    let mut block = Vec::new();
+    for (name, value) in vars.into_values() {
+        block.extend(name.encode_wide());
+        block.push(u16::from(b'='));
+        block.extend(value.encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    if block.len() == 1 {
+        block.push(0);
+    }
+    Some(block)
 }
 
 pub fn own_group(command: &mut tokio::process::Command) {
@@ -363,6 +420,21 @@ mod tests {
     use std::io::{BufRead as _, BufReader, Write as _};
 
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+
+    #[test]
+    fn arguments_are_quoted_as_the_c_runtime_splits_them() {
+        let quoted = |arg: &str| {
+            let mut line = Vec::new();
+            super::push_quoted(&mut line, std::ffi::OsStr::new(arg));
+            String::from_utf16(&line).expect("utf-16")
+        };
+        assert_eq!(quoted("run"), "run");
+        assert_eq!(quoted(r"C:\a\silt.exe"), r"C:\a\silt.exe");
+        assert_eq!(quoted(""), r#""""#);
+        assert_eq!(quoted(r"C:\Program Files\"), r#""C:\Program Files\\""#);
+        assert_eq!(quoted(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(quoted(r#"a\"b"#), r#""a\\\"b""#);
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_pipe_name_cannot_be_taken_before_the_daemon() {

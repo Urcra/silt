@@ -48,12 +48,7 @@ impl Env {
         fs::write(repo.path().join("src/main.rs"), "fn main() {}\n").expect("write");
         git(repo.path(), &["add", "."]);
         git(repo.path(), &["commit", "-q", "-m", "init"]);
-        let real = repo.path().canonicalize().expect("canonical");
-        // A shell's `pwd` names it without the `\\?\` Windows' adds.
-        let repo_path = match real.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
-            Some(plain) if cfg!(windows) => PathBuf::from(plain),
-            _ => real,
-        };
+        let repo_path = silt_os::canonicalize(repo.path()).expect("canonical");
         Self {
             silt_home: silt_home.path().to_owned(),
             claude_dir: claude_dir.path().to_owned(),
@@ -279,7 +274,9 @@ fn projection(env: &Env, envs: &[(&str, &str)]) -> String {
         args.insert(1, &thread);
         printed += &format!("$ silt {}\n{}\n", args.join(" "), env.stdout(&args));
     }
-    printed.replace(&env.repo.to_string_lossy().into_owned(), "<repo>").replace(&thread, "<thread>")
+    let repo = env.repo.to_string_lossy().into_owned();
+    // Paths are also shown as JSON, where Windows' backslashes are doubled.
+    printed.replace(&repo.replace('\\', "\\\\"), "<repo>").replace(&repo, "<repo>").replace(&thread, "<thread>")
 }
 
 #[test]
@@ -336,7 +333,7 @@ impl Api {
         let output = command.arg(format!("{}{path}", self.base)).output().expect("curl runs");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = text.rsplit_once('\n').expect("a status line");
-        (status == "200", serde_json::from_str(json).unwrap_or(serde_json::Value::Null))
+        (status == "200", serde_json::from_str(json).unwrap_or_else(|_| serde_json::Value::String(text.clone())))
     }
 
     fn ok(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {

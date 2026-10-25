@@ -26,7 +26,7 @@ fn read_back(agent: &dyn Agent, transcript: &Path) -> Vec<Entry> {
 
 fn cwd() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("temp dir");
-    let cwd = dir.path().canonicalize().expect("canonical");
+    let cwd = silt_os::canonicalize(dir.path()).expect("canonical");
     (dir, cwd)
 }
 

@@ -34,7 +34,7 @@ fn repo_with_commit() -> tempfile::TempDir {
 fn reads_head_branch_remote_and_tree() {
     let dir = repo_with_commit();
     let repo = Repo::discover(&dir.path().join("src")).expect("discovers from a subdirectory");
-    assert_eq!(repo.root(), dir.path().canonicalize().expect("canonical"));
+    assert_eq!(repo.root(), silt_os::canonicalize(dir.path()).expect("canonical"));
     assert_eq!(repo.head_branch().expect("branch").as_deref(), Some("main"));
     assert_eq!(repo.remote_url("origin").expect("remote").as_deref(), Some("git@github.com:Urcra/silt.git"));
     assert_eq!(repo.remote_url("upstream").expect("remote"), None);
