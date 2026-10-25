@@ -627,8 +627,9 @@ mod tests {
         let paths =
             restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
-        // The old directory's prefix becomes the new one, on Windows too.
-        let saved = format!("saved to {}/tool-results/t1.txt", paths.tool_results.parent().expect("the session's").display());
+        // The old directory becomes the new one, and on Windows the rest of
+        // the path takes its separators.
+        let saved = format!("saved to {}", paths.tool_results.join("t1.txt").display());
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
             format!(
