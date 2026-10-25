@@ -93,6 +93,53 @@ pub struct Rewrites {
 struct Matcher {
     automaton: AhoCorasick,
     replacements: Vec<String>,
+    separators: Vec<Option<Separators>>,
+}
+
+/// Which way a rewrite between a Windows and a Unix path turns the
+/// separators of the rest of the path it starts: a session recorded on
+/// Windows and resumed in WSL names `C:\repo\src\a.rs`, which is to become
+/// `/home/me/repo/src/a.rs` (ADR 0045).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Separators {
+    ToUnix,
+    ToWindows,
+}
+
+impl Separators {
+    fn between(old: &str, new: &str) -> Option<Self> {
+        let windows = |path: &str| path.contains('\\') || path.as_bytes().get(1) == Some(&b':');
+        match (windows(old), windows(new)) {
+            (true, false) if new.starts_with('/') => Some(Self::ToUnix),
+            (false, true) if old.starts_with('/') => Some(Self::ToWindows),
+            _ => None,
+        }
+    }
+
+    /// Writes the part of `rest`, the JSON text after a rewritten path, that
+    /// continues the path, with its separators turned, and says how long it
+    /// was. A path ends at the end of its string, at a space or at an escape
+    /// other than a backslash.
+    fn turn_rest(self, rest: &str, out: &mut String) -> usize {
+        let mut taken = 0;
+        while let Some(char) = rest[taken..].chars().next() {
+            let after = rest[taken + char.len_utf8()..].chars().next();
+            match (self, char) {
+                (_, '"') => break,
+                (_, char) if char.is_whitespace() => break,
+                (Self::ToUnix, '\\') if after == Some('\\') => {
+                    out.push('/');
+                    taken += 2;
+                    continue;
+                }
+                (_, '\\') => break,
+                (Self::ToWindows, '/') => out.push_str("\\\\"),
+                (_, char) => out.push(char),
+            }
+            taken += char.len_utf8();
+        }
+        taken
+    }
 }
 
 /// Below this many bytes of lines, rewriting them on one thread is faster
@@ -149,6 +196,9 @@ impl Rewrites {
             out.push_str(&json[done..start]);
             out.push_str(&matcher.replacements[pattern]);
             done = end;
+            if let Some(separators) = matcher.separators[pattern] {
+                done += separators.turn_rest(&json[end..], out);
+            }
         }
         out.push_str(&json[done..]);
     }
@@ -202,13 +252,35 @@ impl Matcher {
             .match_kind(MatchKind::Standard)
             .build(pairs.iter().map(|(old, _)| json_escaped(old)))
             .expect("rewrites are few and short enough for an automaton");
-        Self { automaton, replacements: pairs.into_iter().map(|(_, new)| json_escaped(new)).collect() }
+        Self {
+            automaton,
+            separators: pairs.iter().map(|(old, new)| Separators::between(old, new)).collect(),
+            replacements: pairs.into_iter().map(|(_, new)| json_escaped(new)).collect(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_under_a_rewritten_one_take_the_new_platform_s_separators() {
+        let to_wsl = Rewrites::default().with(r"C:\src\app", "/home/me/app");
+        let line = serde_json::json!({"file_path": r"C:\src\app\src\main.rs", "text": r"saved to C:\src\app\out\t1.txt now"});
+        let rewritten: serde_json::Value = serde_json::from_str(&to_wsl.apply(&line.to_string())).expect("json");
+        assert_eq!(rewritten["file_path"], "/home/me/app/src/main.rs");
+        assert_eq!(rewritten["text"], "saved to /home/me/app/out/t1.txt now");
+
+        let to_windows = Rewrites::default().with("/home/me/app", r"C:\src\app");
+        let line = serde_json::json!({"file_path": "/home/me/app/src/main.rs", "cwd": "/home/me/app"});
+        let rewritten: serde_json::Value = serde_json::from_str(&to_windows.apply(&line.to_string())).expect("json");
+        assert_eq!(rewritten["file_path"], r"C:\src\app\src\main.rs");
+        assert_eq!(rewritten["cwd"], r"C:\src\app");
+
+        let same = Rewrites::default().with("/a/app", "/b/app");
+        assert_eq!(same.apply(r#"{"p":"/a/app/x\\y"}"#), r#"{"p":"/b/app/x\\y"}"#, "Unix to Unix leaves the rest alone");
+    }
 
     #[test]
     fn side_file_names_name_files_inside_the_session() {
