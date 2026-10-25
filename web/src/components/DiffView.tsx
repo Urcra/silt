@@ -289,7 +289,7 @@ export function DiffView({
           }
           actions={
             <>
-              <Counts added={file.added} removed={file.removed} />
+              <Counts added={file.added} removed={file.removed} binary={file.binary} />
               {viewFiles && (
                 <a
                   aria-label="view file"

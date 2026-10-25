@@ -728,11 +728,12 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: hello')).toBeVisible()
   await expect(page.getByRole('group', { name: 'permission' })).toHaveCount(0)
-  // What it changed sits over the composer; with nothing committed on a branch, Create PR says why it can't yet.
+  // What it changed sits over the composer; with nothing committed on a branch, Create PR is off and says why.
   const changed = page.getByRole('group', { name: 'what the thread changed' })
   await expect(changed).toContainText('1 file changed')
-  await changed.getByRole('button', { name: 'Create PR' }).click()
-  await expect(page.getByText(/isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)).toBeVisible()
+  const createPr = changed.getByRole('button', { name: 'Create PR' })
+  await expect(createPr).toBeDisabled()
+  await expect(createPr).toHaveAttribute('title', /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)
 })
 
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
@@ -935,7 +936,7 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
   await expect(guide).toContainText('by alice')
 
   const request = page.url()
-  await page.getByRole('main').getByRole('link').filter({ hasText: /^[0-9a-f]{12}$/ }).first().click()
+  await page.getByRole('main').getByRole('link', { name: 'Open the fork' }).click()
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await page.getByRole('button', { name: 'Start agent' }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')

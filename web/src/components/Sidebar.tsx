@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { APPROVED } from '../agentState'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
@@ -28,8 +28,14 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
   const actions = useThreadState(thread)
+  const item = useRef<HTMLLIElement>(null)
+  const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}`
+  // The thread open shows in the list however far down its project is.
+  useEffect(() => {
+    if (open && current) item.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [open, current])
   return (
-    <li className="group relative flex items-center">
+    <li ref={item} className="group relative flex items-center">
       <Link
         to="/t/$id"
         params={{ id: thread.id }}
@@ -238,7 +244,7 @@ export function Sidebar() {
   const reviews = mine.filter((thread) => thread.review).length
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
-    <nav aria-label="projects" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px]">
+    <nav aria-label="projects" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px] [&>*]:shrink-0">
       <div className="flex items-center gap-2 px-1.5 pb-2.5">
         <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
           silt

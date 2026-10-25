@@ -19,6 +19,8 @@ export interface DiffFile {
   hunks: Hunk[]
   /** `new`, `deleted` or `renamed from …`, when git says so. */
   note: string | null
+  /** Git says the file is binary, so it has no lines to count. */
+  binary: boolean
 }
 
 /** A git-style unified diff, file by file and hunk by hunk. */
@@ -30,7 +32,7 @@ export function parseFiles(text: string): DiffFile[] {
   let next = 0
   for (const line of text.replace(/\n$/, '').split('\n')) {
     if (line.startsWith('diff --git ')) {
-      file = { path: line.slice(line.lastIndexOf(' b/') + 3), added: 0, removed: 0, hunks: [], note: null }
+      file = { path: line.slice(line.lastIndexOf(' b/') + 3), added: 0, removed: 0, hunks: [], note: null, binary: false }
       files.push(file)
       hunk = null
       continue
@@ -39,6 +41,7 @@ export function parseFiles(text: string): DiffFile[] {
     if (line.startsWith('new file')) file.note = 'new'
     else if (line.startsWith('deleted file')) file.note = 'deleted'
     else if (line.startsWith('rename from ')) file.note = `renamed from ${line.slice('rename from '.length)}`
+    else if (line.startsWith('Binary files ')) file.binary = true
     const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (header) {
       old = Number(header[1])

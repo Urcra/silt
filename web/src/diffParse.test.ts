@@ -1,6 +1,14 @@
 import { expect, test } from 'vitest'
 import { parseDiff, parseFiles, splitRows } from './diffParse'
 
+test('a binary file says so, with no lines to count', () => {
+  const diff = ['diff --git a/x.pyc b/x.pyc', 'Binary files /dev/null and b/x.pyc differ', 'diff --git a/a.rs b/a.rs', '@@ -1 +1 @@', '-a', '+b'].join('\n')
+  expect(parseFiles(diff).map((file) => [file.path, file.binary])).toEqual([
+    ['x.pyc', true],
+    ['a.rs', false],
+  ])
+})
+
 test('a diff reads as files with their counts, and hunks pair up side by side', () => {
   const diff = [
     'diff --git a/src/main.rs b/src/main.rs',

@@ -106,7 +106,12 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
     hidden.add(entry)
   }
   for (const step of steps) if (step.call?.plan && step.result) hidden.add(step.result)
+  // A call an update of it replaced shows as the update.
+  const calls = new Set(steps.map((step) => step.call))
+  for (const entry of entries) if (entry.kind === 'tool_call' && !calls.has(entry)) hidden.add(entry)
   const pieces: Piece[] = []
+  // The fold each folded call went into, so its result joins it there.
+  const foldOf = new Map<HistoryEntry, Piece & { kind: 'tools' }>()
   for (const entry of entries) {
     const last = pieces[pieces.length - 1]
     if (entry === plan) pieces.push({ kind: 'plan', entry })
@@ -115,8 +120,12 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
       const step = steps.find((candidate) => candidate.call === entry)
       if (step) pieces.push({ kind: 'step', step })
     } else if (FOLDED.has(entry.kind)) {
-      if (last?.kind === 'tools') last.entries.push(entry)
+      const call = steps.find((step) => step.result === entry)?.call
+      const fold = (call && foldOf.get(call)) ?? (last?.kind === 'tools' ? last : null)
+      if (fold) fold.entries.push(entry)
       else pieces.push({ kind: 'tools', entries: [entry] })
+      const into = fold ?? (pieces[pieces.length - 1] as Piece & { kind: 'tools' })
+      if (entry.kind === 'tool_call') foldOf.set(entry, into)
     } else pieces.push({ kind: 'entry', entry })
   }
   return pieces
@@ -210,6 +219,12 @@ export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
   const claimed = new Set<HistoryEntry>()
   const steps: ToolStep[] = []
   for (const entry of entries) {
+    // An agent that said more of a call later, its command for one, updates the call already shown.
+    const earlier = entry.kind === 'tool_call' && entry.tool ? steps.find((step) => step.call?.tool?.id === entry.tool!.id) : undefined
+    if (earlier) {
+      earlier.call = entry
+      continue
+    }
     if (entry.kind === 'tool_call') {
       const id = entry.tool?.id
       const result =

@@ -18,11 +18,12 @@ class Bus {
   private topics = new Map<string, number>()
   private listeners = new Set<Listener>()
   private retry: ReturnType<typeof setTimeout> | null = null
-  private open = false
+  /** The socket closed, or never opened, and hasn't opened since: not before the first try ends. */
+  private lost = false
   private watchers = new Set<() => void>()
 
-  /** Whether the socket is open now; hosted pages, which poll, count as connected. */
-  connected = (): boolean => this.open || hosted()
+  /** Whether the page hears the daemon, or hasn't yet found it doesn't; hosted pages, which poll, count as connected. */
+  connected = (): boolean => !this.lost || hosted()
 
   /** Hears the socket open and close, until the returned function is called. */
   watch = (watcher: () => void): (() => void) => {
@@ -31,7 +32,7 @@ class Bus {
   }
 
   private setOpen(open: boolean) {
-    this.open = open
+    this.lost = !open
     for (const watcher of this.watchers) watcher()
   }
 
@@ -137,33 +138,43 @@ export function useBusEvents(listener: Listener) {
   useEffect(() => bus.listen((event) => latest.current(event)), [])
 }
 
+/** How long a burst of `lagged` events counts as one. */
+const LAGGED_MS = 1000
+
 /** Fetches again what an event says changed (ADR 0021). */
 export function useBusInvalidation() {
   const queries = useQueryClient()
+  const laggedAt = useRef(0)
+  // A fetch under way finishes rather than starting over: a burst of events,
+  // such as an import's, would otherwise restart a slow one until requests
+  // pile up past what the browser allows.
+  const refetch = (queryKey?: readonly unknown[]) => void queries.invalidateQueries({ queryKey }, { cancelRefetch: false })
   useBusEvents((event) => {
     switch (event.event) {
       case 'threads':
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        void queries.invalidateQueries({ queryKey: keys.projects })
-        void queries.invalidateQueries({ queryKey: ['graph'] })
+        refetch(keys.threads)
+        refetch(keys.projects)
+        refetch(['graph'])
         break
       case 'thread':
-        void queries.invalidateQueries({ queryKey: keys.thread(event.thread) })
-        void queries.invalidateQueries({ queryKey: ['graph'] })
+        refetch(keys.thread(event.thread))
+        refetch(['graph'])
         break
       case 'queue':
-        void queries.invalidateQueries({ queryKey: keys.queue(event.thread) })
+        refetch(keys.queue(event.thread))
         break
       case 'inbox':
-        void queries.invalidateQueries({ queryKey: ['inbox'] })
+        refetch(['inbox'])
         break
       case 'mrs':
-        void queries.invalidateQueries({ queryKey: keys.mrs })
-        void queries.invalidateQueries({ queryKey: keys.projects })
-        void queries.invalidateQueries({ queryKey: ['graph'] })
+        refetch(keys.mrs)
+        refetch(keys.projects)
+        refetch(['graph'])
         break
       case 'lagged':
-        void queries.invalidateQueries()
+        if (Date.now() - laggedAt.current < LAGGED_MS) break
+        laggedAt.current = Date.now()
+        refetch()
         break
       default:
         break

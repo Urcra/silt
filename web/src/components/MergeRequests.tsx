@@ -172,12 +172,15 @@ function ChangeGuide({
 function Approval({
   id,
   mr,
+  target,
   canApprove,
   act,
   error,
 }: {
   id: string
   mr: MrSummary
+  /** The target thread's title, when this machine knows it. */
+  target: string | undefined
   canApprove: boolean
   act: (action: Promise<unknown>) => Promise<unknown>
   error: string | undefined
@@ -224,8 +227,8 @@ function Approval({
       )}
       <p className="text-2xs leading-normal text-fg-2">
         Merging brings the fork’s code and its conversation into{' '}
-        <span className="font-mono" data-volatile>
-          {short(mr.target)}
+        <span className={target ? undefined : 'font-mono'} title={mr.target} data-volatile>
+          {target ?? short(mr.target)}
         </span>
         . History from both sides stays searchable.
       </p>
@@ -256,7 +259,7 @@ function PhoneFiles({
   seenNow: (file: MrFile) => boolean
   onSeen: (path: string, seen: boolean) => void
   diff: string
-  counts: Map<string, { added: number; removed: number }>
+  counts: Map<string, { added: number; removed: number; binary: boolean }>
   commenting: Commenting
   target: string
 }) {
@@ -276,7 +279,7 @@ function PhoneFiles({
             <CopyLink path={`/mr/${id}#file-${file.path}`} thread={target} label="Copy link" name="link" className="-my-2 inline-flex min-h-11 items-center text-accent-fg" />
           </span>
         </span>
-        {stats && <Counts added={stats.added} removed={stats.removed} />}
+        {stats && <Counts added={stats.added} removed={stats.removed} binary={stats.binary} />}
         <label className="flex min-h-11 items-center gap-1.5 text-xs">
           <input
             type="checkbox"
@@ -394,16 +397,16 @@ export function MergeRequest({ id }: { id: string }) {
             {state.label}
           </span>
           {forkThread?.owner && <Avatar name={forkThread.owner} size={16} />}
-          <span>{forkThread?.owner ? `${forkThread.owner} wants to merge fork` : 'merge fork'}</span>
-          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.fork }}>
-            <span data-volatile>{short(mr.fork)}</span>
+          <span>{forkThread?.owner ? `${forkThread.owner} wants to merge` : 'merge'}</span>
+          <Link className="max-w-[16rem] truncate text-accent-fg" to="/t/$id" params={{ id: mr.fork }} title={mr.fork}>
+            <span data-volatile>{forkThread?.title ?? short(mr.fork)}</span>
           </Link>
           <span>into</span>
-          <Link className="text-accent-fg" to="/t/$id" params={{ id: mr.target }}>
-            <span data-volatile>{short(mr.target)}</span>
+          <Link className="max-w-[16rem] truncate text-accent-fg" to="/t/$id" params={{ id: mr.target }} title={mr.target}>
+            <span data-volatile>{targetThread?.title ?? short(mr.target)}</span>
           </Link>
           <span>
-            {targetThread?.title && `· ${targetThread.title} `}· opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
+            · opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
           </span>
         </span>
       }
@@ -417,7 +420,7 @@ export function MergeRequest({ id }: { id: string }) {
       inspector={
         wide && (
           <div className="flex flex-col gap-5 p-4">
-            <Approval id={id} mr={mr} canApprove={targetThread?.writable ?? true} act={act} error={error} />
+            <Approval id={id} mr={mr} target={targetThread?.title ?? undefined} canApprove={targetThread?.writable ?? true} act={act} error={error} />
           </div>
         )
       }
@@ -517,7 +520,7 @@ export function MergeRequest({ id }: { id: string }) {
                     <Link to="/mr/$id" params={{ id }} hash={`file-${file.path}`} className="min-w-0 flex-1 truncate text-inherit hover:text-fg-1" title={file.path}>
                       {file.path}
                     </Link>
-                    {stats && <Counts added={stats.added} removed={stats.removed} />}
+                    {stats && <Counts added={stats.added} removed={stats.removed} binary={stats.binary} />}
                   </div>
                 )
               })}
@@ -556,7 +559,7 @@ export function MergeRequest({ id }: { id: string }) {
         </div>
       )}
       {tab === 'conversation' && (
-        <div className="max-w-[880px] px-4 py-4 md:px-6">
+        <div role="tabpanel" aria-label="the fork's conversation" className="max-w-[880px] px-4 py-4 md:px-6">
           <Conversation lines={conversation} />
         </div>
       )}
@@ -608,7 +611,7 @@ export function MergeRequest({ id }: { id: string }) {
       {/* On a phone the decision comes after the code, as the phone board orders it. */}
       {!wide && (
         <div className="px-4 pb-6">
-          <Approval id={id} mr={mr} canApprove={targetThread?.writable ?? true} act={act} error={error} />
+          <Approval id={id} mr={mr} target={targetThread?.title ?? undefined} canApprove={targetThread?.writable ?? true} act={act} error={error} />
         </div>
       )}
     </Page>

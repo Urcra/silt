@@ -9,10 +9,12 @@ import { projectName } from '../projects'
 import { keys, message } from '../query'
 import type { NewThreadSearch } from '../router'
 import { formatKeys } from '../shortcuts'
+import { store, stored } from '../stored'
 import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
+import { ImportOffer } from './ImportOffer'
 import { ComposerBox, RoundButton } from './Composer'
 import { Mock } from './Mock'
 import { Page } from './Page'
@@ -31,23 +33,6 @@ const DRAFTS_KEY = 'silt-stashed-prompts'
 const savedAt = () => Date.now()
 const LAST_PROJECT_KEY = 'silt-last-project'
 const MODE_KEY = 'silt-mode:'
-
-function stored<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key)
-    return value === null ? fallback : (JSON.parse(value) as T)
-  } catch {
-    return fallback
-  }
-}
-
-function store(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Kept for this page only, then.
-  }
-}
 
 /** Where a new thread's agent works (ADR 0044): the clone itself, a checkout of its own, or a cloud session. */
 type Where = 'local' | 'worktree' | 'cloud'
@@ -257,13 +242,10 @@ function Welcome() {
   const navigate = useNavigate()
   const found = useQuery({ queryKey: keys.found, queryFn: api.found })
   const [opening, setOpening] = useState<'folder' | 'clone' | null>(null)
-  const [importing, setImporting] = useState(false)
-  const [declined, setDeclined] = useState(() => stored('silt-import-declined', false))
   const [error, setError] = useState<string>()
   const folders = found.data ?? []
   const startable = (folder: FoundFolder) => folder.git && folder.repo !== ''
   const firstStartable = folders.find(startable)?.path
-  const sessions = folders.reduce((sum, folder) => sum + folder.sessions.reduce((count, each) => count + each.count, 0), 0)
   const added = (path: string) => {
     void queries.invalidateQueries({ queryKey: keys.agents })
     void queries.invalidateQueries({ queryKey: keys.projects })
@@ -331,43 +313,7 @@ function Welcome() {
       </div>
       {opening === 'folder' && <OpenFolder found={[]} onAdded={added} />}
       {opening === 'clone' && <CloneRepository onAdded={added} />}
-      {sessions > 0 && !declined && (
-        <div role="group" aria-label="import" className="flex flex-wrap items-center gap-3 rounded-md border border-line px-3.5 py-3">
-          <span className="min-w-0 flex-[1_1_320px]">
-            <b className="font-medium">Import the {sessions === 1 ? 'session' : `${sessions} sessions`} found</b>
-            <span className="block text-xs text-fg-2">
-              Each becomes a thread you can read and search right away. They stay on this machine until you sync. Same as <code className="font-mono">silt import</code>.
-            </span>
-          </span>
-          <Button
-            disabled={importing}
-            onClick={() => {
-              setImporting(true)
-              api
-                .importFound()
-                .then(
-                  (made) => {
-                    toast(`Imported ${made === 1 ? '1 thread' : `${made} threads`}`, 'ok')
-                    return queries.invalidateQueries({ queryKey: keys.threads })
-                  },
-                  (failure: unknown) => setError(message(failure)),
-                )
-                .finally(() => setImporting(false))
-            }}
-          >
-            {importing ? 'Importing…' : 'Import them'}
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setDeclined(true)
-              store('silt-import-declined', true)
-            }}
-          >
-            Not now
-          </Button>
-        </div>
-      )}
+      <ImportOffer />
       <p className="text-xs text-fg-2">
         Prefer the terminal? Run <code className="font-mono text-fg-1">silt claude</code> in any clone. It shows up here as it works.
       </p>
@@ -572,16 +518,20 @@ export function NewThread() {
             tools={
               chosenWhere !== 'cloud' && (
                 <>
-                  <ChipSelect
-                    ghost
-                    label="agent to start"
-                    value={agent}
-                    onChange={(chosen) => {
-                      setAgent(chosen)
-                      setAgentMode('')
-                    }}
-                    options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
-                  />
+                  {agents.length > 0 ? (
+                    <ChipSelect
+                      ghost
+                      label="agent to start"
+                      value={agent}
+                      onChange={(chosen) => {
+                        setAgent(chosen)
+                        setAgentMode('')
+                      }}
+                      options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+                    />
+                  ) : (
+                    choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
+                  )}
                   {modes.length > 0 && (
                     <ChipSelect
                       ghost
@@ -658,6 +608,13 @@ export function NewThread() {
             )}
           </div>
           <p className="mt-2 px-0.5 text-xs text-fg-2">{whereSays(chosenWhere, clone?.path ?? '', base)}</p>
+          {choices.isSuccess && agents.length === 0 && chosenWhere !== 'cloud' && (
+            <p className="mt-1 px-0.5 text-xs text-warn">
+              No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}
+              <code className="font-mono">silt daemon stop</code> so the next start finds it, or add your own in{' '}
+              <code className="font-mono">agents.json</code> in Silt's data directory.
+            </p>
+          )}
           {chosenWhere === 'local' && busyHere && (
             <p className="mt-1 px-0.5 text-xs text-warn">An agent is already working in this project. A second Local one shares its files; pick Worktree to keep them apart.</p>
           )}
@@ -676,6 +633,7 @@ export function NewThread() {
             />
           </div>
         )}
+        <ImportOffer />
       </div>
     </Page>
   )

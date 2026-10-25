@@ -16,6 +16,7 @@ import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
 import { useActions } from '../shortcuts'
 import { threadTone, threadWhere } from '../threadLook'
+import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
 import { type Piece, type Row, duration, kindOf, piecesOf, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
@@ -146,7 +147,7 @@ function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: 
       <button type="button" aria-label={copied ? 'copied' : `copy entry ${entry.index}`} title="Copy" className={action} onClick={copy}>
         <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
       </button>
-      {entry.kind === 'user' && turn !== undefined && turn > 1 && !hosted() && (
+      {entry.kind === 'user' && turn !== undefined && turn > 1 && !hosted() && !taskNotification(entry.text) && (
         <button type="button" aria-label={`edit from turn ${turn}`} title="Edit this prompt in a fork from the turn before it" className={action} onClick={() => void edit()}>
           <Icon name="edit" className="h-3.5 w-3.5" />
         </button>
@@ -210,16 +211,43 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
 
 /** What one entry says: a prompt, the agent's words as Markdown, or an event. */
 function EntryText({ entry }: { entry: HistoryEntry }) {
+  const notification = entry.kind === 'user' ? taskNotification(entry.text) : null
+  if (notification)
+    return (
+      <details data-testid="task-notification" className="group/task rounded-md border border-line bg-elevated text-xs">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
+          <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/task:rotate-90" />
+          <span className="min-w-0 truncate">{notification.summary}</span>
+          {notification.status && notification.status !== 'completed' && <span className="text-danger">· {notification.status}</span>}
+        </summary>
+        {notification.result && (
+          <div className="border-t border-line-subtle px-3 py-2 text-sm">
+            <Markdown text={notification.result} />
+          </div>
+        )}
+      </details>
+    )
   if (entry.kind === 'user')
     return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
-  if (entry.kind === 'merge' || entry.kind === 'pull')
+  if (entry.kind === 'merge' || entry.kind === 'pull') {
+    // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.
+    const [, said, summary] = /^([^:]*?from fork \S+): ([\s\S]+)$/.exec(entry.text) ?? [null, entry.text, null]
     return (
-      <p className="flex items-center gap-1.5 text-xs text-info">
-        <Icon name="merge" className="h-3.5 w-3.5" />
-        {entry.text}
-      </p>
+      <details className="group/merge text-xs text-info">
+        <summary className={cx('flex items-center gap-1.5', summary ? 'cursor-pointer' : 'list-none')}>
+          <Icon name="merge" className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0">{said}</span>
+          {summary && <Icon name="chevronRight" className="h-3 w-3 shrink-0 transition-transform group-open/merge:rotate-90" />}
+        </summary>
+        {summary && (
+          <div className="mt-1.5 border-l-2 border-line pl-3 text-sm text-fg-1">
+            <Markdown text={summary} />
+          </div>
+        )}
+      </details>
     )
+  }
   if (entry.kind === 'thinking') return <p className="text-xs text-fg-2 italic whitespace-pre-wrap">{entry.text}</p>
   if (entry.kind === 'tool_call') {
     const call = toolOf(entry.text)
@@ -408,23 +436,30 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   )
 }
 
+/** Where the history moves to another thread's part: the source before a fork, or upstream work pulled in. Named by its title, as people know it. */
+function OriginDivider({ origin, thread }: { origin: string; thread: string }) {
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const title = threads.data?.find((candidate) => candidate.id === thread || candidate.id.endsWith(thread))?.title
+  return (
+    <div className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
+      <span className="h-px flex-1 bg-line" />
+      <span className="min-w-0 truncate text-2xs">
+        {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
+        <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={thread} data-volatile>
+          {title ?? short(thread)}
+        </Link>
+        {origin === 'inherited' && ', before this fork'}
+      </span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  )
+}
+
 /** `running`: the turn is still under way, so it has no totals or actions yet. */
 function TranscriptRow({ row, running = false, ...props }: EntryProps & { row: Row; running?: boolean }) {
   const [summary, setSummary] = useState(false)
   const detail = useContext(TranscriptDetail)
-  if (row.kind === 'origin') {
-    return (
-      <div className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
-        <span className="h-px flex-1 bg-line" />
-        <span className="font-mono text-2xs tracking-[0.04em] uppercase">
-          {row.origin === 'inherited' ? 'From ' : 'Upstream progress from '}
-          <span data-volatile>{short(row.thread)}</span>
-          {row.origin === 'inherited' && ', before this fork'}
-        </span>
-        <span className="h-px flex-1 bg-line" />
-      </div>
-    )
-  }
+  if (row.kind === 'origin') return <OriginDivider origin={row.origin} thread={row.thread} />
   if (row.kind === 'compaction') {
     return (
       <div className="py-2">
@@ -515,7 +550,7 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
   const [title, setTitle] = useState('')
   return (
     <form
-      className="flex items-center gap-2"
+      className="flex items-center gap-2 [&>input]:min-w-0 [&>input]:flex-1"
       onSubmit={(event) => {
         event.preventDefault()
         api.offerMergeRequest(thread, title).then((mr) => {
@@ -536,6 +571,12 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
 function ChangesBar({ thread, files, totals, forked, onReview }: { thread: string; files: number; totals: { added: number; removed: number }; forked: boolean; onReview: () => void }) {
   const [offering, setOffering] = useState(false)
   const [pushing, setPushing] = useState(false)
+  // Asked again with the changes, as a commit or a branch can lift what stood in the way.
+  const blocker = useQuery({
+    queryKey: [...keys.thread(thread), 'pull-request', files, totals.added, totals.removed],
+    queryFn: () => api.pullRequestBlocker(thread),
+    enabled: !hosted(),
+  })
   // The tab opens on the click, so no popup blocker stops it, and goes to the forge once the push is done.
   const createPr = () => {
     const tab = window.open('', '_blank')
@@ -573,7 +614,14 @@ function ChangesBar({ thread, files, totals, forked, onReview }: { thread: strin
             </Button>
           ))}
         {!hosted() && !offering && (
-          <Button size="sm" variant="primary" icon="external" disabled={pushing} onClick={createPr} title="Pushes the thread's branch to origin and opens the forge's page for its pull request">
+          <Button
+            size="sm"
+            variant={blocker.data ? 'secondary' : 'primary'}
+            icon="external"
+            disabled={pushing || Boolean(blocker.data)}
+            onClick={createPr}
+            title={blocker.data ? `No pull request yet: ${blocker.data}` : "Pushes the thread's branch to origin and opens the forge's page for its pull request"}
+          >
             {pushing ? 'Pushing…' : 'Create PR'}
           </Button>
         )}
@@ -584,29 +632,38 @@ function ChangesBar({ thread, files, totals, forked, onReview }: { thread: strin
 
 function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   const navigate = useNavigate()
-  const [offering, setOffering] = useState(false)
-  const [error, setError] = useState<string>()
-  const failed = (failure: unknown) => setError(message(failure))
-  const fork = () => {
-    setError(undefined)
-    api.fork(thread).then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)
-  }
+  // Each time the palette asks, the offer opens again.
+  const [offered, setOffered] = useState(0)
+  const failed = (failure: unknown) => toast(message(failure), 'danger')
+  const fork = () => api.fork(thread).then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)
   useActions([
-    { id: 'fork', label: 'Fork this thread', run: fork },
-    ...(forked ? [{ id: 'offer', label: 'Offer as merge request', run: () => setOffering(true) }] : []),
+    { id: 'fork', label: 'Fork this thread', run: () => void fork() },
+    ...(forked ? [{ id: 'offer', label: 'Offer as merge request', run: () => setOffered((count) => count + 1) }] : []),
   ])
   return (
     <>
-      <Button icon="fork" onClick={fork} aria-label="Fork" title="A copy of the thread, in a checkout of its own, to try something else in">
-        <span className="max-md:sr-only">Fork</span>
+      <Button icon="fork" onClick={() => void fork()} aria-label="Fork" title="A copy of the thread, in a checkout of its own, to try something else in">
+        <span className="@max-xl/head:sr-only">Fork</span>
       </Button>
-      {forked && !offering && (
-        <Button icon="merge" onClick={() => setOffering(true)} aria-label="Offer as merge request" title="Offer this fork's work back to its source">
-          <span className="max-lg:sr-only">Offer as merge request</span>
-        </Button>
+      {forked && (
+        <Popover
+          key={offered}
+          openOnMount={offered > 0}
+          label="Offer as merge request"
+          triggerLabel="Offer as merge request"
+          align="right"
+          triggerClassName={buttonClass()}
+          panelClassName="w-80 p-2"
+          trigger={
+            <span className="inline-flex items-center gap-1.5" title="Offer this fork's work back to its source">
+              <Icon name="merge" className="h-3.5 w-3.5" />
+              <span className="@max-3xl/head:sr-only">Offer as merge request</span>
+            </span>
+          }
+        >
+          <OfferForm thread={thread} onError={failed} />
+        </Popover>
       )}
-      {offering && <OfferForm thread={thread} onError={failed} />}
-      {error && <p className="w-full text-sm text-danger">{error}</p>}
     </>
   )
 }
@@ -749,7 +806,7 @@ function ThreadHeader({
   // Where it is and what records it; who started it and the rest are in Details.
   const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle px-4 md:pr-3 md:pl-5">
+    <header className="@container/head sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle bg-bg px-4 md:pr-3 md:pl-5">
       <DrawerButton />
       <h1 className="max-w-[50%] min-w-16 shrink truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
         {summary?.title ?? 'Thread'}
@@ -776,7 +833,7 @@ function ThreadHeader({
             <span className="truncate">{branch}</span>
           </span>
         )}
-        {summary?.forked_from && (
+        {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
           <span className="shrink-0 text-2xs text-fg-2">
             Fork of{' '}
             <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
@@ -797,8 +854,8 @@ function ThreadHeader({
           title="What the thread changed, beside the conversation (D)"
           className="aria-pressed:border-accent aria-pressed:bg-accent-tint aria-pressed:text-accent-fg"
         >
-          <Icon name="file" className="h-3.5 w-3.5 md:hidden" />
-          <span className="max-md:sr-only">Changes</span>
+          <Icon name="file" className="h-3.5 w-3.5 @xl/head:hidden" />
+          <span className="@max-xl/head:sr-only">Changes</span>
           {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} />
@@ -962,7 +1019,7 @@ function Details({
               >
                 {file.path}
               </a>
-              <Counts added={file.added} removed={file.removed} />
+              <Counts added={file.added} removed={file.removed} binary={file.binary} />
             </li>
           ))}
         </ul>
@@ -1098,6 +1155,16 @@ function ThreadBody({
     scrollMargin: list.current?.offsetTop ?? 0,
   })
   const scrollTo = useCallback((row: number) => virtual.scrollToIndex(row, { align: 'center' }), [virtual])
+  // After a prompt is sent, the page follows to its turn, which arrives a moment later.
+  const following = useRef(false)
+  const toEnd = useCallback(() => {
+    if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: 'end' })
+  }, [virtual, rows.length])
+  useEffect(() => {
+    if (!following.current) return
+    following.current = false
+    toEnd()
+  }, [rows.length, toEnd])
   const anchor = useAnchor(rows, entries.length >= total, turns.data, comments.data, scrollTo)
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
   const files = diff.data === undefined ? null : parseFiles(diff.data)
@@ -1245,7 +1312,19 @@ function ThreadBody({
           {files && files.length > 0 && totals && !busy && (
             <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} onReview={showChanges} />
           )}
-          <AgentDock thread={thread} status={agent} preset={preset} onPreset={setPreset} draft={draft} onDraft={setDraft} people={people} />
+          <AgentDock
+            thread={thread}
+            status={agent}
+            preset={preset}
+            onPreset={setPreset}
+            draft={draft}
+            onDraft={setDraft}
+            onSent={() => {
+              following.current = true
+              toEnd()
+            }}
+            people={people}
+          />
         </div>
       </div>
     </Page>
@@ -1272,11 +1351,14 @@ function useHistory(id: string) {
       return next < last.total ? next : undefined
     },
   })
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = pages
-  useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
+  const { hasNextPage, isFetching, fetchNextPage } = pages
   const loaded = pages.data?.pages
+  // Whenever a fetch settles with more to come, whichever fetch it was: a refetch,
+  // such as the one subscribing to the thread starts, cancels the next page's
+  // fetch and brings back only the pages it had, which left a thread at its first page.
+  useEffect(() => {
+    if (hasNextPage && !isFetching) void fetchNextPage()
+  }, [hasNextPage, isFetching, fetchNextPage, loaded?.length])
   const last = loaded?.[loaded.length - 1]
   return {
     error: pages.error,

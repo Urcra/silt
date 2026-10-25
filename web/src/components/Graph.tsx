@@ -145,7 +145,7 @@ function Details({ row, thread }: { row: GraphRow; thread: ThreadSummary | undef
             {files?.map((file) => (
               <li key={file.path} className="flex gap-2">
                 <span className="min-w-0 flex-1 truncate">{file.path}</span>
-                <Counts added={file.added} removed={file.removed} />
+                <Counts added={file.added} removed={file.removed} binary={file.binary} />
               </li>
             ))}
           </ul>

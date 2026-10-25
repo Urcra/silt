@@ -71,10 +71,11 @@ export function Page({
       </div>
     )
   return (
-    <div className="flex min-h-full flex-1 flex-col lg:flex-row">
+    // Grows with its content, never under it, so the header and inspector stay stuck however long the body is.
+    <div className="flex min-h-full shrink-0 grow flex-col lg:flex-row">
       <div className="flex min-w-0 flex-1 flex-col" data-page={label}>
         {(title || actions) && (
-          <header className="flex min-h-12 shrink-0 items-center gap-x-2.5 gap-y-0.5 border-b border-line-subtle px-4 max-md:flex-wrap max-md:py-1.5 md:h-12 md:pr-3 md:pl-5">
+          <header className="sticky top-0 z-10 flex min-h-12 shrink-0 items-center bg-bg gap-x-2.5 gap-y-0.5 border-b border-line-subtle px-4 max-md:flex-wrap max-md:py-1.5 md:h-12 md:pr-3 md:pl-5">
             <DrawerButton />
             {title && <h1 className="max-w-[60%] min-w-0 shrink-0 truncate text-[15px] font-medium">{title}</h1>}
             {meta && (
@@ -93,7 +94,7 @@ export function Page({
             inspectorWide ? 'lg:w-[min(42vw,640px)]' : 'lg:w-[360px]',
             sheet
               ? sheet.open
-                ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:static lg:z-auto'
+                ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:sticky lg:z-auto'
                 : 'hidden lg:flex'
               : 'border-t lg:border-t-0',
           )}

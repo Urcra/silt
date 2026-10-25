@@ -146,7 +146,7 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
   return (
     <>
       <Button icon="link" onClick={() => setOpen(true)} aria-label="Share">
-        <span className="max-md:sr-only">Share</span>
+        <span className="max-md:sr-only @max-xl/head:sr-only">Share</span>
       </Button>
       <Dialog open={open} onClose={() => setOpen(false)} title={thread.title ? `Share “${thread.title}”` : 'Share this thread'}>
         {thread.local_only ? (

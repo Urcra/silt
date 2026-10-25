@@ -201,6 +201,8 @@ export const api = {
     request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),
   /** Pushes the thread's branch; answers the forge's page for its new pull request. */
   openPullRequest: (id: string) => request<string>('POST', `${thread(id)}/pull-request`),
+  /** Why the thread can't open a pull request now, or `null` when it can. */
+  pullRequestBlocker: (id: string) => request<string | null>('GET', `${thread(id)}/pull-request`),
   stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
   steer: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/steer`, { text }),
   setPreset: (id: string, preset: Preset) => request<string>('POST', `${thread(id)}/agent/preset`, { preset }),

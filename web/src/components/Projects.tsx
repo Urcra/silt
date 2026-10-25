@@ -7,6 +7,7 @@ import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { Button, EmptyState, Input, Select, Skeleton, Tag, buttonClass, toast } from '../ui'
 import { useWorkspace } from '../workspace'
+import { ImportOffer } from './ImportOffer'
 import { Mock } from './Mock'
 import { Page } from './Page'
 
@@ -339,6 +340,9 @@ export function Projects() {
         )
       }
     >
+      <div className="mb-3 empty:hidden">
+        <ImportOffer />
+      </div>
       {projects.isPending && <Skeleton className="h-16 w-full" />}
       {projects.error && <p className="text-sm text-danger">{message(projects.error)}</p>}
       {projects.isSuccess && all.length === 0 && (

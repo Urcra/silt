@@ -1,6 +1,7 @@
 // What the boards draw that the daemon can't tell yet (ADR 0039). Each mock
-// is listed here and in docs/ui-mocks.md, with what replacing it needs; a
-// build with VITE_SILT_MOCKS=off leaves every mocked part out.
+// is listed here and in docs/ui-mocks.md, with what replacing it needs. Only
+// the dev server and a build with VITE_SILT_MOCKS=on show them, so what
+// people install never shows made-up data.
 
 export const MOCKS = {
   'thread.handoff-before': 'The device a thread was on before its last handoff, and when it moved.',
@@ -23,7 +24,7 @@ export const MOCKS = {
 
 export type MockId = keyof typeof MOCKS
 
-export const mocksOn: boolean = import.meta.env.VITE_SILT_MOCKS !== 'off'
+export const mocksOn: boolean = import.meta.env.DEV || import.meta.env.VITE_SILT_MOCKS === 'on'
 
 /** `value` standing in for data that doesn't exist yet, or nothing when mocks are off. */
 export function mocked<T>(_id: MockId, value: T): T | undefined {

@@ -129,7 +129,7 @@ test('reviews and approves a merge request', async ({ page }) => {
   await expect(page.getByTestId('mr-status')).toHaveText('open')
   await expect(page.getByTestId('diff')).toContainText('+ fn forked() {}')
   await page.getByRole('tab', { name: /^The fork’s conversation/ }).click()
-  await expect(page.getByRole('main').getByText('Continuing in a fork')).toBeVisible()
+  await expect(page.getByRole('tabpanel', { name: "the fork's conversation" }).getByText('Continuing in a fork')).toBeVisible()
   await page.getByRole('tab', { name: /^Changes/ }).click()
 
   await page.getByLabel('reason').fill('add a test first')
@@ -145,6 +145,7 @@ test('reviews and approves a merge request', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('approved')
-  await page.getByRole('link', { name: thread }).first().click()
+  // The request names the thread it merges into by title, linked to it.
+  await page.locator(`main a[href$="${thread}"]`).first().click()
   await expect(page.getByText(/merged "Add forked" from fork/)).toBeVisible()
 })

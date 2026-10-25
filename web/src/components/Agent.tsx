@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
 import { rememberModes } from '../agentModes'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
@@ -223,6 +223,7 @@ export function AgentDock({
   onPreset,
   draft,
   onDraft,
+  onSent,
   people,
 }: {
   thread: string
@@ -230,7 +231,9 @@ export function AgentDock({
   preset: Preset
   onPreset: (preset: Preset) => void
   draft: string
-  onDraft: (draft: string) => void
+  onDraft: Dispatch<SetStateAction<string>>
+  /** The agent took a prompt, so the page goes to where its turn will show. */
+  onSent?: () => void
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
 }) {
@@ -260,16 +263,21 @@ export function AgentDock({
   ])
   const sendable = live && draft.trim() !== '' && !(attached.length > 0 && !ready(status))
   const startable = !live && !elsewhere && !hosted() && agent !== ''
+  // What was written while the request was under way stays to be sent next.
+  const sent = (text: string) => () => {
+    onDraft((current) => (current === text ? '' : current))
+    if (text.trim()) onSent?.()
+  }
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
-    if (startable) act(api.startAgent(agent, { thread }, { preset, prompt: draft.trim() ? draft : null }), () => onDraft(''))
+    if (startable) act(api.startAgent(agent, { thread }, { preset, prompt: draft.trim() ? draft : null }), sent(draft))
   }
   const send = () => {
     if (startable) return start()
     if (!live || !sendable) return
     act(api.prompt(thread, draft, false, attached), () => {
       setAttached([])
-      onDraft('')
+      sent(draft)()
     })
   }
 
@@ -342,7 +350,7 @@ export function AgentDock({
           />
         </label>
       )}
-      {!live && !elsewhere && !hosted() && (
+      {!live && !elsewhere && !hosted() && agents.length > 0 && (
         <ChipSelect
           ghost
           label="agent to start"
@@ -350,6 +358,11 @@ export function AgentDock({
           onChange={setAgent}
           options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
         />
+      )}
+      {!live && !elsewhere && !hosted() && choices.isSuccess && agents.length === 0 && (
+        <span className="px-2 text-xs text-fg-2" title="No agent CLI is on the daemon's PATH; see New thread for how to add one">
+          No agent found
+        </span>
       )}
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live && status.modes && (
@@ -363,16 +376,21 @@ export function AgentDock({
         />
       )}
       {live &&
-        status.settings.map((setting) => (
-          <ChipSelect
-            ghost
-            key={setting.id}
-            label={setting.name.toLowerCase()}
-            value={setting.current}
-            onChange={(value) => act(api.setSetting(thread, setting.id, value))}
-            options={setting.choices}
-          />
-        ))}
+        status.settings
+          // An agent may list its mode among its settings too, which the Mode chip already sets.
+          .filter((setting) => !(status.modes && setting.category === 'mode'))
+          .map((setting) => (
+            <ChipSelect
+              ghost
+              key={setting.id}
+              label={setting.name.toLowerCase()}
+              // A model names itself; "High" or "Off" need saying what they set.
+              prefix={setting.category === 'model' ? undefined : setting.name}
+              value={setting.current}
+              onChange={(value) => act(api.setSetting(thread, setting.id, value))}
+              options={setting.choices}
+            />
+          ))}
       {(live || !hosted()) && (
         <ChipSelect
           ghost
@@ -406,7 +424,7 @@ export function AgentDock({
     live && (
       <>
         {turning && draft.trim() && (
-          <Button variant="ghost" onClick={() => act(api.steer(thread, draft), () => onDraft(''))} title="Interrupts the agent's turn to tell it your draft">
+          <Button variant="ghost" onClick={() => act(api.steer(thread, draft), sent(draft))} title="Interrupts the agent's turn to tell it your draft">
             Steer now
           </Button>
         )}

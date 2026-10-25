@@ -6,6 +6,7 @@ import { api, short, type InboxEntry, type InboxRead, type KindSetting, type MrS
 import { useTopic } from '../bus'
 import { KIND_LABEL, notificationsAllowed, subscribeToPush } from '../notifier'
 import { useNow } from '../now'
+import { useHasServer } from '../hasServer'
 import { keys, message } from '../query'
 import { ago } from '../time'
 import { Button, Dot, type DotTone, EmptyState, Skeleton, Tabs, buttonClass, toast } from '../ui'
@@ -74,7 +75,7 @@ function Go({ notification, review }: { notification: InboxEntry; review: MrSumm
 /** Which kinds notify, as a quiet list under the inbox. */
 export function NotificationSettings({ open = false }: { open?: boolean }) {
   const queries = useQueryClient()
-  const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false })
+  const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false, enabled: useHasServer() })
   if (!settings.data) return null
   const change = (setting: KindSetting) =>
     void api.setNotification(setting).then(

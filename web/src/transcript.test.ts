@@ -54,6 +54,20 @@ test('each call gets the result that answers it, and the run is summed up by kin
   expect(tailOf('one\ntwo\nthree\nfour\nfive\n', 2)).toEqual({ lines: ['four', 'five'], hidden: 3 })
 })
 
+test("a call's update replaces it, and a result joins its call's fold across a command", () => {
+  const announced = { ...call(0, 'a', 'execute', ''), text: 'Terminal {}' } as HistoryEntry
+  const updated = { ...call(1, 'a', 'execute', 'python3 -m unittest'), text: '`python3 -m unittest` {"command":"python3 -m unittest"}' } as HistoryEntry
+  const entries = [announced, updated, call(2, 'r', 'read', 'calc.py'), call(3, 'b', 'execute', 'ls'), result(4, 'r', 'def add'), result(5, 'b', 'README.md'), result(6, 'a', 'OK')]
+  const steps = stepsOf(entries)
+  expect(steps.map((step) => [step.call?.index, step.result?.index])).toEqual([
+    [1, 6],
+    [2, 4],
+    [3, 5],
+  ])
+  const pieces = piecesOf(entries)
+  expect(pieces.map((piece) => (piece.kind === 'tools' ? piece.entries.map((each) => each.index) : piece.kind))).toEqual(['step', [2, 4], 'step'])
+})
+
 test('a turn shows its plan once, as it stood last', () => {
   const plan = (index: number, status: string): HistoryEntry =>
     ({ ...entry(index, 'plan', 'Fix it'), plan: [{ text: 'Fix it', status }] }) as HistoryEntry

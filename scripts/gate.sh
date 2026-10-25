@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 if [ -f web/package.json ]; then
     pnpm -C web install --frozen-lockfile
     pnpm -C web lint
-    pnpm -C web build
+    # With the mocks, which the screen references draw as the boards do (ADR 0039).
+    VITE_SILT_MOCKS=on pnpm -C web build
     pnpm -C web test
 fi
 
