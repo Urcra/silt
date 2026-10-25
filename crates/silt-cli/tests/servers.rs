@@ -20,7 +20,7 @@ struct World {
 }
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-servers").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-servers");
     let origin = origin(root.path());
     let work = Server::start(&root.path().join("work"));
     let oss = Server::start(&root.path().join("oss"));

@@ -20,7 +20,7 @@ struct Team {
 }
 
 fn team() -> Team {
-    let root = tempfile::Builder::new().prefix("silt-forks").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-forks");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let alice = Machine::new_for(root.path(), "alice-laptop", "alice", &origin, &server);

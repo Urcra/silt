@@ -112,13 +112,8 @@ impl From<LegacyConfig> for RemoteConfig {
 
 /// Saves the sign-ins, with the devices' tokens, for this user's eyes only.
 fn save_sign_ins(data_dir: &Path, sign_ins: &[RemoteConfig]) -> Result<(), RemoteError> {
-    use std::io::Write as _;
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     crate::paths::make_private(data_dir)?;
-    let path = sign_ins_path(data_dir);
-    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-    file.write_all(&serde_json::to_vec_pretty(sign_ins)?)?;
+    silt_os::write_private(&sign_ins_path(data_dir), &serde_json::to_vec_pretty(sign_ins)?)?;
     match fs::remove_file(single_sign_in_path(data_dir)) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
         _ => Ok(()),

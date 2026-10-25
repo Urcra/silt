@@ -4,8 +4,7 @@
 //! its `.agents/` counterpart.
 
 use std::fs;
-use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{self, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -84,7 +83,7 @@ pub fn link_shared_paths(checkout: &Repo, source: &Path, shared: &Path) -> Resul
         }
         let seeded = if target.symlink_metadata().is_ok() { false } else { seed(&source.join(&path), &target)? };
         fs::create_dir_all(link.parent().expect("joined onto the checkout"))?;
-        std::os::unix::fs::symlink(&target, &link)?;
+        silt_os::link(&target, &link)?;
         excluded.push(path.clone());
         outcomes.push(LinkOutcome::Linked { path, seeded });
     }
@@ -164,10 +163,33 @@ pub fn run_prepare(checkout: &Path, envs: &[(&str, &str)]) -> io::Result<Option<
     let Some(script) = project_file(checkout, "prepare") else {
         return Ok(None);
     };
-    if fs::metadata(&script)?.permissions().mode() & 0o111 == 0 {
-        return Ok(Some(PrepareOutcome::NotExecutable { script }));
-    }
-    let status = Command::new(&script).current_dir(checkout).envs(envs.iter().copied()).stdin(Stdio::null()).status()?;
+    // Kept until the script ran.
+    let mut copy = None;
+    let mut command = if cfg!(windows) {
+        // Windows can't run a script by itself; Git for Windows' shell can,
+        // as it runs git's hooks.
+        let Some(shell) = std::env::var_os("PATH").and_then(|path| silt_os::find_program("sh", &path)) else {
+            return Ok(Some(PrepareOutcome::NotExecutable { script }));
+        };
+        // A clone with `core.autocrlf` has the script with CRLF, which `sh`
+        // reads as part of each command: it runs a copy without CRs.
+        let text = fs::read(&script)?;
+        if text.contains(&b'\r') {
+            let mut unix = tempfile::NamedTempFile::new()?;
+            unix.write_all(&text.into_iter().filter(|byte| *byte != b'\r').collect::<Vec<u8>>())?;
+            copy = Some(unix.into_temp_path());
+        }
+        let mut command = Command::new(shell);
+        command.arg(copy.as_deref().unwrap_or(&script));
+        command
+    } else {
+        if !silt_os::is_executable(&fs::metadata(&script)?) {
+            return Ok(Some(PrepareOutcome::NotExecutable { script }));
+        }
+        Command::new(&script)
+    };
+    let status = command.current_dir(checkout).envs(envs.iter().copied()).stdin(Stdio::null()).status()?;
+    drop(copy);
     Ok(Some(PrepareOutcome::Ran { script, status }))
 }
 

@@ -133,22 +133,9 @@ fn route(roots: &[&Path], events: Option<&[DebouncedEvent]>) -> Vec<(usize, Vec<
         .collect()
 }
 
-/// Filesystems where inotify delivers nothing or can't be relied on, such as
-/// WSL's `/mnt/c` (9p), FUSE, SMB and NFS (docs/research/probes.md).
+/// Filesystems where events can't be relied on (docs/research/probes.md).
 fn needs_polling(root: &Path) -> bool {
-    const V9FS: i64 = 0x0102_1997;
-    const FUSE: i64 = 0x6573_5546;
-    const CIFS: i64 = 0xFF53_4D42;
-    const SMB2: i64 = 0xFE53_4D42;
-    const NFS: i64 = 0x6969;
-    rustix::fs::statfs(root).is_ok_and(|stats| {
-        #[allow(
-            clippy::unnecessary_cast,
-            reason = "`f_type` is i64 here but a different integer type on other platforms, so #[expect] would not hold everywhere"
-        )]
-        let kind = stats.f_type as i64;
-        [V9FS, FUSE, CIFS, SMB2, NFS].contains(&kind)
-    })
+    silt_os::needs_polling(root)
 }
 
 /// Whether an event can mean the path changed. Opening and reading don't,

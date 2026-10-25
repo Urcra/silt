@@ -10,8 +10,12 @@ use silt_daemon::client;
 use silt_daemon::protocol::{AgentChoices, Request, Response};
 
 fn known_clones(machine: &Machine) -> Vec<std::path::PathBuf> {
-    match client::send(&machine.silt_home.join("daemon.sock"), &Request::AcpAgents, Some(Duration::from_secs(10)))
-        .expect("answers")
+    match client::send(
+        &silt_daemon::paths::socket_path_in(&machine.silt_home),
+        &Request::AcpAgents,
+        Some(Duration::from_secs(10)),
+    )
+    .expect("answers")
     {
         Response::Ok { data } => serde_json::from_value::<AgentChoices>(data)
             .expect("agent choices")
@@ -25,7 +29,7 @@ fn known_clones(machine: &Machine) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn clones_are_remembered_across_restarts() {
-    let root = tempfile::Builder::new().prefix("silt-clones").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-clones");
     let origin = origin(root.path());
     let _server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &_server);
@@ -39,7 +43,7 @@ fn clones_are_remembered_across_restarts() {
 
 #[test]
 fn only_one_daemon_runs_per_data_directory() {
-    let root = tempfile::Builder::new().prefix("silt-one-daemon").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-one-daemon");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);

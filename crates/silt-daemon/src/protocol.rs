@@ -199,6 +199,11 @@ pub enum Request {
     Turns {
         thread: String,
     },
+    /// The thread's files a checkout on this machine doesn't write: names
+    /// its file system can't hold, or that differ only in case.
+    Unwritten {
+        thread: String,
+    },
     /// The commits the thread made, with their turns (ADR 0030).
     Commits {
         thread: String,

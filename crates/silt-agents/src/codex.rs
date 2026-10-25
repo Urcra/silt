@@ -79,7 +79,7 @@ fn rollout_id(path: &Path) -> Option<String> {
 /// the Codex home `home`: the one that started first since, as a session
 /// that started earlier but is still written to belongs to another run.
 pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
+    let cwd = silt_os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
     let cwd = cwd.to_string_lossy();
     rollouts_since(home, since_ms)
         .into_iter()

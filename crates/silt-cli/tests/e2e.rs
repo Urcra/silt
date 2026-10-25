@@ -1,106 +1,21 @@
-//! Drives the real `silt` binary with a scripted stand-in for Claude Code
-//! that writes its transcript where Claude would, fires the hooks and edits
-//! a file inside a tool call.
+//! Drives the real `silt` binary with a scripted stand-in for Claude Code,
+//! `silt-fake-claude`, that writes its transcript where Claude would, fires
+//! the hooks and edits a file inside a tool call: its `short` script, or
+//! `tools` for a session with tools of every kind.
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-const FAKE_CLAUDE: &str = r#"#!/bin/sh
-set -eu
-session=""
-settings=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --session-id) session="$2"; shift 2 ;;
-        --settings) settings="$2"; shift 2 ;;
-        --mcp-config) printf '%s' "$2" > "$CLAUDE_CONFIG_DIR/mcp-config.json"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-slug=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
-dir="$CLAUDE_CONFIG_DIR/projects/$slug"
-mkdir -p "$dir"
-transcript="$dir/$session.jsonl"
-# Like Claude Code, runs the command the settings give for the event, and
-# without settings no hook at all.
-hook() {
-    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
-    [ -n "$settings" ] || return 0
-    [ -n "$command" ] || { echo "no $1 hook in the settings" >&2; exit 8; }
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"toolu_1"}' "$session" "$1" | sh -c "$command"
+/// The stand-in for Claude Code, built beside `silt`.
+fn fake_claude() -> PathBuf {
+    let silt = Path::new(env!("CARGO_BIN_EXE_silt"));
+    let fake = silt.with_file_name(format!("silt-fake-claude{}", std::env::consts::EXE_SUFFIX));
+    assert!(fake.is_file(), "{} isn't built; run `cargo build -p silt-fake-agent`", fake.display());
+    fake
 }
-printf '%s\n' '{"type":"ai-title","aiTitle":"Add a greeting","sessionId":"x"}' >> "$transcript"
-printf '%s\n' '{"type":"user","message":{"role":"user","content":"Please add a farewell line to main"}}' >> "$transcript"
-hook UserPromptSubmit
-sleep "${FAKE_PAUSE:-0}"
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Adding it now."},{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"src/main.rs"}}]}}' >> "$transcript"
-hook PreToolUse
-printf 'fn farewell() {}\n' >> src/main.rs
-hook PostToolUse
-printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"edited","is_error":false}]}}' >> "$transcript"
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: farewell added."}]}}' >> "$transcript"
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Decision: farewell stays in main.rs instead of its own module, to keep the binary single-file."}]}}' >> "$transcript"
-printf '%s\n' '{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}' >> "$transcript"
-printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: farewell was added to main."}}' >> "$transcript"
-hook Stop
-"#;
-
-/// A Claude Code session of two turns with tools of every kind Silt treats
-/// apart, and an edit by hand between the turns.
-const FAKE_CLAUDE_TOOLS: &str = r#"#!/bin/sh
-set -eu
-session=""
-settings=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --session-id) session="$2"; shift 2 ;;
-        --settings) settings="$2"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-dir="$CLAUDE_CONFIG_DIR/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
-mkdir -p "$dir"
-transcript="$dir/$session.jsonl"
-hook() {
-    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"%s","tool_use_id":"%s","tool_input":%s}' \
-        "$session" "$1" "${2:-}" "${3:-}" "${4:-null}" | sh -c "$command"
-}
-say() { printf '%s\n' "$1" >> "$transcript"; }
-prompt() { say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"$1\"}}"; hook UserPromptSubmit; }
-reply() { say "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]}}"; }
-start() {
-    say "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"$1\",\"name\":\"$2\",\"input\":$3}]}}"
-    hook PreToolUse "$2" "$1" "$3"
-}
-finish() {
-    hook PostToolUse "$2" "$1" "$3"
-    say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"$1\",\"content\":\"ok\",\"is_error\":false}]}}"
-}
-
-prompt "Add a farewell and a helper"
-start toolu_1 Edit '{"file_path":"src/main.rs"}'
-printf 'fn farewell() {}\n' >> src/main.rs
-finish toolu_1 Edit '{"file_path":"src/main.rs"}'
-start toolu_2 Read '{"file_path":"src/main.rs"}'
-finish toolu_2 Read '{"file_path":"src/main.rs"}'
-start toolu_3 Bash '{"command":"make helper"}'
-printf 'pub fn help() {}\n' > src/helper.rs
-finish toolu_3 Bash '{"command":"make helper"}'
-reply "Added both."
-hook Stop
-printf '// by hand\n' >> src/helper.rs
-prompt "Now a note"
-start toolu_4 Write '{"file_path":"'"$(pwd)"'/NOTES.md"}'
-printf '# Notes\n' > NOTES.md
-finish toolu_4 Write '{"file_path":"'"$(pwd)"'/NOTES.md"}'
-reply "Noted."
-hook Stop
-"#;
 
 struct Env {
     _dirs: Vec<tempfile::TempDir>,
@@ -108,15 +23,23 @@ struct Env {
     claude_dir: PathBuf,
     repo: PathBuf,
     fake: PathBuf,
+    /// The stand-in's `FAKE_SCRIPT`.
+    script: &'static str,
+    /// For a test's own stand-in.
+    #[cfg_attr(not(unix), expect(dead_code, reason = "only the cloud test, which needs a Unix terminal, writes one"))]
+    bin: PathBuf,
 }
 
 impl Env {
     fn new() -> Self {
-        Self::with_claude(FAKE_CLAUDE)
+        Self::with_claude("short")
     }
 
-    fn with_claude(script: &str) -> Self {
-        let silt_home = tempfile::Builder::new().prefix("silt").tempdir_in("/tmp").expect("temp dir");
+    fn with_claude(script: &'static str) -> Self {
+        // Under `/tmp` on Unix, which keeps the daemon's socket path short.
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("silt");
+        let silt_home = if cfg!(unix) { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("temp dir");
         let claude_dir = tempfile::tempdir().expect("temp dir");
         let repo = tempfile::tempdir().expect("temp dir");
         let bin = tempfile::tempdir().expect("temp dir");
@@ -125,16 +48,23 @@ impl Env {
         fs::write(repo.path().join("src/main.rs"), "fn main() {}\n").expect("write");
         git(repo.path(), &["add", "."]);
         git(repo.path(), &["commit", "-q", "-m", "init"]);
-        let fake = bin.path().join("claude");
-        fs::write(&fake, script).expect("write fake claude");
-        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let repo_path = silt_os::canonicalize(repo.path()).expect("canonical");
         Self {
             silt_home: silt_home.path().to_owned(),
             claude_dir: claude_dir.path().to_owned(),
-            repo: repo.path().canonicalize().expect("canonical"),
-            fake,
+            repo: repo_path,
+            fake: fake_claude(),
+            script,
+            bin: bin.path().to_owned(),
             _dirs: vec![silt_home, claude_dir, repo, bin],
         }
+    }
+
+    /// The stand-in as a test runs it directly.
+    fn claude(&self) -> Command {
+        let mut command = Command::new(&self.fake);
+        command.env("FAKE_SCRIPT", self.script);
+        command
     }
 
     fn silt(&self, args: &[&str]) -> Output {
@@ -154,6 +84,7 @@ impl Env {
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
+            .env("FAKE_SCRIPT", self.script)
             .envs(envs.iter().copied())
             .output()
             .expect("silt runs")
@@ -274,7 +205,7 @@ fn hooks_capturing_in_their_own_process_record_what_the_daemon_would() {
 
 #[test]
 fn the_web_ui_reads_a_diff_a_page_of_files_at_a_time() {
-    let env = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    let env = Env::with_claude("tools");
     env.silt(&["claude"]);
     let thread = env.thread();
     assert!(
@@ -343,15 +274,17 @@ fn projection(env: &Env, envs: &[(&str, &str)]) -> String {
         args.insert(1, &thread);
         printed += &format!("$ silt {}\n{}\n", args.join(" "), env.stdout(&args));
     }
-    printed.replace(&env.repo.to_string_lossy().into_owned(), "<repo>").replace(&thread, "<thread>")
+    let repo = env.repo.to_string_lossy().into_owned();
+    // Paths are also shown as JSON, where Windows' backslashes are doubled.
+    printed.replace(&repo.replace('\\', "\\\\"), "<repo>").replace(&repo, "<repo>").replace(&thread, "<thread>")
 }
 
 #[test]
 fn a_session_recorded_without_the_daemon_projects_as_one_recorded_by_it() {
-    let with_daemon = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    let with_daemon = Env::with_claude("tools");
     with_daemon.silt(&["daemon", "start"]);
     let recorded_by_daemon = projection(&with_daemon, &[]);
-    let without = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    let without = Env::with_claude("tools");
     let recorded_alone = projection(&without, &[("SILT_DAEMONLESS_CAPTURE", "1")]);
 
     assert_eq!(recorded_alone, recorded_by_daemon);
@@ -400,7 +333,7 @@ impl Api {
         let output = command.arg(format!("{}{path}", self.base)).output().expect("curl runs");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = text.rsplit_once('\n').expect("a status line");
-        (status == "200", serde_json::from_str(json).unwrap_or(serde_json::Value::Null))
+        (status == "200", serde_json::from_str(json).unwrap_or_else(|_| serde_json::Value::String(text.clone())))
     }
 
     fn ok(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
@@ -482,6 +415,7 @@ fn browsers_hear_of_new_threads_and_of_changes_to_the_ones_they_watch() {
                 .env("SILT_HOME", home)
                 .env("CLAUDE_CONFIG_DIR", claude_dir)
                 .env("SILT_CLAUDE_BIN", fake)
+                .env("FAKE_SCRIPT", "short")
                 .output()
                 .expect("silt runs")
         });
@@ -515,7 +449,7 @@ fn isolated_sessions_work_in_a_managed_checkout() {
 #[test]
 fn track_attaches_to_a_session_started_without_silt() {
     let env = Env::new();
-    let mut fake = Command::new(&env.fake);
+    let mut fake = env.claude();
     fake.args(["--session-id", "11111111-2222-4333-8444-555555555555"])
         .current_dir(&env.repo)
         .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
@@ -537,7 +471,7 @@ fn track_from_hook_records_the_hooks_session_once() {
     let env = Env::new();
     let session = "11111111-2222-4333-8444-777777777777";
     let ran = output_once_released(
-        Command::new(&env.fake)
+        env.claude()
             .args(["--session-id", session])
             .current_dir(&env.repo)
             .env("CLAUDE_CONFIG_DIR", &env.claude_dir)
@@ -578,14 +512,18 @@ fn track_from_hook_records_the_hooks_session_once() {
 }
 
 /// A `claude` that also plays `--cloud` and `-p --cloud`: it names a cloud
-/// session after a moment and then stays, as the real one does, and takes a
-/// follow-up on stdin.
-fn fake_cloud_claude() -> String {
-    let cloud = r#"#!/bin/sh
+/// session after a moment and then stays, as the real one does, in the
+/// terminal it was started in, and takes a follow-up on stdin. Anything
+/// else is the stand-in's `short` session.
+#[cfg(unix)]
+fn fake_cloud_claude(env: &Env) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let script = format!(
+        r#"#!/bin/sh
 set -eu
-case "${1:-}" in
+case "${{1:-}}" in
     --cloud=*)
-        { printf '%s\n' "$1"; [ -t 0 ] && echo tty; } > "$CLAUDE_CONFIG_DIR/cloud-started"
+        {{ printf '%s\n' "$1"; [ -t 0 ] && echo tty; }} > "$CLAUDE_CONFIG_DIR/cloud-started"
         printf '\033[2J\033[1;1HStarting a cloud session\r\n'
         sleep 0.2
         printf 'Branch topic is not on GitHub; starting from main\r\n'
@@ -595,19 +533,28 @@ case "${1:-}" in
     -p)
         printf '%s\n' "$*" > "$CLAUDE_CONFIG_DIR/cloud-sent"
         cat >> "$CLAUDE_CONFIG_DIR/cloud-sent"
-        echo '{"ok":true,"session_id":"session_01FakeCloud","url":"https://claude.ai/code/session_01FakeCloud"}'
+        echo '{{"ok":true,"session_id":"session_01FakeCloud","url":"https://claude.ai/code/session_01FakeCloud"}}'
         exit 0 ;;
 esac
-"#;
-    format!("{cloud}{}", FAKE_CLAUDE.trim_start_matches("#!/bin/sh\nset -eu\n"))
+FAKE_SCRIPT=short exec '{}' "$@"
+"#,
+        env.fake.display()
+    );
+    let fake = env.bin.join("claude");
+    fs::write(&fake, script).expect("write fake claude");
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+    fake
 }
 
 /// The web UI starts a cloud session through the person's own `claude`,
 /// lists it until the thread recording it arrives, and sends that thread's
 /// session a follow-up.
+// The cloud session runs in a terminal of its own, which is Unix's here.
+#[cfg(unix)]
 #[test]
 fn the_web_ui_starts_and_steers_a_cloud_session_through_claude() {
-    let env = Env::with_claude(&fake_cloud_claude());
+    let mut env = Env::new();
+    env.fake = fake_cloud_claude(&env);
     git(&env.repo, &["remote", "add", "origin", "https://github.com/example/app"]);
     let api = Api::open(&env);
     let started = std::time::Instant::now();
@@ -834,7 +781,7 @@ fn a_commit_is_found_with_the_thread_and_turn_that_made_it() {
 
 #[test]
 fn commits_get_silts_note_and_blame_reads_the_log_or_the_notes() {
-    let env = Env::with_claude(FAKE_CLAUDE_TOOLS);
+    let env = Env::with_claude("tools");
     git(&env.repo, &["config", "silt.notes", "local"]);
     env.silt(&["claude"]);
     let thread = env.thread();

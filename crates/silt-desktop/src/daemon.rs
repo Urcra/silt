@@ -15,6 +15,8 @@ use tauri::Url;
 pub enum DesktopError {
     #[error("Silt's command line isn't installed; install `silt`, or set SILT_BIN to it")]
     NoSilt,
+    #[error("Silt isn't installed in the WSL distribution {0}; install it there, then pick it again")]
+    NoSiltIn(String),
     #[error("could not run {0}")]
     Run(String),
     #[error("{0}")]
@@ -31,7 +33,7 @@ pub fn silt_program(silt_bin: Option<OsString>, app_exe: Option<&Path>, is_file:
     }
     app_exe
         .and_then(Path::parent)
-        .map(|dir| dir.join("silt"))
+        .map(|dir| dir.join(if cfg!(windows) { "silt.exe" } else { "silt" }))
         .filter(|beside| is_file(beside))
         .unwrap_or_else(|| PathBuf::from("silt"))
 }
@@ -48,28 +50,40 @@ pub fn web_url(stdout: &str) -> Result<Url, DesktopError> {
     if local && token { Ok(url) } else { Err(not_the_ui()) }
 }
 
-/// Attaches to the daemon, starting it if none runs, and returns its web
-/// UI's address. The daemon runs in its own process group, so it outlives
-/// this app.
-pub fn open_web(program: &Path) -> Result<Url, Exn<DesktopError>> {
-    let shown = program.display().to_string();
-    let output = Command::new(program)
-        .args(["open", "--no-browser"])
-        // Not a clone of any repository, whatever directory the app
-        // started in.
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| match error.kind() {
-            io::ErrorKind::NotFound => Exn::new(DesktopError::NoSilt),
-            _ => Exn::from(error).raise(DesktopError::Run(shown.clone())),
-        })?;
+/// Runs `command`, which attaches to a daemon, starting it if none runs,
+/// and returns its web UI's address. The daemon runs in its own process
+/// group, so it outlives this app.
+pub fn open_web(mut command: Command) -> Result<Url, Exn<DesktopError>> {
+    let shown = command.get_program().to_string_lossy().into_owned();
+    hide_console(&mut command);
+    let output = command.stdin(Stdio::null()).output().map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => Exn::new(DesktopError::NoSilt),
+        _ => Exn::from(error).raise(DesktopError::Run(shown.clone())),
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let reason = stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it failed");
         return Err(Exn::new(DesktopError::Silt(reason.strip_prefix("silt: ").unwrap_or(reason).to_owned())));
     }
     web_url(&String::from_utf8_lossy(&output.stdout)).or_raise(|| DesktopError::Run(shown))
+}
+
+/// A window app's console programs would each open a console window.
+fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::os::windows::process::CommandExt::creation_flags(command, CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// Runs `command` quietly and returns what it printed, if it succeeded.
+pub fn output_of(mut command: Command) -> Option<Vec<u8>> {
+    hide_console(&mut command);
+    let output = command.stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    output.status.success().then_some(output.stdout)
 }
 
 /// What a look at the UI found.
@@ -175,7 +189,8 @@ mod tests {
         let everywhere = |_: &Path| true;
         let nowhere = |_: &Path| false;
         assert_eq!(silt_program(Some("/x/silt".into()), Some(app), everywhere), PathBuf::from("/x/silt"));
-        assert_eq!(silt_program(Some("".into()), Some(app), everywhere), PathBuf::from("/opt/silt/silt"));
+        let beside = if cfg!(windows) { "/opt/silt/silt.exe" } else { "/opt/silt/silt" };
+        assert_eq!(silt_program(Some("".into()), Some(app), everywhere), PathBuf::from(beside));
         assert_eq!(silt_program(None, Some(app), nowhere), PathBuf::from("silt"));
         assert_eq!(silt_program(None, None, everywhere), PathBuf::from("silt"));
     }
@@ -281,7 +296,7 @@ mod tests {
 
     #[test]
     fn a_missing_silt_says_how_to_get_one() {
-        let error = open_web(Path::new("/nonexistent/silt")).expect_err("no silt there");
+        let error = open_web(Command::new("/nonexistent/silt")).expect_err("no silt there");
         assert!(matches!(error.frame().error().downcast_ref::<DesktopError>(), Some(DesktopError::NoSilt)));
     }
 }

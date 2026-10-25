@@ -1,94 +1,40 @@
 //! Real processes for multi-machine tests: a Silt server, and machines
 //! with their own Silt and Claude Code homes, a clone and a scripted
-//! stand-in for Claude Code.
+//! stand-ins for the agent CLIs, `silt-fake-agent`'s programs, which run everywhere.
 #![allow(dead_code, reason = "each test file uses part of the harness")]
 
 use std::fs;
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-pub mod fakes;
+/// The stand-in for an agent CLI, `silt-fake-<agent>`, built beside `silt`
+/// by `cargo build` or `cargo test` of the workspace.
+pub fn fake_agent(agent: &str) -> PathBuf {
+    let silt = Path::new(env!("CARGO_BIN_EXE_silt"));
+    let fake = silt.with_file_name(format!("silt-fake-{agent}{}", std::env::consts::EXE_SUFFIX));
+    assert!(fake.is_file(), "{} isn't built; run `cargo build -p silt-fake-agent`", fake.display());
+    fake
+}
 
-/// Records a first session, or on `--resume` checks that the restored
-/// transcript is where Claude looks for it and points at this directory.
-pub const FAKE_CLAUDE: &str = r#"#!/bin/sh
-set -eu
-session=""
-resume=""
-settings=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --session-id) session="$2"; shift 2 ;;
-        --resume) session="$2"; resume=1; shift 2 ;;
-        --settings) settings="$2"; shift 2 ;;
-        --append-system-prompt) printf '%s' "$2" > "$FAKE_LOG_DIR/claude-instructions"; shift 2 ;;
-        --plugin-dir) ls "$2/skills" > "$FAKE_LOG_DIR/claude-skills"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-slug=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
-dir="$CLAUDE_CONFIG_DIR/projects/$slug"
-transcript="$dir/$session.jsonl"
-# Like Claude Code, runs the command the settings give for the event, and
-# without settings no hook at all.
-hook() {
-    command=$(printf '%s' "$settings" | sed -n "s/.*\"$1\":\[[^]]*\"command\":\"\([^\"]*\)\".*/\1/p")
-    [ -n "$settings" ] || return 0
-    [ -n "$command" ] || { echo "no $1 hook in the settings" >&2; exit 8; }
-    printf '{"session_id":"%s","hook_event_name":"%s","tool_name":"Edit","tool_use_id":"%s","tool_input":{"file_path":"%s/src/main.rs"}}' "$session" "$1" "$2" "$(pwd)" | sh -c "$command"
+pub fn fake_claude() -> PathBuf {
+    fake_agent("claude")
 }
-say() {
-    printf '%s\n' "$1" >> "$transcript"
+
+/// `path` with links resolved, as a shell's `pwd` names it: on Windows
+/// without the `\\?\` prefix `canonicalize` adds, which agents never see.
+pub fn canonical(path: &Path) -> PathBuf {
+    silt_os::canonicalize(path).expect("canonical")
 }
-# Lets a test act while the tool runs: says so, then waits to be let go.
-in_tool() {
-    [ -n "${FAKE_IN_TOOL:-}" ] || return 0
-    touch "$FAKE_IN_TOOL"
-    while [ ! -e "$FAKE_IN_TOOL.go" ]; do sleep 0.05; done
+
+/// A directory for one test's machines: under `/tmp` on Unix, which keeps
+/// the daemons' socket paths short enough, else where the system says.
+pub fn temp_root(prefix: &str) -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    if cfg!(unix) { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("temp dir")
 }
-if [ -n "$resume" ]; then
-    grep -q "\"cwd\":\"$(pwd)\"" "$transcript" || { echo "transcript not restored for $(pwd)" >&2; exit 3; }
-    grep -q "Please add a farewell line" "$transcript" || { echo "conversation missing" >&2; exit 3; }
-    if [ -z "${FAKE_TRANSLATED:-}" ]; then
-        saved=$(sed -n 's/.*saved to \([^"]*\)".*/\1/p' "$transcript" | head -n 1)
-        [ "$saved" = "$dir/$session/tool-results/t1.txt" ] || { echo "tool result path not rewritten: $saved" >&2; exit 4; }
-        grep -q "big output" "$saved" || { echo "tool result missing" >&2; exit 4; }
-    fi
-    grep -q "\"sessionId\":\"$session\"" "$transcript" || { echo "session id not rewritten" >&2; exit 5; }
-    for needle in ${FAKE_EXPECT:-}; do
-        needle=$(printf '%s' "$needle" | tr '-' ' ')
-        grep -q "$needle" "$transcript" || { echo "transcript lacks $needle" >&2; cat "$transcript" >&2; exit 6; }
-    done
-    printf '%s' "$session" > "$CLAUDE_CONFIG_DIR/last-session"
-    say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"${FAKE_SAY:-Continuing at home: add a home line}\"}}"
-    hook UserPromptSubmit toolu_2 > "$CLAUDE_CONFIG_DIR/last-hook-output"
-    say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"file_path":"src/main.rs"}}]}}'
-    hook PreToolUse toolu_2
-    in_tool
-    printf '%s\n' "${FAKE_LINE:-fn home() {\}}" >> src/main.rs
-    hook PostToolUse toolu_2
-    say '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"edited","is_error":false}]}}'
-    hook Stop toolu_2
-    exit 0
-fi
-mkdir -p "$dir"
-say '{"type":"ai-title","aiTitle":"Add a farewell","sessionId":"x"}'
-say "{\"type\":\"user\",\"cwd\":\"$(pwd)\",\"sessionId\":\"$session\",\"message\":{\"role\":\"user\",\"content\":\"Please add a farewell line to main\"}}"
-hook UserPromptSubmit toolu_1
-say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"src/main.rs"}}]}}'
-hook PreToolUse toolu_1
-in_tool
-printf 'fn farewell() {}\n' >> src/main.rs
-hook PostToolUse toolu_1
-mkdir -p "$dir/$session/tool-results"
-printf 'big output\n' > "$dir/$session/tool-results/t1.txt"
-say "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"saved to $dir/$session/tool-results/t1.txt\"}]}}"
-say '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: farewell added. I used ghp_abcdefghijklmnopqrstuvwxyz0123 to fetch it."}]}}'
-hook Stop toolu_1
-"#;
 
 pub const WAIT: Duration = Duration::from_secs(30);
 
@@ -248,24 +194,19 @@ impl Machine {
         let silt_home = home.join("silt");
         let claude_dir = home.join("claude");
         fs::create_dir_all(&claude_dir).expect("mkdir");
-        git(root, &["clone", "-q", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
-        let fake = home.join("claude-bin");
-        fs::write(&fake, FAKE_CLAUDE).expect("write fake claude");
-        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+        // Git for Windows turns `core.autocrlf` on; off, in the clone and in
+        // the clones Silt makes, files have the same bytes everywhere and
+        // the tests compare them as they are.
+        fs::create_dir_all(&home).expect("mkdir");
+        fs::write(home.join(".gitconfig"), "[core]\n\tautocrlf = false\n").expect("git config");
+        git(root, &["clone", "-q", "-c", "core.autocrlf=false", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
+        let fake = fake_claude();
         let agents = home.join("agents");
-        for (name, script) in [
-            ("codex", fakes::FAKE_CODEX),
-            ("gemini", fakes::FAKE_GEMINI),
-            ("copilot", fakes::FAKE_COPILOT),
-            ("opencode", fakes::FAKE_OPENCODE),
-        ] {
+        for name in ["codex", "gemini", "copilot", "opencode"] {
             fs::create_dir_all(agents.join(name)).expect("mkdir");
-            let bin = agents.join(format!("{name}-bin"));
-            fs::write(&bin, script).expect("write fake agent");
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         fs::create_dir_all(agents.join("logs")).expect("mkdir");
-        let machine = Self { silt_home, claude_dir, repo: home.join("repo").canonicalize().expect("canonical"), fake, agents };
+        let machine = Self { silt_home, claude_dir, repo: canonical(&home.join("repo")), fake, agents };
         let code = server.pairing_code_for(user);
         machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
         machine
@@ -288,10 +229,10 @@ impl Machine {
             .env("SILT_HOME", &self.silt_home)
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
-            .env("SILT_CODEX_BIN", self.agents.join("codex-bin"))
-            .env("SILT_GEMINI_BIN", self.agents.join("gemini-bin"))
-            .env("SILT_COPILOT_BIN", self.agents.join("copilot-bin"))
-            .env("SILT_OPENCODE_BIN", self.agents.join("opencode-bin"))
+            .env("SILT_CODEX_BIN", fake_agent("codex"))
+            .env("SILT_GEMINI_BIN", fake_agent("gemini"))
+            .env("SILT_COPILOT_BIN", fake_agent("copilot"))
+            .env("SILT_OPENCODE_BIN", fake_agent("opencode"))
             .env("CODEX_HOME", self.agents.join("codex"))
             .env("GEMINI_CLI_HOME", self.agents.join("gemini"))
             .env("COPILOT_HOME", self.agents.join("copilot"))
@@ -310,11 +251,19 @@ impl Machine {
         let output = self.run_with(args, envs);
         assert!(
             output.status.success(),
-            "silt {args:?} failed: {}{}",
+            "silt {args:?} failed: {}{}\ndaemon.log:\n{}",
             String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&output.stderr),
+            self.daemon_log()
         );
         output
+    }
+
+    /// The end of this machine's daemon log, to show why a command failed.
+    pub fn daemon_log(&self) -> String {
+        let log = fs::read_to_string(self.silt_home.join("daemon.log")).unwrap_or_default();
+        let lines: Vec<&str> = log.lines().collect();
+        lines[lines.len().saturating_sub(40)..].join("\n")
     }
 
     /// Output of a command that may fail for now, for polling.
@@ -346,7 +295,7 @@ impl Machine {
         let output = command.arg(format!("{base}{path}")).output().expect("curl runs");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = text.rsplit_once('\n').expect("a status line");
-        assert_eq!(status, "200", "{method} {path}: {json}");
+        assert_eq!(status, "200", "{method} {path}: {json}\ndaemon.log:\n{}", self.daemon_log());
         serde_json::from_str(json).unwrap_or(serde_json::Value::Null)
     }
 }

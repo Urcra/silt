@@ -17,6 +17,7 @@ export const keys = {
   history: (id: string) => ['thread', id, 'history'] as const,
   turns: (id: string) => ['thread', id, 'turns'] as const,
   commits: (id: string) => ['thread', id, 'commits'] as const,
+  unwritten: (id: string) => ['thread', id, 'unwritten'] as const,
   fileAt: (id: string, path: string, at: string | undefined) => ['thread', id, 'file', path, at ?? 'head'] as const,
   graph: (query: object) => ['graph', query] as const,
   comments: (id: string) => ['thread', id, 'comments'] as const,

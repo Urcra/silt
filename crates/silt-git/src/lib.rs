@@ -81,7 +81,7 @@ impl Repo {
         let not_a_repo = || GitError::NotARepository { path: path.to_owned() };
         let repo = gix::discover(path).map_err(|_| not_a_repo())?;
         let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
-        let root = root.canonicalize().unwrap_or(root);
+        let root = silt_os::canonicalize(&root).unwrap_or(root);
         Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None), untracked: std::cell::RefCell::default() })
     }
 
@@ -386,7 +386,15 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result
 /// Settings for every git command Silt runs. A checkout holds other
 /// people's and agents' work, and git would run hooks and an fsmonitor
 /// named in its config; Silt's own git commands run neither (ADR 0016).
-const HARDENED: [&str; 4] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+#[cfg(not(windows))]
+const HARDENED: &[&str] = &["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
+/// On Windows `/dev/null` would be a directory on the current drive, which
+/// anyone could make; `NUL` can't be a directory. Paths past 260
+/// characters, which deep `node_modules` reach, need `core.longpaths`
+/// (ADR 0045).
+#[cfg(windows)]
+const HARDENED: &[&str] = &["-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true"];
 
 pub(crate) fn run_git_with(
     dir: &Path,

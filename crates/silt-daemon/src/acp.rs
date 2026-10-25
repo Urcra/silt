@@ -1051,7 +1051,7 @@ pub(crate) fn decode(attachments: Vec<PromptAttachment>) -> Result<Vec<Attachmen
 /// browser called it.
 fn attachment_name(hash: &str, name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let safe: String = base.chars().map(|c| if c.is_control() { '_' } else { c }).collect();
+    let safe: String = base.chars().map(|c| if c.is_control() || c == ':' { '_' } else { c }).collect();
     let safe = if safe.is_empty() || safe == "." || safe == ".." { "file".to_owned() } else { safe };
     format!("prompt/{}/{safe}", &hash[..hash.len().min(12)])
 }
@@ -1170,6 +1170,7 @@ mod tests {
         assert_eq!(attachment_name(hash, ".."), "prompt/0123456789ab/file");
         assert_eq!(attachment_name(hash, "a/"), "prompt/0123456789ab/file");
         assert_eq!(attachment_name(hash, "line\nbreak"), "prompt/0123456789ab/line_break");
+        assert_eq!(attachment_name(hash, "C:notes.txt"), "prompt/0123456789ab/C_notes.txt");
         assert!(silt_agents::is_side_file_name(&attachment_name(hash, "dir/.")));
     }
 

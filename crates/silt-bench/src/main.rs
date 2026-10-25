@@ -76,7 +76,7 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     let bin = here.parent().expect("in a directory");
     let silt = cli.silt.clone().unwrap_or_else(|| bin.join("silt"));
     // Absolute, as the daemon is started from `/`.
-    let Ok(silt) = silt.canonicalize() else {
+    let Ok(silt) = silt_os::canonicalize(&silt) else {
         return Err(fail(format!(
             "no silt binary at {}; build it with `cargo build --profile perf -p silt-cli`",
             silt.display()

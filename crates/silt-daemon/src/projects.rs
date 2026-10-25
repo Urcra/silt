@@ -90,7 +90,14 @@ impl Core {
         check_clone_target(url, path)?;
         let (url, path, events) = (url.to_owned(), path.to_owned(), self.events.clone());
         Ok(async move {
-            let output = tokio::process::Command::new("git").args(["clone", "--quiet", "--", &url]).arg(&path).output().await?;
+            // Deep trees pass Windows' 260 characters (ADR 0045).
+            let long_paths: &[&str] = if cfg!(windows) { &["-c", "core.longpaths=true"] } else { &[] };
+            let output = tokio::process::Command::new("git")
+                .args(long_paths)
+                .args(["clone", "--quiet", "--", &url])
+                .arg(&path)
+                .output()
+                .await?;
             if !output.status.success() {
                 return Err(CoreError::Invalid(format!(
                     "git could not clone {url}: {}",

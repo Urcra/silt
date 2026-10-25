@@ -4,7 +4,6 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 
 use common::{Machine, Server, checkout_from, eventually, git, origin, thread_of};
 
@@ -18,14 +17,14 @@ struct World {
 const PREPARE: &str = "#!/bin/sh\necho \"prepared $SILT_THREAD\" >> node_modules/prepare.log\necho prepare-ran\n";
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-conv").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-conv");
     let origin = origin(root.path());
     let seed = root.path().join("seed");
     fs::create_dir_all(seed.join(".agents")).expect("mkdir");
     fs::write(seed.join(".gitignore"), "node_modules/\n").expect("write");
     fs::write(seed.join(".agents/linked"), "# dependencies\nnode_modules\n").expect("write");
     fs::write(seed.join(".agents/prepare"), PREPARE).expect("write");
-    fs::set_permissions(seed.join(".agents/prepare"), fs::Permissions::from_mode(0o755)).expect("chmod");
+    silt_os::make_executable(&seed.join(".agents/prepare")).expect("chmod");
     git(&seed, &["add", "."]);
     git(&seed, &["commit", "-q", "-m", "conventions"]);
     git(&seed, &["push", "-q", &origin.to_string_lossy(), "main"]);
@@ -57,7 +56,7 @@ fn managed_checkouts_link_shared_paths_and_run_prepare() {
     );
     assert!(fs::symlink_metadata(checkout.join("node_modules")).expect("linked").is_symlink());
     assert_eq!(fs::read_to_string(checkout.join("node_modules/dep/index.js")).expect("seeded from the clone"), "installed\n");
-    assert!(String::from_utf8_lossy(&started.stdout).contains("prepare-ran"));
+    assert!(String::from_utf8_lossy(&started.stdout).contains("prepare-ran"), "{stderr}");
     let log = fs::read_to_string(checkout.join("node_modules/prepare.log")).expect("prepare ran");
     assert!(log.starts_with("prepared "), "{log}");
     assert!(
@@ -93,7 +92,9 @@ fn a_prepare_script_changed_by_someone_else_needs_approval() {
     let checkout = checkout_from(&resumed.stderr);
     assert_eq!(fs::read_to_string(checkout.join(".agents/prepare")).expect("synced"), changed);
     assert!(!String::from_utf8_lossy(&resumed.stdout).contains("changed-prepare-ran"), "it ran without approval");
-    assert!(String::from_utf8_lossy(&resumed.stderr).contains("not running .agents/prepare"));
+    let script = std::path::Path::new(".agents").join("prepare");
+    let stderr = String::from_utf8_lossy(&resumed.stderr);
+    assert!(stderr.contains(&format!("not running {}", script.display())), "{stderr}");
 }
 
 fn git_status(dir: &std::path::Path) -> String {
@@ -103,7 +104,7 @@ fn git_status(dir: &std::path::Path) -> String {
 
 #[test]
 fn skills_and_rules_reach_every_agent() {
-    let root = tempfile::Builder::new().prefix("silt-skills").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-skills");
     let origin = origin(root.path());
     let seed = root.path().join("seed");
     fs::create_dir_all(seed.join(".agents/skills/review")).expect("mkdir");

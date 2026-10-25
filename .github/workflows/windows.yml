@@ -1,0 +1,185 @@
+# Windows comes before macOS (ADR 0045): clippy and the tests on GitHub's
+# Windows runners, for the workspace and the desktop app, install.ps1, the
+# desktop installer, a WSL distribution beside the native silt, and an
+# aarch64 build.
+name: windows
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+# Windows minutes are dear: a push to a pull request cancels the run it
+# replaces. Another label than `windows-full` starts a run of its own, whose
+# jobs all skip, so it cancels nothing.
+concurrency:
+  group: windows-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'windows-full' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+# On a pull request, the WSL handoff, the desktop installer and the aarch64
+# build wait for its `windows-full` label; on main and by hand, everything
+# runs.
+env:
+  FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full') }}
+
+jobs:
+  check:
+    if: github.event.action != 'labeled' || github.event.label.name == 'windows-full'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      # The tests don't need the web UI, and building it needs wasm-bindgen.
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace --exclude silt-cli --no-fail-fast
+
+      # One at a time, each failure printed as it happens: a test that hangs
+      # is the last one named, and the timeout still shows the ones before.
+      - name: CLI tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          cargo build --locked -p silt-fake-agent
+          cargo test --locked -p silt-cli --no-fail-fast -- --nocapture --test-threads=1
+
+      # install.ps1 against a release made of this build, as a tag would.
+      - name: install.ps1
+        shell: pwsh
+        run: |
+          cargo build --locked -p silt-cli
+          $release = Join-Path $env:RUNNER_TEMP 'release'
+          New-Item -ItemType Directory $release | Out-Null
+          Compress-Archive -Path target/debug/silt.exe -DestinationPath "$release/silt-x86_64-pc-windows-msvc.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "$release/silt-x86_64-pc-windows-msvc.zip").Hash.ToLowerInvariant()
+          Set-Content "$release/SHA256SUMS" "$hash  silt-x86_64-pc-windows-msvc.zip"
+          $env:SILT_DOWNLOAD_URL = ([System.Uri] $release).AbsoluteUri
+          $env:SILT_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'bin'
+          ./scripts/install.ps1
+          & "$env:SILT_INSTALL_DIR/silt.exe" --version
+
+      - name: Desktop app
+        working-directory: crates/silt-desktop
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+      # The installer as a release makes it, unsigned, with this build's
+      # silt.exe beside the app.
+      - uses: actions/setup-node@v4
+        if: env.FULL == 'true'
+        with:
+          node-version: 22
+      - name: Desktop installer
+        if: env.FULL == 'true'
+        working-directory: crates/silt-desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force binaries | Out-Null
+          Copy-Item ../../target/debug/silt.exe binaries/silt-x86_64-pc-windows-msvc.exe
+          npx --yes @tauri-apps/cli@2.12.4 build --debug --config tauri.release.conf.json --bundles nsis
+          Get-ChildItem target/debug/bundle/nsis/*.exe
+
+  # The Linux `silt` a WSL distribution runs in the `wsl` job.
+  linux-binaries:
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full')) && (github.event.action != 'labeled' || github.event.label.name == 'windows-full')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2.9.3
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            target/debug/silt
+            target/debug/silt-fake-claude
+
+  # A WSL distribution beside the native `silt` (ADR 0045): WSL 1, as
+  # GitHub's runners can't run WSL 2, which shares Windows' loopback as WSL
+  # 2's mirrored mode does. A thread goes from Windows to the distribution
+  # and another back, and the desktop app starts both backends.
+  wsl:
+    needs: linux-binaries
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: git
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: linux-binaries
+      - name: silt in the distribution
+        shell: bash
+        run: |
+          MSYS2_ARG_CONV_EXCL='*' wsl.exe -d Ubuntu-24.04 --exec sh -c \
+            'install -m 755 "$(wslpath -u "$1")"/silt "$(wslpath -u "$1")"/silt-fake-claude /usr/local/bin/ && silt --version' \
+            _ "$(cygpath -w linux-binaries)"
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - name: Handoff
+        shell: bash
+        run: SILT=target/debug/silt.exe FAKE_CLAUDE=target/debug/silt-fake-claude.exe scripts/wsl-handoff.sh Ubuntu-24.04
+      - name: Desktop backends
+        working-directory: crates/silt-desktop
+        shell: bash
+        run: |
+          export SILT_TEST_WSL=Ubuntu-24.04 SILT_BIN="$(cygpath -w ../../target/debug/silt.exe)" SILT_HOME="$(cygpath -w "$RUNNER_TEMP/silt-home")"
+          cargo test --locked the_native_and_a_distribution_backend_start -- --nocapture
+
+  # Release builds include aarch64; this keeps it building between tags.
+  arm64:
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'windows-full')) && (github.event.action != 'labeled' || github.event.label.name == 'windows-full')
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.3
+      - name: Build
+        run: cargo build --locked -p silt-cli
+      - name: Runs
+        run: target/debug/silt.exe --version

@@ -75,20 +75,19 @@ fn spawn_daemon() -> Result<(), Exn<CliError>> {
         .or_raise(|| CliError("cannot open the daemon log".into()))?;
     let log_err = log.try_clone().or_raise(|| CliError("cannot open the daemon log".into()))?;
     let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
-    {
-        use std::os::unix::process::CommandExt;
-        // The daemon outlives this command: it starts from `/`, not from
-        // wherever this ran.
+    // The daemon outlives this command: it starts from `/`, not from
+    // wherever this ran. On Windows it gets no handles, and writes its log
+    // itself.
+    silt_os::spawn_detached(
         Command::new(exe)
             .args(["daemon", "run"])
+            .env(DAEMON_LOG, paths::log_path())
             .current_dir("/")
             .stdin(Stdio::null())
             .stdout(log)
-            .stderr(log_err)
-            .process_group(0)
-            .spawn()
-            .or_raise(|| CliError("cannot start the Silt daemon".into()))?;
-    }
+            .stderr(log_err),
+    )
+    .or_raise(|| CliError("cannot start the Silt daemon".into()))?;
     Ok(())
 }
 
@@ -138,16 +137,44 @@ fn wait_for_busy_daemon() -> Result<Waited, Exn<CliError>> {
     Err(fail(format!("the Silt daemon runs but does not answer; see {}", paths::log_path().display())))
 }
 
+/// Set for a daemon started in the background: where it logs when it has
+/// no stderr of its own.
+const DAEMON_LOG: &str = "SILT_DAEMON_LOG";
+
 pub fn daemon_run() -> Result<(), Exn<CliError>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()))
-        .with_writer(io::stderr)
-        .init();
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
-    runtime
-        .block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path()))
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("SILT_LOG").unwrap_or_else(|_| "info".into()));
+    let log = env::var_os(DAEMON_LOG)
+        .filter(|_| cfg!(windows))
+        .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok());
+    match log {
+        Some(log) => subscriber.with_ansi(false).with_writer(std::sync::Mutex::new(log)).init(),
+        None => subscriber.with_writer(io::stderr).init(),
+    }
+    // Panics go to the log too, which on Windows is all the daemon has.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("{info}");
+        report(info);
+    }));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(DAEMON_STACK)
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    // Requests are handled on the thread that runs the event loop, and
+    // Windows gives a main thread 1 MiB.
+    std::thread::Builder::new()
+        .name("silt-daemon".into())
+        .stack_size(DAEMON_STACK)
+        .spawn(move || runtime.block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path())))
+        .or_raise(|| CliError("cannot start the Silt daemon's thread".into()))?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
         .or_raise(|| CliError("the Silt daemon failed".into()))
 }
+
+const DAEMON_STACK: usize = 8 << 20;
 
 pub fn daemon_stop() -> Result<(), Exn<CliError>> {
     if !is_running() && silt_daemon::holds_lock(&paths::data_dir()) {
@@ -249,8 +276,8 @@ fn daemonless_capture() -> bool {
 /// Exits as the agent did: with its code, or 128 + the signal that ended it,
 /// as a shell would report.
 fn exit_like(status: std::process::ExitStatus) -> Result<(), Exn<CliError>> {
-    use std::os::unix::process::ExitStatusExt as _;
-    if let Some(signal) = status.signal() {
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
         std::process::exit(128 + signal);
     }
     if !status.success() {
@@ -289,7 +316,7 @@ impl Run<'_> {
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
         let _scratch = Scratch(scratch.clone());
-        let home = env::var_os("HOME").map(PathBuf::from);
+        let home = silt_os::home_dir();
         let native = self.agent.native();
         let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
         let rules = agent_conventions::discover_rules(self.checkout, self.cwd, home.as_deref());
@@ -307,6 +334,7 @@ impl Run<'_> {
                 ],
             },
             hook_command: format!("{} hook", silt_agents::shell_quote(&exe.to_string_lossy())),
+            hook_program: exe.clone(),
             instructions: agent_conventions::session_instructions(&rules, &skills, native, self.checkout),
             skills: agent_conventions::skills_to_give(&skills, native, self.checkout)
                 .into_iter()
@@ -503,7 +531,7 @@ pub fn auth_status() -> Result<(), Exn<CliError>> {
 pub fn track(agent: &str, session: Option<&str>) -> Result<(), Exn<CliError>> {
     let agent = find_agent(agent)?;
     let cwd = current_dir()?;
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let cwd = silt_os::canonicalize(&cwd).unwrap_or(cwd);
     let id = match session {
         Some(id) => id.to_owned(),
         None => {
@@ -596,7 +624,7 @@ pub fn track_from_hook(agent: &str) -> Result<(), Exn<CliError>> {
         return Err(fail("the hook input names no session_id and cwd"));
     };
     let cwd = PathBuf::from(cwd);
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let cwd = silt_os::canonicalize(&cwd).unwrap_or(cwd);
     // Claude Code sets it in a cloud session's container (ADR 0040).
     let cloud = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID").ok().and_then(|id| id.parse().ok());
     let thread = start_tracking(agent, cwd, id.to_owned(), cloud)?;
@@ -926,10 +954,25 @@ pub fn blame(file: &str, notes_only: bool) -> Result<(), Exn<CliError>> {
 }
 
 pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
+    let cwd = env::current_dir().ok();
+    // `--no-browser` is how the app itself asks, so it never opens the app.
+    if cfg!(windows)
+        && let Some(cwd) = &cwd
+        && silt_os::wsl_path(&cwd.to_string_lossy()).is_some()
+    {
+        if !no_browser && crate::desktop::open_wsl_folder(cwd) {
+            return Ok(());
+        }
+        return crate::desktop::refuse_wsl_folder(cwd).map_err(fail);
+    }
     ensure_daemon()?;
+    if !no_browser && cwd.as_deref().is_some_and(crate::desktop::open_from_wsl) {
+        eprintln!("silt: opened in the Silt app on Windows");
+        return Ok(());
+    }
     // A browser's arguments are visible to other users, so it gets an
     // address that works once rather than one with the lasting token.
-    let url: String = call(&Request::OpenWeb { cwd: env::current_dir().ok(), once: !no_browser })?;
+    let url: String = call(&Request::OpenWeb { cwd, once: !no_browser })?;
     println!("{url}");
     if !no_browser && !open_in_browser(&url) {
         eprintln!("silt: could not open a browser; open the address above within a minute");
@@ -941,9 +984,18 @@ pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
 /// browser from WSL. `open` is only tried on macOS: elsewhere it can be
 /// another program entirely, such as Debian's `openvt`.
 pub fn open_in_browser(url: &str) -> bool {
-    let openers: &[&str] = if cfg!(target_os = "macos") { &["open"] } else { &["xdg-open", "wslview"] };
+    // rundll32 hands the address to Windows' default browser without cmd,
+    // which would split it at its `&`.
+    let openers: &[&[&str]] = if cfg!(windows) {
+        &[&["rundll32", "url.dll,FileProtocolHandler"]]
+    } else if cfg!(target_os = "macos") {
+        &[&["open"]]
+    } else {
+        &[&["xdg-open"], &["wslview"]]
+    };
     openers.iter().any(|opener| {
-        Command::new(opener)
+        Command::new(opener[0])
+            .args(&opener[1..])
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

@@ -60,6 +60,8 @@ fn platform() -> Option<&'static str> {
         ("linux", "x86_64") => Some("linux-x86_64"),
         ("macos", "aarch64") => Some("darwin-aarch64"),
         ("macos", "x86_64") => Some("darwin-x86_64"),
+        ("windows", "aarch64") => Some("windows-aarch64"),
+        ("windows", "x86_64") => Some("windows-x86_64"),
         _ => None,
     }
 }
@@ -147,12 +149,22 @@ impl Distributions {
         }
         let mut binary = self.binary;
         match platform().and_then(|platform| binary.remove(platform)) {
-            Some(build) => {
-                Distribution::Binary { archive: build.archive, cmd: build.cmd, args: build.args, sha256: build.sha256 }
-            }
+            Some(build) => Distribution::Binary {
+                archive: build.archive,
+                cmd: in_archive(&build.cmd),
+                args: build.args,
+                sha256: build.sha256,
+            },
             None => Distribution::Unavailable,
         }
     }
+}
+
+/// A registry command as a path inside the unpacked archive: entries write
+/// `./goose`, and Windows ones `./goose-package\\goose.exe`.
+fn in_archive(cmd: &str) -> String {
+    let cmd = cmd.replace('\\', "/");
+    cmd.strip_prefix("./").map_or_else(|| cmd.clone(), str::to_owned)
 }
 
 /// The agents in a registry document.
@@ -246,12 +258,42 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
             text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
         })
         .unwrap_or_default();
+    // What Windows programs can't start without, or find nothing without.
+    const WINDOWS: [&str; 22] = [
+        "SystemRoot",
+        "SystemDrive",
+        "windir",
+        "ComSpec",
+        "PATHEXT",
+        "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
+        "PUBLIC",
+        "OS",
+        "PROCESSOR_ARCHITECTURE",
+        "NUMBER_OF_PROCESSORS",
+    ];
+    // Windows' variable names ignore case: its `PATH` is usually `Path`.
+    let named = |names: &[&str], name: &str| {
+        names.iter().any(|listed| if cfg!(windows) { listed.eq_ignore_ascii_case(name) } else { *listed == name })
+    };
     std::env::vars_os()
         .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
-            TOOLS.contains(&name.as_str())
+            named(&TOOLS, name)
+                || (cfg!(windows) && named(&WINDOWS, name))
                 || name.starts_with("LC_")
-                || SHARED.contains(&name.as_str())
+                || named(&SHARED, name)
                 || name.starts_with("XDG_")
                 || vendor.iter().any(|prefix| name.starts_with(prefix))
                 || listed.contains(name)
@@ -344,14 +386,7 @@ fn downloaded(agent: &AgentInfo, data_dir: &Path) -> bool {
 
 /// Whether `program` names an executable, directly or on `path`.
 fn resolves(program: &str, path: &std::ffi::OsStr) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    let executable = |candidate: &Path| {
-        candidate.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    };
-    if program.contains('/') {
-        return executable(Path::new(program));
-    }
-    !program.is_empty() && std::env::split_paths(path).any(|dir| executable(&dir.join(program)))
+    silt_os::find_program(program, path).is_some()
 }
 
 /// The text at `url`, or none when it can't be had; the bundled snapshot
@@ -467,8 +502,11 @@ async fn stage(archive: &str, cmd: &str, sha256: Option<&str>, staging: &Path, u
         command.current_dir(unpacked);
         command
     };
-    let unpacked_ok = if name.ends_with(".zip") {
+    // Windows has no `unzip`, but its `tar` reads zips.
+    let unpacked_ok = if name.ends_with(".zip") && !cfg!(windows) {
         unpack("unzip").arg("-q").arg(&file).arg("-d").arg(unpacked).status().await?.success()
+    } else if name.ends_with(".zip") {
+        unpack("tar").arg("-xf").arg(&file).arg("-C").arg(unpacked).status().await?.success()
     } else if [".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tbz2"].iter().any(|suffix| name.ends_with(suffix)) {
         unpack("tar").arg("-xf").arg(&file).arg("-C").arg(unpacked).arg("--no-same-owner").status().await?.success()
     } else {
@@ -490,12 +528,7 @@ async fn stage(archive: &str, cmd: &str, sha256: Option<&str>, staging: &Path, u
     if !real.starts_with(&root) || !metadata.is_file() {
         return Err(RegistryError::UnsafeEntry(archive.to_owned()));
     }
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(permissions.mode() | 0o700);
-        tokio::fs::set_permissions(&program, permissions).await?;
-    }
+    silt_os::make_executable(&program)?;
     let program_digest = digest(&tokio::fs::read(&program).await?);
     tokio::fs::write(unpacked.join(".silt-program-sha256"), program_digest).await?;
     Ok(())
@@ -526,6 +559,15 @@ mod tests {
         }
         let unverified = command(&agent("ok", "agent", None), dir.path()).await;
         assert!(matches!(unverified, Err(RegistryError::Unverified(_))), "{unverified:?}");
+    }
+
+    #[test]
+    fn registry_commands_become_paths_in_the_archive() {
+        assert_eq!(in_archive("./goose"), "goose");
+        assert_eq!(in_archive("./goose-package\\goose.exe"), "goose-package/goose.exe");
+        assert_eq!(in_archive("harn.exe"), "harn.exe");
+        assert!(is_plain_relative(&in_archive("./dist-package/cursor-agent")));
+        assert!(!is_plain_relative(&in_archive("./../escape")));
     }
 
     #[test]
@@ -573,6 +615,7 @@ mod tests {
         assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_agents_installed_here_are_offered() {
         use std::os::unix::fs::PermissionsExt as _;

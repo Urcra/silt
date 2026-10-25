@@ -18,6 +18,7 @@ fail() {
 
 case "$(uname -s)" in
     Linux) ;;
+    MINGW* | MSYS* | CYGWIN*) fail "on Windows, run in PowerShell: irm https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.ps1 | iex" ;;
     *) fail "there are release binaries for Linux only so far; build from source: cargo install --locked --git $repo silt-cli" ;;
 esac
 case "$(uname -m)" in

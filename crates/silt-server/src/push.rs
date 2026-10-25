@@ -39,12 +39,7 @@ pub(crate) fn load_or_make_key(data_dir: &Path) -> std::io::Result<ES256KeyPair>
 }
 
 fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(text.as_bytes())
+    silt_os::write_private(path, text.as_bytes())
 }
 
 pub(crate) fn browser_routes() -> Router<Server> {

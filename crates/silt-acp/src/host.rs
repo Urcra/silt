@@ -395,12 +395,28 @@ type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
 /// Questions waiting on the person, with which of their fields take several choices.
 type Asking = Arc<Mutex<HashMap<u64, (Responder<CreateElicitationResponse>, HashMap<String, bool>)>>>;
 
+/// The program to start. Windows runs only what it's given in full, so a
+/// bare `npx` is looked up there, `npx.cmd` included, on the agent's own
+/// `PATH`.
+fn program(start: &Start) -> std::path::PathBuf {
+    let bare = std::path::PathBuf::from(&start.program);
+    if !cfg!(windows) || bare.components().count() > 1 {
+        return bare;
+    }
+    let path = start.env.iter().find(|(name, _)| name.eq_ignore_ascii_case("PATH")).map(|(_, value)| value.as_str());
+    path.and_then(|path| silt_os::find_program(&start.program, std::ffi::OsStr::new(path))).unwrap_or(bare)
+}
+
 async fn run(
     start: Start,
     events: mpsc::UnboundedSender<Event>,
     mut commands: mpsc::UnboundedReceiver<Command>,
 ) -> Result<(), HostError> {
-    let mut child = tokio::process::Command::new(&start.program)
+    let mut command = tokio::process::Command::new(program(&start));
+    // Its own process group, so stopping it stops what it started too,
+    // such as the agent `npx` runs.
+    silt_os::own_group(&mut command);
+    let mut child = command
         .args(&start.args)
         // Only what the daemon chose to pass: see `registry::agent_environment`.
         .env_clear()
@@ -409,13 +425,10 @@ async fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        // Its own process group, so stopping it stops what it started too,
-        // such as the agent `npx` runs.
-        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .map_err(|source| HostError::Spawn { program: start.program.clone(), source })?;
-    let group = child.id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
+    let group = child.id();
     let stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
@@ -638,7 +651,7 @@ async fn run(
         },
     };
     if let Some(group) = group {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        silt_os::kill_tree(group);
     }
     let _ = child.kill().await;
     result

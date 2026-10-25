@@ -47,7 +47,7 @@ fn key(subpath: Option<&str>) -> Value {
 
 #[test]
 fn a_session_one_host_stores_is_loaded_by_another_and_reaches_the_persons_machines() {
-    let root = tempfile::Builder::new().prefix("silt-sdk").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-sdk");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let home = Machine::new(root.path(), "home", &origin, &server);

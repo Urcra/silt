@@ -20,7 +20,7 @@ struct World {
 }
 
 fn world() -> World {
-    let root = tempfile::Builder::new().prefix("silt-import").tempdir_in("/tmp").expect("temp dir");
+    let root = common::temp_root("silt-import");
     let origin = origin(root.path());
     let server = Server::start(&root.path().join("server"));
     let laptop = Machine::new(root.path(), "laptop", &origin, &server);
@@ -56,7 +56,7 @@ fn sessions_from_before_silt_are_imported_once_kept_here_and_sent_redacted() {
     let laptop = &world.laptop;
     let session = "6f1c2d3e-0000-4000-8000-000000000001";
     run_agent_alone(laptop, &laptop.fake, &laptop.repo, &["--session-id", session]);
-    run_agent_alone(laptop, &laptop.agents.join("codex-bin"), &laptop.repo, &[]);
+    run_agent_alone(laptop, &common::fake_agent("codex"), &laptop.repo, &[]);
     let scratch = world.root.path().join("scratch");
     fs::create_dir_all(scratch.join("src")).expect("mkdir");
     run_agent_alone(laptop, &laptop.fake, &scratch, &["--session-id", "6f1c2d3e-0000-4000-8000-000000000002"]);
@@ -111,7 +111,7 @@ fn import_takes_paths_and_an_agent() {
     let world = world();
     let laptop = &world.laptop;
     run_agent_alone(laptop, &laptop.fake, &laptop.repo, &["--session-id", "6f1c2d3e-0000-4000-8000-000000000003"]);
-    run_agent_alone(laptop, &laptop.agents.join("codex-bin"), &laptop.repo, &[]);
+    run_agent_alone(laptop, &common::fake_agent("codex"), &laptop.repo, &[]);
     let elsewhere = world.root.path().join("elsewhere");
     fs::create_dir_all(elsewhere.join("src")).expect("mkdir");
     run_agent_alone(laptop, &laptop.fake, &elsewhere, &["--session-id", "6f1c2d3e-0000-4000-8000-000000000004"]);
@@ -150,11 +150,11 @@ fn an_imported_thread_keeps_the_times_its_session_ran_at() {
         laptop.repo.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
     let dir = laptop.claude_dir.join("projects").join(slug);
     fs::create_dir_all(&dir).expect("mkdir");
-    let cwd = laptop.repo.to_string_lossy();
+    let cwd = serde_json::to_string(&laptop.repo).expect("json");
     fs::write(
         dir.join("6f1c2d3e-0000-4000-8000-000000000005.jsonl"),
         format!(
-            "{{\"type\":\"user\",\"cwd\":\"{cwd}\",\"timestamp\":\"2025-03-04T05:06:07.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"What is the oldest thing here?\"}}}}\n\
+            "{{\"type\":\"user\",\"cwd\":{cwd},\"timestamp\":\"2025-03-04T05:06:07.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"What is the oldest thing here?\"}}}}\n\
              {{\"type\":\"assistant\",\"timestamp\":\"2025-03-04T05:16:07.000Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"The seed commit.\"}}]}}}}\n"
         ),
     )
@@ -174,19 +174,25 @@ fn every_agent_s_sessions_are_imported() {
     // The fake checks that Silt's MCP server is configured, as `silt gemini` does.
     fs::create_dir_all(agents.join("gemini/.gemini")).expect("mkdir");
     fs::write(agents.join("gemini/.gemini/settings.json"), r#"{"mcpServers":{"silt":{}}}"#).expect("writes");
-    run_agent_alone(laptop, &agents.join("gemini-bin"), &laptop.repo, &["--session-id", "6f1c2d3e-0000-4000-8000-000000000006"]);
+    run_agent_alone(
+        laptop,
+        &common::fake_agent("gemini"),
+        &laptop.repo,
+        &["--session-id", "6f1c2d3e-0000-4000-8000-000000000006"],
+    );
     // And that a plugin gives its hooks; these do nothing.
     let plugin = world.root.path().join("copilot-plugin");
     fs::create_dir_all(plugin.join("hooks")).expect("mkdir");
-    fs::write(plugin.join("hooks/hooks.json"), r#"{"userPromptSubmitted":[{"bash":"true"}]}"#).expect("writes");
+    let hooks = r#"{"version":1,"hooks":{"userPromptSubmitted":[{"type":"command","bash":"true","powershell":"exit 0"}]}}"#;
+    fs::write(plugin.join("hooks/hooks.json"), hooks).expect("writes");
     let plugin = plugin.to_string_lossy();
     run_agent_alone(
         laptop,
-        &agents.join("copilot-bin"),
+        &common::fake_agent("copilot"),
         &laptop.repo,
         &["--session-id", "6f1c2d3e-0000-4000-8000-000000000007", "--plugin-dir", &plugin],
     );
-    run_agent_alone(laptop, &agents.join("opencode-bin"), &laptop.repo, &[]);
+    run_agent_alone(laptop, &common::fake_agent("opencode"), &laptop.repo, &[]);
     let imported = laptop.stdout(&["import"]);
     for agent in ["gemini-cli", "copilot", "opencode"] {
         assert!(imported.contains(agent), "{agent}: {imported}");

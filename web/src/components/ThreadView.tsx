@@ -303,6 +303,19 @@ function ToolFold({ entries, live = false, ...props }: EntryProps & { entries: H
   )
 }
 
+/** The thread's files this machine leaves off its disk: names its file system can't hold, such as `aux.txt` on Windows, or that differ only in case (ADR 0045). */
+function Unwritten({ thread }: { thread: string }) {
+  const unwritten = useQuery({ queryKey: keys.unwritten(thread), queryFn: () => api.unwritten(thread), enabled: !hosted(), retry: false })
+  const paths = unwritten.data ?? []
+  if (paths.length === 0) return null
+  return (
+    <p role="note" className="mb-4 rounded-md border border-line-subtle px-3 py-2 text-xs text-fg-2">
+      {paths.length === 1 ? 'One file' : `${paths.length} files`} of this thread {paths.length === 1 ? "isn't" : "aren't"} written on this machine, as its file system can't hold{' '}
+      {paths.length === 1 ? 'its name' : 'their names'}: <span className="font-mono">{paths.join(', ')}</span>. The thread keeps {paths.length === 1 ? 'it' : 'them'} for machines that can.
+    </p>
+  )
+}
+
 /** Under a turn: what it did, in numbers, and what can be done from it (ADR 0029, 0031). */
 function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInfo; row: Extract<Row, { kind: 'turn' }>; rewound: boolean }) {
   const navigate = useNavigate()
@@ -1175,6 +1188,7 @@ function ThreadBody({
             />
           ) : (
             <div className="px-4 py-4">
+              <Unwritten thread={thread} />
               <DiffPanel thread={thread} comments={comments.data ?? []} onCommented={reloadComments} agent={agent?.agent} wide />
             </div>
           )}

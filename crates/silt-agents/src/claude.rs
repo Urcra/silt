@@ -24,7 +24,7 @@ pub fn config_dir() -> Option<PathBuf> {
     if let Some(dir) = env::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
-    env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
+    silt_os::home_dir().map(|home| home.join(".claude"))
 }
 
 /// The directory name Claude Code uses for sessions started in `cwd`.
@@ -293,7 +293,7 @@ impl Agent for ClaudeCode {
             "mcpServers": { "silt": { "command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args } }
         });
         launch.arg("--mcp-config").arg(mcp.to_string());
-        launch.arg("--settings").arg(hook_settings(&plan.hook_command));
+        launch.arg("--settings").arg(hook_settings(&plan.hook_command, cfg!(windows).then_some(plan.hook_program.as_path())));
         if let Some(instructions) = &plan.instructions {
             launch.arg("--append-system-prompt").arg(instructions);
         }
@@ -519,17 +519,19 @@ pub struct HookInput {
 pub const HOOK_EVENTS: [&str; 5] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart"];
 
 /// Settings JSON for `claude --settings` that runs `command <event>` for each
-/// hook event Silt needs, with the hook input on stdin.
-pub fn hook_settings(command: &str) -> String {
+/// hook event Silt needs, with the hook input on stdin. With `program`, the
+/// hooks start it directly with `hook <event>` as its arguments (Claude
+/// Code's exec form), which Windows needs (ADR 0045): there Claude Code
+/// runs a command through Git Bash or else PowerShell, which read a quoted
+/// path differently.
+pub fn hook_settings(command: &str, program: Option<&Path>) -> String {
     let mut hooks = serde_json::Map::new();
     for event in HOOK_EVENTS {
-        hooks.insert(
-            event.to_owned(),
-            json!([{
-                "matcher": "*",
-                "hooks": [{ "type": "command", "command": format!("{command} {event}"), "timeout": 30 }]
-            }]),
-        );
+        let hook = match program {
+            Some(program) => json!({ "type": "command", "command": program, "args": ["hook", event], "timeout": 30 }),
+            None => json!({ "type": "command", "command": format!("{command} {event}"), "timeout": 30 }),
+        };
+        hooks.insert(event.to_owned(), json!([{ "matcher": "*", "hooks": [hook] }]));
     }
     json!({ "hooks": hooks }).to_string()
 }
@@ -625,11 +627,14 @@ mod tests {
         let paths =
             restore_into(config.path(), Path::new("/home/b/repo"), Path::new("/home/b/repo"), &session).expect("restores");
         assert_eq!(paths.transcript, config.path().join("projects/-home-b-repo/abc.jsonl"));
+        // The old directory becomes the new one, and on Windows the rest of
+        // the path takes its separators.
+        let saved = format!("saved to {}", paths.tool_results.join("t1.txt").display());
         assert_eq!(
             fs::read_to_string(&paths.transcript).expect("transcript"),
             format!(
-                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\",\"sessionId\":\"abc\"}}\n{{\"cwd\":\"/home/b/repo/src\"}}\n{{\"result\":\"saved to {}\"}}\n",
-                paths.tool_results.join("t1.txt").display()
+                "{{\"cwd\":\"/home/b/repo\",\"type\":\"user\",\"sessionId\":\"abc\"}}\n{{\"cwd\":\"/home/b/repo/src\"}}\n{}\n",
+                json!({ "result": saved })
             )
         );
         assert_eq!(fs::read(paths.tool_results.join("t1.txt")).expect("attachment"), b"big output");
@@ -658,8 +663,13 @@ mod tests {
         )
         .expect("parses");
         assert_eq!(input.tool_use_id.as_deref(), Some("toolu_9"));
-        let settings: Value = serde_json::from_str(&hook_settings("silt hook")).expect("valid json");
+        let settings: Value = serde_json::from_str(&hook_settings("silt hook", None)).expect("valid json");
         assert_eq!(settings.pointer("/hooks/PostToolUse/0/hooks/0/command"), Some(&json!("silt hook PostToolUse")));
+        let program = Path::new(r"C:\Program Files\Silt\silt.exe");
+        let exec: Value = serde_json::from_str(&hook_settings("ignored", Some(program))).expect("valid json");
+        let hook = exec.pointer("/hooks/Stop/0/hooks/0").expect("a Stop hook");
+        assert_eq!(hook["command"], json!(r"C:\Program Files\Silt\silt.exe"));
+        assert_eq!(hook["args"], json!(["hook", "Stop"]), "no shell reads the path");
     }
 
     #[test]

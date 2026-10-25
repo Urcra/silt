@@ -30,9 +30,12 @@ impl BlobStore {
             // Fresh again: garbage collection spares recently stored blobs,
             // and a delta referring to this one may be on its way.
             let touched = path.clone();
-            tokio::task::spawn_blocking(move || std::fs::File::open(touched)?.set_modified(SystemTime::now()))
-                .await
-                .map_err(io::Error::other)??;
+            // Windows changes a file's times only through a handle that may write.
+            tokio::task::spawn_blocking(move || {
+                std::fs::File::options().write(true).open(touched)?.set_modified(SystemTime::now())
+            })
+            .await
+            .map_err(io::Error::other)??;
             return Ok(hash);
         }
         let dir = path.parent().expect("blob paths have a parent");
@@ -44,7 +47,8 @@ impl BlobStore {
         file.sync_all().await?;
         drop(file);
         fs::rename(&temporary, &path).await?;
-        fs::File::open(dir).await?.sync_all().await?;
+        let dir = dir.to_owned();
+        tokio::task::spawn_blocking(move || silt_os::sync_dir(&dir)).await.map_err(io::Error::other)??;
         Ok(hash)
     }
 

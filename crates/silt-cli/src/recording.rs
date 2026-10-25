@@ -172,6 +172,7 @@ async fn adopted(thread: &str) -> bool {
 /// the session. A hangup or termination is passed on to the agent, and the
 /// wrapper still waits for it to exit. It steps every `STEP_INTERVAL`
 /// meanwhile.
+#[cfg(unix)]
 async fn run_until_exit(command: Command, local: &mut Local) -> io::Result<std::process::ExitStatus> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut child = tokio::process::Command::from(command).spawn()?;
@@ -196,25 +197,43 @@ async fn run_until_exit(command: Command, local: &mut Local) -> io::Result<std::
     }
 }
 
+/// On Windows, Ctrl-C and Ctrl-Break reach every process on the console,
+/// the agent's too; this wrapper only stays to record the end.
+#[cfg(windows)]
+async fn run_until_exit(command: Command, local: &mut Local) -> io::Result<std::process::ExitStatus> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c};
+    let mut child = tokio::process::Command::from(command).spawn()?;
+    let (mut interrupt, mut break_key) = (ctrl_c()?, ctrl_break()?);
+    let mut steps = tokio::time::interval(STEP_INTERVAL);
+    steps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            _ = interrupt.recv() => {}
+            _ = break_key.recv() => {}
+            _ = steps.tick() => local.step().await,
+        }
+    }
+}
+
 /// Starts `silt sync --once` for the thread, detached, when this machine
 /// syncs with a server: what was recorded without the daemon reaches it
 /// without the agent waiting.
 pub(crate) fn push_in_background(thread: &str) {
-    use std::os::unix::process::CommandExt;
     if silt_daemon::remote::load_config(&paths::data_dir()).is_none() {
         return;
     }
     let Ok(exe) = env::current_exe() else {
         return;
     };
-    let started = Command::new(exe)
-        .args(["sync", "--once", thread])
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn();
+    let started = silt_os::spawn_detached(
+        Command::new(exe)
+            .args(["sync", "--once", thread])
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    );
     if let Err(error) = started {
         eprintln!("silt: could not start pushing to the server: {error}");
     }

@@ -175,6 +175,10 @@ pub struct LaunchPlan {
     pub mcp: McpServer,
     /// Shell command that forwards hook events: `<command> <Event>`.
     pub hook_command: String,
+    /// The `silt` that command runs, for agents that can start a program
+    /// without a shell, which Windows needs: its agents pick Git Bash or
+    /// PowerShell, and the two read a quoted path differently.
+    pub hook_program: PathBuf,
     /// Rules and skills the agent doesn't read by itself.
     pub instructions: Option<String>,
     /// A directory Silt may use for per-run configuration files.
@@ -374,7 +378,7 @@ pub(crate) fn agent_home(variable: &str, dir: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    silt_os::home_dir()
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -412,6 +416,11 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
+/// `text` as one argument for PowerShell's call operator, `& '<path>'`.
+pub fn powershell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
 /// Links each skill directory into `dir` under its directory name, made
 /// safe as a file name. Of skills sharing a name the first is kept, as Silt
 /// lists the repository's before the personal ones.
@@ -440,16 +449,7 @@ pub(crate) fn link_skills(dir: &Path, skills: &[PathBuf]) -> std::io::Result<()>
 
 /// Makes `link` point at `target`, a directory or a file.
 pub(crate) fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    return std::os::unix::fs::symlink(target, link);
-    #[cfg(windows)]
-    return if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    };
-    #[cfg(not(any(unix, windows)))]
-    return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, format!("can't link {} here", link.display())));
+    silt_os::link(target, link)
 }
 
 /// A transcript's first line, which agents start with a record of where

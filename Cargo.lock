@@ -1604,15 +1604,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
-name = "fsevent-sys"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3257,6 +3248,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cde48f36530cbd91b65f050101e6c056d6eb743cea2a8f0f19beef69c6742ff8"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "jwt-simple"
 version = "0.12.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3531,32 +3532,35 @@ checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
 
 [[package]]
 name = "notify"
-version = "8.2.0"
+version = "9.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d3d07927151ff8575b7087f245456e549fea62edf0ec4e565a5ee50c8402bc3"
+checksum = "bb94cf3583e1483c23ceb47a5f7d56b3e8d7309b3e3727698a8c52a96993355e"
 dependencies = [
  "bitflags 2.13.2",
- "fsevent-sys",
  "inotify",
  "kqueue",
  "libc",
  "log",
  "mio",
  "notify-types",
+ "objc2-core-foundation",
+ "objc2-core-services",
  "walkdir",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "xxhash-rust",
 ]
 
 [[package]]
 name = "notify-debouncer-full"
-version = "0.7.0"
+version = "0.8.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c02b49179cfebc9932238d04d6079912d26de0379328872846118a0fa0dbb302"
+checksum = "9c9b3ca8dc01d924371a57d93be72fb7ca2c937f861f2f128926d967dab25182"
 dependencies = [
  "file-id",
  "log",
  "notify",
  "notify-types",
+ "rustc-hash",
  "walkdir",
 ]
 
@@ -3649,6 +3653,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
+name = "objc2-core-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "583300ad934cba24ff5292aee751ecc070f7ca6b39a574cc21b7b5e588e06a0b"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -4956,10 +4979,10 @@ dependencies = [
  "agent-client-protocol",
  "base64 0.23.1",
  "futures",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "silt-os",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4978,6 +5001,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "silt-os",
  "silt-proto",
  "silt-types",
  "tempfile",
@@ -4997,6 +5021,7 @@ dependencies = [
  "silt-agents",
  "silt-daemon",
  "silt-log",
+ "silt-os",
  "silt-store",
  "silt-types",
  "tempfile",
@@ -5032,6 +5057,7 @@ dependencies = [
  "silt-daemon",
  "silt-git",
  "silt-mcp",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-server",
@@ -5040,6 +5066,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "tracing-subscriber",
  "uuid",
 ]
@@ -5072,7 +5099,6 @@ dependencies = [
  "notify-debouncer-full",
  "postcard",
  "reqwest",
- "rustix",
  "serde",
  "serde_json",
  "silt-acp",
@@ -5082,6 +5108,7 @@ dependencies = [
  "silt-git",
  "silt-log",
  "silt-mcp",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-store",
@@ -5106,6 +5133,7 @@ dependencies = [
  "silt-acp",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5113,6 +5141,7 @@ name = "silt-git"
 version = "0.0.1"
 dependencies = [
  "gix",
+ "silt-os",
  "silt-types",
  "tempfile",
  "thiserror 2.0.21",
@@ -5137,6 +5166,18 @@ name = "silt-mcp"
 version = "0.0.1"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "silt-os"
+version = "0.0.1"
+dependencies = [
+ "junction",
+ "rustix",
+ "tempfile",
+ "tokio",
+ "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5180,6 +5221,7 @@ dependencies = [
  "silt-agents",
  "silt-crdt",
  "silt-log",
+ "silt-os",
  "silt-proto",
  "silt-redact",
  "silt-store",
@@ -5216,6 +5258,7 @@ dependencies = [
  "serde_json",
  "silt-crdt",
  "silt-log",
+ "silt-os",
  "silt-types",
  "sqlx",
  "tempfile",
@@ -6444,6 +6487,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "which"
+version = "8.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "whoami"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6748,6 +6800,12 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 [[package]]
 name = "xtask"
 version = "0.0.1"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
 
 [[package]]
 name = "yoke"

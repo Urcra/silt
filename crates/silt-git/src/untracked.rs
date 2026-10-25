@@ -161,6 +161,6 @@ impl Walk<'_> {
 fn default_excludes_file() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .or_else(|| silt_os::home_dir().map(|home| home.join(".config")))
         .map(|config| config.join("git").join("ignore"))
 }

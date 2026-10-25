@@ -20,6 +20,7 @@ serde_json = "1.0.154"
 silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-log = { path = "../silt-log" }
+silt-os = { path = "../silt-os" }
 silt-store = { path = "../silt-store" }
 silt-types = { path = "../silt-types" }
 tempfile = "3.27.0"

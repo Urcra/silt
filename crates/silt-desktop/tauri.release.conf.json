@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/silt"],
+    "windows": {
+      "nsis": { "installMode": "currentUser", "installerHooks": "windows/installer.nsh" }
+    }
+  }
+}
