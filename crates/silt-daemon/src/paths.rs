@@ -3,8 +3,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Where Silt keeps its data: `$SILT_HOME`, else `$XDG_DATA_HOME/silt`, else
-/// `~/.local/share/silt`; on Windows `%LOCALAPPDATA%\silt`, which doesn't
-/// roam, as the store and blobs are too big to.
+/// `~/.local/share/silt`; on Windows `%LOCALAPPDATA%\silt\data`, which
+/// doesn't roam, as the store and blobs are too big to. Not
+/// `%LOCALAPPDATA%\silt` itself: the desktop app's installer puts the app
+/// there, as Windows doesn't tell `Silt` from `silt`.
 pub fn data_dir() -> PathBuf {
     if let Some(home) = env::var_os("SILT_HOME") {
         return PathBuf::from(home);
@@ -12,7 +14,7 @@ pub fn data_dir() -> PathBuf {
     if cfg!(windows)
         && let Some(local) = env::var_os("LOCALAPPDATA")
     {
-        return PathBuf::from(local).join("silt");
+        return PathBuf::from(local).join("silt").join("data");
     }
     if let Some(data) = env::var_os("XDG_DATA_HOME") {
         return PathBuf::from(data).join("silt");

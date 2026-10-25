@@ -61,11 +61,12 @@ fn app_installed() -> bool {
     quietly(Command::new(reg).args(["query", r"HKCU\Software\Classes\silt", "/ve"]))
 }
 
-/// Opens `link` with Windows' handler for its scheme. `explorer.exe` takes
-/// it as one argument, without cmd's parsing of `&`, and answers 1 whether
-/// or not it opened it, so starting it is all that can be checked.
+/// Opens `link` with Windows' handler for its scheme. rundll32 hands it on
+/// whole, where cmd would split it at `&` and `explorer.exe` at `=`, which
+/// left Windows opening `wsl:<distribution>` as a link of its own.
 fn open_link(link: &str) -> bool {
-    Command::new("explorer.exe").arg(link).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+    let rundll32 = if cfg!(windows) { "rundll32" } else { "rundll32.exe" };
+    quietly(Command::new(rundll32).args(["url.dll,FileProtocolHandler", link]))
 }
 
 fn quietly(command: &mut Command) -> bool {

@@ -146,6 +146,17 @@ pub fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `name` without an extension `PATHEXT` lets a command leave off, as `npx`
+/// runs `npx.cmd`.
+pub fn without_run_extension(name: &str) -> Option<&str> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    let run_extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    run_extensions
+        .split(';')
+        .any(|listed| listed.strip_prefix('.').is_some_and(|listed| listed.eq_ignore_ascii_case(extension)))
+        .then_some(stem)
+}
+
 /// Starts `command` with `CreateProcessW` itself, as `Command` always lets a
 /// child inherit every inheritable handle: a daemon started from a command
 /// whose output a caller reads through a pipe would hold that pipe, and the

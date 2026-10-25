@@ -39,6 +39,10 @@ pub fn is_executable(metadata: &fs::Metadata) -> bool {
     metadata.permissions().mode() & 0o111 != 0
 }
 
+pub fn without_run_extension(_name: &str) -> Option<&str> {
+    None
+}
+
 pub fn make_executable(path: &Path) -> io::Result<()> {
     let mode = fs::metadata(path)?.permissions().mode();
     fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700 | ((mode & 0o044) >> 2)))

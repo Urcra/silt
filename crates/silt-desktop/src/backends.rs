@@ -128,6 +128,13 @@ pub fn remember_silts(silts: &HashMap<String, String>) -> String {
     serde_json::to_string_pretty(&sorted).expect("strings serialize")
 }
 
+/// Runs `"$0" "$@"` in the person's own shell, as a login and interactive one,
+/// so a daemon it starts finds the agents their terminal does: `wsl.exe
+/// --exec` alone gives the distribution's bare `PATH`, without `~/.local/bin`
+/// or nvm's node. Shells that don't take `$0` and `$@` so get `sh -l`.
+const IN_THEIR_SHELL: &str = r#"case "${SHELL##*/}" in bash|zsh|ksh|dash|sh) shell=$SHELL ;; *) shell=/bin/sh ;; esac
+exec "$shell" -lic 'exec "$0" "$@"' "$0" "$@""#;
+
 /// The command that attaches to the backend's daemon, starting it if none
 /// runs, and prints its web UI's address: in the project's directory, or
 /// in `/`, not a clone of any repository.
@@ -140,7 +147,8 @@ pub fn open_web(target: &Target, native: &Path, wsl_silt: &str) -> Command {
         }
         Backend::Wsl(distribution) => {
             let mut command = Command::new("wsl.exe");
-            command.args(["-d", distribution, "--cd", target.project.as_deref().unwrap_or("/"), "--exec", wsl_silt]);
+            command.args(["-d", distribution, "--cd", target.project.as_deref().unwrap_or("/"), "--exec", "sh", "-c"]);
+            command.args([IN_THEIR_SHELL, wsl_silt]);
             command
         }
     };
@@ -206,14 +214,44 @@ mod tests {
     }
 
     #[test]
-    fn a_distribution_s_silt_runs_in_the_project_without_a_shell() {
+    fn a_distribution_s_silt_runs_in_the_project_in_the_person_s_shell() {
         let target = Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/repo".into()) };
         let command = open_web(&target, Path::new("silt"), "/usr/local/bin/silt");
         let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(command.get_program(), "wsl.exe");
-        assert_eq!(args, ["-d", "Ubuntu", "--cd", "/home/me/repo", "--exec", "/usr/local/bin/silt", "open", "--no-browser"]);
+        assert_eq!(
+            args,
+            [
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "/home/me/repo",
+                "--exec",
+                "sh",
+                "-c",
+                IN_THEIR_SHELL,
+                "/usr/local/bin/silt",
+                "open",
+                "--no-browser"
+            ]
+        );
         let native = open_web(&Target::default(), Path::new("/opt/silt"), "silt");
         assert_eq!(native.get_program(), "/opt/silt");
         assert_eq!(native.get_current_dir(), Some(Path::new("/")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_person_s_shell_runs_the_program_with_its_arguments_as_they_are() {
+        for shell in ["/bin/sh", "/usr/bin/fish"] {
+            let output = Command::new("sh")
+                .args(["-c", IN_THEIR_SHELL, "printf", "[%s]", "a b", "$HOME", "'"])
+                .env("SHELL", shell)
+                .env("HOME", "/nonexistent")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("sh runs");
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "[a b][$HOME][']", "with SHELL={shell}");
+        }
     }
 }

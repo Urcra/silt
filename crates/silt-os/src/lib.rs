@@ -25,7 +25,7 @@ use windows as imp;
 #[cfg(windows)]
 pub use windows::pipe;
 
-pub use wsl::{WslPath, in_wsl, is_distribution_name, wsl_path};
+pub use wsl::{WslPath, in_wsl, is_distribution_name, linux_path, wsl_path};
 
 /// Makes `dir`, or an existing one, reachable by this user alone. One that
 /// isn't a plain directory of this user's is refused: in a shared place it
@@ -132,6 +132,43 @@ pub fn find_program(program: &str, path: &OsStr) -> Option<PathBuf> {
     }
     let cwd = std::env::current_dir().ok()?;
     which::which_in(program, Some(path), cwd).ok()
+}
+
+/// What's on a `PATH`, each directory listed once, for asking about many
+/// programs: [`find_program`] looks in every directory for each one, which
+/// is slow where a directory is, such as a Windows drive seen from WSL.
+pub struct Programs {
+    path: std::ffi::OsString,
+    names: std::collections::HashSet<String>,
+}
+
+impl Programs {
+    pub fn on(path: &OsStr) -> Self {
+        let names = std::env::split_paths(path)
+            .filter_map(|dir| fs::read_dir(dir).ok())
+            .flatten()
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .flat_map(|name| {
+                let bare = imp::without_run_extension(&name).map(program_key);
+                std::iter::once(program_key(&name)).chain(bare)
+            })
+            .collect();
+        Self { path: path.to_owned(), names }
+    }
+
+    /// As [`find_program`], with a name on no listed directory refused at once.
+    pub fn find(&self, program: &str) -> Option<PathBuf> {
+        let named = !program.contains(['/', std::path::MAIN_SEPARATOR]);
+        if named && !self.names.contains(&program_key(program)) {
+            return None;
+        }
+        find_program(program, &self.path)
+    }
+}
+
+/// A program's name as the system compares it: Windows ignores case.
+fn program_key(name: &str) -> String {
+    if cfg!(windows) { name.to_ascii_lowercase() } else { name.to_owned() }
 }
 
 /// Ends the process `pid` at once, as `kill -KILL` does.

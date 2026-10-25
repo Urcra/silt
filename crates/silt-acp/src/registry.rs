@@ -114,6 +114,11 @@ fn bare(name: &str) -> &str {
     ["-acp", "-cli", "-agent"].iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name)
 }
 
+/// Guesses that name another program: a launcher installed beside an agent's
+/// CLI (`cursor` beside `cursor-agent`, `code` beside MiniMax's `@minimax-ai/code`),
+/// and words too plain to be one agent's, such as Kilo's `@kilocode/cli`.
+const NOT_AGENTS: [&str; 9] = ["cli", "code", "cursor", "factory", "github", "kiro", "qoder", "windsurf", "zed"];
+
 impl Entry {
     /// The names its CLI may go by. The registry doesn't say, so they're
     /// guessed from the id, the package and the binary's command.
@@ -128,7 +133,7 @@ impl Entry {
             .chain(packages)
             .chain(commands)
             .flat_map(|name| [name, bare(name)])
-            .filter(|name| is_plain_relative(name))
+            .filter(|name| is_plain_relative(name) && !NOT_AGENTS.contains(name))
             .map(str::to_owned)
             .collect();
         names.sort();
@@ -363,16 +368,17 @@ pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
 /// binary was downloaded already. The registry lists far more agents than
 /// anyone has, and `npx` would fetch any of them.
 pub fn installed_here(data_dir: &Path) -> Vec<AgentInfo> {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    all(data_dir).into_iter().filter(|agent| is_installed(agent, data_dir, &path)).collect()
+    let programs = silt_os::Programs::on(&silt_os::linux_path(&std::env::var_os("PATH").unwrap_or_default()));
+    all(data_dir).into_iter().filter(|agent| is_installed(agent, data_dir, &programs)).collect()
 }
 
-fn is_installed(agent: &AgentInfo, data_dir: &Path, path: &std::ffi::OsStr) -> bool {
+fn is_installed(agent: &AgentInfo, data_dir: &Path, programs: &silt_os::Programs) -> bool {
+    let resolves = |program: &str| programs.find(program).is_some();
     match &agent.distribution {
-        Distribution::Command { program, .. } if agent.clis.is_empty() => resolves(program, path),
+        Distribution::Command { program, .. } if agent.clis.is_empty() => resolves(program),
         Distribution::Binary { .. } if downloaded(agent, data_dir) => true,
         Distribution::Unavailable => false,
-        _ => agent.clis.iter().any(|cli| resolves(cli, path)),
+        _ => agent.clis.iter().any(|cli| resolves(cli)),
     }
 }
 
@@ -382,11 +388,6 @@ fn downloaded(agent: &AgentInfo, data_dir: &Path) -> bool {
         && std::fs::read_dir(data_dir.join("agents").join(&agent.id)).is_ok_and(|mut builds| {
             builds.any(|build| build.is_ok_and(|build| build.path().join(".silt-program-sha256").is_file()))
         })
-}
-
-/// Whether `program` names an executable, directly or on `path`.
-fn resolves(program: &str, path: &std::ffi::OsStr) -> bool {
-    silt_os::find_program(program, path).is_some()
 }
 
 /// The text at `url`, or none when it can't be had; the bundled snapshot
@@ -613,6 +614,9 @@ mod tests {
         assert!(clis("github-copilot-cli").contains(&"copilot".to_owned()));
         assert!(clis("gemini").contains(&"gemini".to_owned()));
         assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
+        assert!(!clis("cursor").contains(&"cursor".to_owned()), "an editor's launcher");
+        assert!(!clis("minimax-code").contains(&"code".to_owned()), "VS Code's launcher");
+        assert!(!clis("github-copilot-cli").contains(&"github".to_owned()));
     }
 
     #[cfg(unix)]
@@ -628,6 +632,8 @@ mod tests {
         };
         program("claude", 0o755);
         program("gemini", 0o644);
+        program("cursor", 0o755);
+        program("code", 0o755);
         let stamped = data.path().join("agents/goose/build");
         std::fs::create_dir_all(&stamped).expect("mkdir");
         std::fs::write(stamped.join(".silt-program-sha256"), "00").expect("stamp");
@@ -644,11 +650,11 @@ mod tests {
             }
             .into_info()
         };
-        let path = bin.path().as_os_str();
+        let programs = silt_os::Programs::on(bin.path().as_os_str());
         let offered: Vec<String> = parse(SNAPSHOT)
             .into_iter()
             .chain([custom("claude"), custom("not-here"), custom("/bin/sh")])
-            .filter(|agent| is_installed(agent, data.path(), path))
+            .filter(|agent| is_installed(agent, data.path(), &programs))
             .map(|agent| agent.id)
             .collect();
         let goose = if platform().is_some() { vec!["goose"] } else { Vec::new() };

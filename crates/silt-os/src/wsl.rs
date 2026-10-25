@@ -38,6 +38,28 @@ pub fn wsl_path(path: &str) -> Option<WslPath> {
     Some(WslPath { distribution: distribution.to_owned(), linux: format!("/{}", components.join("/")) })
 }
 
+/// `path` without the Windows drives WSL appends to it, `/mnt/<drive>/…`:
+/// what's there is a Windows program, and each look on those drives
+/// crosses into Windows, slowly. Elsewhere `path` as it is.
+pub fn linux_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
+    if in_wsl().is_none() {
+        return path.to_owned();
+    }
+    without_windows_drives(path)
+}
+
+fn without_windows_drives(path: &std::ffi::OsStr) -> std::ffi::OsString {
+    let on_a_drive = |dir: &std::path::Path| {
+        let mut components = dir.components().skip_while(|component| *component == std::path::Component::RootDir);
+        components.next().is_some_and(|first| first.as_os_str() == "mnt")
+            && components
+                .next()
+                .and_then(|drive| drive.as_os_str().to_str())
+                .is_some_and(|drive| drive.len() == 1 && drive.chars().all(|letter| letter.is_ascii_alphabetic()))
+    };
+    std::env::join_paths(std::env::split_paths(path).filter(|dir| !on_a_drive(dir))).unwrap_or_else(|_| path.to_owned())
+}
+
 /// What `wsl.exe --install` accepts for a distribution's name, which is also
 /// safe to pass to `wsl.exe -d` and put in a link.
 pub fn is_distribution_name(name: &str) -> bool {
@@ -79,6 +101,13 @@ mod tests {
         ] {
             assert_eq!(wsl_path(path), None, "{path}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_windows_drives_leave_the_path() {
+        let path = std::ffi::OsStr::new("/home/me/.local/bin:/mnt/c/Program Files/nodejs:/usr/bin:/mnt/d/tools:/mnt/data/bin");
+        assert_eq!(without_windows_drives(path), "/home/me/.local/bin:/usr/bin:/mnt/data/bin");
     }
 
     #[test]
