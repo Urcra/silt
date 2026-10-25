@@ -56,7 +56,7 @@ fn managed_checkouts_link_shared_paths_and_run_prepare() {
     );
     assert!(fs::symlink_metadata(checkout.join("node_modules")).expect("linked").is_symlink());
     assert_eq!(fs::read_to_string(checkout.join("node_modules/dep/index.js")).expect("seeded from the clone"), "installed\n");
-    assert!(String::from_utf8_lossy(&started.stdout).contains("prepare-ran"));
+    assert!(String::from_utf8_lossy(&started.stdout).contains("prepare-ran"), "{stderr}");
     let log = fs::read_to_string(checkout.join("node_modules/prepare.log")).expect("prepare ran");
     assert!(log.starts_with("prepared "), "{log}");
     assert!(

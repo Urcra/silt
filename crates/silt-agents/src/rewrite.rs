@@ -74,9 +74,11 @@ impl std::ops::Deref for CheckedSession {
 
 /// Whether `name` names a file inside a session directory: plain names
 /// between slashes only. Checked by segment, as `Path` ignores a trailing
-/// `/` or `/.`, which would name the directory instead.
+/// `/` or `/.`, which would name the directory instead. No `\` or `:`, on
+/// any machine, as Windows reads `..\x` and `C:x` as leaving the directory.
 pub fn is_side_file_name(name: &str) -> bool {
-    name.split('/').all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+    name.split('/')
+        .all(|segment| !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['\\', ':', '\0']))
 }
 
 /// Replaces the paths and ids a session was recorded under with new ones.
@@ -213,7 +215,7 @@ mod tests {
         for name in ["notes.txt", "tool-results/t1.txt", "a/b/c"] {
             assert!(is_side_file_name(name), "{name}");
         }
-        for name in ["", "/etc/passwd", "a/.", "a/..", "../a", "a//b", "a/", "./a"] {
+        for name in ["", "/etc/passwd", "a/.", "a/..", "../a", "a//b", "a/", "./a", "..\\a", "a\\", "C:x", "C:/x", "a\0b"] {
             assert!(!is_side_file_name(name), "{name}");
         }
     }

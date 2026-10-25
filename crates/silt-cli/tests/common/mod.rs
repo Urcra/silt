@@ -194,8 +194,11 @@ impl Machine {
         let silt_home = home.join("silt");
         let claude_dir = home.join("claude");
         fs::create_dir_all(&claude_dir).expect("mkdir");
-        // Git for Windows turns `core.autocrlf` on; off, the clone has the
-        // same bytes everywhere and the tests compare them as they are.
+        // Git for Windows turns `core.autocrlf` on; off, in the clone and in
+        // the clones Silt makes, files have the same bytes everywhere and
+        // the tests compare them as they are.
+        fs::create_dir_all(&home).expect("mkdir");
+        fs::write(home.join(".gitconfig"), "[core]\n\tautocrlf = false\n").expect("git config");
         git(root, &["clone", "-q", "-c", "core.autocrlf=false", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
         let fake = fake_claude();
         let agents = home.join("agents");
