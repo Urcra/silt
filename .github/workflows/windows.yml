@@ -1,6 +1,7 @@
 # Windows comes before macOS (ADR 0045): clippy and the tests on GitHub's
 # Windows runners, for the workspace and the desktop app, install.ps1, the
-# desktop installer, and an aarch64 build.
+# desktop installer, a WSL distribution beside the native silt, and an
+# aarch64 build.
 name: windows
 
 on:
@@ -72,6 +73,65 @@ jobs:
           Copy-Item ../../target/debug/silt.exe binaries/silt-x86_64-pc-windows-msvc.exe
           npx --yes @tauri-apps/cli@2.12.4 build --debug --config tauri.release.conf.json --bundles nsis
           Get-ChildItem target/debug/bundle/nsis/*.exe
+
+  # The Linux `silt` a WSL distribution runs in the `wsl` job.
+  linux-binaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            target/debug/silt
+            target/debug/silt-fake-claude
+
+  # A WSL distribution beside the native `silt` (ADR 0045): WSL 1, as
+  # GitHub's runners can't run WSL 2, which shares Windows' loopback as WSL
+  # 2's mirrored mode does. A thread goes from Windows to the distribution
+  # and another back, and the desktop app starts both backends.
+  wsl:
+    needs: linux-binaries
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      SILT_SKIP_WEB_BUILD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: git
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: linux-binaries
+      - name: silt in the distribution
+        shell: bash
+        run: |
+          MSYS2_ARG_CONV_EXCL='*' wsl.exe -d Ubuntu-24.04 --exec sh -c \
+            'install -m 755 "$(wslpath -u "$1")"/silt "$(wslpath -u "$1")"/silt-fake-claude /usr/local/bin/ && silt --version' \
+            _ "$(cygpath -w linux-binaries)"
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - name: Handoff
+        shell: bash
+        run: SILT=target/debug/silt.exe FAKE_CLAUDE=target/debug/silt-fake-claude.exe scripts/wsl-handoff.sh Ubuntu-24.04
+      - name: Desktop backends
+        working-directory: crates/silt-desktop
+        shell: bash
+        run: |
+          export SILT_TEST_WSL=Ubuntu-24.04 SILT_BIN="$(cygpath -w ../../target/debug/silt.exe)" SILT_HOME="$(cygpath -w "$RUNNER_TEMP/silt-home")"
+          cargo test --locked the_native_and_a_distribution_backend_start -- --nocapture
 
   # Release builds include aarch64; this keeps it building between tags.
   arm64:

@@ -1,6 +1,7 @@
 //! The daemons one window can show (ADR 0045): this machine's, and on
 //! Windows each WSL distribution's, reached through `wsl.exe`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -108,6 +109,25 @@ pub fn found_silt(stdout: &str) -> Option<String> {
     (line.starts_with('/') && !line.chars().any(char::is_control)).then(|| line.to_owned())
 }
 
+/// Each distribution's `silt` as last found, from the file the app keeps
+/// them in. Entries that aren't a distribution and an absolute path are
+/// left out: the file is the person's to edit.
+pub fn remembered_silts(text: &str) -> HashMap<String, String> {
+    let Ok(serde_json::Value::Object(entries)) = serde_json::from_str(text) else {
+        return HashMap::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|(distribution, path)| Some((distribution, found_silt(path.as_str()?)?)))
+        .filter(|(distribution, _)| is_distribution_name(distribution))
+        .collect()
+}
+
+pub fn remember_silts(silts: &HashMap<String, String>) -> String {
+    let sorted: std::collections::BTreeMap<_, _> = silts.iter().collect();
+    serde_json::to_string_pretty(&sorted).expect("strings serialize")
+}
+
 /// The command that attaches to the backend's daemon, starting it if none
 /// runs, and prints its web UI's address: in the project's directory, or
 /// in `/`, not a clone of any repository.
@@ -174,6 +194,15 @@ mod tests {
         assert_eq!(found_silt("motd\n/home/me/.local/bin/silt\n"), Some("/home/me/.local/bin/silt".into()));
         assert_eq!(found_silt("silt\n"), None, "an alias isn't a path");
         assert_eq!(found_silt(""), None);
+    }
+
+    #[test]
+    fn distributions_silts_are_remembered_and_what_isnt_one_is_dropped() {
+        let silts = HashMap::from([("Ubuntu".to_owned(), "/home/me/.local/bin/silt".to_owned())]);
+        assert_eq!(remembered_silts(&remember_silts(&silts)), silts);
+        let edited = r#"{"Ubuntu": "/usr/bin/silt", "-d": "/x", "Debian": "silt", "Arch": 3}"#;
+        assert_eq!(remembered_silts(edited), HashMap::from([("Ubuntu".to_owned(), "/usr/bin/silt".to_owned())]));
+        assert!(remembered_silts("not json").is_empty());
     }
 
     #[test]

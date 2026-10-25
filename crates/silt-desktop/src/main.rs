@@ -8,6 +8,8 @@ mod daemon;
 
 use std::collections::HashMap;
 use std::env;
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -110,7 +112,8 @@ fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>, target: Arc<Mutex<T
             if payload.event() == PageLoadEvent::Finished && !started.swap(true, Ordering::SeqCst) {
                 let ui = loading.clone();
                 let target = target.clone();
-                std::thread::spawn(move || keep_ui(&window, &ui, &target));
+                let silts = window.app_handle().path().app_data_dir().ok().map(|dir| dir.join("wsl-silt.json"));
+                std::thread::spawn(move || keep_ui(&window, &ui, &target, silts.as_deref()));
             }
         })
         .build()
@@ -125,10 +128,11 @@ const CHECK_WAIT: Duration = Duration::from_secs(3);
 /// again and the window follows it to the same page. When another backend
 /// or project is asked for, the window goes there. Until the UI first
 /// loads, the starting page says why it hasn't.
-fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Target>) {
+fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Target>, silts: Option<&Path>) {
     let exe = env::current_exe().ok();
     let program = daemon::silt_program(env::var_os("SILT_BIN"), exe.as_deref(), |path| path.is_file());
-    let mut wsl_silt: HashMap<String, String> = HashMap::new();
+    let mut wsl_silt =
+        silts.and_then(|file| fs::read_to_string(file).ok()).map(|text| backends::remembered_silts(&text)).unwrap_or_default();
     let mut showing: Option<Target> = None;
     let mut lost = true;
     let mut failures = 0;
@@ -153,6 +157,7 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
         };
         // Another backend or project starts on its own page.
         let carried = if showing.as_ref() == Some(&wanted) { known.as_ref() } else { None };
+        let known_silts = wsl_silt.clone();
         let opened = command_for(&wanted, &program, &mut wsl_silt).and_then(daemon::open_web).and_then(|new| {
             let moved = daemon::same_page_on(Some(&shown), carried, &new);
             eprintln!("silt-desktop: showing {}{}", new.origin().ascii_serialization(), moved.path());
@@ -163,6 +168,18 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
                 .and_then(|()| if reload { window.reload() } else { Ok(()) })
                 .map_err(|error| Exn::from(error).raise(DesktopError::Run("the window".into())))
         });
+        // A `silt` moved or uninstalled since it was found is looked for
+        // again next time.
+        if opened.is_err()
+            && let Backend::Wsl(distribution) = &wanted.backend
+        {
+            wsl_silt.remove(distribution);
+        }
+        if wsl_silt != known_silts
+            && let Some(file) = silts
+        {
+            remember(file, &wsl_silt);
+        }
         match opened {
             Ok(()) => {
                 showing = Some(wanted);
@@ -201,6 +218,14 @@ fn command_for(
         wsl_silt.insert(distribution.clone(), found);
     }
     Ok(backends::open_web(target, program, &wsl_silt[distribution]))
+}
+
+fn remember(file: &Path, silts: &HashMap<String, String>) {
+    let written =
+        file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(file, backends::remember_silts(silts)));
+    if let Err(error) = written {
+        eprintln!("silt-desktop: could not remember where silt is in each distribution: {error}");
+    }
 }
 
 fn show(app: &AppHandle) {
@@ -248,4 +273,29 @@ fn explain(error: &Exn<DesktopError>) -> String {
         source = cause.source();
     }
     causes.join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Starts this computer's backend and a WSL distribution's through the
+    /// commands the app runs, when `SILT_TEST_WSL` names a distribution with
+    /// `silt`, as the Windows CI job's does.
+    #[test]
+    fn the_native_and_a_distribution_backend_start() {
+        let Some(distribution) = env::var("SILT_TEST_WSL").ok().filter(|name| !name.is_empty()) else {
+            return;
+        };
+        let program = daemon::silt_program(env::var_os("SILT_BIN"), None, |_| false);
+        let mut silts = HashMap::new();
+        for backend in [Backend::Native, Backend::Wsl(distribution.clone())] {
+            let target = Target { backend, project: None };
+            let ui = command_for(&target, &program, &mut silts)
+                .and_then(daemon::open_web)
+                .unwrap_or_else(|error| panic!("{target:?}: {}", explain(&error)));
+            assert_eq!(daemon::check(&ui, CHECK_WAIT), Answer::Up, "{target:?} answers at {}", ui.origin().ascii_serialization());
+        }
+        assert!(silts[&distribution].starts_with('/'), "the distribution's silt was found: {silts:?}");
+    }
 }
