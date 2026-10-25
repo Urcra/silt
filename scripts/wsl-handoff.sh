@@ -14,14 +14,16 @@ distribution=${1:?usage: wsl-handoff.sh <distribution>}
 silt=${SILT:?SILT names the Windows silt.exe}
 fake=${FAKE_CLAUDE:?FAKE_CLAUDE names the Windows silt-fake-claude.exe}
 local_run=${SILT_HANDOFF_LOCAL:-}
-# Git Bash would rewrite arguments that look like Unix paths, which the
-# distribution's commands are.
-export MSYS2_ARG_CONV_EXCL='*'
-
 # A path as Windows programs take it, and as the distribution sees it.
 windows_path() { if [ -n "$local_run" ]; then printf '%s' "$1"; else cygpath -m "$1"; fi; }
+# Git Bash rewrites arguments that look like Unix paths for the Windows
+# programs it runs, but the distribution's are Unix paths.
 in_wsl() {
-    if [ -n "$local_run" ]; then bash -c "$1"; else wsl.exe -d "$distribution" --exec bash -lc "$1"; fi
+    if [ -n "$local_run" ]; then
+        bash -c "$1"
+    else
+        MSYS2_ARG_CONV_EXCL='*' wsl.exe -d "$distribution" --exec bash -lc "$1"
+    fi
 }
 wsl_path() { if [ -n "$local_run" ]; then printf '%s' "$1"; else in_wsl "wslpath -u '$(cygpath -w "$1")'"; fi; }
 
