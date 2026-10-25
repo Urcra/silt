@@ -151,11 +151,30 @@ pub fn daemon_run() -> Result<(), Exn<CliError>> {
         Some(log) => subscriber.with_ansi(false).with_writer(std::sync::Mutex::new(log)).init(),
         None => subscriber.with_writer(io::stderr).init(),
     }
-    let runtime = tokio::runtime::Runtime::new().or_raise(|| CliError("cannot start the async runtime".into()))?;
-    runtime
-        .block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path()))
+    // Panics go to the log too, which on Windows is all the daemon has.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("{info}");
+        report(info);
+    }));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(DAEMON_STACK)
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    // Requests are handled on the thread that runs the event loop, and
+    // Windows gives a main thread 1 MiB.
+    std::thread::Builder::new()
+        .name("silt-daemon".into())
+        .stack_size(DAEMON_STACK)
+        .spawn(move || runtime.block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path())))
+        .or_raise(|| CliError("cannot start the Silt daemon's thread".into()))?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
         .or_raise(|| CliError("the Silt daemon failed".into()))
 }
+
+const DAEMON_STACK: usize = 8 << 20;
 
 pub fn daemon_stop() -> Result<(), Exn<CliError>> {
     if !is_running() && silt_daemon::holds_lock(&paths::data_dir()) {

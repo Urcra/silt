@@ -194,7 +194,9 @@ impl Machine {
         let silt_home = home.join("silt");
         let claude_dir = home.join("claude");
         fs::create_dir_all(&claude_dir).expect("mkdir");
-        git(root, &["clone", "-q", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
+        // Git for Windows turns `core.autocrlf` on; off, the clone has the
+        // same bytes everywhere and the tests compare them as they are.
+        git(root, &["clone", "-q", "-c", "core.autocrlf=false", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
         let fake = fake_claude();
         let agents = home.join("agents");
         for name in ["codex", "gemini", "copilot", "opencode"] {
@@ -246,11 +248,19 @@ impl Machine {
         let output = self.run_with(args, envs);
         assert!(
             output.status.success(),
-            "silt {args:?} failed: {}{}",
+            "silt {args:?} failed: {}{}\ndaemon.log:\n{}",
             String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&output.stderr),
+            self.daemon_log()
         );
         output
+    }
+
+    /// The end of this machine's daemon log, to show why a command failed.
+    pub fn daemon_log(&self) -> String {
+        let log = fs::read_to_string(self.silt_home.join("daemon.log")).unwrap_or_default();
+        let lines: Vec<&str> = log.lines().collect();
+        lines[lines.len().saturating_sub(40)..].join("\n")
     }
 
     /// Output of a command that may fail for now, for polling.
@@ -282,7 +292,7 @@ impl Machine {
         let output = command.arg(format!("{base}{path}")).output().expect("curl runs");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = text.rsplit_once('\n').expect("a status line");
-        assert_eq!(status, "200", "{method} {path}: {json}");
+        assert_eq!(status, "200", "{method} {path}: {json}\ndaemon.log:\n{}", self.daemon_log());
         serde_json::from_str(json).unwrap_or(serde_json::Value::Null)
     }
 }

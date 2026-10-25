@@ -169,8 +169,11 @@ pub fn run_prepare(checkout: &Path, envs: &[(&str, &str)]) -> io::Result<Option<
         let Some(shell) = std::env::var_os("PATH").and_then(|path| silt_os::find_program("sh", &path)) else {
             return Ok(Some(PrepareOutcome::NotExecutable { script }));
         };
+        // Given as text without CRs: a clone with `core.autocrlf` has the
+        // script with CRLF, which `sh` reads as part of each command.
+        let text = fs::read_to_string(&script)?.replace("\r\n", "\n");
         let mut command = Command::new(shell);
-        command.arg(&script);
+        command.arg("-c").arg(text).arg(&script);
         command
     } else {
         if !silt_os::is_executable(&fs::metadata(&script)?) {

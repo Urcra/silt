@@ -150,11 +150,11 @@ fn an_imported_thread_keeps_the_times_its_session_ran_at() {
         laptop.repo.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
     let dir = laptop.claude_dir.join("projects").join(slug);
     fs::create_dir_all(&dir).expect("mkdir");
-    let cwd = laptop.repo.to_string_lossy();
+    let cwd = serde_json::to_string(&laptop.repo).expect("json");
     fs::write(
         dir.join("6f1c2d3e-0000-4000-8000-000000000005.jsonl"),
         format!(
-            "{{\"type\":\"user\",\"cwd\":\"{cwd}\",\"timestamp\":\"2025-03-04T05:06:07.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"What is the oldest thing here?\"}}}}\n\
+            "{{\"type\":\"user\",\"cwd\":{cwd},\"timestamp\":\"2025-03-04T05:06:07.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"What is the oldest thing here?\"}}}}\n\
              {{\"type\":\"assistant\",\"timestamp\":\"2025-03-04T05:16:07.000Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"The seed commit.\"}}]}}}}\n"
         ),
     )
