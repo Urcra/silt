@@ -92,7 +92,9 @@ fn a_prepare_script_changed_by_someone_else_needs_approval() {
     let checkout = checkout_from(&resumed.stderr);
     assert_eq!(fs::read_to_string(checkout.join(".agents/prepare")).expect("synced"), changed);
     assert!(!String::from_utf8_lossy(&resumed.stdout).contains("changed-prepare-ran"), "it ran without approval");
-    assert!(String::from_utf8_lossy(&resumed.stderr).contains("not running .agents/prepare"));
+    let script = std::path::Path::new(".agents").join("prepare");
+    let stderr = String::from_utf8_lossy(&resumed.stderr);
+    assert!(stderr.contains(&format!("not running {}", script.display())), "{stderr}");
 }
 
 fn git_status(dir: &std::path::Path) -> String {
