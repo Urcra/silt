@@ -53,7 +53,8 @@
   --warn: var(--honey-500);
   --danger: light-dark(var(--rust-600), #d97a59);
   --info: light-dark(var(--slate-600), #7b98a8);
-  --ok-tint: light-dark(rgb(122 138 63 / 0.12), rgb(122 138 63 / 0.18));
+  /* Fainter in dark than its siblings: olive on the dark ground reads louder than rust does. */
+  --ok-tint: light-dark(rgb(122 138 63 / 0.12), rgb(122 138 63 / 0.11));
   --warn-tint: light-dark(rgb(201 152 46 / 0.14), rgb(201 152 46 / 0.18));
   --danger-tint: light-dark(rgb(194 90 58 / 0.12), rgb(194 90 58 / 0.18));
   --info-tint: light-dark(rgb(91 122 138 / 0.12), rgb(91 122 138 / 0.18));

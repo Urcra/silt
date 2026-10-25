@@ -297,7 +297,12 @@ impl Core {
                 .agent
                 .permissions
                 .iter()
-                .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
+                .map(|asked| PermissionAsked {
+                    id: asked.id,
+                    title: asked.title.clone(),
+                    options: asked.options.clone(),
+                    plan: None,
+                })
                 .collect(),
             questions: running.agent.questions.clone(),
             context: None,

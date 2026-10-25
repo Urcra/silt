@@ -27,6 +27,12 @@ pub fn session_of(line: &str) -> Option<(String, String)> {
     })
 }
 
+/// The agent's name a `session` record gives, such as "Claude Code".
+pub fn name_of(line: &str) -> Option<String> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    (record["t"] == "session").then(|| record["name"].as_str().map(str::to_owned)).flatten().filter(|name| !name.is_empty())
+}
+
 /// A prompt by `by`, naming the files attached to it; each file's content
 /// is recorded beside the session under that name.
 /// A prompt with the names of the files attached to it, and the images
@@ -67,8 +73,17 @@ pub fn tool_update(id: &str, title: &str, kind: &str, input: Option<&Value>) -> 
     json!({"t": "tool_call", "id": id, "title": title, "kind": kind, "input": input, "update": true}).to_string()
 }
 
-/// A tool's output without the one Markdown fence an agent may wrap it in,
-/// such as Claude's ```` ```console ````, which a transcript would show as text.
+/// A tool's output as it reads: a message an earlier Silt kept as a JSON
+/// string, quotes and `\n`s and all, unquoted, and without the one
+/// Markdown fence an agent may wrap it in, such as Claude's ```` ```console ````.
+fn readable(output: String) -> String {
+    let output = match serde_json::from_str::<Value>(&output) {
+        Ok(Value::String(text)) => text,
+        _ => output,
+    };
+    unfenced(output)
+}
+
 fn unfenced(output: String) -> String {
     let trimmed = output.trim();
     let inner = trimmed
@@ -134,7 +149,7 @@ pub fn read_line(line: &str) -> Read {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
             read.entries.push(Entry::ToolResult {
                 tool_use_id: field("id"),
-                text: unfenced(field("output")),
+                text: readable(field("output")),
                 is_error: field("status") == "failed",
             });
         }
@@ -258,6 +273,12 @@ mod tests {
         assert_eq!(text("```console\nRan 10 tests\n\nOK\n```"), "Ran 10 tests\n\nOK");
         assert_eq!(text("```\nExit code 2\n```"), "Exit code 2");
         assert_eq!(text("plain output"), "plain output");
+        assert_eq!(
+            text(r#""File created at /x.md\n\nDone""#),
+            "File created at /x.md\n\nDone",
+            "a JSON string reads as its text"
+        );
+        assert_eq!(text("42"), "42");
         assert_eq!(text("```a\n1\n```\nthen\n```b\n2\n```"), "```a\n1\n```\nthen\n```b\n2\n```", "two blocks keep theirs");
     }
 

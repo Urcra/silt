@@ -1224,9 +1224,14 @@ impl Store {
         }
         // Checked at runtime: sqlx can't describe an FTS5 match, and its
         // macro crashes the compiler on this one.
+        // What was said, the prompt or the answer, before the tools' input and
+        // output it matches as well: bm25's rank is negative, so a larger
+        // weight ranks a row higher.
         let rows = sqlx::query(
             "SELECT thread_id, actor, lamport, kind, snippet(search, 0, '[', ']', '…', 12) AS snippet
-             FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?",
+             FROM search WHERE search MATCH ?
+             ORDER BY rank * CASE kind WHEN 'user' THEN 3.0 WHEN 'assistant' THEN 3.0 WHEN 'compaction' THEN 2.0 ELSE 1.0 END
+             LIMIT ?",
         )
         .bind(query)
         .bind(limit)

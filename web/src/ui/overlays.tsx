@@ -55,7 +55,8 @@ export function Tabs<T extends string>({
           onKeyDown={(event) => move(event, index)}
           className={cx(
             'inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs max-md:min-h-11',
-            tab.id === value ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
+            // Hovering one only lights its text, so only the selected tab is ever filled.
+            tab.id === value ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:text-fg-1',
           )}
         >
           {tab.label}

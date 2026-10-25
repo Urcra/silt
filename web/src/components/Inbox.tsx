@@ -10,7 +10,7 @@ import { useHasServer } from '../hasServer'
 import { keys, message } from '../query'
 import { ago } from '../time'
 import { Button, Dot, type DotTone, EmptyState, Skeleton, Tabs, buttonClass, toast } from '../ui'
-import { Page } from './Page'
+import { ListColumn, Page } from './Page'
 
 const TONE: Record<string, DotTone> = {
   permission: 'warn',
@@ -185,12 +185,14 @@ export function Inbox() {
       title="Inbox"
       meta={`${unread.length} unread`}
       actions={
-        <Button variant="ghost" icon="check" disabled={unread.length === 0} onClick={() => void markRead({ all: true })}>
-          Mark all read
-        </Button>
+        unread.length > 0 && (
+          <Button variant="ghost" icon="check" onClick={() => void markRead({ all: true })}>
+            Mark all read
+          </Button>
+        )
       }
     >
-      <div className="mx-auto flex w-full max-w-[960px] flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
+      <div className="flex w-full max-w-[960px] flex-wrap items-center gap-2 px-4 pt-4 md:pr-6 md:pl-5">
         <Tabs
           label="inbox filter"
           value={filter}
@@ -202,7 +204,7 @@ export function Inbox() {
           ]}
         />
       </div>
-      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-4 px-4 py-4 md:px-6">
+      <ListColumn>
         <NotificationBanner />
         {inbox.error && <p className="text-danger">{message(inbox.error)}</p>}
         {inbox.isPending && <Skeleton className="h-24" />}
@@ -260,7 +262,7 @@ export function Inbox() {
           )}
         </div>
         <NotificationSettings />
-      </div>
+      </ListColumn>
     </Page>
   )
 }

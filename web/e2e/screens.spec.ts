@@ -57,7 +57,7 @@ async function open(page: Page, path: string) {
  */
 function shotOptions(page: Page) {
   return {
-    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true })],
+    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|\/silt-live-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true })],
     animations: 'disabled' as const,
     caret: 'hide' as const,
     maxDiffPixelRatio: 0.001,
@@ -287,7 +287,7 @@ test('a thread waiting on a permission', async ({ page }) => {
   await startFake(page, 'Add a hello line to main', 'Ask for everything')
   await shoot(page, 'thread-waiting', async (shown) => {
     await expect(shown.getByRole('group', { name: 'permission' })).toBeVisible()
-    await expect(shown.getByText('Waiting on you').filter({ visible: true }).first()).toBeVisible()
+    await expect(shown.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
   })
 })
 

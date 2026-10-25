@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { GraphRow } from './api'
-import { layout } from './lanes'
+import { byFamily, layout } from './lanes'
 
 function row(id: string, thread: string, kind: string, overrides: Partial<GraphRow> = {}): GraphRow {
   return {
@@ -57,4 +57,13 @@ test('a lane is reused once its thread is past', () => {
   const { lanes, width } = layout(rows)
   expect(lanes).toEqual([0, 0, 1, 0])
   expect(width).toBe(2)
+})
+
+test("unrelated projects' threads don't run through each other", () => {
+  const rows = [row('4', 'a', 'turn'), row('3', 'x', 'turn', { family: 'g' }), row('2', 'x', 'turn', { family: 'g' }), row('1', 'a', 'turn')]
+  const grouped = byFamily(rows)
+  expect(grouped.map((shown) => shown.id)).toEqual(['4', '1', '3', '2'])
+  const { threads } = layout(grouped)
+  expect(threads.get('a')).toMatchObject({ top: 0, bottom: 1 })
+  expect(threads.get('x')).toMatchObject({ top: 2, bottom: 3 })
 })

@@ -171,7 +171,8 @@ function HunkView({
   )
   const codeCell = (line: CodeLine | null) =>
     line ? (
-      <span className="min-w-0 pr-3 whitespace-pre">
+      // Long lines wrap rather than run past the panel's edge, where they were cut off.
+      <span className="min-w-0 pr-3 whitespace-pre-wrap [overflow-wrap:anywhere]">
         <span className={cx('select-none', line.kind === 'add' ? 'text-ok' : line.kind === 'del' ? 'text-danger' : 'text-fg-3')}>
           {SIGN[line.kind]}
         </span>

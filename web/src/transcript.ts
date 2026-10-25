@@ -5,7 +5,8 @@
 import type { HistoryEntry, TurnInfo } from './api'
 
 export type Row =
-  | { kind: 'origin'; key: string; origin: string; thread: string }
+  /** Where the history moves to another thread's part, or back to this fork's own; `folded` turns of it hidden behind it. */
+  | { kind: 'origin'; key: string; origin: string; thread: string; folded?: number }
   | { kind: 'compaction'; key: string; marker: HistoryEntry | null; summary: HistoryEntry | null }
   | {
       kind: 'turn'
@@ -18,6 +19,31 @@ export type Row =
       /** What the agent's messages in the turn wrote, in tokens. */
       tokens: number
     }
+
+/** Which part of the history a row is from: this thread's own, inherited before a fork, or pulled upstream. */
+function originOf(row: Row): string | undefined {
+  if (row.kind === 'origin') return row.origin
+  if (row.kind === 'compaction') return (row.marker ?? row.summary)?.origin
+  return (row.prompt ?? row.entries[0])?.origin
+}
+
+/** A fork's history with what it inherited folded into the divider that says where it came from: the fork's own turns are what it is about. */
+export function foldInherited(rows: Row[]): Row[] {
+  const shown: Row[] = []
+  let into: Extract<Row, { kind: 'origin' }> | null = null
+  for (const row of rows) {
+    if (row.kind === 'origin' && row.origin === 'inherited') {
+      into = { ...row, folded: 0 }
+      shown.push(into)
+    } else if (into && originOf(row) === 'inherited') {
+      if (row.kind === 'turn') into.folded = (into.folded ?? 0) + 1
+    } else {
+      into = null
+      shown.push(row)
+    }
+  }
+  return shown
+}
 
 /** Entries the agent's tools made, folded together: its calls, their results and its thinking. */
 export const FOLDED = new Set(['tool_call', 'tool_result', 'thinking', 'image'])
@@ -46,9 +72,11 @@ export function rowsOf(entries: HistoryEntry[], turns: TurnInfo[]): Row[] {
       continue
     }
     if (entry.origin !== origin) {
+      // Where a fork's own part starts after what it inherited is marked too.
+      if (entry.origin !== 'own' || origin === 'inherited')
+        rows.push({ kind: 'origin', key: `origin-${entry.index}`, origin: entry.origin, thread: entry.thread })
       origin = entry.origin
       current = null
-      if (origin !== 'own') rows.push({ kind: 'origin', key: `origin-${entry.index}`, origin, thread: entry.thread })
     }
     if (entry.kind === 'compaction') {
       const last = rows[rows.length - 1]
@@ -166,7 +194,6 @@ const SAID: Record<string, [string, string, string]> = {
   other: ['used', 'tool', 'tools'],
 }
 
-/** What a run of tool work did, as its folded summary says it: `Searched 1 pattern, read 2 files, ran 3 commands`. */
 /** A tool still waiting for its result, as a fold says it: `editing 1 file`. */
 const DOING: Record<string, string> = {
   search: 'searching',
@@ -181,27 +208,30 @@ const DOING: Record<string, string> = {
 
 /** What a run of tool work did, as its folded summary says it: `Searched 1 pattern, read 2 files, ran 3 commands`. In a turn still `live`, calls waiting for their result say what they're doing. */
 export function toolSummary(entries: HistoryEntry[], live = false): string {
-  const done = new Map<string, number>()
-  const doing = new Map<string, number>()
+  // Reading or editing one file three times is still one file.
+  const done = new Map<string, Set<string>>()
+  const doing = new Map<string, Set<string>>()
   for (const step of stepsOf(entries)) {
     const call = step.call
     if (!call) continue
     const kind = call.plan ? 'plan' : kindOf(call) in SAID ? kindOf(call) : 'other'
     const counts = step.result || !live ? done : doing
-    counts.set(kind, (counts.get(kind) ?? 0) + 1)
+    const which = (kind === 'read' || kind === 'edit') && call.tool?.subject ? call.tool.subject : String(call.index)
+    counts.set(kind, (counts.get(kind) ?? new Set()).add(which))
   }
-  const said = (counts: Map<string, number>, verbOf: (kind: string) => string) =>
+  const said = (counts: Map<string, Set<string>>, verbOf: (kind: string) => string) =>
     Object.entries(SAID)
       .filter(([kind]) => counts.has(kind))
       .map(([kind, [, one, many]]) => {
-        const count = counts.get(kind)!
+        const count = counts.get(kind)!.size
         const verb = verbOf(kind)
         if (kind === 'plan') return count === 1 ? verb : `${verb} ${count} ${many}`
         return `${verb} ${count} ${count === 1 ? one : many}`
       })
-  const parts = [...said(done, (kind) => SAID[kind]![0]), ...said(doing, (kind) => DOING[kind]!)]
-  if (parts.length === 0) return entries.some((entry) => entry.kind === 'thinking') ? 'Thought it through' : 'Tool output'
-  const text = parts.join(', ')
+  const finished = said(done, (kind) => SAID[kind]![0]).join(', ')
+  const underWay = said(doing, (kind) => DOING[kind]!).join(', ')
+  const text = finished && underWay ? `${finished} · now ${underWay}` : finished || underWay
+  if (!text) return entries.some((entry) => entry.kind === 'thinking') ? 'Thought it through' : 'Tool output'
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { HistoryEntry } from './api'
-import { imageSize, piecesOf, rowsOf, shortCommand, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
+import { foldInherited, imageSize, piecesOf, rowsOf, shortCommand, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
 
 const entry = (index: number, kind: string, text: string, origin = 'own'): HistoryEntry =>
   ({ index, thread: 't', origin, kind, text, time_ms: index * 1000, rewound: false }) as HistoryEntry
@@ -18,14 +18,19 @@ test('history reads as turns between compaction and origin dividers, with tool w
     entry(8, 'compaction', 'Summary: farewell added.'),
   ]
   const rows = rowsOf(entries, [{ number: 1, entry: 2, prompt: 'add a farewell' }])
-  expect(rows.map((row) => row.kind)).toEqual(['origin', 'turn', 'turn', 'compaction'])
-  const turn = rows[2]
+  expect(rows.map((row) => row.kind)).toEqual(['origin', 'turn', 'origin', 'turn', 'compaction'])
+  const turn = rows[3]
   if (turn.kind !== 'turn') throw new Error('a turn')
   expect(turn.turn?.number).toBe(1)
   expect(piecesOf(turn.entries).map((piece) => piece.kind)).toEqual(['tools', 'entry'])
   expect(toolSummary(turn.entries)).toBe('Read 1 file, edited 1 file')
-  const compaction = rows[3]
+  const compaction = rows[4]
   expect(compaction.kind === 'compaction' && compaction.summary?.text).toBe('Summary: farewell added.')
+
+  const folded = foldInherited(rows)
+  expect(folded.map((row) => row.kind)).toEqual(['origin', 'origin', 'turn', 'compaction'])
+  expect(folded[0].kind === 'origin' && folded[0].folded).toBe(1)
+  expect(folded[1].kind === 'origin' && folded[1].origin).toBe('own')
 })
 
 const call = (index: number, id: string, kind: string, subject: string): HistoryEntry =>
@@ -51,6 +56,7 @@ test('each call gets the result that answers it, and the run is summed up by kin
     ['d', null],
   ])
   expect(toolSummary(entries)).toBe('Searched 1 pattern, ran 2 commands, edited 1 file')
+  expect(toolSummary([...entries, call(7, 'e', 'edit', 'src/upload.rs')])).toBe('Searched 1 pattern, ran 2 commands, edited 1 file')
   expect(tailOf('one\ntwo\nthree\nfour\nfive\n', 2)).toEqual({ lines: ['four', 'five'], hidden: 3 })
 })
 
@@ -81,7 +87,7 @@ test('a turn shows its plan once, as it stood last', () => {
 
 test('a call still waiting for its result says what it is doing, while its turn runs', () => {
   const entries = [call(0, 'a', 'read', 'src/lib.rs'), result(1, 'a', 'fn x() {}'), call(2, 'b', 'edit', 'src/main.rs')]
-  expect(toolSummary(entries, true)).toBe('Read 1 file, editing 1 file')
+  expect(toolSummary(entries, true)).toBe('Read 1 file · now editing 1 file')
   expect(toolSummary(entries)).toBe('Read 1 file, edited 1 file')
 })
 

@@ -432,15 +432,20 @@ fn generated_summary(family: &Family, thread: ThreadId, files: &[String]) -> Str
         .filter(|item| item.source == HistorySource::Own)
         .flat_map(|item| native_entries(&mut transcripts, item.delta))
         .collect();
-    let last_message = own.into_iter().rev().find_map(|entry| match entry {
-        Entry::Assistant { text } if !text.trim().is_empty() => Some(text),
+    // The fork's prompts stay out: the summary goes into the target's history with the merge, and the
+    // fork's conversation stays the fork's.
+    let last_message = own.iter().rev().find_map(|entry| match entry {
+        Entry::Assistant { text } if !text.trim().is_empty() => Some(text.trim()),
         _ => None,
     });
+    // Set apart as a quote, so the agent's words don't read as the request's own.
     if let Some(message) = last_message {
-        summary.push_str("\nThe fork's agent last said: ");
-        summary.push_str(&quoted(message.trim(), QUOTE_CHARS));
+        summary.push_str("\n\nWhere the fork's agent left it:\n\n");
+        for line in quoted(message, QUOTE_CHARS).lines() {
+            summary.push_str(&format!("> {line}\n"));
+        }
     }
-    summary
+    summary.trim_end().to_owned()
 }
 
 /// `text`, or as much of it as fits in `limit` characters, cut at a line,
@@ -554,6 +559,7 @@ fn mr_summary(family: &Family, request: &MergeRequest) -> MrSummary {
         summary: request.summary.clone(),
         status: status_text(&request.status),
         opened_ms: request.opened_ms,
+        decided_ms: request.decided_ms,
         changes_requested: asked.map(|asked| asked.reason.clone()),
         updated_since: asked.is_some_and(|asked| fork_moved_ms.is_some_and(|moved| moved > asked.at_ms)),
     }

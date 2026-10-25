@@ -646,6 +646,7 @@ fn mr_summary(log: &[Delta], request: &MergeRequest) -> MrSummary {
         summary: request.summary.clone(),
         status: status_text(&request.status),
         opened_ms: request.opened_ms,
+        decided_ms: request.decided_ms,
         changes_requested: asked.map(|asked| asked.reason.clone()),
         updated_since: asked.is_some_and(|asked| moved.is_some_and(|moved| moved > asked.at_ms)),
     }

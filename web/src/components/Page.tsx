@@ -1,7 +1,10 @@
-import { type ReactNode, useContext } from 'react'
+import { type CSSProperties, type ReactNode, useContext } from 'react'
+import { useDragWidth } from '../dragWidth'
 import { InSettings } from '../settingsContext'
 import { Drawer } from '../shell'
 import { IconButton, cx } from '../ui'
+
+const INSPECTOR = { min: 320, max: 960, start: 480 }
 
 /** On a phone, the header's way to the sidebar, as the page's first control. */
 export function DrawerButton() {
@@ -16,6 +19,11 @@ export function DrawerButton() {
       className="-ml-2 shrink-0 md:hidden"
     />
   )
+}
+
+/** A list page's column: 960 px at most, starting where the page's title does. */
+export function ListColumn({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cx('flex w-full max-w-[960px] flex-col gap-4 px-4 py-4 md:pr-6 md:pl-5', className)}>{children}</div>
 }
 
 /**
@@ -34,7 +42,6 @@ export function Page({
   width = 'full',
   label,
   flush = false,
-  inspectorWide = false,
   sheet,
 }: {
   title?: ReactNode
@@ -50,13 +57,13 @@ export function Page({
   label?: string
   /** The body sets its own padding, such as a list running edge to edge. */
   flush?: boolean
-  /** The inspector takes more room, such as for a diff. */
-  inspectorWide?: boolean
   /** Below the desktop width, the inspector opens over the page as a sheet, only while `open`. */
   sheet?: { open: boolean; onClose: () => void }
 }) {
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
   const embedded = useContext(InSettings)
+  // One width for every inspector and tab, so switching between them leaves the page where it was.
+  const panel = useDragWidth('silt-inspector-width', INSPECTOR, 'left')
   if (embedded)
     return (
       <div className="flex min-w-0 flex-col gap-3" data-page={label}>
@@ -87,11 +94,18 @@ export function Page({
         <div className={cx('w-full flex-1', column, flush ? 'flex flex-col' : 'px-4 py-4 pb-8 md:px-6')}>{children}</div>
       </div>
       {inspector && (
+        <div
+          {...panel.handle}
+          aria-label={`resize ${inspectorLabel}`}
+          className="relative z-10 -mr-1 hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent lg:sticky lg:top-0 lg:block lg:h-dvh"
+        />
+      )}
+      {inspector && (
         <aside
           aria-label={inspectorLabel}
+          style={{ '--inspector': `${panel.width}px` } as CSSProperties}
           className={cx(
-            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-dvh lg:overflow-y-auto lg:border-l',
-            inspectorWide ? 'lg:w-[min(42vw,640px)]' : 'lg:w-[360px]',
+            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-dvh lg:w-(--inspector) lg:max-w-[60vw] lg:overflow-y-auto lg:border-l',
             sheet
               ? sheet.open
                 ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:sticky lg:z-auto'

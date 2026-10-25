@@ -13,7 +13,7 @@ import { threadDoing, threadWhere } from '../threadLook'
 import { ago } from '../time'
 import { Dot, EmptyState, Icon, Skeleton, Tabs, buttonClass, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
-import { Page } from './Page'
+import { ListColumn, Page } from './Page'
 import { ThreadMark } from './ThreadMark'
 
 type Filter = 'all' | 'working' | 'mine' | 'shared' | 'elsewhere'
@@ -49,7 +49,7 @@ function NeedsYouRow({ thread, review }: { thread: ThreadSummary; review: MrSumm
           <Dot tone="warn" />
           <span className="min-w-0 flex-1 truncate">{review.title}</span>
           <span className="truncate text-xs text-accent-fg">{what}</span>
-          <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+          <span className="min-w-8 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
             {ago(thread.last_ms, now)}
           </span>
         </Link>
@@ -58,7 +58,7 @@ function NeedsYouRow({ thread, review }: { thread: ThreadSummary; review: MrSumm
           <Dot tone={thread.agent_state === 'error' ? 'danger' : 'warn'} />
           <span className="min-w-0 flex-1 truncate">{thread.title ?? 'Untitled thread'}</span>
           <span className="max-w-[50%] truncate font-mono text-xs text-accent-fg">{what}</span>
-          <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+          <span className="min-w-8 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
             {ago(thread.last_ms, now)}
           </span>
         </Link>
@@ -109,7 +109,7 @@ function ThreadRow({
           </span>
         </span>
         <span className={cx('hidden max-w-[40%] truncate text-xs md:inline', recovered || review ? 'text-accent-fg' : 'text-fg-2')}>{meta.join(' · ')}</span>
-        <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+        <span className="min-w-8 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
           {ago(thread.last_ms, now)}
         </span>
       </div>
@@ -155,12 +155,21 @@ export function ThreadList() {
     return true
   })
   const grouped = projects(filtered)
+  // Counted as Settings counts projects; threads found in other folders are said apart.
+  const known = grouped.filter(([repo]) => named.data?.some((project) => project.repo === repo)).length
+  const folders = grouped.length - known
+  const projectsSaid = [
+    `${known} ${known === 1 ? 'project' : 'projects'}`,
+    folders > 0 && `${folders} other ${folders === 1 ? 'folder' : 'folders'}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
   return (
     <Page
       flush
       label="threads"
       title="All threads"
-      meta={threads.isSuccess ? `${grouped.length} ${grouped.length === 1 ? 'project' : 'projects'} · ${all.length} ${all.length === 1 ? 'thread' : 'threads'} · ${working} working` : undefined}
+      meta={threads.isSuccess ? [projectsSaid, `${all.length} ${all.length === 1 ? 'thread' : 'threads'}`, `${working} working`].join(' · ') : undefined}
       actions={
         <>
           <Link to="/graph" className={buttonClass('ghost')}>
@@ -176,7 +185,7 @@ export function ThreadList() {
         </>
       }
     >
-      <div className="mx-auto flex w-full max-w-[960px] flex-col gap-4 px-4 pt-4 pb-8 md:px-6">
+      <ListColumn className="pb-8">
         {waiting.length > 0 && (
           <section aria-labelledby="needs-you" className="flex flex-col">
             <h2 id="needs-you" className="px-2.5 pb-1 font-mono text-2xs tracking-[0.06em] text-accent-fg uppercase">
@@ -215,7 +224,7 @@ export function ThreadList() {
             </section>
           ))}
         </div>
-      </div>
+      </ListColumn>
     </Page>
   )
 }

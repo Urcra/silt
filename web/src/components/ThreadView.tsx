@@ -7,7 +7,7 @@ import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { parseFiles } from '../diffParse'
 import { appHref, filePath } from '../permalink'
-import { projectName } from '../projects'
+import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { useMedia } from '../media'
@@ -19,7 +19,7 @@ import { threadTone, threadWhere } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { type Piece, type Row, duration, kindOf, piecesOf, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
+import { type Piece, type Row, duration, foldInherited, kindOf, piecesOf, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
 import {
   Avatar,
   Button,
@@ -45,6 +45,7 @@ import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 import { Mock } from './Mock'
+import { mocksOn } from '../mocks'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
 import { CommandCard, ImageThumb, PlanSteps, QuestionCard, StepRow } from './ToolSteps'
@@ -172,10 +173,10 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
       {entry.rewound && entry.kind === 'user' && <p className="text-xs text-fg-2 italic">rewound by a revert</p>}
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">{children}</div>
-        {/* In the gutter on a desktop, so every card in a turn is as wide as the others. */}
+        {/* Over the card's corner on a desktop, so every card in a turn is as wide as the others and nothing sits outside the column. */}
         <span
           className={cx(
-            'flex shrink-0 items-center gap-0.5 md:absolute md:top-0 md:left-full md:ml-1 md:flex-col',
+            'flex shrink-0 items-center gap-0.5 md:invisible md:absolute md:-top-2.5 md:right-1 md:z-10 md:rounded-sm md:border md:border-line md:bg-elevated md:px-0.5 md:shadow-sm md:group-hover/entry:visible md:focus-within:visible',
             // A phone shows no comment button, so only messages keep the column.
             entry.kind !== 'user' && entry.kind !== 'assistant' && 'max-md:hidden',
           )}
@@ -437,29 +438,41 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
 }
 
 /** Where the history moves to another thread's part: the source before a fork, or upstream work pulled in. Named by its title, as people know it. */
-function OriginDivider({ origin, thread }: { origin: string; thread: string }) {
+function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; thread: string; folded?: number; onUnfold?: () => void }) {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const title = threads.data?.find((candidate) => candidate.id === thread || candidate.id.endsWith(thread))?.title
   return (
-    <div className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
+    <div role="separator" aria-label={origin === 'own' ? 'this fork starts here' : `from ${title ?? short(thread)}`} className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
       <span className="h-px flex-1 bg-line" />
-      <span className="min-w-0 truncate text-2xs">
-        {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
-        <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={thread} data-volatile>
-          {title ?? short(thread)}
-        </Link>
-        {origin === 'inherited' && ', before this fork'}
-      </span>
+      {origin === 'own' ? (
+        <span className="text-2xs font-medium text-fg-1">This fork starts here</span>
+      ) : (
+        <span className="min-w-0 truncate text-2xs">
+          {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
+          <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={thread} data-volatile>
+            {title ?? short(thread)}
+          </Link>
+          {origin === 'inherited' && ', before this fork'}
+          {folded !== undefined && folded > 0 && (
+            <>
+              {` · ${folded} ${folded === 1 ? 'turn' : 'turns'} · `}
+              <button type="button" className="text-accent-fg hover:underline" onClick={onUnfold}>
+                Show {folded === 1 ? 'it' : 'them'}
+              </button>
+            </>
+          )}
+        </span>
+      )}
       <span className="h-px flex-1 bg-line" />
     </div>
   )
 }
 
-/** `running`: the turn is still under way, so it has no totals or actions yet. */
-function TranscriptRow({ row, running = false, ...props }: EntryProps & { row: Row; running?: boolean }) {
+/** `running`: the turn is still under way, so it has no totals or actions yet. `onUnfold` shows what a fork inherited. */
+function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
   const [summary, setSummary] = useState(false)
   const detail = useContext(TranscriptDetail)
-  if (row.kind === 'origin') return <OriginDivider origin={row.origin} thread={row.thread} />
+  if (row.kind === 'origin') return <OriginDivider origin={row.origin} thread={row.thread} folded={row.folded} onUnfold={onUnfold} />
   if (row.kind === 'compaction') {
     return (
       <div className="py-2">
@@ -543,7 +556,6 @@ function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
   return null
 }
 
-/** Fork the thread here, or offer a fork's work back to its source as a merge request. */
 /** A fork's work offered back to its source as a merge request, by its title. */
 function OfferForm({ thread, onError }: { thread: string; onError: (failure: unknown) => void }) {
   const navigate = useNavigate()
@@ -568,7 +580,22 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
 }
 
 /** What the thread changed, over the composer: how much, a way to review it, a pull request on the forge, and for a fork, offering it back. */
-function ChangesBar({ thread, files, totals, forked, onReview }: { thread: string; files: number; totals: { added: number; removed: number }; forked: boolean; onReview: () => void }) {
+function ChangesBar({
+  thread,
+  files,
+  totals,
+  forked,
+  forge,
+  onReview,
+}: {
+  thread: string
+  files: number
+  totals: { added: number; removed: number }
+  forked: boolean
+  /** The forge the project's remote is on, by name, when it is a known one. */
+  forge: string | undefined
+  onReview: () => void
+}) {
   const [offering, setOffering] = useState(false)
   const [pushing, setPushing] = useState(false)
   // Asked again with the changes, as a commit or a branch can lift what stood in the way.
@@ -610,7 +637,7 @@ function ChangesBar({ thread, files, totals, forked, onReview }: { thread: strin
             <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
           ) : (
             <Button size="sm" variant={hosted() ? 'primary' : 'secondary'} icon="merge" onClick={() => setOffering(true)}>
-              Create merge request
+              Offer as merge request
             </Button>
           ))}
         {!hosted() && !offering && (
@@ -620,9 +647,9 @@ function ChangesBar({ thread, files, totals, forked, onReview }: { thread: strin
             icon="external"
             disabled={pushing || Boolean(blocker.data)}
             onClick={createPr}
-            title={blocker.data ? `No pull request yet: ${blocker.data}` : "Pushes the thread's branch to origin and opens the forge's page for its pull request"}
+            title={blocker.data ? `No pull request yet: ${blocker.data}` : `Pushes the thread's branch to origin and opens ${forge ?? "the forge"}'s page for its pull request`}
           >
-            {pushing ? 'Pushing…' : 'Create PR'}
+            {pushing ? 'Pushing…' : forge ? `Create PR on ${forge}` : 'Create PR on the forge'}
           </Button>
         )}
       </span>
@@ -805,44 +832,50 @@ function ThreadHeader({
   const branch = commits.data?.findLast((commit) => commit.branch)?.branch
   // Where it is and what records it; who started it and the rest are in Details.
   const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const source = summary?.forked_from ? threads.data?.find((candidate) => candidate.id === summary.forked_from) : undefined
   return (
     <header className="@container/head sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle bg-bg px-4 md:pr-3 md:pl-5">
       <DrawerButton />
-      <h1 className="max-w-[50%] min-w-16 shrink truncate text-[15px] font-medium" title={summary?.title ?? undefined}>
-        {summary?.title ?? 'Thread'}
-      </h1>
-      {waiting && (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
-          <Dot tone="warn" />
-          Waiting on you
-        </span>
-      )}
-      {summary?.local_only && (
-        <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
-          <Tag>This machine only</Tag>
-        </span>
-      )}
-      <span className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden whitespace-nowrap max-md:hidden">
-        <span className="min-w-0 truncate font-mono text-2xs text-fg-2" data-volatile>
-          {short(thread)}
-          {meta.map((part) => ` · ${part}`)}
-        </span>
-        {branch && (
-          <span className="inline-flex min-w-0 shrink items-center gap-1 font-mono text-2xs text-fg-2" title="The branch its latest commit went on">
-            <Icon name="branch" className="h-3 w-3 shrink-0" />
-            <span className="truncate">{branch}</span>
+      {/* Two lines, as ADR 0044 draws it: the title keeps the room, what it is goes under it. */}
+      <div className="flex min-w-0 flex-1 flex-col justify-center">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="min-w-0 truncate text-[15px] leading-tight font-medium" title={summary?.title ?? undefined}>
+            {summary?.title ?? 'Thread'}
+          </h1>
+          {waiting && (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
+              <Dot tone="warn" />
+              Waiting on you
+            </span>
+          )}
+          {summary?.local_only && (
+            <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
+              <Tag>This machine only</Tag>
+            </span>
+          )}
+        </div>
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden font-mono text-2xs leading-tight whitespace-nowrap text-fg-2">
+          <span className="min-w-0 truncate" data-volatile>
+            {short(thread)}
+            {meta.map((part) => ` · ${part}`)}
           </span>
-        )}
-        {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
-          <span className="shrink-0 text-2xs text-fg-2">
-            Fork of{' '}
-            <Link className="font-mono text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} data-volatile>
-              {short(summary.forked_from)}
-            </Link>
-          </span>
-        )}
-      </span>
-      <span className="flex-1 md:hidden" />
+          {branch && (
+            <span className="inline-flex min-w-0 shrink items-center gap-1" title="The branch its latest commit went on">
+              <Icon name="branch" className="h-3 w-3 shrink-0" />
+              <span className="truncate">{branch}</span>
+            </span>
+          )}
+          {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
+            <span className="inline-flex min-w-0 shrink items-center gap-1 font-sans">
+              fork of
+              <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} title={summary.forked_from} data-volatile>
+                {source?.title ?? short(summary.forked_from)}
+              </Link>
+            </span>
+          )}
+        </div>
+      </div>
       <Here people={people} />
       <span className="flex shrink-0 items-center gap-1">
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
@@ -852,7 +885,8 @@ function ThreadHeader({
           aria-pressed={panelOpen}
           onClick={onChanges}
           title="What the thread changed, beside the conversation (D)"
-          className="aria-pressed:border-accent aria-pressed:bg-accent-tint aria-pressed:text-accent-fg"
+          // Amber is for what waits on someone; an open panel is only on.
+          className="aria-pressed:border-line-strong aria-pressed:bg-surface-2 aria-pressed:text-fg-1"
         >
           <Icon name="file" className="h-3.5 w-3.5 @xl/head:hidden" />
           <span className="@max-xl/head:sr-only">Changes</span>
@@ -989,18 +1023,23 @@ function Details({
         <KeyValue
           rows={[
             ['Live on', liveOn],
-            [
-              'Before',
-              <Mock key="before" id="thread.handoff-before">
-                laptop · 2h ago
-              </Mock>,
-            ],
-            [
-              'Synced',
-              <Mock key="synced" id="thread.synced">
-                all {total} entries
-              </Mock>,
-            ],
+            // Rows with nothing to say yet are left out rather than shown blank.
+            ...(mocksOn
+              ? ([
+                  [
+                    'Before',
+                    <Mock key="before" id="thread.handoff-before">
+                      laptop · 2h ago
+                    </Mock>,
+                  ],
+                  [
+                    'Synced',
+                    <Mock key="synced" id="thread.synced">
+                      all {total} entries
+                    </Mock>,
+                  ],
+                ] as [ReactNode, ReactNode][])
+              : []),
             ...(summary ? ([['Last moved', <span key="moved" data-volatile>{ago(summary.last_ms, now)}</span>]] as [ReactNode, ReactNode][]) : []),
           ]}
         />
@@ -1144,7 +1183,10 @@ function ThreadBody({
     if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true }).catch(() => undefined)
   }, [thread, unseen])
 
-  const rows = rowsOf(entries, turns.data ?? [])
+  const [unfolded, setUnfolded] = useState<string | null>(null)
+  const history = rowsOf(entries, turns.data ?? [])
+  // A link into the history may name an inherited turn, so it shows them all.
+  const rows = unfolded === thread || hash ? history : foldInherited(history)
   const list = useRef<HTMLDivElement>(null)
   const scroll = useContext(MainScroll)
   const virtual = useVirtualizer({
@@ -1166,6 +1208,14 @@ function ThreadBody({
     toEnd()
   }, [rows.length, toEnd])
   const anchor = useAnchor(rows, entries.length >= total, turns.data, comments.data, scrollTo)
+  // A thread opens where it is now, its latest turn, unless a link names a place in it.
+  const landed = useRef<string | null>(null)
+  const linked = anchor.entry !== undefined || anchor.comment !== undefined
+  useEffect(() => {
+    if (landed.current === thread || entries.length < total || rows.length === 0) return
+    landed.current = thread
+    if (!linked) toEnd()
+  }, [thread, entries.length, total, rows.length, linked, toEnd])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
   const files = diff.data === undefined ? null : parseFiles(diff.data)
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
@@ -1203,7 +1253,6 @@ function ThreadBody({
       flush
       label="thread"
       inspectorLabel="thread details"
-      inspectorWide={tab === 'changes'}
       sheet={{ open: sheet, onClose: () => setSheet(false) }}
       inspector={
         (panel || sheet) && (
@@ -1296,7 +1345,12 @@ function ThreadBody({
                 className="absolute left-0 w-full"
                 style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
               >
-                <TranscriptRow row={row} running={turnRunning && item.index === rows.length - 1} {...entryProps} />
+                <TranscriptRow
+                  row={row}
+                  running={turnRunning && item.index === rows.length - 1}
+                  onUnfold={() => setUnfolded(thread)}
+                  {...entryProps}
+                />
               </div>
             )
           })}
@@ -1310,7 +1364,7 @@ function ThreadBody({
         </div>
         <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
           {files && files.length > 0 && totals && !busy && (
-            <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} onReview={showChanges} />
+            <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
           )}
           <AgentDock
             thread={thread}

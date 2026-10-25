@@ -15,7 +15,7 @@ import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
-import { Page } from './Page'
+import { ListColumn, Page } from './Page'
 
 /** The messages a conversation holds: its prompts and the agent's answers. */
 function messageCount(lines: ShowLine[]): number {
@@ -38,6 +38,13 @@ function standing(mr: MrSummary): { label: string; tone: DotTone } {
   return { label: 'Open', tone: 'accent' }
 }
 
+type ListTab = 'open' | 'merged' | 'declined'
+const LIST_TABS: [ListTab, string][] = [
+  ['open', 'Open'],
+  ['merged', 'Merged'],
+  ['declined', 'Declined'],
+]
+
 export function MergeRequests() {
   useTopic('mrs')
   const now = useNow()
@@ -45,15 +52,16 @@ export function MergeRequests() {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const titleOf = (id: string) => threads.data?.find((thread) => thread.id === id)?.title ?? short(id)
   const ownerOf = (id: string) => threads.data?.find((thread) => thread.id === id)?.owner
+  const [tab, setTab] = useState<ListTab>('open')
   const shown = [...(requests.data ?? [])].reverse()
-  const open = shown.filter((mr) => mr.status === 'open')
-  const closed = shown.filter((mr) => mr.status !== 'open')
+  const inTab = (which: ListTab) =>
+    shown.filter((mr) => (which === 'open' ? mr.status === 'open' : which === 'merged' ? mr.status === 'approved' : mr.status.startsWith('declined')))
+  const open = inTab('open')
   const list = (title: string, items: MrSummary[]) =>
-    items.length > 0 && (
+    items.length === 0 ? (
+      <p className="px-1 text-sm text-fg-2">No {title.toLowerCase()} merge requests.</p>
+    ) : (
       <section aria-label={title.toLowerCase()} className="flex flex-col gap-2">
-        <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
-          {title} · {items.length}
-        </h2>
         <ul className="overflow-hidden rounded-md border border-line bg-elevated">
           {items.map((mr) => {
             const state = standing(mr)
@@ -65,9 +73,9 @@ export function MergeRequests() {
                     {mr.title}
                   </Link>
                   <span className="truncate font-mono text-2xs text-fg-2">
-                    {[ownerOf(mr.fork), `into ${titleOf(mr.target)}`, state.label].filter(Boolean).join(' · ')}
+                    {[ownerOf(mr.fork), `→ ${titleOf(mr.target)}`, state.label].filter(Boolean).join(' · ')}
                     {' · '}
-                    <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
+                    <span data-volatile>{ago(Number(mr.decided_ms ?? mr.opened_ms), now)}</span>
                   </span>
                 </div>
               </li>
@@ -77,18 +85,36 @@ export function MergeRequests() {
       </section>
     )
   return (
-    <Page title="Merge requests" meta={`${open.length} open`} width="wide">
-      {requests.error && <p className="text-danger">{message(requests.error)}</p>}
-      {requests.isPending && <Skeleton className="h-24" />}
-      <div data-testid="merge-requests" className="flex flex-col gap-6">
-        {requests.data?.length === 0 && (
-          <EmptyState title="Offer a fork's work back to review it here">
-            A fork offers its work with "Offer as merge request" on its page, or <code className="font-mono">silt mr create</code>.
-          </EmptyState>
-        )}
-        {list('Open', open)}
-        {list('Closed', closed)}
-      </div>
+    <Page flush label="merge requests" title="Merge requests" meta={`${open.length} open`}>
+      <ListColumn>
+        {requests.error && <p className="text-danger">{message(requests.error)}</p>}
+        {requests.isPending && <Skeleton className="h-24" />}
+        <div data-testid="merge-requests" className="flex flex-col gap-4">
+          {requests.data?.length === 0 && (
+            <EmptyState title="Offer a fork's work back to review it here">
+              A fork offers its work with "Offer as merge request" on its page, or <code className="font-mono">silt mr create</code>.
+            </EmptyState>
+          )}
+          {(requests.data?.length ?? 0) > 0 && (
+            <>
+              <Tabs
+                label="merge requests by state"
+                value={tab}
+                onChange={setTab}
+                tabs={LIST_TABS.map(([id, label]) => ({
+                  id,
+                  label: (
+                    <>
+                      {label} <span className="font-mono text-fg-2">{inTab(id).length}</span>
+                    </>
+                  ),
+                }))}
+              />
+              {list(LIST_TABS.find(([id]) => id === tab)![1], inTab(tab))}
+            </>
+          )}
+        </div>
+      </ListColumn>
     </Page>
   )
 }
@@ -99,11 +125,14 @@ function ChangeGuide({
   guide,
   act,
   files,
+  decided,
 }: {
   id: string
   guide: MrGuide | null
   act: (action: Promise<unknown>) => Promise<unknown>
   files: string[]
+  /** Approved or declined, so there's no more reviewing to guide. */
+  decided: boolean
 }) {
   const [writing, setWriting] = useState(false)
   const [text, setText] = useState('')
@@ -113,7 +142,7 @@ function ChangeGuide({
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Change guide</h2>
         {guide && <span className="text-2xs text-fg-2">written by {guide.by}</span>}
-        <span className="ml-auto flex gap-1">
+        <span className={cx('ml-auto flex gap-1', decided && 'hidden')}>
           <Button
             size="sm"
             onClick={() => {
@@ -186,16 +215,28 @@ function Approval({
   error: string | undefined
 }) {
   const [reason, setReason] = useState('')
+  const now = useNow()
   const open = mr.status === 'open'
+  const targetName = (
+    <span className={target ? undefined : 'font-mono'} title={mr.target} data-volatile>
+      {target ?? short(mr.target)}
+    </span>
+  )
+  const declinedFor = mr.status.startsWith('declined: ') ? mr.status.slice('declined: '.length) : undefined
   return (
     <section aria-label="approval" className="flex w-full flex-col gap-2.5">
       <div className="flex items-center gap-2">
         <Dot tone={open ? 'warn' : standing(mr).tone} />
-        <span className="text-xs font-medium">
-          {open ? 'Needs 1 approval' : mr.status === 'approved' ? 'Approved and merged' : 'Declined'}
-        </span>
+        <span className="text-xs font-medium">{open ? 'Needs 1 approval' : mr.status === 'approved' ? 'Approved and merged' : 'Declined'}</span>
         {open && <span className="ml-auto text-xs text-fg-2">{canApprove ? 'you can approve' : 'its owner approves'}</span>}
+        {!open && mr.decided_ms !== null && (
+          <span className="ml-auto text-xs text-fg-2" data-volatile>
+            {ago(Number(mr.decided_ms), now)}
+          </span>
+        )}
       </div>
+      {mr.status === 'approved' && <p className="text-xs text-fg-2">Its code and conversation are now part of {targetName}.</p>}
+      {declinedFor && <p className="text-xs text-fg-2">{declinedFor}</p>}
       {open && (
         <>
           <Button variant="primary" size="lg" icon="check" className="justify-center" onClick={() => void act(api.approve(id))}>
@@ -225,13 +266,11 @@ function Approval({
           </div>
         </>
       )}
-      <p className="text-2xs leading-normal text-fg-2">
-        Merging brings the fork’s code and its conversation into{' '}
-        <span className={target ? undefined : 'font-mono'} title={mr.target} data-volatile>
-          {target ?? short(mr.target)}
-        </span>
-        . History from both sides stays searchable.
-      </p>
+      {open && (
+        <p className="text-2xs leading-normal text-fg-2">
+          Merging brings the fork’s code and its conversation into {targetName}. History from both sides stays searchable.
+        </p>
+      )}
       {error && <p className="text-xs text-danger">{error}</p>}
     </section>
   )
@@ -257,7 +296,8 @@ function PhoneFiles({
   at: number
   onAt: (at: number) => void
   seenNow: (file: MrFile) => boolean
-  onSeen: (path: string, seen: boolean) => void
+  /** Unset once it is decided, when there's nothing left to tick off. */
+  onSeen: ((path: string, seen: boolean) => void) | undefined
   diff: string
   counts: Map<string, { added: number; removed: number; binary: boolean }>
   commenting: Commenting
@@ -274,22 +314,32 @@ function PhoneFiles({
           <span className="truncate font-mono text-xs">{file.path}</span>
           <span className="flex items-center gap-2 font-mono text-2xs text-fg-2">
             <span>
-              file {at + 1} of {files.length} · <span data-testid="seen-count">{seen}/{files.length} seen</span>
+              file {at + 1} of {files.length}
+              {onSeen && (
+                <>
+                  {' · '}
+                  <span data-testid="seen-count">
+                    {seen}/{files.length} seen
+                  </span>
+                </>
+              )}
             </span>
             <CopyLink path={`/mr/${id}#file-${file.path}`} thread={target} label="Copy link" name="link" className="-my-2 inline-flex min-h-11 items-center text-accent-fg" />
           </span>
         </span>
         {stats && <Counts added={stats.added} removed={stats.removed} binary={stats.binary} />}
-        <label className="flex min-h-11 items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            aria-label={`seen ${file.path}`}
-            checked={seenNow(file)}
-            onChange={(event) => onSeen(file.path, event.target.checked)}
-            className="h-5 w-5 accent-[var(--accent)]"
-          />
-          Seen
-        </label>
+        {onSeen && (
+          <label className="flex min-h-11 items-center gap-1.5 text-xs">
+            <input
+              type="checkbox"
+              aria-label={`seen ${file.path}`}
+              checked={seenNow(file)}
+              onChange={(event) => onSeen(file.path, event.target.checked)}
+              className="h-5 w-5 accent-[var(--accent)]"
+            />
+            Seen
+          </label>
+        )}
       </div>
       <DiffView text={diff} only={file.path} commenting={commenting} bare />
       {files.length > 1 && (
@@ -358,6 +408,7 @@ export function MergeRequest({ id }: { id: string }) {
   const forkThread = threads.data?.find((thread) => thread.id === mr.fork)
   const targetThread = threads.data?.find((thread) => thread.id === mr.target)
   const state = standing(mr)
+  const open = mr.status === 'open'
   // A tick shows at once, before the daemon answers.
   const seenNow = (file: MrFile) => ticked[file.path] ?? file.seen
   const seenCount = files.filter(seenNow).length
@@ -373,7 +424,7 @@ export function MergeRequest({ id }: { id: string }) {
     setTicked((before) => ({ ...before, [path]: seen }))
     void act(api.markSeen(id, path, seen))
   }
-  const seenBox = (file: MrFile) => (
+  const seenBox = (file: MrFile) => open && (
     <input
       type="checkbox"
       aria-label={`seen ${file.path}`}
@@ -397,15 +448,19 @@ export function MergeRequest({ id }: { id: string }) {
             {state.label}
           </span>
           {forkThread?.owner && <Avatar name={forkThread.owner} size={16} />}
-          <span>{forkThread?.owner ? `${forkThread.owner} wants to merge` : 'merge'}</span>
-          <Link className="max-w-[16rem] truncate text-accent-fg" to="/t/$id" params={{ id: mr.fork }} title={mr.fork}>
+          <span className="shrink-0">
+            {forkThread?.owner ? `${forkThread.owner} ${open ? 'wants to merge' : mr.status === 'approved' ? 'merged' : 'offered'}` : 'from'}
+          </span>
+          <Link className="inline-block max-w-[14rem] truncate align-bottom text-accent-fg" to="/t/$id" params={{ id: mr.fork }} title={forkThread?.title ?? mr.fork}>
             <span data-volatile>{forkThread?.title ?? short(mr.fork)}</span>
           </Link>
-          <span>into</span>
-          <Link className="max-w-[16rem] truncate text-accent-fg" to="/t/$id" params={{ id: mr.target }} title={mr.target}>
+          <span aria-label="into" className="shrink-0">
+            →
+          </span>
+          <Link className="inline-block max-w-[14rem] truncate align-bottom text-accent-fg" to="/t/$id" params={{ id: mr.target }} title={targetThread?.title ?? mr.target}>
             <span data-volatile>{targetThread?.title ?? short(mr.target)}</span>
           </Link>
-          <span>
+          <span className="shrink-0">
             · opened <span data-volatile>{ago(Number(mr.opened_ms), now)}</span>
           </span>
         </span>
@@ -427,7 +482,7 @@ export function MergeRequest({ id }: { id: string }) {
     >
       <div className="flex flex-col gap-3 border-b border-line-subtle px-4 py-4 md:px-6">
         {mr.summary && <Markdown text={mr.summary} className="max-w-[720px]" />}
-        <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} />
+        {(open || details.data.guide) && <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} decided={!open} />}
       </div>
       {mr.changes_requested && (
         <div data-testid="changes-requested" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6">
@@ -477,7 +532,7 @@ export function MergeRequest({ id }: { id: string }) {
           at={Math.min(fileAt, files.length - 1)}
           onAt={setFileAt}
           seenNow={seenNow}
-          onSeen={markSeen}
+          onSeen={open ? markSeen : undefined}
           diff={diff}
           counts={counts}
           commenting={{
@@ -498,14 +553,16 @@ export function MergeRequest({ id }: { id: string }) {
         <div className="flex flex-col md:flex-row">
           {files.length > 0 && (
             <nav aria-label="files" className="flex shrink-0 flex-col gap-0.5 border-b border-line p-3 md:w-64 md:border-r md:border-b-0">
-              <div className="flex items-center gap-2 px-2 pb-2 text-xs text-fg-2">
-                <span className="h-1 flex-1 overflow-hidden rounded-sm bg-surface-2" aria-hidden="true">
-                  <span className="block h-full bg-accent" style={{ width: `${(100 * seenCount) / files.length}%` }} />
-                </span>
-                <span data-testid="seen-count" className="font-mono text-2xs">
-                  {seenCount}/{files.length} seen
-                </span>
-              </div>
+              {open && (
+                <div className="flex items-center gap-2 px-2 pb-2 text-xs text-fg-2">
+                  <span className="h-1 flex-1 overflow-hidden rounded-sm bg-surface-2" aria-hidden="true">
+                    <span className="block h-full bg-accent" style={{ width: `${(100 * seenCount) / files.length}%` }} />
+                  </span>
+                  <span data-testid="seen-count" className="font-mono text-2xs">
+                    {seenCount}/{files.length} seen
+                  </span>
+                </div>
+              )}
               {files.map((file) => {
                 const stats = counts.get(file.path)
                 return (
@@ -524,7 +581,7 @@ export function MergeRequest({ id }: { id: string }) {
                   </div>
                 )
               })}
-              <p className="px-2 pt-2 text-2xs leading-normal text-fg-2">A file you marked seen comes back if the fork changes it again.</p>
+              {open && <p className="px-2 pt-2 text-2xs leading-normal text-fg-2">A file you marked seen comes back if the fork changes it again.</p>}
             </nav>
           )}
           <div className="min-w-0 flex-1 px-4 py-4 md:px-6">

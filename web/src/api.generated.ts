@@ -508,6 +508,10 @@ export type MrSummary = { id: string, fork: string, target: string, title: strin
  */
 status: string, opened_ms: number, 
 /**
+ * When it was approved or declined.
+ */
+decided_ms: number | null, 
+/**
  * What to change before it's taken, while it's open (ADR 0025).
  */
 changes_requested: string | null, 
@@ -520,7 +524,12 @@ export type PermissionAsked = { id: number, title: string,
 /**
  * Option ids and labels.
  */
-options: Array<[string, string]>, };
+options: Array<[string, string]>, 
+/**
+ * The plan it asks to approve, as Markdown, when it is the agent's
+ * own plan approval, as Claude's ExitPlanMode is.
+ */
+plan: string | null, };
 
 export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access" | "plan";
 

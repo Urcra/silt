@@ -148,6 +148,9 @@ impl Core {
                 None => inherited(),
             }),
             agent: conversation.iter().rev().find_map(|delta| match &delta.op {
+                Op::Conv(ConvOp::Native { session, .. }) if session.agent == silt_agents::acp::AGENT => {
+                    Some(acp_agent_name(&conversation).unwrap_or_else(|| session.agent.clone()))
+                }
                 Op::Conv(ConvOp::Native { session, .. }) => Some(
                     silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()),
                 ),
@@ -616,6 +619,17 @@ fn title(conversation: &[&Delta]) -> Option<String> {
 
 /// The conversation's first prompt as a title, and how many prompts and
 /// replies it has, read in one pass.
+/// The name an ACP session's latest `session` record gives its agent: every
+/// ACP agent records under the one adapter, whose own name says nothing.
+fn acp_agent_name(conversation: &[&Delta]) -> Option<String> {
+    conversation.iter().rev().find_map(|delta| match &delta.op {
+        Op::Conv(ConvOp::Native { session, line, .. }) if session.agent == silt_agents::acp::AGENT => {
+            silt_agents::acp::name_of(line)
+        }
+        _ => None,
+    })
+}
+
 fn first_prompt_and_messages(conversation: &[&Delta]) -> (Option<String>, usize) {
     let mut transcripts = Transcripts::default();
     let mut first_prompt = None;

@@ -14,7 +14,7 @@ import { formatKeys } from '../shortcuts'
 import { threadDoing } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Avatar, Button, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, cx } from '../ui'
+import { Avatar, Button, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, buttonClass, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { PaletteRow } from './Palette'
 import { ThreadMark } from './ThreadMark'
@@ -46,7 +46,8 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
         <ThreadMark thread={thread} />
         <span className={cx('min-w-0 flex-1 truncate', unread(thread) && 'font-semibold')}>{title}</span>
         {thread.mine.pinned && <span className="sr-only"> pinned</span>}
-        {unread(thread) && <span aria-label="unread" role="img" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}
+        {/* Not amber, which the dot before the title keeps for what waits on someone. */}
+        {unread(thread) && <span aria-label="unread" role="img" className="h-1.5 w-1.5 shrink-0 rounded-full bg-info" />}
         {aside ?? (
           <span className="min-w-7 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3 group-hover:invisible" data-volatile>
             {ago(thread.last_ms, now).replace('just now', 'now')}
@@ -78,6 +79,20 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
   }
   const asked = status?.permissions[0]
   const title = thread.title ?? 'Untitled thread'
+  // A request waiting for review is named for itself, not for the thread it would merge into.
+  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: thread.review && !asked })
+  const review = thread.review && !asked ? (mrs.data ?? []).find((mr) => mr.target === thread.id && mr.status === 'open') : undefined
+  if (review)
+    return (
+      <li role="group" aria-label={`${review.title} needs you`}>
+        <Link to="/mr/$id" params={{ id: review.id }} className={cx(ROW, 'py-[5px] pl-2')} title={`Merge request into ${title}`}>
+          <Icon name="merge" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+          <span className="min-w-0 flex-1 truncate">{review.title}</span>
+          <span className="shrink-0 text-2xs text-accent-fg">review</span>
+        </Link>
+      </li>
+    )
+  const first = asked?.options[0]
   return (
     <li role="group" aria-label={`${title} needs you`}>
       <ul>
@@ -85,15 +100,19 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
       </ul>
       {asked && (
         <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">
-          <p className="truncate text-fg-2" title={asked.title}>
-            Asks to run: <span className="font-mono">{asked.title}</span>
+          <p className="truncate text-fg-2" title={asked.plan ? 'A plan to approve' : asked.title}>
+            {asked.plan ? 'A plan to approve' : <>Asks to run: <span className="font-mono">{asked.title}</span></>}
           </p>
-          <div className="flex flex-wrap gap-1">
-            {asked.options.map(([option, label], index) => (
-              <Button key={option} size="sm" variant={index === 0 ? 'primary' : 'secondary'} onClick={() => act(api.answer(thread.id, asked.id, option))}>
-                {label}
+          {/* The first answer here; every other, and the plan, on the thread's own card. */}
+          <div className="flex min-w-0 gap-1">
+            {first && !asked.plan && (
+              <Button size="sm" variant="primary" className="min-w-0" title={first[1]} onClick={() => act(api.answer(thread.id, asked.id, first[0]))}>
+                <span className="truncate">{first[1]}</span>
               </Button>
-            ))}
+            )}
+            <Link to="/t/$id" params={{ id: thread.id }} className={buttonClass('secondary', 'sm')}>
+              {asked.plan ? 'Read the plan' : 'Open'}
+            </Link>
           </div>
         </div>
       )}
@@ -116,6 +135,8 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
   const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
   const shown = newest.filter((thread) => ['needs_you', 'working', 'active'].includes(section(thread, now)))
   const rest = newest.filter((thread) => ['snoozed', 'settled'].includes(section(thread, now)))
+  const restKinds = new Set(rest.map((thread) => section(thread, now)))
+  const restSaid = restKinds.size > 1 ? 'settled or snoozed' : [...restKinds][0]
   const working = threads.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
   return (
     <section aria-label={repo} className="mb-0.5">
@@ -156,7 +177,7 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
               onClick={() => setShowRest(!showRest)}
               className="block py-1 pr-2 pl-[26px] text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
             >
-              {showRest ? 'Show fewer' : `Show ${rest.length} more`}
+              {showRest ? 'Show fewer' : `Show ${rest.length} ${restSaid}`}
             </button>
           )}
         </>
@@ -200,7 +221,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const sync = status.data?.sync_error
   const agents = running === 0 ? null : `${running === 1 ? '1 agent' : `${running} agents`}${waiting > 0 ? `, ${waiting} waiting` : ' running'}`
   return (
-    <div className="mt-auto flex items-center gap-2 border-t border-line px-2 pt-2.5 pb-1 text-xs text-fg-2">
+    <div className="flex items-center gap-2 border-t border-line px-2 pt-2.5 pb-1 text-xs text-fg-2">
       {hosted() ? (
         <span className="flex-1 truncate">On the server</span>
       ) : (
@@ -244,6 +265,7 @@ export function Sidebar() {
   const reviews = mine.filter((thread) => thread.review).length
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
+    <>
     <nav aria-label="projects" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px] [&>*]:shrink-0">
       <div className="flex items-center gap-2 px-1.5 pb-2.5">
         <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
@@ -319,7 +341,11 @@ export function Sidebar() {
       {projects(listed).map(([repo, inRepo]) => (
         <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
       ))}
-      <DeviceFooter threads={mine} />
     </nav>
+    {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
+    <div className="shrink-0 px-2 pb-2">
+      <DeviceFooter threads={mine} />
+    </div>
+    </>
   )
 }

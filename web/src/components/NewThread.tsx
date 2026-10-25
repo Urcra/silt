@@ -5,7 +5,7 @@ import { rememberedModes } from '../agentModes'
 import { PRESETS } from '../agentState'
 import { api, type CloneInfo, type FoundFolder, type Preset, type Project } from '../api'
 import { useNow } from '../now'
-import { projectName } from '../projects'
+import { projectName, shortPath } from '../projects'
 import { keys, message } from '../query'
 import type { NewThreadSearch } from '../router'
 import { formatKeys } from '../shortcuts'
@@ -44,7 +44,7 @@ const WHERE: { id: Where; label: string }[] = [
 ]
 
 function whereSays(where: Where, clone: string, base: string): string {
-  if (where === 'local') return `Works in your clone at ${clone}; edits land in your working tree.`
+  if (where === 'local') return `Works in your clone at ${shortPath(clone)}; edits land in your working tree.`
   if (where === 'worktree')
     return `Gets its own checkout under .silt/checkouts, from ${base || 'what the clone has checked out'}. Bring it back with a merge request.`
   return "Runs claude --cloud from the project's GitHub remote with your own sign-in; it records into a thread here."
@@ -157,7 +157,7 @@ function ProjectPicker({
   const added = (path: string, close: () => void) => {
     void queries.invalidateQueries({ queryKey: keys.agents })
     void queries.invalidateQueries({ queryKey: keys.projects })
-    toast(`Added ${path}`, 'ok')
+    toast(`Added ${projectName(path)}`, 'ok')
     onPick(path)
     close()
   }
@@ -226,9 +226,12 @@ function ProjectPicker({
               ))}
             </ul>
           )}
-          <p className="border-t border-line-subtle px-1 pt-1.5 text-2xs text-fg-2">
-            <Kbd>{formatKeys('n')}</Kbd> starts in the current project · <Kbd>{formatKeys('shift+n')}</Kbd> opens this picker
-          </p>
+          {/* Only beside the projects the keys pick from. */}
+          {tab === 'projects' && (
+            <p className="border-t border-line-subtle px-1 pt-1.5 text-2xs text-fg-2 max-md:hidden">
+              <Kbd>{formatKeys('n')}</Kbd> starts in the current project · <Kbd>{formatKeys('shift+n')}</Kbd> opens this picker
+            </p>
+          )}
         </div>
       )}
     </Popover>
@@ -364,7 +367,7 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
           <span className="truncate text-xs text-fg-2">
             {thread.location === 'moved' ? 'last on another device · resume here or fork' : [thread.agent, thread.agent_state === 'working' && 'working'].filter(Boolean).join(' · ')}
           </span>
-          <span className="w-8 shrink-0 text-right font-mono text-2xs text-fg-3" data-volatile>
+          <span className="min-w-8 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
             {ago(thread.last_ms, now)}
           </span>
         </Link>

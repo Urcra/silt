@@ -125,7 +125,7 @@ test('reviews and approves a merge request', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)
   await page.getByRole('link', { name: 'Merge requests' }).click()
-  await page.getByRole('link', { name: 'Add forked' }).click()
+  await page.getByTestId('merge-requests').getByRole('link', { name: 'Add forked' }).click()
   await expect(page.getByTestId('mr-status')).toHaveText('open')
   await expect(page.getByTestId('diff')).toContainText('+ fn forked() {}')
   await page.getByRole('tab', { name: /^The fork’s conversation/ }).click()

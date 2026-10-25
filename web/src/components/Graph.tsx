@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { api, short, type GraphQuery, type GraphRow, type ThreadSummary } from '../api'
 import { parseFiles } from '../diffParse'
 import { useTopic } from '../bus'
-import { layout } from '../lanes'
+import { byFamily, layout } from '../lanes'
 import { useMedia } from '../media'
 import { plain } from '../plain'
 import { useNow } from '../now'
@@ -95,7 +95,7 @@ function KindTag({ row }: { row: GraphRow }) {
 }
 
 /** The chosen row, in full, with what can be done from it (the Graph board's panel). */
-function Details({ row, thread }: { row: GraphRow; thread: ThreadSummary | undefined }) {
+function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSummary | undefined; described: string }) {
   const now = useNow()
   const navigate = useNavigate()
   const queries = useQueryClient()
@@ -114,7 +114,7 @@ function Details({ row, thread }: { row: GraphRow; thread: ThreadSummary | undef
           <KindTag row={row} />
           {row.turn !== null && <span className="font-mono text-2xs text-fg-2">turn {row.turn}</span>}
         </span>
-        <h2 className="text-lg font-medium break-words">{plain(row.text)}</h2>
+        <h2 className="text-lg font-medium break-words">{described}</h2>
       </div>
       <KeyValue
         rows={[
@@ -228,13 +228,18 @@ export function Graph() {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const threadOf = (id: string) => threads.data?.find((thread) => thread.id === id)
   const wanted = text.trim().toLowerCase()
-  const rows = (graph.data ?? []).filter(
-    (row) =>
-      !wanted ||
-      row.text.toLowerCase().includes(wanted) ||
-      row.owner.toLowerCase().includes(wanted) ||
-      (threadOf(row.thread)?.title ?? '').toLowerCase().includes(wanted),
+  const rows = byFamily(
+    (graph.data ?? []).filter(
+      (row) =>
+        !wanted ||
+        row.text.toLowerCase().includes(wanted) ||
+        row.owner.toLowerCase().includes(wanted) ||
+        (threadOf(row.thread)?.title ?? '').toLowerCase().includes(wanted),
+    ),
   )
+  const oldest = Math.min(...(graph.data ?? []).map((row) => Number(row.time_ms)))
+  // The tag already says it forked; its text says from where, by name.
+  const describe = (row: GraphRow) => (row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text))
   const picked = chosen && rows.find((row) => row.id === chosen.id) ? chosen : rows[0]
   const grid = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_200px_140px_56px]'
   // A phone's rows are tall enough to tap; the lanes follow them.
@@ -244,7 +249,7 @@ export function Graph() {
       flush
       label="history graph"
       title="History graph"
-      inspector={picked ? <Details row={picked} thread={threadOf(picked.thread)} /> : undefined}
+      inspector={picked ? <Details row={picked} thread={threadOf(picked.thread)} described={describe(picked)} /> : undefined}
       inspectorLabel="selected"
       inspectorTitle="Selected"
     >
@@ -323,7 +328,7 @@ export function Graph() {
                       >
                         <span className="flex min-w-0 items-center gap-2">
                           <KindTag row={row} />
-                          <span className={cx('min-w-0 truncate', row.kind === 'fork' && 'font-mono text-xs')}>{plain(row.text)}</span>
+                          <span className="min-w-0 truncate">{describe(row)}</span>
                           {row.turn !== null && <span className="shrink-0 font-mono text-2xs text-fg-2">turn {row.turn}</span>}
                           {thread && ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') && row.kind === 'turn' && (
                             <span className="shrink-0 rounded-sm bg-warn-tint px-1.5 text-2xs">waiting on you</span>
@@ -355,7 +360,7 @@ export function Graph() {
             </Button>
           )}
           {(graph.data?.length ?? 0) >= 200 && (
-            <Button variant="ghost" onClick={() => setBefore([...before, Number(rows[rows.length - 1].time_ms)])}>
+            <Button variant="ghost" onClick={() => setBefore([...before, oldest])}>
               <Icon name="chevronDown" />
               Load older history
             </Button>

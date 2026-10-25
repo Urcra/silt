@@ -101,7 +101,7 @@ export function Kbd({ children, onAccent = false }: { children: ReactNode; onAcc
     <kbd
       aria-hidden="true"
       className={cx(
-        'inline-flex min-w-[18px] justify-center rounded-sm border px-1 font-mono text-2xs pointer-coarse:hidden',
+        'inline-flex min-w-[18px] justify-center rounded-sm border px-1 font-mono text-2xs pointer-coarse:hidden max-md:hidden',
         onAccent ? 'border-on-accent/30 bg-transparent text-on-accent' : 'border-line bg-surface-1 text-fg-2',
       )}
     >

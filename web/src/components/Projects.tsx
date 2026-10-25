@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
 import { DEFAULT_PRESETS, PRESETS } from '../agentState'
 import { api, type GitNotes, type Project } from '../api'
+import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { Button, EmptyState, Input, Select, Skeleton, Tag, buttonClass, toast } from '../ui'
@@ -219,7 +220,7 @@ export function AddProjectPage() {
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
   const where = workspace.kind === 'server' ? (workspace.org ?? serverName(workspace.server)) : 'your workspace'
   const added = (repo: string) => {
-    toast(`Added ${repo}`, 'ok')
+    toast(`Added ${projectName(repo)}`, 'ok')
     setPath('')
     setUrl('')
     setInto('')

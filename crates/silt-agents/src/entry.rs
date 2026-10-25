@@ -81,7 +81,7 @@ impl Entry {
             Self::User { text } | Self::Assistant { text } | Self::Thinking { text } | Self::ToolResult { text, .. } => {
                 Some(text.clone())
             }
-            Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
+            Self::ToolCall { name, input, .. } => Some(call_text(name, input)),
             Self::Plan { steps } => Some(plan_text(steps)),
             Self::Compaction { summary } => summary.clone(),
             Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
@@ -95,12 +95,30 @@ impl Entry {
             Self::User { text } | Self::Assistant { text } | Self::Thinking { text } | Self::ToolResult { text, .. } => {
                 Some(text)
             }
-            Self::ToolCall { name, input, .. } => Some(format!("{name} {input}")),
+            Self::ToolCall { name, input, .. } => Some(call_text(&name, &input)),
             Self::Plan { steps } => Some(plan_text(&steps)),
             Self::Compaction { summary } => summary,
             Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
         }
     }
+}
+
+/// A tool call as a search finds it: its name and the values it was given,
+/// as `Bash cargo test -p silt-store`, not its input's JSON, whose keys and
+/// escapes would match every call.
+fn call_text(name: &str, input: &serde_json::Value) -> String {
+    fn values(value: &serde_json::Value, into: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(text) => into.push(text.clone()),
+            serde_json::Value::Number(number) => into.push(number.to_string()),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| values(item, into)),
+            serde_json::Value::Object(fields) => fields.values().for_each(|field| values(field, into)),
+            serde_json::Value::Bool(_) | serde_json::Value::Null => {}
+        }
+    }
+    let mut said = vec![name.to_owned()];
+    values(input, &mut said);
+    said.join(" ")
 }
 
 fn plan_text(steps: &[(String, String)]) -> String {

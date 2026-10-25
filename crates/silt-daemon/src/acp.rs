@@ -726,7 +726,16 @@ impl Core {
             permissions: run
                 .asking
                 .iter()
-                .map(|asked| PermissionAsked { id: asked.id, title: asked.title.clone(), options: asked.options.clone() })
+                .map(|asked| PermissionAsked {
+                    id: asked.id,
+                    title: asked.title.clone(),
+                    options: asked.options.clone(),
+                    plan: run
+                        .tool_said
+                        .get(&asked.tool_call_id)
+                        .and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
+                        .map(str::to_owned),
+                })
                 .collect(),
             questions: run.questions.iter().map(question_asked).collect(),
             context: run.context,
@@ -794,8 +803,16 @@ impl Core {
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::ModeChanged(mode)) => {
+                let left_planning = run.plan_mode().is_some_and(|plan| plan != mode);
                 if let Some(modes) = &mut run.modes {
-                    modes.current = mode;
+                    modes.current = mode.clone();
+                }
+                // The agent left its plan mode by the person's answer to its own
+                // plan, as Claude's does: the thread goes on as that answer said,
+                // where Silt's plan card would have moved it (ADR 0044).
+                if left_planning && self.preset(thread) == Preset::Plan {
+                    self.acp.get_mut(&thread).expect("caller checked").back_to = None;
+                    self.set_preset(thread, preset_for_mode(&mode)).await?;
                 }
             }
             AcpEvent::Agent(silt_acp::Event::Settings(settings)) => run.settings = settings,
@@ -1086,6 +1103,16 @@ impl AcpRun {
 
 /// Makes the next turn a Plan first one: in the agent's plan mode when it
 /// has one, and by the prompt otherwise.
+/// The preset that lets an agent do what its mode `mode` does, by the ids
+/// Claude's and Codex's adapters use; any other asks before commands.
+fn preset_for_mode(mode: &str) -> Preset {
+    match mode {
+        "default" | "read-only" => Preset::AskForEverything,
+        "bypassPermissions" | "auto" | "dontAsk" | "full-access" => Preset::FullAccess,
+        _ => Preset::AskBeforeCommands,
+    }
+}
+
 fn plan_first(run: &mut AcpRun) {
     run.planning = true;
     let Some(plan) = run.plan_mode().map(str::to_owned) else {

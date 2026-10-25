@@ -43,7 +43,13 @@ const COMPONENTS: Components = {
     )
   },
   code({ children }) {
-    return <code className="rounded-sm border border-line-subtle bg-surface-1 px-1 font-mono text-[0.92em]">{children}</code>
+    // A short chip, a path or a name, stays whole on its line; a long one wraps with each piece boxed.
+    const short = textOf(children).length <= 40
+    return (
+      <code className={cx('rounded-sm border border-line-subtle bg-surface-1 px-1 font-mono text-[0.92em]', short ? 'whitespace-nowrap' : '[box-decoration-break:clone]')}>
+        {children}
+      </code>
+    )
   },
   a({ href, children }) {
     const outside = href !== undefined && /^https?:/.test(href)

@@ -9,7 +9,7 @@ import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, Icon, Kbd, Spinner, cx } from '../ui'
+import { Button, Dot, Icon, Kbd, Popover, Spinner, cx } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
@@ -40,8 +40,19 @@ function ready(status: AgentStatus): boolean {
 }
 
 /** Whether a turn is under way. */
+/** The model the agent says it runs, by its name, when it says. */
+function modelOf(status: AgentStatus): string | undefined {
+  const model = status.settings.find((setting) => setting.category === 'model')
+  return model?.choices.find((choice) => choice.id === model.current)?.name
+}
+
 function working(status: AgentStatus | null): boolean {
   return status?.state === 'working' || status?.state === 'awaiting_permission'
+}
+
+function statePhrase(status: AgentStatus): string {
+  const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
+  return `${status.agent} ${asking ? 'is asking you a question' : STATE_PHRASE[status.state]}`
 }
 
 /** A permission the agent asks for, answered in place: ⏎ allows, Esc dismisses (ADR 0022). */
@@ -55,16 +66,30 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
   useShortcut('enter', 'Allow what the agent asks', () => {
     if (first && allow && !document.querySelector('dialog[open]')) answer(allow[0])
   })
-  useShortcut('escape', 'Dismiss what the agent asks', () => {
+  useShortcut('escape', 'Answer neither and stop the turn', () => {
     if (first && !document.querySelector('dialog[open]')) answer(null)
   })
   return (
-    <div role="group" aria-label="permission" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
-      <span className="flex items-center gap-2 text-xs text-fg-2">
-        <span className="h-1.5 w-1.5 rounded-full bg-warn" />
-        {agent} asks to run
+    <div role="group" aria-label={asked.plan ? 'plan' : 'permission'} className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+      {/* The tool's own card above shows the whole command; here it is only named. */}
+      <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
+        {asked.plan ? (
+          `${agent}'s plan, to approve before it changes anything`
+        ) : (
+          <>
+            <span className="shrink-0">{agent} asks to run</span>
+            <code className="min-w-0 truncate font-mono text-fg-1" title={asked.title}>
+              {asked.title}
+            </code>
+          </>
+        )}
       </span>
-      <code className="rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs break-all text-fg-1">{asked.title}</code>
+      {asked.plan && (
+        <div className="max-h-[50vh] overflow-y-auto rounded-sm border border-line-subtle bg-bg px-3.5 py-2.5 text-sm">
+          <Markdown text={asked.plan} />
+        </div>
+      )}
       <span className="flex flex-wrap gap-1.5">
         {asked.options.map(([option, label], index) => (
           <Button key={option} variant={index === 0 ? 'primary' : 'secondary'} onClick={() => answer(option)}>
@@ -72,8 +97,8 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
             {index === 0 && first && <Kbd onAccent>⏎</Kbd>}
           </Button>
         ))}
-        <Button variant="ghost" onClick={() => answer(null)}>
-          Dismiss {first && <Kbd>Esc</Kbd>}
+        <Button variant="ghost" title="Answers neither: the agent drops what it asked and ends its turn" onClick={() => answer(null)}>
+          Stop the turn {first && <Kbd>Esc</Kbd>}
         </Button>
       </span>
       {error && <span className="text-xs text-danger">{error}</span>}
@@ -166,7 +191,9 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
         <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
           {/* Blocked on the person, not busy: no spinner. */}
           {status.state === 'awaiting_permission' ? <Dot tone="warn" /> : <Spinner />}
-          <span className="text-fg-1">{status.state === 'awaiting_permission' ? 'Waiting on you' : 'Working'}</span>
+          <span data-testid="agent-state" className="min-w-0 truncate text-fg-1">
+            {statePhrase(status)}
+          </span>
           {clock && (
             <span className="font-mono" data-volatile>
               {clock}
@@ -281,15 +308,48 @@ export function AgentDock({
     })
   }
 
+  // While a turn runs, the line above the composer says so, with its clock.
   const statusLine = live ? (
-    <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
-      {status.agent} {(status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission' ? 'is asking you a question' : STATE_PHRASE[status.state]}
-    </span>
+    !working(status) && (
+      <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
+        {statePhrase(status)}
+      </span>
+    )
   ) : elsewhere?.agent ? (
     <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
       {elsewhere.user}&apos;s {elsewhere.agent.name} {STATE_PHRASE[elsewhere.agent.state]}
     </span>
   ) : null
+
+  const agentSettings = live && (
+    <>
+      {status.modes && (
+        <ChipSelect
+          ghost
+          label="mode"
+          prefix="Mode"
+          value={status.modes.current}
+          onChange={(mode) => act(api.setMode(thread, mode))}
+          options={status.modes.available.map((mode) => ({ id: mode.id, name: mode.name, description: mode.description }))}
+        />
+      )}
+      {status.settings
+        // An agent may list its mode among its settings too, which the Mode chip already sets.
+        .filter((setting) => !(status.modes && setting.category === 'mode'))
+        .map((setting) => (
+          <ChipSelect
+            ghost
+            key={setting.id}
+            label={setting.name.toLowerCase()}
+            // A model names itself; "High" or "Off" need saying what they set.
+            prefix={setting.category === 'model' ? undefined : setting.name}
+            value={setting.current}
+            onChange={(value) => act(api.setSetting(thread, setting.id, value))}
+            options={setting.choices}
+          />
+        ))}
+    </>
+  )
 
   const above = (
     <>
@@ -365,32 +425,30 @@ export function AgentDock({
         </span>
       )}
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
-      {live && status.modes && (
-        <ChipSelect
-          ghost
-          label="mode"
-          prefix="Mode"
-          value={status.modes.current}
-          onChange={(mode) => act(api.setMode(thread, mode))}
-          options={status.modes.available.map((mode) => ({ id: mode.id, name: mode.name, description: mode.description }))}
-        />
-      )}
       {live &&
-        status.settings
-          // An agent may list its mode among its settings too, which the Mode chip already sets.
-          .filter((setting) => !(status.modes && setting.category === 'mode'))
-          .map((setting) => (
-            <ChipSelect
-              ghost
-              key={setting.id}
-              label={setting.name.toLowerCase()}
-              // A model names itself; "High" or "Off" need saying what they set.
-              prefix={setting.category === 'model' ? undefined : setting.name}
-              value={setting.current}
-              onChange={(value) => act(api.setSetting(thread, setting.id, value))}
-              options={setting.choices}
-            />
-          ))}
+        (narrow ? (
+          // A phone's composer keeps one row: the agent's own settings open from one chip, named by its model.
+          <Popover
+            label="agent settings"
+            triggerLabel="agent settings"
+            panelClassName="w-72 p-2"
+            trigger={
+              <span className="inline-flex items-center gap-1 text-xs text-fg-2">
+                <Icon name="settings" className="h-3.5 w-3.5" />
+                {modelOf(status) ?? 'Settings'}
+              </span>
+            }
+          >
+            <div className="flex flex-col items-start gap-1.5">
+              {agentSettings}
+              <Button variant="ghost" size="sm" onClick={() => act(api.stopAgent(thread))}>
+                Stop agent
+              </Button>
+            </div>
+          </Popover>
+        ) : (
+          agentSettings
+        ))}
       {(live || !hosted()) && (
         <ChipSelect
           ghost
@@ -404,7 +462,7 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
         />
       )}
-      {live && (
+      {live && !narrow && (
         <Button variant="ghost" size="sm" aria-label="Stop agent" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
           Stop agent
         </Button>

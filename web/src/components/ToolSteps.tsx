@@ -5,6 +5,7 @@ import { message } from '../query'
 import { duration, imageSize, kindOf, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
 import { TranscriptDetail } from '../detail'
 import { Button, Dialog, Icon, Kbd, cx } from '../ui'
+import { Markdown } from './Markdown'
 
 /** A picture a prompt or a tool carried, small, opening at full size. */
 export function ImageThumb({ entry, from }: { entry: HistoryEntry; from: string }) {
@@ -48,10 +49,23 @@ function Mark({ step }: { step: ToolStep }) {
 
 const VERB: Record<string, string> = { read: 'Read', search: 'Searched', edit: 'Edited', execute: 'Ran', question: 'Asked', fetch: 'Fetched' }
 
+/** The plan a call put to the person for approval, as Claude's ExitPlanMode does: its input's `plan`, as Markdown. */
+function proposedPlan(call: HistoryEntry): string | null {
+  const at = call.text.indexOf(' {')
+  if (at < 0) return null
+  try {
+    const input = JSON.parse(call.text.slice(at + 1)) as { plan?: unknown }
+    return typeof input.plan === 'string' ? input.plan : null
+  } catch {
+    return null
+  }
+}
+
 /** What a step did, in its tool's words: `Read src/upload.rs`, `Searched progress in src`. */
 function Said({ call }: { call: HistoryEntry }) {
   const tool = call.tool
   if (call.plan) return <span className="text-fg-2">Updated the plan · {call.plan.length} steps</span>
+  if (proposedPlan(call)) return <span className="text-fg-2">Proposed a plan</span>
   if (!tool || tool.kind === 'other' || !tool.subject) {
     const { name, file } = toolOf(call.text)
     return (
@@ -85,20 +99,26 @@ function measure(step: ToolStep): string | null {
 export function StepRow({ step, open: opened = false }: { step: ToolStep; open?: boolean }) {
   const [open, setOpen] = useState(opened)
   const result = step.result
-  // A plan's result only tells the model it was saved; its steps show on the plan.
-  const output = result && result.text.trim() && !step.call?.plan ? result.text : null
+  const plan = step.call ? proposedPlan(step.call) : null
+  // A plan's result only tells the model it was saved or approved; the plan itself is what to show.
+  const output = result && result.text.trim() && !step.call?.plan && !plan ? result.text : null
   return (
     <div className="flex flex-col gap-1">
       <span className="flex items-start gap-2">
         <Mark step={step} />
         <span className="min-w-0 flex-1">{step.call ? <Said call={step.call} /> : <span className="text-fg-2">A tool&apos;s output</span>}</span>
         {measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>}
-        {output && (
+        {(output || plan) && (
           <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
-            {open ? 'Hide output' : 'Output'}
+            {plan ? (open ? 'Hide plan' : 'Plan') : open ? 'Hide output' : 'Output'}
           </button>
         )}
       </span>
+      {open && plan && (
+        <div className="ml-[22px] max-h-96 overflow-auto rounded-sm bg-bg px-3 py-2 text-sm text-fg-1">
+          <Markdown text={plan} />
+        </div>
+      )}
       {open && output && (
         <pre className="ml-[22px] max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{output}</pre>
       )}

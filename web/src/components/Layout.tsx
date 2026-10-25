@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useRef, useState } from 'react'
 import { api } from '../api'
 import { useBusConnected } from '../bus'
+import { useDragWidth } from '../dragWidth'
 import { useNotifier } from '../notifier'
 import { keys } from '../query'
 import { MainScroll } from '../scroll'
@@ -53,51 +54,7 @@ function useGlobalActions() {
   ])
 }
 
-const SIDEBAR_KEY = 'silt-sidebar-width'
 const SIDEBAR = { min: 200, max: 420, start: 260 }
-
-function storedWidth(): number {
-  try {
-    const stored = Number(localStorage.getItem(SIDEBAR_KEY))
-    return stored >= SIDEBAR.min && stored <= SIDEBAR.max ? stored : SIDEBAR.start
-  } catch {
-    return SIDEBAR.start
-  }
-}
-
-/** The sidebar's width, dragged or moved with the arrow keys on its edge. */
-function useSidebarWidth() {
-  const [width, setWidth] = useState(storedWidth)
-  const set = (next: number) => {
-    const clamped = Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, Math.round(next)))
-    setWidth(clamped)
-    try {
-      localStorage.setItem(SIDEBAR_KEY, String(clamped))
-    } catch {
-      // The width then lasts for this page only.
-    }
-  }
-  const drag = (event: PointerEvent<HTMLDivElement>) => {
-    const start = { x: event.clientX, width }
-    const handle = event.currentTarget
-    handle.setPointerCapture(event.pointerId)
-    const move = (moved: globalThis.PointerEvent) => set(start.width + moved.clientX - start.x)
-    const stop = () => {
-      handle.removeEventListener('pointermove', move)
-      handle.removeEventListener('pointerup', stop)
-    }
-    handle.addEventListener('pointermove', move)
-    handle.addEventListener('pointerup', stop)
-  }
-  const key = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step = { ArrowLeft: -16, ArrowRight: 16 }[event.key]
-    if (step) {
-      event.preventDefault()
-      set(width + step)
-    }
-  }
-  return { width, drag, key }
-}
 
 function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'list' | 'merge' | 'search'; children: ReactNode; at: (path: string) => boolean }) {
   const current = at(useRouterState({ select: (state) => state.location.pathname }))
@@ -159,7 +116,7 @@ export function Layout() {
   useGlobalActions()
   useThemeAction()
   useNotifier()
-  const sidebar = useSidebarWidth()
+  const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right')
   const scroll = useRef<HTMLElement>(null)
   const path = useRouterState({ select: (state) => state.location.pathname })
   // The drawer was opened on this page; going elsewhere closes it.
@@ -181,15 +138,8 @@ export function Layout() {
           </ErrorBoundary>
         </aside>
         <div
-          role="separator"
-          aria-orientation="vertical"
+          {...sidebar.handle}
           aria-label="resize projects"
-          aria-valuenow={sidebar.width}
-          aria-valuemin={SIDEBAR.min}
-          aria-valuemax={SIDEBAR.max}
-          tabIndex={0}
-          onPointerDown={sidebar.drag}
-          onKeyDown={sidebar.key}
           className="-ml-px hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent md:block"
         />
         {sidebarShown && (

@@ -213,6 +213,8 @@ pub struct MergeRequest {
     pub summary: String,
     pub opened_ms: i64,
     pub status: MrStatus,
+    /// When it was approved or declined.
+    pub decided_ms: Option<i64>,
     /// The latest request for changes made while it was open.
     pub changes_requested: Option<ChangesRequested>,
     /// The latest walk-through for reviewers, and who wrote it.
@@ -672,6 +674,7 @@ pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
                 summary: summary.clone(),
                 opened_ms: delta.time_ms,
                 status: MrStatus::Open,
+                decided_ms: None,
                 changes_requested: None,
                 guide: None,
             }),
@@ -695,6 +698,7 @@ pub fn merge_requests_in(log: &[Delta]) -> Vec<MergeRequest> {
                         MrOp::Declined { reason, .. } => MrStatus::Declined { reason: reason.clone() },
                         _ => MrStatus::Approved,
                     };
+                    request.decided_ms = Some(delta.time_ms);
                 }
             }
         }

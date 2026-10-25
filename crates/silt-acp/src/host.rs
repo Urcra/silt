@@ -381,12 +381,13 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
         SessionUpdate::ToolCallUpdate(update) => Update::ToolUpdate {
             id: update.tool_call_id.to_string(),
             status: update.fields.status.as_ref().map(label),
-            output: update
-                .fields
-                .content
-                .as_deref()
-                .and_then(tool_output)
-                .or_else(|| update.fields.raw_output.as_ref().map(Value::to_string)),
+            output: update.fields.content.as_deref().and_then(tool_output).or_else(|| {
+                update.fields.raw_output.as_ref().map(|output| match output {
+                    // A message, as Claude's tools answer, rather than data to show as JSON.
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
+            }),
             title: update.fields.title,
             input: update.fields.raw_input,
         },

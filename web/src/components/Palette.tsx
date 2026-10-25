@@ -155,9 +155,9 @@ function PaletteList({ close }: { close: () => void }) {
               </>
             ),
             hint: (
-              <span data-volatile>
+              <span className="inline-block max-w-[16rem] truncate align-bottom">
                 {hit.turn !== null && `turn ${hit.turn} · `}
-                {short(hit.thread)}
+                <span data-volatile>{threads.data?.find((thread) => thread.id === hit.thread)?.title ?? short(hit.thread)}</span>
               </span>
             ),
             run: goTo(hit.thread, hit.turn),

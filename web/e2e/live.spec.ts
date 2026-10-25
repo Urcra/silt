@@ -502,7 +502,8 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
   await machine.getByRole('button', { name: 'Send' }).click()
   await expect(machine.getByText(/^Done: [\s\S]*fork work$/)).toBeVisible()
   await machine.getByRole('button', { name: 'Stop agent' }).click()
-  await machine.getByRole('button', { name: 'Offer as merge request' }).click()
+  // The header's; the changes bar over the composer offers it too.
+  await machine.getByRole('button', { name: 'Offer as merge request' }).first().click()
   await machine.getByLabel('merge request title').fill('Fork work')
   await machine.getByRole('button', { name: 'Offer', exact: true }).click()
   await expect(machine).toHaveURL(/\/mr\//)
@@ -919,7 +920,7 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
 
   await page.getByRole('button', { name: 'Fork', exact: true }).click()
   await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
-  await page.getByRole('button', { name: 'Offer as merge request' }).click()
+  await page.getByRole('button', { name: 'Offer as merge request' }).first().click()
   await page.getByLabel('merge request title').fill('Origin work')
   await page.getByRole('button', { name: 'Offer', exact: true }).click()
   await expect(page).toHaveURL(/\/mr\//)
@@ -1008,8 +1009,8 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
   await expect(sidebar(bob).getByRole('region', { name: 'pinned' })).toHaveCount(0)
   await act(alice, 'Unpin')
   await act(alice, 'Snooze until something happens')
-  // Snoozed threads fold behind "Show more" under their project.
-  const more = sidebar(alice).getByRole('button', { name: 'Show 1 more' })
+  // Snoozed threads fold behind a count under their project.
+  const more = sidebar(alice).getByRole('button', { name: 'Show 1 snoozed' })
   await more.click()
   await act(alice, 'Wake up')
   await expect(more).toHaveCount(0)
@@ -1121,7 +1122,7 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText(/^Done: [\s\S]*work to merge$/)).toBeVisible()
   await page.getByRole('button', { name: 'Stop agent' }).click()
-  await page.getByRole('button', { name: 'Offer as merge request' }).click()
+  await page.getByRole('button', { name: 'Offer as merge request' }).first().click()
   await page.getByLabel('merge request title').fill('Work to merge')
   await page.getByRole('button', { name: 'Offer', exact: true }).click()
   await page.getByRole('button', { name: 'Approve and merge' }).click()

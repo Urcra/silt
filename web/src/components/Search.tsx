@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { api, short, type SearchForm, type SearchResult } from '../api'
+import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { threadTone } from '../threadLook'
 import { Button, Dot, EmptyState, Icon, Input, Kbd, Skeleton, cx } from '../ui'
@@ -39,7 +40,20 @@ function byThread(hits: SearchResult[]): [string, SearchResult[]][] {
 
 const SHOWN = 3
 
-function ThreadHits({ thread, hits, title, tone }: { thread: string; hits: SearchResult[]; title: string; tone: ReturnType<typeof threadTone> }) {
+function ThreadHits({
+  thread,
+  hits,
+  title,
+  project,
+  tone,
+}: {
+  thread: string
+  hits: SearchResult[]
+  title: string
+  /** The thread's project, which hits found on this machine don't carry. */
+  project: string | undefined
+  tone: ReturnType<typeof threadTone>
+}) {
   const [all, setAll] = useState(false)
   const shown = all ? hits : hits.slice(0, SHOWN)
   return (
@@ -51,7 +65,7 @@ function ThreadHits({ thread, hits, title, tone }: { thread: string; hits: Searc
         </Link>
         <span className="font-mono text-2xs text-fg-2">
           <span data-volatile>{short(thread)}</span>
-          {[hits[0].repo, hits[0].owner, hits[0].status].filter(Boolean).map((part) => ` · ${part}`)}
+          {[projectName(hits[0].repo ?? project ?? ''), hits[0].owner, hits[0].status].filter(Boolean).map((part) => ` · ${part}`)}
         </span>
         <span className="ml-auto text-xs text-fg-2">
           {hits.length} {hits.length === 1 ? 'hit' : 'hits'}
@@ -254,6 +268,7 @@ export function Search() {
                     thread={thread}
                     hits={hits}
                     title={summary?.title ?? short(thread)}
+                    project={summary?.repo}
                     tone={summary ? threadTone(summary) : 'idle'}
                   />
                 )
@@ -261,9 +276,9 @@ export function Search() {
             </div>
           )}
         </div>
+        <Mock id="search.saved">
         <aside aria-label="saved searches" className="flex shrink-0 flex-col gap-1.5 lg:w-56">
           <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Saved</h2>
-          <Mock id="search.saved">
             {[
               { label: 'author:alice status:active', filters: { author: 'alice', status: 'active' } as SearchForm },
               { label: 'status:merged', filters: { status: 'merged' } as SearchForm },
@@ -280,8 +295,8 @@ export function Search() {
                 {saved.label}
               </button>
             ))}
-          </Mock>
         </aside>
+        </Mock>
       </div>
     </Page>
   )

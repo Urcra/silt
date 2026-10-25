@@ -961,6 +961,10 @@ pub struct PermissionAsked {
     pub title: String,
     /// Option ids and labels.
     pub options: Vec<(String, String)>,
+    /// The plan it asks to approve, as Markdown, when it is the agent's
+    /// own plan approval, as Claude's ExitPlanMode is.
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 /// Tokens of a context window used, of its size.

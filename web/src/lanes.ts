@@ -21,6 +21,14 @@ export interface Layout {
   width: number
 }
 
+/** Rows newest first, each family's together, the one worked in last first: threads of unrelated projects
+ * never share a lane's line, which would read as one history. */
+export function byFamily(rows: GraphRow[]): GraphRow[] {
+  const families = new Map<string, GraphRow[]>()
+  for (const row of rows) families.set(row.family, [...(families.get(row.family) ?? []), row])
+  return [...families.values()].flat()
+}
+
 /** Lays out rows given newest first: a lane per thread, reused once its thread's oldest row is past. */
 export function layout(rows: GraphRow[]): Layout {
   const touched = new Map<string, { top: number; bottom: number }>()

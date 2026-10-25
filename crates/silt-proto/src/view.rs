@@ -270,6 +270,9 @@ pub struct MrSummary {
     /// `open`, `approved` or `declined: <reason>`.
     pub status: String,
     pub opened_ms: i64,
+    /// When it was approved or declined.
+    #[serde(default)]
+    pub decided_ms: Option<i64>,
     /// What to change before it's taken, while it's open (ADR 0025).
     #[serde(default)]
     pub changes_requested: Option<String>,
