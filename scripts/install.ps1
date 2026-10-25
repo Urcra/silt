@@ -35,10 +35,17 @@ try {
     $archive = "silt-$target.zip"
     Write-Host "silt install: downloading $url/$archive"
     try {
-        Invoke-WebRequest -UseBasicParsing "$url/$archive" -OutFile (Join-Path $work $archive)
-        Invoke-WebRequest -UseBasicParsing "$url/SHA256SUMS" -OutFile (Join-Path $work 'SHA256SUMS')
+        foreach ($name in @($archive, 'SHA256SUMS')) {
+            $from = [System.Uri] "$url/$name"
+            # `Invoke-WebRequest` takes no `file:` URLs, as a local release has.
+            if ($from.IsFile) {
+                Copy-Item $from.LocalPath (Join-Path $work $name)
+            } else {
+                Invoke-WebRequest -UseBasicParsing $from -OutFile (Join-Path $work $name)
+            }
+        }
     } catch {
-        Fail "could not download $url/$archive"
+        Fail "could not download $url/$archive`: $_"
     }
     $expected = Get-Content (Join-Path $work 'SHA256SUMS') |
         ForEach-Object { $fields = -split $_; if ($fields[1] -eq $archive -or $fields[1] -eq "*$archive") { $fields[0] } } |
