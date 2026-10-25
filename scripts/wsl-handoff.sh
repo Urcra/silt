@@ -11,8 +11,10 @@
 set -euo pipefail
 
 distribution=${1:?usage: wsl-handoff.sh <distribution>}
-silt=${SILT:?SILT names the Windows silt.exe}
-fake=${FAKE_CLAUDE:?FAKE_CLAUDE names the Windows silt-fake-claude.exe}
+absolute() { printf '%s/%s' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"; }
+# Absolute, as the machines run them from their clones.
+silt=$(absolute "${SILT:?SILT names the Windows silt.exe}")
+fake=$(absolute "${FAKE_CLAUDE:?FAKE_CLAUDE names the Windows silt-fake-claude.exe}")
 local_run=${SILT_HANDOFF_LOCAL:-}
 # A path as Windows programs take it, and as the distribution sees it.
 windows_path() { if [ -n "$local_run" ]; then printf '%s' "$1"; else cygpath -m "$1"; fi; }
