@@ -290,6 +290,7 @@ impl Core {
         };
         Some(AgentStatus {
             agent: format!("{} on {}", running.agent.agent, running.device_name),
+            agent_id: String::new(),
             state: running.agent.state,
             streaming: String::new(),
             thinking: String::new(),

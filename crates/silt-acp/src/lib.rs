@@ -10,5 +10,5 @@ pub mod registry;
 pub use host::{
     AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, Update, start,
 };
-pub use modes::{Choice, Modes, Setting, plan_mode};
+pub use modes::{Choice, Modes, Setting, built_in, plan_mode};
 pub use prompt::{Accepts, Attachment};

@@ -1,4 +1,4 @@
-import type { AgentState, Preset } from './api'
+import type { AgentChoiceItem, AgentState, Preset } from './api'
 import type { Tone } from './ui'
 
 /** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan,
@@ -12,6 +12,14 @@ export const PRESETS: { id: Preset; label: string; says: string }[] = [
 
 /** The presets a project can start its threads with: Plan is chosen per thread. */
 export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')
+
+/** Modes that say what the agent may do without asking, by the ids Claude's and Codex's adapters use; the daemon maps them to presets. */
+const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'full-access'])
+
+/** Whether an agent's modes are its permissions, which then stand in for Silt's preset (ADR 0048). */
+export function permissionModes(modes: AgentChoiceItem[] | null | undefined): boolean {
+  return modes?.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
+}
 
 /** How a state reads after the agent's name (ADR 0022). */
 export const STATE_PHRASE: Record<AgentState, string> = {

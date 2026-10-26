@@ -89,6 +89,12 @@ pub enum Event {
         run: u64,
         event: crate::acp::AcpEvent,
     },
+    /// What an agent offers, as a session opened only to ask said; none
+    /// where it couldn't be asked.
+    AgentProbed {
+        agent: String,
+        offered: Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)>,
+    },
     Control(crate::control::ControlEvent),
     /// A server's projects and their git notes settings (ADR 0042).
     NotesSettings {
@@ -254,6 +260,8 @@ pub struct Core {
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
     pub(crate) registry_checked: bool,
+    /// Agents being asked what they offer, by registry id, so each is asked once at a time.
+    pub(crate) probing: HashSet<String>,
     /// Whether this is the daemon, which holds every family and watches its
     /// checkouts, rather than a hook or wrapper holding only its own
     /// family and watching nothing (ADR 0018).
@@ -488,6 +496,7 @@ impl Core {
             recovered: Vec::new(),
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
+            probing: HashSet::new(),
             resident,
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,

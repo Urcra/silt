@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
-import { rememberSettings } from '../agentModes'
+import { type Dispatch, type SetStateAction, useState } from 'react'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
-import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, running } from '../agentState'
+import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
@@ -45,12 +44,6 @@ function working(status: AgentStatus | null): boolean {
   return status?.state === 'working' || status?.state === 'awaiting_permission'
 }
 
-/** Modes that say what the agent may do without asking, by the ids Claude's and Codex's adapters use; the daemon maps them to presets. */
-const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'full-access'])
-
-function permissionModes(status: AgentStatus): boolean {
-  return status.modes?.available.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
-}
 
 function statePhrase(status: AgentStatus): string {
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
@@ -346,12 +339,22 @@ export function AgentDock({
   }
   const live = status !== null && running(status.state)
   const elsewhere = people.find((person) => person.agent)
-  const agentName = status?.agent
   const narrow = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
-  const settings = status?.settings
-  useEffect(() => {
-    if (agentName && settings?.length) rememberSettings(agentName, settings)
-  }, [agentName, settings])
+  // Before an agent runs here, its modes and settings as it last ran on this machine, to start it with.
+  const seen = agents.find((choice) => choice.id === agent)
+  const seenModes = seen?.modes?.available
+  const [mode, setChosenMode] = useState<string>()
+  const chosenMode = mode ?? seen?.modes?.current
+  const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
+  const chooseAgent = (chosen: string) => {
+    setAgent(chosen)
+    setChosenMode(undefined)
+    setChosenSettings({})
+  }
+  // Another agent takes the thread over: this one stops, keeping all it did, and the other starts here.
+  const switchAgent = (chosen: string) => {
+    if (live && chosen !== status.agent_id) act(api.stopAgent(thread).then(() => api.startAgent(chosen, { thread }, { preset })))
+  }
   const turning = working(status)
   useActions([
     ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
@@ -367,7 +370,9 @@ export function AgentDock({
   }
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
-    if (startable) act(api.startAgent(agent, { thread }, { preset, prompt: draft.trim() ? draft : null }), sent(draft))
+    if (!startable) return
+    const settings = (seen?.settings ?? []).map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
+    act(api.startAgent(agent, { thread }, { preset, mode: permissionModes(seenModes) ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null }), sent(draft))
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
@@ -384,7 +389,7 @@ export function AgentDock({
   // While a turn runs, the line above the composer says so, with its clock.
   // Shift+Tab moves to the agent's next mode, or Silt's next preset for an agent without modes.
   const cycle = () => {
-    if (live && status.modes && permissionModes(status)) {
+    if (live && status.modes && permissionModes(status.modes.available)) {
       const modes = status.modes.available
       const at = modes.findIndex((mode) => mode.id === status.modes!.current)
       const next = modes[(at + 1) % modes.length]
@@ -397,9 +402,10 @@ export function AgentDock({
     void api.setPreset(thread, next).then(() => onPreset(next))
   }
 
+  // Ready, waiting or planned, the page shows it already (the header, the cards); this says it only to a screen reader.
   const statusLine = live ? (
     !working(status) && (
-      <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
+      <span data-testid="agent-state" role="status" className="sr-only">
         {statePhrase(status)}
       </span>
     )
@@ -468,12 +474,13 @@ export function AgentDock({
           />
         </label>
       )}
-      {!live && !elsewhere && !hosted() && agents.length > 0 && (
+      {/* The same row as New thread's: which agent, then its mode and settings. Another agent here takes the thread over. */}
+      {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
         <ChipSelect
           ghost
           label="agent to start"
-          value={agent}
-          onChange={setAgent}
+          value={live ? status.agent_id : agent}
+          onChange={(chosen) => (live ? switchAgent(chosen) : chooseAgent(chosen))}
           options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
         />
       )}
@@ -483,24 +490,35 @@ export function AgentDock({
         </span>
       )}
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
-      {live && (
+      {live ? (
         <AgentSettings
-          modes={status.modes}
+          modes={status.modes?.available}
+          mode={status.modes?.current}
           onMode={(mode) => act(api.setMode(thread, mode))}
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
           more={
-            narrow && (
-              <Button variant="ghost" size="sm" onClick={() => act(api.stopAgent(thread))}>
-                Stop agent
-              </Button>
-            )
+            <Button variant="ghost" size="sm" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
+              Stop agent
+            </Button>
           }
           narrow={narrow}
         />
+      ) : (
+        startable && (
+          <AgentSettings
+            modes={seenModes}
+            mode={chosenMode}
+            onMode={setChosenMode}
+            settings={seen?.settings ?? []}
+            value={(setting) => chosenSettings[setting.id] ?? setting.current}
+            onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
+            narrow={narrow}
+          />
+        )
       )}
       {/* An agent whose modes are about permissions has them as its one control; the preset follows them (ADR 0048). */}
-      {(live || !hosted()) && !(live && permissionModes(status)) && (
+      {(live || !hosted()) && !(live ? permissionModes(status.modes?.available) : startable && permissionModes(seenModes)) && (
         <ChipSelect
           ghost
           label="permissions"
@@ -512,12 +530,6 @@ export function AgentDock({
           }}
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
         />
-      )}
-      {/* Between turns only: while one runs, the round button stops the turn. */}
-      {live && !narrow && !turning && (
-        <Button variant="ghost" size="sm" aria-label="Stop agent" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
-          Stop agent
-        </Button>
       )}
     </>
   )

@@ -836,6 +836,9 @@ impl Preset {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AgentStatus {
     pub agent: String,
+    /// The agent's registry id, as `AgentChoice` names it.
+    #[serde(default)]
+    pub agent_id: String,
     pub state: silt_proto::AgentState,
     /// What the agent is saying or thinking right now, not recorded yet.
     pub streaming: String,
@@ -997,6 +1000,13 @@ pub struct AgentChoice {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Its modes as it last listed them here, for a new thread to choose
+    /// from before it runs.
+    #[serde(default)]
+    pub modes: Option<AgentModes>,
+    /// Its settings, such as its model, as it last listed them here.
+    #[serde(default)]
+    pub settings: Vec<AgentSetting>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1051,6 +1061,8 @@ pub enum BusEvent {
     Inbox,
     /// Merge requests may have changed.
     Mrs,
+    /// What an agent offers, its modes and settings, is newly known.
+    Agents,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1076,7 +1088,8 @@ impl BusEvent {
             | Self::Queue { thread } => Some(format!("thread:{thread}")),
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
-            Self::Lagged => None,
+            // Rare and small: every socket hears it, as any page may show a composer.
+            Self::Agents | Self::Lagged => None,
         }
     }
 }

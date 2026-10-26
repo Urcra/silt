@@ -31,6 +31,56 @@ pub struct Setting {
     pub choices: Vec<Choice>,
 }
 
+/// What an agent is known to offer before it has run on this machine, by
+/// its registry id: what a new thread shows until the agent itself says,
+/// as Claude's adapter does when its session opens. A value it no longer
+/// offers is dropped when it starts.
+pub fn built_in(agent: &str) -> Option<(Modes, Vec<Setting>)> {
+    let choice = |id: &str, name: &str| Choice { id: id.to_owned(), name: name.to_owned(), description: None };
+    match agent {
+        "claude-acp" => Some((
+            Modes {
+                current: "default".to_owned(),
+                available: vec![
+                    choice("default", "Manual"),
+                    choice("acceptEdits", "Accept edits"),
+                    choice("plan", "Plan"),
+                    choice("auto", "Auto"),
+                ],
+            },
+            vec![
+                Setting {
+                    id: "model".to_owned(),
+                    name: "Model".to_owned(),
+                    category: Some("model".to_owned()),
+                    current: "default".to_owned(),
+                    choices: vec![
+                        choice("default", "Default"),
+                        choice("opus", "Opus"),
+                        choice("sonnet", "Sonnet"),
+                        choice("haiku", "Haiku"),
+                    ],
+                },
+                Setting {
+                    id: "effort".to_owned(),
+                    name: "Effort".to_owned(),
+                    category: Some("thought_level".to_owned()),
+                    current: "default".to_owned(),
+                    choices: vec![
+                        choice("default", "Default"),
+                        choice("low", "Low"),
+                        choice("medium", "Medium"),
+                        choice("high", "High"),
+                        choice("xhigh", "XHigh"),
+                        choice("max", "Max"),
+                    ],
+                },
+            ],
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn modes_of(state: Option<SessionModeState>) -> Option<Modes> {
     let state = state?;
     Some(Modes {

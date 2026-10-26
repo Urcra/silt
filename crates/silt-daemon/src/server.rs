@@ -151,6 +151,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 }
             }
             Event::Acp { thread, run, event } => core.acp_event(thread, run, event).await,
+            Event::AgentProbed { agent, offered } => core.agent_probed(agent, offered),
             Event::Pushed { family, epoch, generation, outcome, error } => {
                 core.pushed(family, epoch, generation, outcome, error).await
             }

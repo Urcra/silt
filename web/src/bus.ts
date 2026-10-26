@@ -171,6 +171,9 @@ export function useBusInvalidation() {
         refetch(keys.projects)
         refetch(['graph'])
         break
+      case 'agents':
+        refetch(keys.agents)
+        break
       case 'lagged':
         if (Date.now() - laggedAt.current < LAGGED_MS) break
         laggedAt.current = Date.now()

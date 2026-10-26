@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Serialize};
 use silt_acp::registry::{self, AgentInfo};
 use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Question, Start, Update};
 use silt_agents::acp;
@@ -229,13 +230,75 @@ impl Core {
         let mut clones: Vec<CloneInfo> =
             self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect();
         clones.sort_by(|a, b| a.repo.cmp(&b.repo));
+        let mut seen = read_seen(&self.data_dir);
+        let now = now_ms();
+        let installed = registry::installed_here(&self.data_dir);
+        // What each offers as last seen here, else as Silt knows it; one not asked lately is asked again, behind the answer.
+        let asking = std::env::var_os("SILT_ASK_AGENTS").is_none_or(|value| value != "0");
+        for agent in &installed {
+            if asking
+                && seen.get(&agent.id).is_none_or(|seen| now - seen.seen_ms > ASK_AGAIN_MS)
+                && self.probing.insert(agent.id.clone())
+            {
+                probe_agent(self.events.clone(), agent.clone(), self.data_dir.clone());
+            }
+        }
         AgentChoices {
-            agents: registry::installed_here(&self.data_dir)
+            agents: installed
                 .into_iter()
-                .map(|agent| AgentChoice { id: agent.id, name: agent.name, description: agent.description })
+                .map(|agent| {
+                    let Seen { modes, settings, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
+                        silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
+                            modes: Some((&modes).into()),
+                            settings: settings.iter().map(Into::into).collect(),
+                            seen_ms: 0,
+                        })
+                    });
+                    AgentChoice { id: agent.id, name: agent.name, description: agent.description, modes, settings }
+                })
                 .collect(),
             clones,
         }
+    }
+
+    /// Keeps what an agent said it offers when asked, and tells the web UI.
+    pub(crate) fn agent_probed(&mut self, agent: String, offered: Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)>) {
+        self.probing.remove(&agent);
+        let Some((modes, settings)) = offered else {
+            return;
+        };
+        let seen = Seen {
+            modes: modes.as_ref().map(Into::into),
+            settings: settings.iter().map(Into::into).collect(),
+            seen_ms: now_ms(),
+        };
+        self.keep_seen(agent, seen);
+        self.announce(crate::protocol::BusEvent::Agents);
+    }
+
+    fn keep_seen(&self, agent: String, kept: Seen) {
+        let mut seen = read_seen(&self.data_dir);
+        seen.insert(agent, kept);
+        let written = serde_json::to_vec_pretty(&seen)
+            .map_err(std::io::Error::other)
+            .and_then(|json| std::fs::write(self.data_dir.join(SEEN), json));
+        if let Err(error) = written {
+            warn!(%error, "could not keep the agent's modes and settings");
+        }
+    }
+
+    /// Keeps the thread's agent's modes and settings as it lists them now, for
+    /// a new thread to offer before that agent runs again.
+    fn remember_seen(&self, thread: ThreadId) {
+        let Some(run) = self.acp.get(&thread) else {
+            return;
+        };
+        let seen = Seen {
+            modes: run.modes.as_ref().map(Into::into),
+            settings: run.settings.iter().map(Into::into).collect(),
+            seen_ms: now_ms(),
+        };
+        self.keep_seen(run.info.id.clone(), seen);
     }
 
     /// Starts `agent` in the thread's checkout, making one from a known
@@ -286,7 +349,14 @@ impl Core {
             self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
         }
         if let Some(mode) = options.mode.clone() {
-            self.keep_choice(thread, |record| record.mode = Some(mode)).await?;
+            // The preset follows the mode chosen, as it does once the agent runs (ADR 0048).
+            let plan = read_seen(&self.data_dir).remove(&info.id).and_then(|seen| seen.modes?.plan);
+            let follows = preset_following(&mode, plan.as_deref() == Some(mode.as_str()), self.preset(thread));
+            self.keep_choice(thread, |record| {
+                record.mode = Some(mode);
+                record.preset = follows.as_str().to_owned();
+            })
+            .await?;
         }
         self.next_token += 1;
         let run = self.next_token;
@@ -695,6 +765,7 @@ impl Core {
             record.preset = follows.as_str().to_owned();
         })
         .await?;
+        self.remember_seen(thread);
         self.announce_agent(thread);
         Ok("set")
     }
@@ -709,7 +780,13 @@ impl Core {
         if !offered {
             return Err(CoreError::Invalid(format!("the agent doesn't offer {value} for {id}")));
         }
-        send(self.acp.get_mut(&thread).expect("checked above"), Command::SetSetting { id, value });
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        if let Some(setting) = run.settings.iter_mut().find(|setting| setting.id == id) {
+            setting.current = value.clone();
+        }
+        send(run, Command::SetSetting { id, value });
+        self.remember_seen(thread);
+        self.announce_agent(thread);
         Ok("set")
     }
 
@@ -751,6 +828,7 @@ impl Core {
         let run = self.acp.get(&thread)?;
         Some(AgentStatus {
             agent: run.info.name.clone(),
+            agent_id: run.info.id.clone(),
             state: run.shown(),
             streaming: run.text.clone(),
             thinking: run.thought.clone(),
@@ -842,6 +920,7 @@ impl Core {
                     }
                 }
                 let first = run.first.take();
+                self.remember_seen(thread);
                 self.acp_ready(thread, &session, loaded).await?;
                 if let Some((prompt, plan)) = first {
                     self.acp_prompt(&thread.to_string(), &prompt, plan).await?;
@@ -867,9 +946,13 @@ impl Core {
                         })
                         .await?;
                     }
+                    self.remember_seen(thread);
                 }
             }
-            AcpEvent::Agent(silt_acp::Event::Settings(settings)) => run.settings = settings,
+            AcpEvent::Agent(silt_acp::Event::Settings(settings)) => {
+                run.settings = settings;
+                self.remember_seen(thread);
+            }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
@@ -1155,6 +1238,74 @@ impl AcpRun {
             handle.send(Command::Stop);
         }
     }
+}
+
+/// Where each agent's modes and settings are kept, as it last listed them.
+const SEEN: &str = "agents-seen.json";
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Seen {
+    modes: Option<crate::protocol::AgentModes>,
+    settings: Vec<crate::protocol::AgentSetting>,
+    /// When they were seen; an agent's offer older than `ASK_AGAIN_MS` is asked for again.
+    #[serde(default)]
+    seen_ms: i64,
+}
+
+/// How long what an agent offers is taken as current: models and effort levels change with its releases.
+const ASK_AGAIN_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How long an agent asked what it offers may take to open its session.
+const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64)
+}
+
+/// Asks `info`'s agent what it offers: opens a session in a folder of the daemon's own, which nothing is
+/// prompted in, takes the modes and settings it lists, and stops it.
+fn probe_agent(events: mpsc::UnboundedSender<Event>, info: AgentInfo, data_dir: PathBuf) {
+    tokio::spawn(async move {
+        let offered = ask_agent(&info, &data_dir).await;
+        let _ = events.send(Event::AgentProbed { agent: info.id, offered });
+    });
+}
+
+async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)> {
+    let registry::AgentCommand { program, args, env } = registry::command(info, data_dir).await.ok()?;
+    let cwd = data_dir.join("asking-agents");
+    std::fs::create_dir_all(&cwd).ok()?;
+    let start = Start {
+        program,
+        args,
+        env: registry::agent_environment(&info.id, data_dir).into_iter().chain(env).collect(),
+        cwd,
+        mcp: None,
+        load: None,
+    };
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let handle = silt_acp::start(start, sender);
+    let offered = tokio::time::timeout(PROBE_WAIT, async {
+        while let Some(event) = receiver.recv().await {
+            match event {
+                silt_acp::Event::Ready { modes, settings, .. } => return Some((modes, settings)),
+                silt_acp::Event::Exited => return None,
+                _ => {}
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    handle.send(Command::Stop);
+    offered
+}
+
+/// Each agent's modes and settings as kept, by its registry id; none where
+/// the file is missing or unreadable, which only means none were seen.
+fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
+    std::fs::read(data_dir.join(SEEN)).ok().and_then(|json| serde_json::from_slice(&json).ok()).unwrap_or_default()
 }
 
 /// The preset that lets an agent do what its mode `mode` does, by the ids

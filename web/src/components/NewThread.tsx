@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
-import { rememberedSettings } from '../agentModes'
-import { PRESETS } from '../agentState'
+import { PRESETS, permissionModes } from '../agentState'
 import { api, type CloneInfo, type FoundFolder, type Preset, type Project } from '../api'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -410,7 +409,14 @@ export function NewThread() {
   const branches = useQuery({ queryKey: keys.branches(project), queryFn: () => api.branches(project), enabled: project !== '' && chosenWhere === 'worktree' })
   const agentName = agents.find((candidate) => candidate.id === agent)?.name ?? ''
   // As this browser last saw the agent run; its mode is the permissions chip's to say.
-  const settings = agentName ? rememberedSettings(agentName).filter((setting) => setting.category !== 'mode') : []
+  // As the agent last ran on this machine, kept by the daemon: its modes and its model, effort and the rest.
+  const seen = agents.find((candidate) => candidate.id === agent)
+  const settings = seen?.settings ?? []
+  const modes = seen?.modes?.available
+  const [mode, setMode] = useState<string>()
+  const chosenMode = mode ?? seen?.modes?.current
+  // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
+  const modesArePermissions = permissionModes(modes)
   const narrow = useMedia('(max-width: 767px)')
   const devices = status.data?.servers?.length ?? 0
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
@@ -463,8 +469,8 @@ export function NewThread() {
         {
           here: chosenWhere === 'local',
           base: chosenWhere === 'worktree' && base ? base : null,
-          // The agent starts in the mode its preset says; its model and the rest as shown here.
-          mode: null,
+          // In the mode chosen here where its modes are its permissions, else the one its preset says; its model and the rest as shown.
+          mode: modesArePermissions ? (chosenMode ?? null) : null,
           settings: settings.map((setting) => [setting.id, chosenSettings[setting.id] ?? setting.current]),
           preset,
           visibility: null,
@@ -523,7 +529,10 @@ export function NewThread() {
             value={prompt}
             onChange={setPrompt}
             onSend={() => ready && start(false)}
-            onCycle={() => setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)}
+            onCycle={() => {
+              if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
+              else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
+            }}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             tools={
               chosenWhere !== 'cloud' && (
@@ -535,6 +544,7 @@ export function NewThread() {
                       value={agent}
                       onChange={(chosen) => {
                         setAgent(chosen)
+                        setMode(undefined)
                         setChosenSettings({})
                       }}
                       options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
@@ -543,19 +553,24 @@ export function NewThread() {
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
                   <AgentSettings
+                    modes={modesArePermissions ? modes : undefined}
+                    mode={chosenMode}
+                    onMode={setMode}
                     settings={settings}
                     value={(setting) => chosenSettings[setting.id] ?? setting.current}
                     onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
                     narrow={narrow}
                   />
-                  <ChipSelect
-                    ghost
-                    label="permissions"
-                    icon="lock"
-                    value={preset}
-                    onChange={(chosen) => setPreset(chosen as Preset)}
-                    options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
-                  />
+                  {!modesArePermissions && (
+                    <ChipSelect
+                      ghost
+                      label="permissions"
+                      icon="lock"
+                      value={preset}
+                      onChange={(chosen) => setPreset(chosen as Preset)}
+                      options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+                    />
+                  )}
                 </>
               )
             }

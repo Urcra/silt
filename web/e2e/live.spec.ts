@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
+import { stopAgent } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -157,7 +158,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(bob.getByLabel('draft')).toHaveValue('')
   await expect(bob.getByTestId('editor')).toContainText('fn acp() {}', { timeout: 15_000 })
 
-  await alice.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(alice)
   await expect(alice.getByRole('button', { name: 'Start agent' })).toBeVisible()
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await alice.getByRole('button', { name: 'Start agent' }).click()
@@ -270,7 +271,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
     await hosted.goto(`${live.server}/app/`)
     await expect(waiting).toHaveCount(0, { timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await machine.context().close()
   await hosted.context().close()
 })
@@ -281,7 +282,7 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await machine.getByLabel('draft').fill('first turn')
   await machine.getByRole('button', { name: 'Send' }).click()
   await expect(machine.getByText('Done: first turn')).toBeVisible()
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
   const thread = new URL(machine.url()).pathname.split('/t/')[1]
 
@@ -300,7 +301,7 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await there.getByLabel('draft').fill('second turn')
   await there.getByRole('button', { name: 'Send' }).click()
   await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible()
-  await there.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(there)
   await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
   await machine.context().close()
   await hosted.context().close()
@@ -333,7 +334,7 @@ test("another of Alice's machines directs the agent running on the first, throug
   await expect(laptop.getByRole('group', { name: 'permission' })).toBeVisible({ timeout: 10_000 })
   await laptop.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(machine.getByText('I was not allowed to edit.').last()).toBeVisible()
-  await laptop.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(laptop)
   await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
   await machine.context().close()
   await laptop.context().close()
@@ -372,7 +373,7 @@ test('the inbox hears that an agent waits, and answers it in place', async ({ pa
   await expect(item).toHaveCount(0)
   await page.goto(new URL(`/t/${thread}`, live.alice).toString())
   await expect(page.getByText(/^Done: [\s\S]*ask me in the inbox$/)).toBeVisible()
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
 })
 
 test('a waiting agent notifies its person in a tab that is open but not in front', async ({ browser }) => {
@@ -406,7 +407,7 @@ test('a waiting agent notifies its person in a tab that is open but not in front
     .poll(() => watcher.evaluate(() => (window as unknown as { shown: string[] }).shown.join('\n')), { timeout: 40_000 })
     .toContain('An agent asks for a permission: Fake agent on alice asks to run: Edit src/main.rs')
   await asked.getByRole('button', { name: 'Allow' }).click()
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await context.close()
   await machine.context().close()
 })
@@ -437,7 +438,7 @@ test('on a phone, the hosted app answers a waiting agent from Needs you', async 
   }).toPass({ timeout: 20_000 })
   await waiting.getByRole('button', { name: 'Allow' }).tap()
   await expect(machine.getByText(/^Done: [\s\S]*from my phone$/)).toBeVisible()
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await machine.context().close()
   await phone.context().close()
 })
@@ -484,7 +485,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await there.getByLabel('draft').fill('may I?')
   await there.getByRole('button', { name: 'Send' }).tap()
   await expect(there.getByText('this device may not send prompts; change that on the Devices page')).toBeVisible()
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await desk.context().close()
   await phone.context().close()
   await machine.context().close()
@@ -493,7 +494,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
 test('the server-hosted app reviews a merge request through a machine, and ticks its files seen', async ({ browser }) => {
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   await machine.getByRole('button', { name: 'Fork', exact: true }).click()
   await expect(machine.getByRole('main').getByText(/^Fork of/)).toBeVisible()
   await machine.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
@@ -501,7 +502,7 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
   await machine.getByLabel('draft').fill('fork work')
   await machine.getByRole('button', { name: 'Send' }).click()
   await expect(machine.getByText(/^Done: [\s\S]*fork work$/)).toBeVisible()
-  await machine.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(machine)
   // The header's; the changes bar over the composer offers it too.
   await machine.getByRole('button', { name: 'Offer as merge request' }).first().click()
   await machine.getByLabel('merge request title').fill('Fork work')
@@ -546,7 +547,7 @@ test('a fork from an earlier turn has the conversation up to it', async ({ page 
   await page.getByLabel('draft').fill('the second turn')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText(/^Done: [\s\S]*the second turn$/)).toBeVisible()
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   const source = new URL(page.url()).pathname
 
   await page.getByRole('button', { name: 'fork from turn 1' }).click()
@@ -564,7 +565,7 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
     await page.getByRole('button', { name: 'Send' }).click()
     await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   }
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
   const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
   const edits = () =>
@@ -594,7 +595,7 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   const reply = page.getByText(/^Done: You are continuing a conversation[\s\S]*after the revert$/)
   await expect(reply).toContainText('revert keeps this')
   await expect(reply).not.toContainText('revert drops this')
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
 })
 
 test('permalinks open a turn, a comment and lines of a file, here and in the server-hosted app', async ({ browser, page }) => {
@@ -604,7 +605,7 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
     await page.getByRole('button', { name: 'Send' }).click()
     await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   }
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
   const copied = async (button: ReturnType<Page['getByRole']>) => {
     await button.click()
@@ -1113,7 +1114,7 @@ test("a thread's page lists its commits with the turns they came in", async ({ p
 
 test('the graph shows turns, commits, forks, requests and merges, and opens a turn from its details', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   await page.getByRole('button', { name: 'Fork', exact: true }).click()
   await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
@@ -1121,7 +1122,7 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await page.getByLabel('draft').fill('work to merge')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText(/^Done: [\s\S]*work to merge$/)).toBeVisible()
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   await page.getByRole('button', { name: 'Offer as merge request' }).first().click()
   await page.getByLabel('merge request title').fill('Work to merge')
   await page.getByRole('button', { name: 'Offer', exact: true }).click()
@@ -1166,7 +1167,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
   const kept = new URL(page.url()).pathname
 
   await toProjects()

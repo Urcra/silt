@@ -5,6 +5,8 @@
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
+# As screens-fixture.sh: no background answer may land in a screen.
+export SILT_ASK_AGENTS=0
 work=$(mktemp -d /tmp/silt-busy-XXXXXX)
 
 git init -q -b main "$work/seed"

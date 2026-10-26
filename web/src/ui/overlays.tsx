@@ -210,14 +210,18 @@ export function Popover({
     opened.current = true
     place()
   }, [openOnMount, place])
-  // A panel past the window's edge, as on a phone, moves back inside it.
+  // A panel past the window's edge, as on a phone, moves back inside it; one past its bottom,
+  // as from a composer docked there, opens above its trigger instead.
   useLayoutEffect(() => {
-    if (!at || !panel.current) return
+    if (!at || !panel.current || !button.current) return
     const box = panel.current.getBoundingClientRect()
     const edge = 8
-    if (box.right <= window.innerWidth - edge + 1 && box.left >= edge - 1) return
-    const left = Math.round(Math.max(edge, Math.min(box.left, window.innerWidth - edge - box.width)))
-    if (at.left !== left || at.right !== undefined) setAt({ top: at.top, left })
+    const below = box.bottom > window.innerHeight - edge + 1
+    const across = box.right > window.innerWidth - edge + 1 || box.left < edge - 1
+    if (!below && !across) return
+    const top = below ? Math.round(Math.max(edge, button.current.getBoundingClientRect().top - 4 - box.height)) : at.top
+    const left = across ? Math.round(Math.max(edge, Math.min(box.left, window.innerWidth - edge - box.width))) : at.left
+    if (top !== at.top || left !== at.left) setAt(across ? { top, left } : { ...at, top })
   }, [at])
   // The trigger moves when what's around it settles, as when fonts load or
   // a centred page's content arrives under a picker opened with the page.

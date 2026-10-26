@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
 export interface Fixture {
   url: string
@@ -29,6 +29,14 @@ export function fixture(): Fixture {
 export function silt(...args: string[]): string {
   const { siltHome } = fixture()
   return execFileSync(SILT, args, { encoding: 'utf8', env: { ...process.env, SILT_HOME: siltHome } })
+}
+
+/** Stops the thread's agent, from the composer's agent settings where it is offered. Their panel opens over the
+ * whole page, outside a part of it the test may look in. */
+export async function stopAgent(on: Page | Locator): Promise<void> {
+  await on.getByRole('button', { name: 'agent settings' }).click()
+  const page = 'page' in on ? on.page() : on
+  await page.getByRole('dialog', { name: 'agent settings' }).getByRole('button', { name: 'Stop agent' }).click()
 }
 
 /** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */

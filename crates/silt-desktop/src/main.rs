@@ -29,8 +29,9 @@ fn main() {
     // and which backend and project the window should show.
     let ui: Arc<Mutex<Option<Url>>> = Arc::default();
     let known = Arc::new(known_backends());
-    let first = link_in(env::args(), &known).unwrap_or_default();
-    let target = Arc::new(Mutex::new(first));
+    let asked = link_in(env::args(), &known);
+    let opened_by_link = asked.is_some();
+    let target = Arc::new(Mutex::new(asked.unwrap_or_default()));
     let (linked, linked_known) = (target.clone(), known.clone());
     tauri::Builder::default()
         // A second launch, a `silt://` link among them, shows the window
@@ -43,11 +44,27 @@ fn main() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
+            // Opened by itself, the window shows where it last did, not this computer every time.
+            if !opened_by_link
+                && let Some(backend) =
+                    app.path().app_data_dir().ok().and_then(|dir| last_backend(&dir.join(LAST_BACKEND), &known))
+            {
+                *target.lock().expect("lock") = Target { backend, project: None };
+            }
             open_window(app.handle(), ui, target, known)?;
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("the desktop app could not start");
+}
+
+/// The file in the app's data dir that keeps the backend last shown.
+const LAST_BACKEND: &str = "backend";
+
+/// The backend last shown, if the app still knows it.
+fn last_backend(file: &Path, known: &[Backend]) -> Option<Backend> {
+    let text = fs::read_to_string(file).ok()?;
+    Backend::parse(text.trim()).filter(|backend| known.contains(backend))
 }
 
 /// This computer, and on Windows each WSL distribution. A distribution's
@@ -198,6 +215,11 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
         }
         match opened {
             Ok(()) => {
+                if showing.as_ref().is_none_or(|shown| shown.backend != wanted.backend)
+                    && let Some(dir) = silts.and_then(Path::parent)
+                {
+                    remember_backend(dir, &wanted.backend);
+                }
                 showing = Some(wanted);
                 lost = false;
                 failures = 0;
@@ -234,6 +256,12 @@ fn command_for(
         wsl_silt.insert(distribution.clone(), found);
     }
     Ok(backends::open_web(target, program, &wsl_silt[distribution]))
+}
+
+fn remember_backend(dir: &Path, backend: &Backend) {
+    if let Err(error) = fs::create_dir_all(dir).and_then(|()| fs::write(dir.join(LAST_BACKEND), backend.id())) {
+        eprintln!("silt-desktop: could not remember the backend shown: {error}");
+    }
 }
 
 fn remember(file: &Path, silts: &HashMap<String, String>) {

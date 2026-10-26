@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
+import { stopAgent } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -40,7 +41,7 @@ async function startIn(page: Page, project: RegExp, prompt: string) {
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
-  await page.getByRole('button', { name: 'Stop agent' }).click()
+  await stopAgent(page)
 }
 
 test('each server is a workspace, and the sidebar shows only the threads of the one chosen', async ({ page }) => {

@@ -55,7 +55,16 @@ export type Visibility = string;
 
 export type GitNotes = "off" | "local" | "push";
 
-export type AgentChoice = { id: string, name: string, description: string, };
+export type AgentChoice = { id: string, name: string, description: string, 
+/**
+ * Its modes as it last listed them here, for a new thread to choose
+ * from before it runs.
+ */
+modes: AgentModes | null, 
+/**
+ * Its settings, such as its model, as it last listed them here.
+ */
+settings: Array<AgentSetting>, };
 
 export type AgentChoiceItem = { id: string, name: string, description: string | null, };
 
@@ -75,7 +84,11 @@ category: string | null, current: string, choices: Array<AgentChoiceItem>, };
 
 export type AgentStart = { "kind": "resume", id: string, } | { "kind": "primed", id: string | null, prompt: string, };
 
-export type AgentStatus = { agent: string, state: AgentState, 
+export type AgentStatus = { agent: string, 
+/**
+ * The agent's registry id, as `AgentChoice` names it.
+ */
+agent_id: string, state: AgentState, 
 /**
  * What the agent is saying or thinking right now, not recorded yet.
  */
@@ -125,7 +138,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
