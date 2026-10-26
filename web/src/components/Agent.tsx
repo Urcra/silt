@@ -9,7 +9,8 @@ import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, Icon, Kbd, Popover, Spinner, cx } from '../ui'
+import { Button, Dot, Icon, Kbd, Spinner, cx } from '../ui'
+import { AgentSettings } from './AgentSettings'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
@@ -40,12 +41,6 @@ function ready(status: AgentStatus): boolean {
 }
 
 /** Whether a turn is under way. */
-/** The model the agent says it runs, by its name, when it says. */
-function modelOf(status: AgentStatus): string | undefined {
-  const model = status.settings.find((setting) => setting.category === 'model')
-  return model?.choices.find((choice) => choice.id === model.current)?.name
-}
-
 function working(status: AgentStatus | null): boolean {
   return status?.state === 'working' || status?.state === 'awaiting_permission'
 }
@@ -374,8 +369,11 @@ export function AgentDock({
   const start = () => {
     if (startable) act(api.startAgent(agent, { thread }, { preset, prompt: draft.trim() ? draft : null }), sent(draft))
   }
-  const send = () => {
+  const steer = () => act(api.steer(thread, draft), sent(draft))
+  // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
+  const send = (now = false) => {
     if (startable) return start()
+    if (now && turning && draft.trim()) return steer()
     if (!live || !sendable) return
     act(api.prompt(thread, draft, false, attached), () => {
       setAttached([])
@@ -410,36 +408,6 @@ export function AgentDock({
       {elsewhere.user}&apos;s {elsewhere.agent.name} {STATE_PHRASE[elsewhere.agent.state]}
     </span>
   ) : null
-
-  const agentSettings = live && (
-    <>
-      {status.modes && (
-        <ChipSelect
-          ghost
-          label="mode"
-          prefix="Mode"
-          value={status.modes.current}
-          onChange={(mode) => act(api.setMode(thread, mode))}
-          options={status.modes.available.map((mode) => ({ id: mode.id, name: mode.name, description: mode.description }))}
-        />
-      )}
-      {status.settings
-        // An agent may list its mode among its settings too, which the Mode chip already sets.
-        .filter((setting) => !(status.modes && setting.category === 'mode'))
-        .map((setting) => (
-          <ChipSelect
-            ghost
-            key={setting.id}
-            label={setting.name.toLowerCase()}
-            // A model names itself; "High" or "Off" need saying what they set.
-            prefix={setting.category === 'model' ? undefined : setting.name}
-            value={setting.current}
-            onChange={(value) => act(api.setSetting(thread, setting.id, value))}
-            options={setting.choices}
-          />
-        ))}
-    </>
-  )
 
   const above = (
     <>
@@ -515,30 +483,22 @@ export function AgentDock({
         </span>
       )}
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
-      {live &&
-        (narrow ? (
-          // A phone's composer keeps one row: the agent's own settings open from one chip, named by its model.
-          <Popover
-            label="agent settings"
-            triggerLabel="agent settings"
-            panelClassName="w-72 p-2"
-            trigger={
-              <span className="inline-flex items-center gap-1 text-xs text-fg-2">
-                <Icon name="settings" className="h-3.5 w-3.5" />
-                {modelOf(status) ?? 'Settings'}
-              </span>
-            }
-          >
-            <div className="flex flex-col items-start gap-1.5">
-              {agentSettings}
+      {live && (
+        <AgentSettings
+          modes={status.modes}
+          onMode={(mode) => act(api.setMode(thread, mode))}
+          settings={status.settings}
+          onSetting={(id, value) => act(api.setSetting(thread, id, value))}
+          more={
+            narrow && (
               <Button variant="ghost" size="sm" onClick={() => act(api.stopAgent(thread))}>
                 Stop agent
               </Button>
-            </div>
-          </Popover>
-        ) : (
-          agentSettings
-        ))}
+            )
+          }
+          narrow={narrow}
+        />
+      )}
       {/* An agent whose modes are about permissions has them as its one control; the preset follows them (ADR 0048). */}
       {(live || !hosted()) && !(live && permissionModes(status)) && (
         <ChipSelect
@@ -553,7 +513,8 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
         />
       )}
-      {live && !narrow && (
+      {/* Between turns only: while one runs, the round button stops the turn. */}
+      {live && !narrow && !turning && (
         <Button variant="ghost" size="sm" aria-label="Stop agent" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
           Stop agent
         </Button>
@@ -567,13 +528,13 @@ export function AgentDock({
       label="Start agent"
       icon="arrowUp"
       onClick={start}
-      title={`Starts ${startName} here${draft.trim() ? ' with your draft' : ''} (${formatKeys('mod+⏎')})`}
+      title={`Starts ${startName} here${draft.trim() ? ' with your draft' : ''} (⏎)`}
     />
   ) : (
     live && (
       <>
         {turning && draft.trim() && (
-          <Button variant="ghost" onClick={() => act(api.steer(thread, draft), sent(draft))} title="Interrupts the agent's turn to tell it your draft">
+          <Button variant="ghost" onClick={steer} title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}>
             Steer now
           </Button>
         )}
@@ -584,13 +545,13 @@ export function AgentDock({
             label={ready(status) ? 'Send' : 'Queue'}
             icon="arrowUp"
             disabled={!sendable}
-            onClick={send}
+            onClick={() => send()}
             title={
               ready(status)
-                ? `Sends your draft together with everyone else's (${formatKeys('mod+⏎')})`
+                ? "Sends your draft together with everyone else's (⏎)"
                 : attached.length > 0
                   ? 'Attached files go with a prompt the agent takes now'
-                  : `Queues your draft for when the agent is ready (${formatKeys('mod+⏎')})`
+                  : `Queues your draft for when the agent is ready (⏎), or tells it now (${formatKeys('mod+⏎')})`
             }
           />
         )}

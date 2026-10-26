@@ -8,10 +8,12 @@ import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
 import { keys, message } from '../query'
 import type { NewThreadSearch } from '../router'
+import { useMedia } from '../media'
 import { formatKeys } from '../shortcuts'
 import { store, stored } from '../stored'
 import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
+import { AgentSettings } from './AgentSettings'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
@@ -409,6 +411,7 @@ export function NewThread() {
   const agentName = agents.find((candidate) => candidate.id === agent)?.name ?? ''
   // As this browser last saw the agent run; its mode is the permissions chip's to say.
   const settings = agentName ? rememberedSettings(agentName).filter((setting) => setting.category !== 'mode') : []
+  const narrow = useMedia('(max-width: 767px)')
   const devices = status.data?.servers?.length ?? 0
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
   const busyHere = (threads.data ?? []).some((thread) => thread.repo === repo && repo !== '' && thread.agent_state === 'working')
@@ -519,7 +522,7 @@ export function NewThread() {
             rows={4}
             value={prompt}
             onChange={setPrompt}
-            onSend={(shift) => ready && start(shift)}
+            onSend={() => ready && start(false)}
             onCycle={() => setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             tools={
@@ -539,18 +542,12 @@ export function NewThread() {
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
-                  {settings.map((setting) => (
-                    <ChipSelect
-                      ghost
-                      key={setting.id}
-                      label={setting.name.toLowerCase()}
-                      // A model names itself; "High" or "Off" need saying what they set.
-                      prefix={setting.category === 'model' ? undefined : setting.name}
-                      value={chosenSettings[setting.id] ?? setting.current}
-                      onChange={(value) => setChosenSettings({ ...chosenSettings, [setting.id]: value })}
-                      options={setting.choices}
-                    />
-                  ))}
+                  <AgentSettings
+                    settings={settings}
+                    value={(setting) => chosenSettings[setting.id] ?? setting.current}
+                    onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
+                    narrow={narrow}
+                  />
                   <ChipSelect
                     ghost
                     label="permissions"
@@ -564,14 +561,13 @@ export function NewThread() {
             }
             actions={
               <>
-                <span className="font-mono text-2xs text-fg-3 max-md:hidden">{formatKeys('mod+⏎')}</span>
                 <span className="flex items-center">
-                  <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} title={chosenWhere === 'cloud' ? 'Start in the cloud' : 'Start and open it'} />
+                  <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} title={chosenWhere === 'cloud' ? 'Start in the cloud (⏎)' : 'Start and open it (⏎)'} />
                   <Menu
                     label="More ways to start"
                     trigger={<Icon name="chevronDown" className="h-3.5 w-3.5" />}
                     items={[
-                      ...(chosenWhere === 'cloud' ? [] : [{ label: `Start in the background (${formatKeys('mod+shift+⏎')})`, onSelect: () => start(true), disabled: !ready }]),
+                      ...(chosenWhere === 'cloud' ? [] : [{ label: 'Start in the background', onSelect: () => start(true), disabled: !ready }]),
                       { label: 'Save as a draft', onSelect: saveDraft, disabled: !prompt.trim() },
                     ]}
                   />

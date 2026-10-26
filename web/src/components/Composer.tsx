@@ -27,8 +27,8 @@ export function ComposerBox({
   label: string
   value: string
   onChange: (value: string) => void
-  /** mod+⏎, with whether shift was held too. */
-  onSend: (shift: boolean) => void
+  /** ⏎ sends; mod+⏎ sends now, interrupting the agent's turn where it has one. */
+  onSend: (now: boolean) => void
   placeholder: string
   rows?: number
   /** Over the text: what's queued, what others are writing. */
@@ -44,9 +44,12 @@ export function ComposerBox({
   className?: string
 }) {
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
+    // the button sends. Never while an input method is still composing a character.
+    const touch = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey && !event.altKey && (!touch || event.metaKey || event.ctrlKey)) {
       event.preventDefault()
-      onSend(event.shiftKey)
+      onSend(event.metaKey || event.ctrlKey)
     }
     if (event.key === 'Tab' && event.shiftKey && onCycle) {
       event.preventDefault()
@@ -70,8 +73,9 @@ export function ComposerBox({
         className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
       />
       {below}
+      {/* One row however many tools: what doesn't fit scrolls sideways rather than starting a second. */}
       <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1 *:shrink-0">{tools}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] *:shrink-0">{tools}</span>
         <span className="flex shrink-0 items-center gap-2">{actions}</span>
       </div>
     </div>
