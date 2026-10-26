@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
-import { duration, imageSize, kindOf, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
+import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
 import { TranscriptDetail } from '../detail'
 import { Button, Dialog, Icon, Kbd, cx } from '../ui'
 import { Markdown } from './Markdown'
@@ -49,18 +49,6 @@ function Mark({ step }: { step: ToolStep }) {
 
 const VERB: Record<string, string> = { read: 'Read', search: 'Searched', edit: 'Edited', execute: 'Ran', question: 'Asked', fetch: 'Fetched' }
 
-/** The plan a call put to the person for approval, as Claude's ExitPlanMode does: its input's `plan`, as Markdown. */
-function proposedPlan(call: HistoryEntry): string | null {
-  const at = call.text.indexOf(' {')
-  if (at < 0) return null
-  try {
-    const input = JSON.parse(call.text.slice(at + 1)) as { plan?: unknown }
-    return typeof input.plan === 'string' ? input.plan : null
-  } catch {
-    return null
-  }
-}
-
 /** What a step did, in its tool's words: `Read src/upload.rs`, `Searched progress in src`. */
 function Said({ call }: { call: HistoryEntry }) {
   const tool = call.tool
@@ -93,6 +81,24 @@ function measure(step: ToolStep): string | null {
   if (kind === 'search') return `${lines} ${lines === 1 ? 'match' : 'matches'}`
   if (kind === 'read') return `${lines} ${lines === 1 ? 'line' : 'lines'}`
   return null
+}
+
+/** A plan the agent put to the person, kept in its turn as it was proposed, folded to its title. */
+export function ProposedPlan({ step }: { step: ToolStep }) {
+  const plan = proposedPlan(step.call!) ?? ''
+  const heading = /^#+\s*(.+)$/m.exec(plan)?.[1]
+  return (
+    <details className="group/plan rounded-md border border-line bg-elevated text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5">
+        <Icon name="chevronRight" className="h-3 w-3 shrink-0 text-fg-2 transition-transform group-open/plan:rotate-90" />
+        <span className="text-fg-2">Proposed a plan</span>
+        {heading && <span className="min-w-0 truncate text-fg-1">{heading}</span>}
+      </summary>
+      <div className="border-t border-line-subtle px-3.5 py-2.5 text-sm">
+        <Markdown text={plan} />
+      </div>
+    </details>
+  )
 }
 
 /** One step in a fold: what it did, with its result a click away. */
@@ -158,15 +164,33 @@ export function CommandCard({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(verbose || !step.result || Boolean(outcome?.failed))
   const tail = tailOf(output)
   const command = call.tool?.subject ?? toolOf(call.text).name
+  // A script of many lines is one line until asked for, so it doesn't take the page.
+  const long = command.length > 160 || command.trim().includes('\n')
+  const [whole, setWhole] = useState(false)
+  const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
   return (
     <div data-testid="command" className="overflow-hidden rounded-md border border-line bg-elevated text-xs">
-      <div className={cx('flex items-center gap-2 px-3 py-1.5', open && output.trim() && 'border-b border-line-subtle')}>
+      <div className={cx('flex items-start gap-2 px-3 py-1.5', open && output.trim() && 'border-b border-line-subtle')}>
         <Mark step={step} />
-        <span className="min-w-0 flex-1 font-mono break-words" title={command}>
-          <span className="text-fg-2">$ </span>
-          {shortCommand(command)}
-        </span>
-        <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : 'text-fg-2')}>{commandStatus(step)}</span>
+        {long ? (
+          <button
+            type="button"
+            aria-expanded={whole}
+            onClick={() => setWhole(!whole)}
+            title={whole ? 'Show one line' : 'Show the whole command'}
+            className={cx('min-w-0 flex-1 text-left font-mono', whole ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'truncate')}
+          >
+            <span className="text-fg-2">$ </span>
+            {whole ? command : shortCommand(command.trim().split('\n')[0]!)}
+            {!whole && <span className="text-fg-2"> …</span>}
+          </button>
+        ) : (
+          <span className="min-w-0 flex-1 font-mono break-words" title={command}>
+            <span className="text-fg-2">$ </span>
+            {shortCommand(command)}
+          </span>
+        )}
+        <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>{waiting ? 'waiting for you' : commandStatus(step)}</span>
         {output.trim() && (
           <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
             {open ? 'Hide output' : 'Output'}

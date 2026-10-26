@@ -879,6 +879,10 @@ pub struct StartOptions {
     /// own.
     pub here: bool,
     pub mode: Option<String>,
+    /// The agent's settings to choose once it's up, such as its model or
+    /// thinking level, by id and value.
+    #[serde(default)]
+    pub settings: Vec<(String, String)>,
     pub preset: Option<Preset>,
     pub visibility: Option<silt_proto::Visibility>,
     /// Sent once the agent is ready.
@@ -965,6 +969,9 @@ pub struct PermissionAsked {
     /// own plan approval, as Claude's ExitPlanMode is.
     #[serde(default)]
     pub plan: Option<String>,
+    /// The tool call it asks about, whose card shows it waiting rather than running.
+    #[serde(default)]
+    pub tool_call: Option<String>,
 }
 
 /// Tokens of a context window used, of its size.

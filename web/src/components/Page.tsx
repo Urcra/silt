@@ -1,5 +1,7 @@
-import { type CSSProperties, type ReactNode, useContext } from 'react'
+import { type CSSProperties, type ReactNode, type RefObject, useContext, useRef } from 'react'
 import { useDragWidth } from '../dragWidth'
+import { WIDE, useMedia } from '../media'
+import { MainScroll } from '../scroll'
 import { InSettings } from '../settingsContext'
 import { Drawer } from '../shell'
 import { IconButton, cx } from '../ui'
@@ -43,6 +45,8 @@ export function Page({
   label,
   flush = false,
   sheet,
+  inspectorWidth = 360,
+  columnRef,
 }: {
   title?: ReactNode
   meta?: ReactNode
@@ -59,11 +63,21 @@ export function Page({
   flush?: boolean
   /** Below the desktop width, the inspector opens over the page as a sheet, only while `open`. */
   sheet?: { open: boolean; onClose: () => void }
+  /** The inspector's width until the person drags it. */
+  inspectorWidth?: number
+  /** The body's own column, which scrolls beside an inspector: for a view that renders only what's in view, above where `MainScroll` says so. */
+  columnRef?: RefObject<HTMLDivElement | null>
 }) {
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
   const embedded = useContext(InSettings)
-  // One width for every inspector and tab, so switching between them leaves the page where it was.
-  const panel = useDragWidth('silt-inspector-width', INSPECTOR, 'left')
+  // A width per kind of page, kept across its tabs; a diff wanted wide on a thread mustn't squeeze a review's.
+  const panel = useDragWidth(`silt-inspector-width:${label ?? 'page'}`, { ...INSPECTOR, start: inspectorWidth }, 'left')
+  const desktop = useMedia(WIDE)
+  const outer = useContext(MainScroll)
+  const fallback = useRef<HTMLDivElement>(null)
+  const own = columnRef ?? fallback
+  // Beside an inspector the body scrolls in its own column, so each side has its own scroll bar by it.
+  const split = Boolean(inspector) && desktop
   if (embedded)
     return (
       <div className="flex min-w-0 flex-col gap-3" data-page={label}>
@@ -78,9 +92,10 @@ export function Page({
       </div>
     )
   return (
-    // Grows with its content, never under it, so the header and inspector stay stuck however long the body is.
-    <div className="flex min-h-full shrink-0 grow flex-col lg:flex-row">
-      <div className="flex min-w-0 flex-1 flex-col" data-page={label}>
+    // Grows with its content, never under it, so the header stays stuck however long the body is.
+    <MainScroll.Provider value={split ? own : outer}>
+    <div className={cx('flex shrink-0 grow flex-col lg:flex-row', split ? 'h-full min-h-0 overflow-hidden' : 'min-h-full')}>
+      <div ref={own} className={cx('flex min-w-0 flex-1 flex-col', split && 'relative overflow-y-auto')} data-page={label}>
         {(title || actions) && (
           <header className="sticky top-0 z-10 flex min-h-12 shrink-0 items-center bg-bg gap-x-2.5 gap-y-0.5 border-b border-line-subtle px-4 max-md:flex-wrap max-md:py-1.5 md:h-12 md:pr-3 md:pl-5">
             <DrawerButton />
@@ -97,7 +112,7 @@ export function Page({
         <div
           {...panel.handle}
           aria-label={`resize ${inspectorLabel}`}
-          className="relative z-10 -mr-1 hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent lg:sticky lg:top-0 lg:block lg:h-dvh"
+          className="relative z-10 -mr-1 hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent lg:block"
         />
       )}
       {inspector && (
@@ -105,7 +120,7 @@ export function Page({
           aria-label={inspectorLabel}
           style={{ '--inspector': `${panel.width}px` } as CSSProperties}
           className={cx(
-            'flex w-full shrink-0 flex-col border-line lg:sticky lg:top-0 lg:h-dvh lg:w-(--inspector) lg:max-w-[60vw] lg:overflow-y-auto lg:border-l',
+            'flex w-full shrink-0 flex-col border-line lg:h-full lg:w-(--inspector) lg:max-w-[50vw] lg:overflow-y-auto lg:border-l',
             sheet
               ? sheet.open
                 ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:sticky lg:z-auto'
@@ -127,5 +142,6 @@ export function Page({
         </aside>
       )}
     </div>
+    </MainScroll.Provider>
   )
 }

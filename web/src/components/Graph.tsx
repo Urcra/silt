@@ -81,10 +81,10 @@ function Lanes({ rows, height }: { rows: GraphRow[]; height: number }) {
 
 /** A row's tag, before its description, for what isn't a plain turn. */
 function KindTag({ row }: { row: GraphRow }) {
-  const tag = (text: string, tone: string) => <span className={cx('rounded-sm px-1.5 text-2xs whitespace-nowrap', tone)}>{text}</span>
+  const tag = (text: string, tone: string) => <span className={cx('shrink-0 rounded-sm px-1.5 text-2xs whitespace-nowrap', tone)}>{text}</span>
   if (row.kind === 'commit' && row.commit)
     return (
-      <span className="rounded-sm border border-line bg-surface-1 px-1 font-mono text-2xs text-fg-1" data-volatile>
+      <span className="shrink-0 rounded-sm border border-line bg-surface-1 px-1 font-mono text-2xs text-fg-1" data-volatile>
         {row.commit.slice(0, 7)}
       </span>
     )
@@ -241,7 +241,8 @@ export function Graph() {
   // The tag already says it forked; its text says from where, by name.
   const describe = (row: GraphRow) => (row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text))
   const picked = chosen && rows.find((row) => row.id === chosen.id) ? chosen : rows[0]
-  const grid = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_200px_140px_56px]'
+  // By the table's own width, not the window's: the details panel beside it takes what the person gives it.
+  const grid = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 @2xl/table:grid-cols-[minmax(0,1fr)_200px_140px_56px]'
   // A phone's rows are tall enough to tap; the lanes follow them.
   const rowHeight = useMedia('(max-width: 767px)') ? 44 : 36
   return (
@@ -303,15 +304,15 @@ export function Graph() {
         ))}
         {rows.length > 0 && (
           <div className="flex min-w-0 overflow-x-auto">
-            <div className="shrink-0">
+            <div className="min-w-14 shrink-0">
               <div className="flex h-7 items-center border-b border-line pl-1 font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Graph</div>
               <Lanes rows={rows} height={rowHeight} />
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="@container/table min-w-0 flex-1">
               <div className={cx(grid, 'h-7 border-b border-line px-2 font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase')}>
                 <span>Description</span>
-                <span className="max-md:hidden">Thread</span>
-                <span className="max-md:hidden">Who</span>
+                <span className="@max-2xl/table:hidden">Thread</span>
+                <span className="@max-2xl/table:hidden">Who</span>
                 <span className="text-right">When</span>
               </div>
               <ul aria-label="graph">
@@ -334,11 +335,11 @@ export function Graph() {
                             <span className="shrink-0 rounded-sm bg-warn-tint px-1.5 text-2xs">waiting on you</span>
                           )}
                         </span>
-                        <span className="flex min-w-0 items-center gap-1.5 text-xs max-md:hidden">
+                        <span className="flex min-w-0 items-center gap-1.5 text-xs @max-2xl/table:hidden">
                           {thread && <Dot tone={threadTone(thread)} />}
                           <span className="truncate">{thread?.title ?? short(row.thread)}</span>
                         </span>
-                        <span className="truncate font-mono text-2xs text-fg-2 max-md:hidden">
+                        <span className="truncate font-mono text-2xs text-fg-2 @max-2xl/table:hidden">
                           {[row.owner || 'you', row.agent].filter(Boolean).join(' · ')}
                         </span>
                         <span className="text-right font-mono text-2xs text-fg-2" data-volatile>

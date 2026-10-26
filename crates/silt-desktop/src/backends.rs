@@ -84,13 +84,14 @@ pub fn is_distribution_name(name: &str) -> bool {
 }
 
 /// The distributions `wsl.exe --list --quiet` printed, in UTF-16 as it
-/// writes.
+/// writes, without Docker Desktop's own, which run its engine rather than
+/// a person's work.
 pub fn distributions(output: &[u8]) -> Vec<String> {
     let units: Vec<u16> = output.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
     String::from_utf16_lossy(&units)
         .lines()
         .map(|line| line.trim_matches(|char: char| char.is_whitespace() || char == '\u{feff}' || char == '\0'))
-        .filter(|name| is_distribution_name(name))
+        .filter(|name| is_distribution_name(name) && !name.starts_with("docker-desktop"))
         .map(str::to_owned)
         .collect()
 }
@@ -192,7 +193,10 @@ mod tests {
 
     #[test]
     fn distributions_are_read_from_wsl_s_utf16() {
-        let output: Vec<u8> = "\u{feff}Ubuntu\r\nDebian\r\n\r\nbad name\r\n".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let output: Vec<u8> = "\u{feff}Ubuntu\r\nDebian\r\n\r\nbad name\r\ndocker-desktop\r\ndocker-desktop-data\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         assert_eq!(distributions(&output), ["Ubuntu", "Debian"]);
         assert!(distributions(&[]).is_empty());
     }

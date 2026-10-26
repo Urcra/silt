@@ -1,8 +1,9 @@
 // The pieces the boards' screens are drawn with (ADR 0039): status dots,
 // pills, section labels, cards, key/value lists, diff blocks and the status bar.
 
-import type { HTMLAttributes, ReactNode } from 'react'
+import { type HTMLAttributes, type ReactNode, useState } from 'react'
 import { cx } from './cx'
+import { Icon } from './icons'
 
 const DOT = {
   ok: 'bg-ok',
@@ -115,14 +116,26 @@ export function DiffBlock({
   className?: string
   id?: string
 }) {
+  const [folded, setFolded] = useState(false)
   return (
     <section id={id} className={cx('overflow-hidden rounded-md border border-line bg-elevated', className)}>
-      <header className="flex items-center gap-2 border-b border-line bg-surface-1 px-3 py-1.5 font-mono text-2xs text-fg-2">
+      <header className={cx('flex items-center gap-2 bg-surface-1 px-3 py-1.5 font-mono text-2xs text-fg-2', !folded && 'border-b border-line')}>
+        {children !== undefined && (
+          <button
+            type="button"
+            aria-expanded={!folded}
+            aria-label={folded ? 'show this file' : 'fold this file'}
+            onClick={() => setFolded(!folded)}
+            className="-ml-1 shrink-0 rounded-sm p-0.5 text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
+          >
+            <Icon name="chevronDown" className={cx('h-3 w-3 transition-transform', folded && '-rotate-90')} />
+          </button>
+        )}
         <span className="min-w-0 truncate text-fg-1">{path}</span>
         {(added !== undefined || removed !== undefined) && <Counts added={added ?? 0} removed={removed ?? 0} className="ml-auto" />}
         {actions && <span className={cx('flex items-center gap-3', added === undefined && 'ml-auto')}>{actions}</span>}
       </header>
-      {children}
+      {!folded && children}
     </section>
   )
 }

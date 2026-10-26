@@ -5,6 +5,7 @@ import { APPROVED } from '../agentState'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import { useTopic } from '../bus'
+import { switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
 import { projectName, projects } from '../projects'
 import { keys, message } from '../query'
@@ -62,8 +63,13 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
 }
 
 /** What a thread waiting on the person waits for, in a word or two. */
-function waitsFor(thread: ThreadSummary, asks: boolean): string {
-  if (thread.agent_state === 'awaiting_input') return 'plan to approve'
+/** Short and on one line, so a click on Allow beside it approves all of it. */
+function shownWhole(command: string): boolean {
+  return command.length <= 80 && !command.includes('\n')
+}
+
+function waitsFor(thread: ThreadSummary, asks: boolean, plan: boolean): string {
+  if (thread.agent_state === 'awaiting_input' || plan) return 'plan to approve'
   if (thread.agent_state === 'awaiting_permission') return asks ? 'asks you' : 'asks to run'
   if (thread.agent_state === 'error') return 'stopped'
   return 'review'
@@ -96,16 +102,16 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
   return (
     <li role="group" aria-label={`${title} needs you`}>
       <ul>
-        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0)}</span>} />
+        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0, Boolean(asked?.plan))}</span>} />
       </ul>
       {asked && (
         <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">
-          <p className="truncate text-fg-2" title={asked.plan ? 'A plan to approve' : asked.title}>
+          <p className="line-clamp-3 whitespace-pre-wrap text-fg-2 [overflow-wrap:anywhere]" title={asked.plan ? 'A plan to approve' : asked.title}>
             {asked.plan ? 'A plan to approve' : <>Asks to run: <span className="font-mono">{asked.title}</span></>}
           </p>
-          {/* The first answer here; every other, and the plan, on the thread's own card. */}
+          {/* The first answer here only for what's shown whole; a longer command, and the plan, on the thread's own card. */}
           <div className="flex min-w-0 gap-1">
-            {first && !asked.plan && (
+            {first && !asked.plan && shownWhole(asked.title) && (
               <Button size="sm" variant="primary" className="min-w-0" title={first[1]} onClick={() => act(api.answer(thread.id, asked.id, first[0]))}>
                 <span className="truncate">{first[1]}</span>
               </Button>
@@ -220,8 +226,26 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const name = signIn?.name ?? 'this machine'
   const sync = status.data?.sync_error
   const agents = running === 0 ? null : `${running === 1 ? '1 agent' : `${running} agents`}${waiting > 0 ? `, ${waiting} waiting` : ' running'}`
+  const { backends, current } = useBackends()
   return (
-    <div className="flex items-center gap-2 border-t border-line px-2 pt-2.5 pb-1 text-xs text-fg-2">
+    <div className="flex flex-col border-t border-line">
+    {backends.length > 1 && (
+      <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
+        <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
+        <span className="shrink-0">Runs on</span>
+        <Menu
+          label="where Silt runs"
+          trigger={
+            <span className="inline-flex min-w-0 items-center gap-1 text-fg-1">
+              <span className="truncate">{backends.find((backend) => backend.id === current)?.label ?? 'This computer'}</span>
+              <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
+            </span>
+          }
+          items={backends.map((backend) => ({ label: backend.label, onSelect: () => switchBackend(backend.id), disabled: backend.id === current }))}
+        />
+      </div>
+    )}
+    <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 text-xs text-fg-2">
       {hosted() ? (
         <span className="flex-1 truncate">On the server</span>
       ) : (
@@ -241,6 +265,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
         <Icon name="settings" className="h-[15px] w-[15px]" />
       </Link>
       {signIn && <Avatar name={signIn.user} size={22} />}
+    </div>
     </div>
   )
 }

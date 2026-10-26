@@ -58,6 +58,9 @@ pub(crate) struct AcpRun {
     tool_said: HashMap<String, (String, Option<serde_json::Value>)>,
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
+    /// Settings chosen before the agent was up, by id and value, set once it
+    /// says which it offers.
+    chosen_settings: Vec<(String, String)>,
     /// The turn running is a Plan first one.
     planning: bool,
     /// The mode Plan first switched away from, to go back to once the plan
@@ -331,6 +334,7 @@ impl Core {
                 tool_said: HashMap::new(),
                 modes: None,
                 settings: Vec::new(),
+                chosen_settings: options.settings,
                 planning: false,
                 back_to: None,
                 first: options.prompt.map(|prompt| (prompt, options.plan)),
@@ -650,6 +654,22 @@ impl Core {
 
     pub(crate) async fn set_preset(&mut self, thread: ThreadId, preset: Preset) -> Result<&'static str, CoreError> {
         self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
+        // An agent with modes of its own is put in the one that does what the preset says, so the two never disagree.
+        if let Some(run) = self.acp.get_mut(&thread)
+            && let Some(mode) = run.modes.as_ref().and_then(|modes| mode_for_preset(preset, modes))
+            && run.modes.as_ref().is_some_and(|modes| modes.current != mode)
+        {
+            // Into the plan mode, it comes back once the plan is approved, as a Plan first turn does.
+            let left = run.modes.as_ref().map(|modes| modes.current.clone());
+            run.back_to = if preset == Preset::Plan { left } else { None };
+            send(run, Command::SetMode(mode.clone()));
+            if let Some(modes) = &mut run.modes {
+                modes.current = mode.clone();
+            }
+            if preset != Preset::Plan {
+                self.keep_choice(thread, |record| record.mode = Some(mode)).await?;
+            }
+        }
         self.announce_agent(thread);
         Ok("set")
     }
@@ -664,7 +684,18 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("checked above");
         run.back_to = None;
         send(run, Command::SetMode(mode.to_owned()));
-        self.keep_choice(thread, |record| record.mode = Some(mode.to_owned())).await?;
+        let planning = run.plan_mode() == Some(mode);
+        let follows = preset_following(mode, planning, self.preset(thread));
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        if let Some(modes) = &mut run.modes {
+            modes.current = mode.to_owned();
+        }
+        self.keep_choice(thread, |record| {
+            record.mode = Some(mode.to_owned());
+            record.preset = follows.as_str().to_owned();
+        })
+        .await?;
+        self.announce_agent(thread);
         Ok("set")
     }
 
@@ -735,6 +766,7 @@ impl Core {
                         .get(&asked.tool_call_id)
                         .and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
                         .map(str::to_owned),
+                    tool_call: Some(asked.tool_call_id.to_string()),
                 })
                 .collect(),
             questions: run.questions.iter().map(question_asked).collect(),
@@ -777,12 +809,26 @@ impl Core {
                 run.error = Some(error);
                 run.state = AgentState::Error;
             }
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, agent, modes, settings, accepts }) => {
-                let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone());
+            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, .. }) => {
+                let preset = self.preset(thread);
+                // A thread whose mode was never chosen starts in the one its preset says; Plan's is
+                // entered by its first prompt, which knows to come back from it.
+                let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone()).or_else(|| {
+                    modes.as_ref().filter(|_| preset != Preset::Plan).and_then(|modes| mode_for_preset(preset, modes))
+                });
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.modes = modes;
                 run.settings = settings;
                 run.accepts = accepts;
+                // What New thread chose, as far as this agent offers it now.
+                for (id, value) in std::mem::take(&mut run.chosen_settings) {
+                    let Some(setting) = run.settings.iter_mut().find(|setting| setting.id == id) else { continue };
+                    if setting.current == value || !setting.choices.iter().any(|choice| choice.id == value) {
+                        continue;
+                    }
+                    setting.current = value.clone();
+                    send(run, Command::SetSetting { id, value });
+                }
                 if let Some(mode) = kept.filter(|mode| {
                     run.modes
                         .as_ref()
@@ -796,23 +842,31 @@ impl Core {
                     }
                 }
                 let first = run.first.take();
-                self.acp_ready(thread, &session, loaded, &agent).await?;
+                self.acp_ready(thread, &session, loaded).await?;
                 if let Some((prompt, plan)) = first {
                     self.acp_prompt(&thread.to_string(), &prompt, plan).await?;
                 }
                 self.next_prompt(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::ModeChanged(mode)) => {
-                let left_planning = run.plan_mode().is_some_and(|plan| plan != mode);
+                let planning = run.plan_mode() == Some(mode.as_str());
                 if let Some(modes) = &mut run.modes {
                     modes.current = mode.clone();
                 }
-                // The agent left its plan mode by the person's answer to its own
-                // plan, as Claude's does: the thread goes on as that answer said,
-                // where Silt's plan card would have moved it (ADR 0044).
-                if left_planning && self.preset(thread) == Preset::Plan {
-                    self.acp.get_mut(&thread).expect("caller checked").back_to = None;
-                    self.set_preset(thread, preset_for_mode(&mode)).await?;
+                // The preset follows the agent's mode, as when it leaves its plan mode by the
+                // person's answer to its own plan (ADR 0044); only Silt's own switch into plan
+                // mode for one Plan first turn, which it undoes, leaves the preset be.
+                let temporary = planning && run.back_to.is_some();
+                if !temporary {
+                    run.back_to = None;
+                    let follows = preset_following(&mode, planning, self.preset(thread));
+                    if follows != self.preset(thread) {
+                        self.keep_choice(thread, |record| {
+                            record.preset = follows.as_str().to_owned();
+                            record.mode = Some(mode);
+                        })
+                        .await?;
+                    }
                 }
             }
             AcpEvent::Agent(silt_acp::Event::Settings(settings)) => run.settings = settings,
@@ -870,10 +924,12 @@ impl Core {
 
     /// The agent's session is up: a loaded one continues its recording, a
     /// new one starts its own, primed with the thread's conversation.
-    async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool, name: &str) -> Result<(), CoreError> {
+    async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Idle;
-        let (checkout_id, checkout, agent_id) = (run.checkout_id, run.checkout.clone(), run.info.id.clone());
+        // The registry's name, as the picker shows it; the agent's own is often its package's.
+        let (checkout_id, checkout, agent_id, name) =
+            (run.checkout_id, run.checkout.clone(), run.info.id.clone(), run.info.name.clone());
         let earlier = run.load.take().filter(|(_, earlier)| loaded && earlier == native);
         if let Some(session) = earlier.and_then(|(id, _)| self.session_mut(&id)) {
             session.live = true;
@@ -900,7 +956,7 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.session = Some(id);
         run.primer = primer;
-        self.record_acp(thread, &acp::session(&agent_id, name, native)).await
+        self.record_acp(thread, &acp::session(&agent_id, &name, native)).await
     }
 
     async fn acp_update(&mut self, thread: ThreadId, update: Update) -> Result<(), CoreError> {
@@ -1101,18 +1157,40 @@ impl AcpRun {
     }
 }
 
-/// Makes the next turn a Plan first one: in the agent's plan mode when it
-/// has one, and by the prompt otherwise.
 /// The preset that lets an agent do what its mode `mode` does, by the ids
-/// Claude's and Codex's adapters use; any other asks before commands.
-fn preset_for_mode(mode: &str) -> Preset {
+/// Claude's and Codex's adapters use.
+fn preset_for_mode(mode: &str) -> Option<Preset> {
     match mode {
-        "default" | "read-only" => Preset::AskForEverything,
-        "bypassPermissions" | "auto" | "dontAsk" | "full-access" => Preset::FullAccess,
-        _ => Preset::AskBeforeCommands,
+        "default" | "read-only" => Some(Preset::AskForEverything),
+        "acceptEdits" => Some(Preset::AskBeforeCommands),
+        "bypassPermissions" | "auto" | "dontAsk" | "full-access" => Some(Preset::FullAccess),
+        _ => None,
     }
 }
 
+/// The preset to go on with once the agent is in `mode`: Plan in its plan mode, the
+/// mode's own where Silt knows it, and otherwise the one already chosen, unless that
+/// was Plan, which the agent has left.
+fn preset_following(mode: &str, planning: bool, chosen: Preset) -> Preset {
+    if planning {
+        return Preset::Plan;
+    }
+    preset_for_mode(mode).unwrap_or(if chosen == Preset::Plan { Preset::AskBeforeCommands } else { chosen })
+}
+
+/// The agent's mode that does what `preset` says, among those it offers.
+fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
+    let wanted: &[&str] = match preset {
+        Preset::Plan => return silt_acp::plan_mode(modes).map(|mode| mode.id.clone()),
+        Preset::AskForEverything => &["default", "read-only"],
+        Preset::AskBeforeCommands => &["acceptEdits"],
+        Preset::FullAccess => &["bypassPermissions", "full-access", "dontAsk"],
+    };
+    wanted.iter().find(|id| modes.available.iter().any(|mode| mode.id == **id)).map(|id| (*id).to_owned())
+}
+
+/// Makes the next turn a Plan first one: in the agent's plan mode when it
+/// has one, and by the prompt otherwise.
 fn plan_first(run: &mut AcpRun) {
     run.planning = true;
     let Some(plan) = run.plan_mode().map(str::to_owned) else {
@@ -1173,6 +1251,24 @@ mod tests {
     use silt_types::{ActorId, FamilyId};
 
     use super::*;
+
+    #[test]
+    fn the_preset_follows_the_mode_the_agent_is_in() {
+        assert_eq!(preset_following("plan", true, Preset::AskForEverything), Preset::Plan);
+        assert_eq!(preset_following("acceptEdits", false, Preset::Plan), Preset::AskBeforeCommands);
+        assert_eq!(preset_following("default", false, Preset::Plan), Preset::AskForEverything);
+        assert_eq!(preset_following("bypassPermissions", false, Preset::AskForEverything), Preset::FullAccess);
+        assert_eq!(
+            preset_following("code", false, Preset::AskForEverything),
+            Preset::AskForEverything,
+            "a mode Silt doesn't know keeps the choice"
+        );
+        assert_eq!(
+            preset_following("code", false, Preset::Plan),
+            Preset::AskBeforeCommands,
+            "but leaves Plan, which the agent left"
+        );
+    }
 
     #[test]
     fn a_question_is_answered_in_its_choices_words() {

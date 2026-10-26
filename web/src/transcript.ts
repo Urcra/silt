@@ -21,7 +21,7 @@ export type Row =
     }
 
 /** Which part of the history a row is from: this thread's own, inherited before a fork, or pulled upstream. */
-function originOf(row: Row): string | undefined {
+export function originOf(row: Row): string | undefined {
   if (row.kind === 'origin') return row.origin
   if (row.kind === 'compaction') return (row.marker ?? row.summary)?.origin
   return (row.prompt ?? row.entries[0])?.origin
@@ -42,6 +42,10 @@ export function foldInherited(rows: Row[]): Row[] {
       shown.push(row)
     }
   }
+  // A fork with nothing of its own yet still says where its part will begin.
+  const last = shown.at(-1)
+  if (last?.kind === 'origin' && last.origin === 'inherited')
+    shown.push({ kind: 'origin', key: 'origin-own-to-come', origin: 'own', thread: last.thread })
   return shown
 }
 
@@ -115,11 +119,24 @@ export type Piece =
 const STANDING = new Set(['execute', 'question'])
 
 /** The pieces of a turn: its words, commands and questions, and runs of the rest of the tool work folded together. */
+/** The plan a call put to the person for approval, as Claude's ExitPlanMode does: its input's `plan`, as Markdown. */
+export function proposedPlan(call: HistoryEntry): string | null {
+  const at = call.text.indexOf(' {')
+  if (at < 0) return null
+  try {
+    const input = JSON.parse(call.text.slice(at + 1)) as { plan?: unknown }
+    return typeof input.plan === 'string' ? input.plan : null
+  } catch {
+    return null
+  }
+}
+
 export function piecesOf(entries: HistoryEntry[]): Piece[] {
   const steps = stepsOf(entries)
   const standing = new Set<HistoryEntry>()
   for (const step of steps) {
-    if (step.call && STANDING.has(kindOf(step.call))) {
+    // A proposed plan stands in its turn, as what the work after it went by.
+    if (step.call && (STANDING.has(kindOf(step.call)) || proposedPlan(step.call))) {
       standing.add(step.call)
       if (step.result) standing.add(step.result)
       for (const image of step.images) standing.add(image)

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
-import { rememberedModes } from '../agentModes'
+import { rememberedSettings } from '../agentModes'
 import { PRESETS } from '../agentState'
 import { api, type CloneInfo, type FoundFolder, type Preset, type Project } from '../api'
 import { useNow } from '../now'
@@ -396,7 +396,7 @@ export function NewThread() {
   const chosenWhere = where ?? stored<Where>(MODE_KEY + project, 'local')
   const [base, setBase] = useState('')
   const [chosenAgent, setAgent] = useState<string>()
-  const [agentMode, setAgentMode] = useState('')
+  const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const [chosenPreset, setPreset] = useState<Preset>()
   const [prompt, setPrompt] = useState(search.prompt ?? '')
   const [drafts, setDrafts] = useState(() => stored<Draft[]>(DRAFTS_KEY, []))
@@ -407,7 +407,8 @@ export function NewThread() {
   const preset: Preset = chosenPreset ?? PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ?? 'ask_before_commands'
   const branches = useQuery({ queryKey: keys.branches(project), queryFn: () => api.branches(project), enabled: project !== '' && chosenWhere === 'worktree' })
   const agentName = agents.find((candidate) => candidate.id === agent)?.name ?? ''
-  const modes = agentName ? rememberedModes(agentName) : []
+  // As this browser last saw the agent run; its mode is the permissions chip's to say.
+  const settings = agentName ? rememberedSettings(agentName).filter((setting) => setting.category !== 'mode') : []
   const devices = status.data?.servers?.length ?? 0
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
   const busyHere = (threads.data ?? []).some((thread) => thread.repo === repo && repo !== '' && thread.agent_state === 'working')
@@ -459,7 +460,9 @@ export function NewThread() {
         {
           here: chosenWhere === 'local',
           base: chosenWhere === 'worktree' && base ? base : null,
-          mode: agentMode || null,
+          // The agent starts in the mode its preset says; its model and the rest as shown here.
+          mode: null,
+          settings: settings.map((setting) => [setting.id, chosenSettings[setting.id] ?? setting.current]),
           preset,
           visibility: null,
           prompt: prompt.trim() ? prompt : null,
@@ -517,6 +520,7 @@ export function NewThread() {
             value={prompt}
             onChange={setPrompt}
             onSend={(shift) => ready && start(shift)}
+            onCycle={() => setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             tools={
               chosenWhere !== 'cloud' && (
@@ -528,23 +532,25 @@ export function NewThread() {
                       value={agent}
                       onChange={(chosen) => {
                         setAgent(chosen)
-                        setAgentMode('')
+                        setChosenSettings({})
                       }}
                       options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
                     />
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
-                  {modes.length > 0 && (
+                  {settings.map((setting) => (
                     <ChipSelect
                       ghost
-                      label="mode"
-                      prefix="Mode"
-                      value={agentMode}
-                      onChange={setAgentMode}
-                      options={[{ id: '', name: 'its default' }, ...modes.map((choice) => ({ id: choice.id, name: choice.name }))]}
+                      key={setting.id}
+                      label={setting.name.toLowerCase()}
+                      // A model names itself; "High" or "Off" need saying what they set.
+                      prefix={setting.category === 'model' ? undefined : setting.name}
+                      value={chosenSettings[setting.id] ?? setting.current}
+                      onChange={(value) => setChosenSettings({ ...chosenSettings, [setting.id]: value })}
+                      options={setting.choices}
                     />
-                  )}
+                  ))}
                   <ChipSelect
                     ghost
                     label="permissions"

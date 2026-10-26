@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use exn::Exn;
-use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -33,7 +32,6 @@ fn main() {
     let first = link_in(env::args(), &known).unwrap_or_default();
     let target = Arc::new(Mutex::new(first));
     let (linked, linked_known) = (target.clone(), known.clone());
-    let (picked, menu_known) = (target.clone(), known.clone());
     tauri::Builder::default()
         // A second launch, a `silt://` link among them, shows the window
         // that's already open.
@@ -44,16 +42,8 @@ fn main() {
             show(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
-        .on_menu_event(move |_, event| {
-            if let Some(backend) = Backend::parse(event.id().as_ref()).filter(|backend| menu_known.contains(backend)) {
-                *picked.lock().expect("lock") = Target { backend, project: None };
-            }
-        })
         .setup(move |app| {
-            if known.len() > 1 {
-                backend_menu(app.handle(), &known)?;
-            }
-            open_window(app.handle(), ui, target)?;
+            open_window(app.handle(), ui, target, known)?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -79,24 +69,47 @@ fn link_in(args: impl IntoIterator<Item = String>, known: &[Backend]) -> Option<
     args.into_iter().filter_map(|arg| Url::parse(&arg).ok()).find_map(|link| backends::target_of(&link, known))
 }
 
-fn backend_menu(app: &AppHandle, known: &[Backend]) -> tauri::Result<()> {
-    let backends = known
-        .iter()
-        .fold(SubmenuBuilder::new(app, "Backend"), |menu, backend| menu.text(backend.id(), backend.label()))
-        .build()?;
-    app.set_menu(MenuBuilder::new(app).item(&backends).build()?)?;
-    Ok(())
+/// What the page is told of the backends it can switch between, which it
+/// offers where it says where Silt runs, rather than in a menu bar of the
+/// window's own; one backend has nothing to choose.
+fn backends_script(known: &[Backend]) -> String {
+    let backends: Vec<serde_json::Value> = if known.len() > 1 {
+        known.iter().map(|backend| serde_json::json!({ "id": backend.id(), "label": backend.label() })).collect()
+    } else {
+        Vec::new()
+    };
+    format!("window.__siltBackends = {};", serde_json::Value::Array(backends))
 }
 
-fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>, target: Arc<Mutex<Target>>) -> tauri::Result<WebviewWindow> {
+/// Tells the page which backend it shows, once it has loaded.
+fn current_script(target: &Target) -> String {
+    format!(
+        "window.__siltBackend = {id}; window.dispatchEvent(new CustomEvent('silt-backend', {{ detail: {id} }}));",
+        id = serde_json::Value::String(target.backend.id())
+    )
+}
+
+fn open_window(
+    app: &AppHandle,
+    ui: Arc<Mutex<Option<Url>>>,
+    target: Arc<Mutex<Target>>,
+    known: Arc<Vec<Backend>>,
+) -> tauri::Result<WebviewWindow> {
     let started = AtomicBool::new(false);
     let navigating = ui.clone();
     let loading = ui.clone();
+    let (switching, shown) = (target.clone(), target.clone());
     WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
         .title("Silt")
         .inner_size(1440.0, 900.0)
         .min_inner_size(390.0, 600.0)
+        .initialization_script(backends_script(&known))
         .on_navigation(move |to| {
+            // The page's own way to switch backends: the window goes there itself.
+            if let Some(wanted) = backends::target_of(to, &known) {
+                *switching.lock().expect("lock") = wanted;
+                return false;
+            }
             let ui = navigating.lock().expect("lock");
             daemon::stays_in_app(ui.as_ref(), to) || {
                 open_in_browser(to);
@@ -109,6 +122,9 @@ fn open_window(app: &AppHandle, ui: Arc<Mutex<Option<Url>>>, target: Arc<Mutex<T
         })
         // Once the starting page has loaded, so it can show what went wrong.
         .on_page_load(move |window, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = window.eval(current_script(&shown.lock().expect("lock")));
+            }
             if payload.event() == PageLoadEvent::Finished && !started.swap(true, Ordering::SeqCst) {
                 let ui = loading.clone();
                 let target = target.clone();

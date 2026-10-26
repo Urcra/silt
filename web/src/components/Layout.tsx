@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useBusConnected } from '../bus'
 import { useDragWidth } from '../dragWidth'
@@ -122,6 +122,11 @@ export function Layout() {
   // The drawer was opened on this page; going elsewhere closes it.
   const [drawerOn, setDrawerOn] = useState<string | null>(null)
   const sidebarShown = drawerOn === path
+  // Each page opens at its top, not where the one before was scrolled to; a thread then goes to its end, or
+  // where a link names, itself. Before the page's own effects run, so it never undoes theirs.
+  useLayoutEffect(() => {
+    if (scroll.current) scroll.current.scrollTop = 0
+  }, [path])
   const setSidebarShown = (shown: boolean) => setDrawerOn(shown ? path : null)
   return (
     <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">

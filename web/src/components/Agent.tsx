@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
-import { rememberModes } from '../agentModes'
+import { rememberSettings } from '../agentModes'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, running } from '../agentState'
@@ -50,6 +50,13 @@ function working(status: AgentStatus | null): boolean {
   return status?.state === 'working' || status?.state === 'awaiting_permission'
 }
 
+/** Modes that say what the agent may do without asking, by the ids Claude's and Codex's adapters use; the daemon maps them to presets. */
+const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'full-access'])
+
+function permissionModes(status: AgentStatus): boolean {
+  return status.modes?.available.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
+}
+
 function statePhrase(status: AgentStatus): string {
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
   return `${status.agent} ${asking ? 'is asking you a question' : STATE_PHRASE[status.state]}`
@@ -62,46 +69,114 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
     setError(undefined)
     api.answer(thread, asked.id, option).catch((failure: unknown) => setError(message(failure)))
   }
-  const [allow] = asked.options
+  const plan = asked.plan ? planChoices(asked.options) : null
+  const [then, setThen] = useState(plan?.approve[0]?.[0])
+  const allow = plan?.approve.length ? then : asked.options[0]?.[0]
   useShortcut('enter', 'Allow what the agent asks', () => {
-    if (first && allow && !document.querySelector('dialog[open]')) answer(allow[0])
+    if (first && allow && !document.querySelector('dialog[open]')) answer(allow)
   })
   useShortcut('escape', 'Answer neither and stop the turn', () => {
     if (first && !document.querySelector('dialog[open]')) answer(null)
   })
   return (
     <div role="group" aria-label={asked.plan ? 'plan' : 'permission'} className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
-      {/* The tool's own card above shows the whole command; here it is only named. */}
       <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
-        {asked.plan ? (
-          `${agent}'s plan, to approve before it changes anything`
-        ) : (
-          <>
-            <span className="shrink-0">{agent} asks to run</span>
-            <code className="min-w-0 truncate font-mono text-fg-1" title={asked.title}>
-              {asked.title}
-            </code>
-          </>
-        )}
+        {asked.plan ? `${agent}'s plan, to approve before it changes anything` : `${agent} asks to run`}
       </span>
+      {/* Whole, with its own line breaks: what's approved must be readable to its end. */}
+      {!asked.plan && (
+        <pre className="max-h-64 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+          {asked.title}
+        </pre>
+      )}
+      {/* In the page's own flow, not a box of its own to scroll: the plan is what's being read. */}
       {asked.plan && (
-        <div className="max-h-[50vh] overflow-y-auto rounded-sm border border-line-subtle bg-bg px-3.5 py-2.5 text-sm">
+        <div className="rounded-sm border border-line-subtle bg-bg px-3.5 py-2.5 text-sm">
           <Markdown text={asked.plan} />
         </div>
       )}
-      <span className="flex flex-wrap gap-1.5">
-        {asked.options.map(([option, label], index) => (
-          <Button key={option} variant={index === 0 ? 'primary' : 'secondary'} onClick={() => answer(option)}>
-            {label}
-            {index === 0 && first && <Kbd onAccent>⏎</Kbd>}
+      {plan && then && plan.approve.length > 0 ? (
+        <PlanChoices choices={plan} then={then} onThen={setThen} answer={answer} first={first} />
+      ) : (
+        <span className="flex flex-wrap gap-1.5">
+          {asked.options.map(([option, label], index) => (
+            <Button key={option} variant={index === 0 ? 'primary' : 'secondary'} onClick={() => answer(option)}>
+              {label}
+              {index === 0 && first && <Kbd onAccent>⏎</Kbd>}
+            </Button>
+          ))}
+          <Button variant="ghost" title="Answers neither: the agent drops what it asked and ends its turn" onClick={() => answer(null)}>
+            Stop the turn {first && <Kbd>Esc</Kbd>}
           </Button>
-        ))}
-        <Button variant="ghost" title="Answers neither: the agent drops what it asked and ends its turn" onClick={() => answer(null)}>
-          Stop the turn {first && <Kbd>Esc</Kbd>}
-        </Button>
-      </span>
+        </span>
+      )}
       {error && <span className="text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/** How approving a plan leaves the thread, in Silt's presets, by the option each is answered with (Claude's ExitPlanMode). */
+const PLAN_PRESETS: [option: string, preset: string][] = [
+  ['exit-plan-accept-edits', 'Ask before commands'],
+  ['exit-plan-default', 'Ask for everything'],
+  ['exit-plan-auto', 'Full access'],
+]
+const KEEP_PLANNING = 'reject'
+
+function planChoices(options: [string, string][]) {
+  const ids = new Set(options.map(([id]) => id))
+  const approve = PLAN_PRESETS.filter(([option]) => ids.has(option))
+  const known = new Set([...approve.map(([option]) => option), KEEP_PLANNING])
+  return { approve, keep: ids.has(KEEP_PLANNING), others: options.filter(([id]) => !known.has(id)) }
+}
+
+/** A plan's answers as ADR 0044 has them: approve, then the preset to go on with; or keep planning. The agent's own other answers stay at hand. */
+function PlanChoices({
+  choices: { approve, keep, others },
+  then,
+  onThen,
+  answer,
+  first,
+}: {
+  choices: ReturnType<typeof planChoices>
+  then: string
+  onThen: (option: string) => void
+  answer: (option: string | null) => void
+  first: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="flex flex-wrap items-center gap-1.5">
+        <Button variant="primary" onClick={() => answer(then)}>
+          Approve plan {first && <Kbd onAccent>⏎</Kbd>}
+        </Button>
+        <ChipSelect
+          label="after approving, the permissions"
+          prefix="then"
+          icon="lock"
+          value={then}
+          onChange={onThen}
+          options={approve.map(([option, preset]) => ({ id: option, name: preset }))}
+        />
+        {keep && (
+          <Button variant="ghost" onClick={() => answer(KEEP_PLANNING)} title="The agent goes on planning; say what to change in the composer">
+            Keep planning
+          </Button>
+        )}
+      </span>
+      {others.length > 0 && (
+        <details className="text-xs text-fg-2">
+          <summary className="cursor-pointer">Other choices</summary>
+          <span className="mt-1.5 flex flex-wrap gap-1.5">
+            {others.map(([option, label]) => (
+              <Button key={option} size="sm" variant="secondary" onClick={() => answer(option)}>
+                {label}
+              </Button>
+            ))}
+          </span>
+        </details>
+      )}
     </div>
   )
 }
@@ -276,12 +351,12 @@ export function AgentDock({
   }
   const live = status !== null && running(status.state)
   const elsewhere = people.find((person) => person.agent)
-  const modes = status?.modes?.available
   const agentName = status?.agent
   const narrow = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
+  const settings = status?.settings
   useEffect(() => {
-    if (agentName && modes) rememberModes(agentName, modes)
-  }, [agentName, modes])
+    if (agentName && settings?.length) rememberSettings(agentName, settings)
+  }, [agentName, settings])
   const turning = working(status)
   useActions([
     ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
@@ -309,6 +384,21 @@ export function AgentDock({
   }
 
   // While a turn runs, the line above the composer says so, with its clock.
+  // Shift+Tab moves to the agent's next mode, or Silt's next preset for an agent without modes.
+  const cycle = () => {
+    if (live && status.modes && permissionModes(status)) {
+      const modes = status.modes.available
+      const at = modes.findIndex((mode) => mode.id === status.modes!.current)
+      const next = modes[(at + 1) % modes.length]
+      if (next) act(api.setMode(thread, next.id))
+      return
+    }
+    if (hosted() && !live) return
+    const at = PRESETS.findIndex((choice) => choice.id === preset)
+    const next = PRESETS[(at + 1) % PRESETS.length]!.id
+    void api.setPreset(thread, next).then(() => onPreset(next))
+  }
+
   const statusLine = live ? (
     !working(status) && (
       <span data-testid="agent-state" className="px-1 text-xs text-fg-2">
@@ -449,7 +539,8 @@ export function AgentDock({
         ) : (
           agentSettings
         ))}
-      {(live || !hosted()) && (
+      {/* An agent whose modes are about permissions has them as its one control; the preset follows them (ADR 0048). */}
+      {(live || !hosted()) && !(live && permissionModes(status)) && (
         <ChipSelect
           ghost
           label="permissions"
@@ -517,6 +608,7 @@ export function AgentDock({
         onChange={onDraft}
         onSend={send}
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
+        onCycle={cycle}
         placeholder={
           !live
             ? startable

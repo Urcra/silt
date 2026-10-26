@@ -302,6 +302,7 @@ impl Core {
                     title: asked.title.clone(),
                     options: asked.options.clone(),
                     plan: None,
+                    tool_call: None,
                 })
                 .collect(),
             questions: running.agent.questions.clone(),

@@ -529,7 +529,11 @@ options: Array<[string, string]>,
  * The plan it asks to approve, as Markdown, when it is the agent's
  * own plan approval, as Claude's ExitPlanMode is.
  */
-plan: string | null, };
+plan: string | null, 
+/**
+ * The tool call it asks about, whose card shows it waiting rather than running.
+ */
+tool_call: string | null, };
 
 export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access" | "plan";
 
@@ -648,7 +652,12 @@ base: string | null,
  * A new thread works in the clone itself rather than a checkout of its
  * own.
  */
-here: boolean, mode: string | null, preset: Preset | null, visibility: Visibility | null, 
+here: boolean, mode: string | null, 
+/**
+ * The agent's settings to choose once it's up, such as its model or
+ * thinking level, by id and value.
+ */
+settings: Array<[string, string]>, preset: Preset | null, visibility: Visibility | null, 
 /**
  * Sent once the agent is ready.
  */

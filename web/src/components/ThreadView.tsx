@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { type ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
@@ -19,7 +19,7 @@ import { threadTone, threadWhere } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { type Piece, type Row, duration, foldInherited, kindOf, piecesOf, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
+import { type Piece, type Row, duration, foldInherited, kindOf, originOf, piecesOf, proposedPlan, rowsOf, stepsOf, tokens, toolOf, toolSummary } from '../transcript'
 import {
   Avatar,
   Button,
@@ -48,7 +48,7 @@ import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
-import { CommandCard, ImageThumb, PlanSteps, QuestionCard, StepRow } from './ToolSteps'
+import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
 import { DETAILS, TranscriptDetail, leaveDraft, takeDraft, useDetailChoice, type Detail } from '../detail'
 
@@ -68,6 +68,38 @@ function anchorOf(hash: string, turns: TurnInfo[] | undefined, comments: Comment
   return { comment: comment.id, entry: comment.location.at === 'entry' ? comment.location.index : undefined }
 }
 
+/** Keeps the page at its bottom while the person is there, as a turn grows and asks things below it;
+ * scrolling up leaves them where they are. Says whether it follows, for a jump to the end to set. */
+function useFollow(scroll: RefObject<HTMLElement | null>, watched: RefObject<HTMLElement | null>[], thread: string) {
+  // Off until the page lands at its end, once the whole history is in: following a history still
+  // loading would chase each page's end, and a link to a place in it is where the page stays.
+  const atBottom = useRef(false)
+  const landed = useRef(false)
+  useEffect(() => {
+    atBottom.current = false
+    landed.current = false
+  }, [thread])
+  useEffect(() => {
+    const element = scroll.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const onScroll = () => {
+      if (landed.current) atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120
+    }
+    element.addEventListener('scroll', onScroll, { passive: true })
+    const grown = new ResizeObserver(() => {
+      if (atBottom.current) element.scrollTop = element.scrollHeight
+    })
+    for (const ref of watched) if (ref.current) grown.observe(ref.current)
+    return () => {
+      element.removeEventListener('scroll', onScroll)
+      grown.disconnect()
+    }
+    // The refs' elements are the page's own, there from its first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scroll, thread])
+  return useMemo(() => ({ atBottom, landed }), [])
+}
+
 /** Follows the page's hash once what it names has loaded, scrolling there with `scrollTo` (a row of `rows`).
  * `complete` says every page of the history has: until then, an entry not among `rows` may still come. */
 function useAnchor(
@@ -76,20 +108,22 @@ function useAnchor(
   turns: TurnInfo[] | undefined,
   comments: CommentView[] | undefined,
   scrollTo: (row: number) => void,
+  scroller: RefObject<HTMLElement | null>,
 ): Anchor {
   const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
   const anchor = anchorOf(hash, turns, comments)
-  const followed = useRef('')
+  // Followed again in a new scroller: the page's column takes over from the main one once the panel beside it shows.
+  const followed = useRef<{ hash: string; in: RefObject<HTMLElement | null> } | null>(null)
   useEffect(() => {
-    if (!anchor || !rows || followed.current === hash) return
+    if (!anchor || !rows || (followed.current?.hash === hash && followed.current.in === scroller)) return
     const holds = (row: Row, index: number) =>
       row.kind === 'turn' && (row.prompt?.index === index || row.entries.some((entry) => entry.index === index))
     const at = anchor.entry === undefined ? -1 : rows.findIndex((row) => holds(row, anchor.entry!))
     if (at < 0 && anchor.entry !== undefined && !complete) return
-    followed.current = hash
+    followed.current = { hash, in: scroller }
     if (at >= 0) scrollTo(at)
     else if (anchor.comment) document.getElementById(`comment-${anchor.comment}`)?.scrollIntoView({ block: 'center' })
-  }, [hash, anchor, rows, complete, scrollTo])
+  }, [hash, anchor, rows, complete, scrollTo, scroller])
   return anchor ?? {}
 }
 
@@ -447,21 +481,21 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
       {origin === 'own' ? (
         <span className="text-2xs font-medium text-fg-1">This fork starts here</span>
       ) : (
-        <span className="min-w-0 truncate text-2xs">
-          {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
-          <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={thread} data-volatile>
-            {title ?? short(thread)}
-          </Link>
-          {origin === 'inherited' && ', before this fork'}
+        <>
+          <span className="min-w-0 truncate text-2xs">
+            {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
+            <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={title ?? thread} data-volatile>
+              {title ?? short(thread)}
+            </Link>
+            {origin === 'inherited' && ', before this fork'}
+          </span>
+          {/* Outside the cut title, so a long one never hides it. */}
           {folded !== undefined && folded > 0 && (
-            <>
-              {` · ${folded} ${folded === 1 ? 'turn' : 'turns'} · `}
-              <button type="button" className="text-accent-fg hover:underline" onClick={onUnfold}>
-                Show {folded === 1 ? 'it' : 'them'}
-              </button>
-            </>
+            <button type="button" className="shrink-0 text-2xs whitespace-nowrap text-accent-fg hover:underline" onClick={onUnfold}>
+              Show {folded} {folded === 1 ? 'turn' : 'turns'}
+            </button>
           )}
-        </span>
+        </>
       )}
       <span className="h-px flex-1 bg-line" />
     </div>
@@ -508,7 +542,13 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
             </Entry>
           ) : piece.kind === 'step' ? (
             <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
-              {kindOf(piece.step.call!) === 'question' ? <QuestionCard step={piece.step} /> : <CommandCard step={piece.step} />}
+              {proposedPlan(piece.step.call!) ? (
+                <ProposedPlan step={piece.step} />
+              ) : kindOf(piece.step.call!) === 'question' ? (
+                <QuestionCard step={piece.step} />
+              ) : (
+                <CommandCard step={piece.step} />
+              )}
             </Entry>
           ) : (
             <Entry key={piece.entry.index} entry={piece.entry} {...props}>
@@ -1183,12 +1223,18 @@ function ThreadBody({
     if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true }).catch(() => undefined)
   }, [thread, unseen])
 
+  // A plan call's own output is the plan again, then the agent's note that it was approved; the plan card shows it once.
+  const planCalls = useRef(new Set<string>())
+  for (const asked of agent?.permissions ?? []) if (asked.plan && asked.tool_call) planCalls.current.add(asked.tool_call)
   const [unfolded, setUnfolded] = useState<string | null>(null)
   const history = rowsOf(entries, turns.data ?? [])
   // A link into the history may name an inherited turn, so it shows them all.
   const rows = unfolded === thread || hash ? history : foldInherited(history)
   const list = useRef<HTMLDivElement>(null)
-  const scroll = useContext(MainScroll)
+  // Beside the open panel the history scrolls in the page's own column (see Page), not the main one.
+  const outer = useContext(MainScroll)
+  const column = useRef<HTMLDivElement>(null)
+  const scroll = (panel || sheet) && desktop ? column : outer
   const virtual = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroll.current,
@@ -1199,23 +1245,33 @@ function ThreadBody({
   const scrollTo = useCallback((row: number) => virtual.scrollToIndex(row, { align: 'center' }), [virtual])
   // After a prompt is sent, the page follows to its turn, which arrives a moment later.
   const following = useRef(false)
+  const below = useRef<HTMLDivElement>(null)
+  const follow = useFollow(scroll, [list, below], thread)
   const toEnd = useCallback(() => {
+    follow.landed.current = true
+    follow.atBottom.current = true
     if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: 'end' })
-  }, [virtual, rows.length])
+    // What waits below the history, a permission or a plan, comes into view too.
+    requestAnimationFrame(() => {
+      if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
+    })
+  }, [virtual, rows.length, scroll, follow])
   useEffect(() => {
     if (!following.current) return
     following.current = false
     toEnd()
   }, [rows.length, toEnd])
-  const anchor = useAnchor(rows, entries.length >= total, turns.data, comments.data, scrollTo)
+  const anchor = useAnchor(rows, entries.length >= total, turns.data, comments.data, scrollTo, scroll)
   // A thread opens where it is now, its latest turn, unless a link names a place in it.
   const landed = useRef<string | null>(null)
   const linked = anchor.entry !== undefined || anchor.comment !== undefined
   useEffect(() => {
     if (landed.current === thread || entries.length < total || rows.length === 0) return
     landed.current = thread
-    if (!linked) toEnd()
-  }, [thread, entries.length, total, rows.length, linked, toEnd])
+    // Linked, the page stays where the link put it until the person scrolls to its end.
+    if (linked) follow.landed.current = true
+    else toEnd()
+  }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
   const files = diff.data === undefined ? null : parseFiles(diff.data)
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
@@ -1248,11 +1304,19 @@ function ThreadBody({
 
   return (
     <TranscriptDetail.Provider value={detail}>
-    <LiveQuestions.Provider value={agent ? { thread, agent: agent.agent, questions: agent.questions ?? [] } : null}>
+    <LiveQuestions.Provider
+      value={
+        agent
+          ? { thread, agent: agent.agent, questions: agent.questions ?? [], awaiting: agent.permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])) }
+          : null
+      }
+    >
     <Page
       flush
       label="thread"
       inspectorLabel="thread details"
+      inspectorWidth={480}
+      columnRef={column}
       sheet={{ open: sheet, onClose: () => setSheet(false) }}
       inspector={
         (panel || sheet) && (
@@ -1342,7 +1406,8 @@ function ThreadBody({
                 key={row.key}
                 data-index={item.index}
                 ref={virtual.measureElement}
-                className="absolute left-0 w-full"
+                // What a fork inherited, once shown, reads as the source's rather than its own.
+                className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
                 style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
               >
                 <TranscriptRow
@@ -1355,12 +1420,12 @@ function ThreadBody({
             )
           })}
         </div>
-        <div className="flex flex-col gap-3 pt-2 pb-4">
+        <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
           {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
-          {agent && <AgentTail status={agent} toolOutput={tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
+          {agent && <AgentTail status={agent} toolOutput={tool.id !== null && planCalls.current.has(tool.id) ? '' : tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
         </div>
         <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
           {files && files.length > 0 && totals && !busy && (

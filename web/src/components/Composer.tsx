@@ -19,6 +19,7 @@ export function ComposerBox({
   tools,
   actions,
   waiting = false,
+  onCycle,
   className,
 }: {
   id: string
@@ -38,12 +39,18 @@ export function ComposerBox({
   actions?: ReactNode
   /** The agent waits on the person, so the box says so. */
   waiting?: boolean
+  /** Shift+Tab: the agent's next mode, as in its own terminal. */
+  onCycle?: () => void
   className?: string
 }) {
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       onSend(event.shiftKey)
+    }
+    if (event.key === 'Tab' && event.shiftKey && onCycle) {
+      event.preventDefault()
+      onCycle()
     }
   }
   return (
