@@ -258,8 +258,9 @@ pub struct Core {
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
     pub(crate) registry_checked: bool,
-    /// Agents being asked what they offer, by registry id, so each is asked once at a time.
-    pub(crate) probing: HashSet<String>,
+    /// When this daemon last asked each agent what it offers, by registry
+    /// id, so one that doesn't answer isn't asked again on every look.
+    pub(crate) asked: HashMap<String, i64>,
     /// Whether this is the daemon, which holds every family and watches its
     /// checkouts, rather than a hook or wrapper holding only its own
     /// family and watching nothing (ADR 0018).
@@ -494,7 +495,7 @@ impl Core {
             recovered: Vec::new(),
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
-            probing: HashSet::new(),
+            asked: HashMap::new(),
             resident,
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,

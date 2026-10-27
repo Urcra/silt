@@ -235,11 +235,13 @@ impl Core {
         let installed = registry::installed_here(&self.data_dir);
         // What each offers as last seen here, else as Silt knows it; one not asked lately is asked again, behind the answer.
         let asking = std::env::var_os("SILT_ASK_AGENTS").is_none_or(|value| value != "0");
+        // One that didn't answer isn't asked again before then either, rather than on every look.
         for agent in &installed {
             if asking
                 && seen.get(&agent.id).is_none_or(|seen| now - seen.seen_ms > ASK_AGAIN_MS)
-                && self.probing.insert(agent.id.clone())
+                && self.asked.get(&agent.id).is_none_or(|asked| now - asked > ASK_AGAIN_MS)
             {
+                self.asked.insert(agent.id.clone(), now);
                 probe_agent(self.events.clone(), agent.clone(), self.data_dir.clone());
             }
         }
@@ -263,7 +265,6 @@ impl Core {
 
     /// Keeps what an agent said it offers when asked, and tells the web UI.
     pub(crate) fn agent_probed(&mut self, agent: String, offered: Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)>) {
-        self.probing.remove(&agent);
         let Some((modes, settings)) = offered else {
             return;
         };

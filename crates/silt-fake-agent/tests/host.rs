@@ -100,6 +100,17 @@ async fn an_agent_that_dies_is_reported_gone() {
 }
 
 #[tokio::test]
+async fn an_agent_stuck_starting_is_stopped_all_the_same() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), vec![("FAKE_ACP_HANG".into(), "1".into())]), sender);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(events.try_recv().is_err(), "it never answers");
+    agent.send(Command::Stop);
+    while !matches!(next(&mut events).await, Event::Exited) {}
+}
+
+#[tokio::test]
 async fn cancelling_answers_the_pending_permission_request() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (sender, mut events) = mpsc::unbounded_channel();
