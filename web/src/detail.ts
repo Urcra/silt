@@ -23,6 +23,9 @@ export const TranscriptGrouping = createContext<Grouping>('turn')
 /** Every thought open or closed at once (T), and how many times that was asked, so open folds follow it. */
 export const ThoughtsOpen = createContext<{ open: boolean; times: number }>({ open: false, times: 0 })
 
+/** What the running tool printed so far, by its call's id, for its step to show. */
+export const LiveTool = createContext<{ id: string | null; text: string }>({ id: null, text: '' })
+
 const KEY = 'silt.transcript-detail'
 const GROUPING_KEY = 'silt.transcript-grouping'
 

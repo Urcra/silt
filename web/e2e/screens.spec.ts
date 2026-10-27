@@ -288,6 +288,8 @@ test('a thread waiting on a permission', async ({ page }) => {
   await shoot(page, 'thread-waiting', async (shown) => {
     await expect(shown.getByRole('group', { name: 'permission' })).toBeVisible()
     await expect(shown.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
+    // Grouped by turn, a running turn's work is one card, its step under way in the present tense (ADR 0049).
+    await expect(shown.getByTestId('activity')).toContainText('Editing src/main.rs')
   })
 })
 

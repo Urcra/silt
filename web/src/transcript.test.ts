@@ -129,3 +129,4 @@ test('a run keeps its thoughts between its steps, each timed to what came after 
   expect(headline('**Empty store** The image has no certificates.')).toBe('Empty store')
   expect(headline('The directory is empty. So add the package.')).toBe('The directory is empty.')
 })
+

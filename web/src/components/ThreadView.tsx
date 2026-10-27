@@ -48,7 +48,7 @@ import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
-import { DETAILS, GROUPINGS, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
+import { DETAILS, GROUPINGS, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -398,6 +398,64 @@ function RunFold({ entries, until, live = false, ...props }: EntryProps & { entr
   )
 }
 
+/**
+ * A turn still running, grouped by turn (ADR 0049): everything since the agent last wrote as one card. It says what
+ * that work did, the thought that led to the step under way, the last few steps and the one running; the rest
+ * opens from it. Once the turn ends, the turn folds under "Worked for".
+ */
+function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: HistoryEntry[]; wrote: boolean }) {
+  const verbose = useContext(TranscriptDetail) === 'verbose'
+  const [all, setAll] = useState(false)
+  const items = runItems(entries, null)
+  const steps = items.flatMap((item) => (item.kind === 'step' ? [item.step] : []))
+  const current = steps.find((step) => step.call && !step.result)
+  const done = steps.filter((step) => step !== current)
+  const thought = thoughtTotal(items)
+  const before = current ? items.slice(0, items.findIndex((item) => item.kind === 'step' && item.step === current)) : items
+  const led = [...before].reverse().find((item) => item.kind === 'thought')
+  const tools = entries.filter((entry) => entry.kind !== 'thinking')
+  const failed = failedIn(tools)
+  const shown = verbose || all
+  const recent = done.slice(-3)
+  const thoughts = items.filter((item) => item.kind === 'thought').length
+  // What the card leaves out: earlier steps, and thoughts other than the headline it shows.
+  const hidden = done.length - recent.length + thoughts - (led ? 1 : 0)
+  return (
+    <section data-testid="activity" aria-label="the agent's work so far" className="flex flex-col gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs">
+      <p className="flex min-w-0 items-center gap-1.5 text-fg-2">
+        <span className="shrink-0 font-medium text-fg-1">{wrote ? 'Since it last wrote' : 'So far'}</span>
+        {done.length > 0 && <span className="min-w-0 truncate">· {toolSummary(tools.filter((entry) => !current || (entry !== current.call && entry !== current.result)), false, 3)}</span>}
+        {thought && <span className="shrink-0 text-fg-3">· thought for {thought}</span>}
+        {failed > 0 && <span className="shrink-0 text-danger">· {failed} failed</span>}
+      </p>
+      {led?.kind === 'thought' && !shown && <p className="line-clamp-2 text-fg-2 italic">{headline(led.entries.map((entry) => entry.text).join(' '))}</p>}
+      <div className="flex flex-col gap-1">
+        {shown
+          ? items.map((item) =>
+              item.kind === 'thought' ? (
+                <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />
+              ) : (
+                <StepItem key={(item.step.call ?? item.step.result!).index} step={item.step} running={item.step === current} {...props} />
+              ),
+            )
+          : [
+              ...recent.map((step) => (
+                <div key={(step.call ?? step.result!).index} className="opacity-80">
+                  <StepItem step={step} running={false} {...props} />
+                </div>
+              )),
+              current && <StepItem key={current.call!.index} step={current} running {...props} />,
+            ]}
+      </div>
+      {!verbose && hidden > 0 && (
+        <button type="button" onClick={() => setAll(!all)} className="w-fit text-accent-fg hover:text-fg-1 max-md:min-h-11">
+          {all ? 'Show only the latest' : `Show everything · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${thoughts > 0 ? `, ${thoughts} ${thoughts === 1 ? 'thought' : 'thoughts'}` : ''}`}
+        </button>
+      )}
+    </section>
+  )
+}
+
 /** What one step did, as a run of one says it: a command's purpose or the command, else what the tool did. */
 function stepLabel(step: ToolStep): string {
   const call = step.call
@@ -579,6 +637,12 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   const decided = (piece: Piece) => piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
   const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece)) : []
   const reply = folded ? [...pieces.filter(decided), pieces[last]] : []
+  // Grouped by turn, a turn still running shows the work since the agent last wrote as one card; what it said
+  // and what waits on the person stay outside it.
+  const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
+  const since = grouping === 'turn' && running ? pieces.slice(wrote + 1) : []
+  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece)))
+  const activity = carded.some((piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking'))) ? carded.flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : [])).sort((a, b) => a.index - b.index) : []
   const final = row.entries[row.entries.length - 1]
   const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
   const drawn = (piece: Piece) =>
@@ -634,6 +698,14 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
               <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">{work.map(drawn)}</div>
             </details>
             {reply.map(drawn)}
+          </>
+        ) : activity.length > 0 ? (
+          <>
+            {pieces.slice(0, wrote + 1).map(drawn)}
+            {/* The card stands where its first piece was; what isn't in it keeps its place. */}
+            {since.map((piece) =>
+              piece === carded[0] ? <ActivityCard key="activity" entries={activity} wrote={wrote >= 0} {...props} /> : carded.includes(piece) ? null : drawn(piece),
+            )}
           </>
         ) : (
           pieces.map(drawn)
@@ -1393,6 +1465,7 @@ function ThreadBody({
     <TranscriptDetail.Provider value={detail}>
     <TranscriptGrouping.Provider value={grouping}>
     <ThoughtsOpen.Provider value={thoughts}>
+    <LiveTool.Provider value={tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool}>
     <LiveQuestions.Provider
       value={
         agent
@@ -1539,6 +1612,7 @@ function ThreadBody({
       </div>
     </Page>
     </LiveQuestions.Provider>
+    </LiveTool.Provider>
     </ThoughtsOpen.Provider>
     </TranscriptGrouping.Provider>
     </TranscriptDetail.Provider>

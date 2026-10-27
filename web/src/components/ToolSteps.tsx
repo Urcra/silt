@@ -3,7 +3,8 @@ import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '.
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
 import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
-import { TranscriptDetail } from '../detail'
+import { LiveTool, TranscriptDetail } from '../detail'
+import { useNow } from '../now'
 import { Button, Dialog, Icon, Kbd, Spinner, cx } from '../ui'
 import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
@@ -182,14 +183,17 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
   const [all, setAll] = useState(false)
   const call = step.call!
   const outcome = step.result?.outcome
-  const output = step.result?.text ?? ''
+  // Under way, its output so far, as the agent streams it; once it ends, what was recorded.
+  const live = useContext(LiveTool)
+  const under = running && !step.result
+  const output = step.result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const [open, setOpen] = useState(verbose)
   const tail = tailOf(output)
   const command = call.tool?.subject ?? toolOf(call.text).name
   const action = call.tool?.detail?.trim()
   const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
-  const openable = Boolean(output.trim()) || step.images.length > 0 || command.length > 80 || command.includes('\n')
+  const openable = under || Boolean(output.trim()) || step.images.length > 0 || command.length > 80 || command.includes('\n')
   return (
     <div data-testid="command" className={cx('text-xs', card && 'overflow-hidden rounded-md border border-line bg-elevated')}>
       <button
@@ -206,7 +210,9 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
           {action ?? <span className="font-mono">{shortCommand(command.trim().split('\n')[0]!)}</span>}
         </span>
         {action && <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">{shortCommand(command.trim().split('\n')[0]!)}</span>}
-        <span className={cx('ml-auto shrink-0 tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>{waiting ? 'waiting for you' : commandStatus(step)}</span>
+        <span className={cx('ml-auto min-w-0 shrink truncate tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>
+          {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
+        </span>
       </button>
       {open && (
         <div className={cx('flex flex-col gap-1.5', card ? 'px-3 py-2' : 'mt-1 ml-5 rounded-sm bg-bg px-2.5 py-2')}>
@@ -215,7 +221,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
             {command}
           </pre>
           {output.trim() && (
-            <pre className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
+            <pre data-testid={under ? 'tool-output' : undefined} className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
               {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
                 <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>
                   {line || ' '}
@@ -238,6 +244,17 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
         </div>
       )}
     </div>
+  )
+}
+
+/** A command under way, and how long it has run; its output is a click away. */
+function Running({ since }: { since: number }) {
+  const now = useNow(1000)
+  const seconds = Math.max(0, Math.floor((now - since) / 1000))
+  return (
+    <span>
+      running <span data-volatile>· {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>
+    </span>
   )
 }
 
