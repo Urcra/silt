@@ -1,0 +1,4 @@
+# sqlx checksums a migration's bytes, and a store refuses a migration whose
+# checksum changed: a CRLF checkout on Windows would build a `silt` that
+# can't open a store made by any other build.
+*.sql text eol=lf

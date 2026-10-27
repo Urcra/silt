@@ -53,6 +53,13 @@ install-desktop: check-webkit
         > "{{data_dir}}/applications/silt.desktop"
     -update-desktop-database "{{data_dir}}/applications" 2>/dev/null
 
+# From WSL: install the CLI here, and the CLI and the desktop app on Windows
+install-wsl: install-cli install-windows
+
+# From WSL: build with Windows' cargo and install into %LOCALAPPDATA%\Silt
+install-windows: build-web
+    scripts/install-windows.sh
+
 # Remove what `just install` installed
 uninstall:
     -cargo uninstall silt-cli
