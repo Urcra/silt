@@ -17,6 +17,8 @@ pub enum Request {
     /// Where this daemon looks for agents' sessions: each of
     /// `silt_agents::HOME_VARIABLES` with its value here.
     AgentHomes,
+    /// Whether this daemon's program was replaced since it started.
+    DaemonBuild,
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
@@ -568,6 +570,18 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
         cause = source.source();
     }
     message
+}
+
+/// The program a daemon runs, as `Request::DaemonBuild` answers: replaced
+/// since it started, as installing Silt again does, it still runs the old
+/// build and serves the old web UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonBuild {
+    pub exe: Option<PathBuf>,
+    pub replaced: bool,
+    /// The agents working in it, which stopping it would end: those the web
+    /// UI started, unless idle, and the sessions being recorded.
+    pub working: usize,
 }
 
 /// What compacting the store gave back: the database file's size before and

@@ -12,9 +12,9 @@ use silt_agents::{Agent, LaunchPlan, McpServer, SessionIds, Start};
 use silt_daemon::client;
 use silt_daemon::paths;
 use silt_daemon::protocol::{
-    AgentStart, BlameLine, CommentOn, CommentView, DaemonStatus, HistoryPage, HookReply, ImportCandidate, ImportedThread,
-    InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, Reverted, SearchFilters, SearchResult, Sent,
-    SessionStarted, ShowLine, ThreadSummary,
+    AgentStart, BlameLine, CommentOn, CommentView, DaemonBuild, DaemonStatus, HistoryPage, HookReply, ImportCandidate,
+    ImportedThread, InFlight, Mount, MrDetails, MrSummary, Pulled, Request, Response, Resumed, Reverted, SearchFilters,
+    SearchResult, Sent, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
 use silt_types::CloudSessionId;
@@ -49,9 +49,10 @@ pub(crate) fn is_running() -> bool {
 pub fn ensure_daemon() -> Result<bool, Exn<CliError>> {
     if is_running() {
         warn_of_other_agent_homes();
-        return Ok(false);
-    }
-    if silt_daemon::holds_lock(&paths::data_dir()) && wait_for_busy_daemon()? == Waited::Answered {
+        if !stop_replaced_daemon()? {
+            return Ok(false);
+        }
+    } else if silt_daemon::holds_lock(&paths::data_dir()) && wait_for_busy_daemon()? == Waited::Answered {
         return Ok(false);
     }
     spawn_daemon()?;
@@ -108,6 +109,35 @@ fn warn_of_other_agent_homes() {
             );
         }
     }
+}
+
+/// Stops the daemon if its program was replaced since it started, as
+/// installing Silt again does, so this command starts the new build. Only
+/// when no agent works in it, and when it's this program: running another
+/// build beside it never swaps it. Says whether it stopped it.
+fn stop_replaced_daemon() -> Result<bool, Exn<CliError>> {
+    let Ok(build) = call::<DaemonBuild>(&Request::DaemonBuild) else {
+        return Ok(false);
+    };
+    if !build.replaced {
+        return Ok(false);
+    }
+    let canonical = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
+    let mine = env::current_exe().ok().map(canonical);
+    if build.working > 0 || build.exe.map(canonical) != mine {
+        let why = match build.working {
+            0 => String::new(),
+            1 => ", as an agent works in it".to_owned(),
+            working => format!(", as {working} agents work in it"),
+        };
+        eprintln!(
+            "silt: the daemon still runs the build installed before this one{why}; `silt daemon stop` restarts it on this one"
+        );
+        return Ok(false);
+    }
+    stop_daemon()?;
+    eprintln!("silt: restarted the daemon on the build installed since it started");
+    Ok(true)
 }
 
 /// How long to wait for a daemon that runs but doesn't answer yet, say
@@ -184,6 +214,13 @@ pub fn daemon_stop() -> Result<(), Exn<CliError>> {
         println!("not running");
         return Ok(());
     }
+    stop_daemon()?;
+    println!("stopped");
+    Ok(())
+}
+
+/// Stops the running daemon, and waits until it let go of the data dir.
+fn stop_daemon() -> Result<(), Exn<CliError>> {
     call::<String>(&Request::Shutdown)?;
     // The daemon answers before it closes the store, and lets go of its lock
     // only after: until then the data dir isn't safe to copy.
@@ -194,7 +231,6 @@ pub fn daemon_stop() -> Result<(), Exn<CliError>> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    println!("stopped");
     Ok(())
 }
 

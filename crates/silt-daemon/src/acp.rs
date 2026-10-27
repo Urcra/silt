@@ -218,6 +218,18 @@ fn silt_exe() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("silt"))
 }
 
+impl AcpRun {
+    /// Whether its agent is busy, or someone is to answer it: stopping it
+    /// now would lose that. An idle one is started again on the next prompt.
+    pub(crate) fn working(&self) -> bool {
+        self.handle.is_some()
+            && matches!(
+                self.state,
+                AgentState::Starting | AgentState::Working | AgentState::AwaitingPermission | AgentState::AwaitingInput
+            )
+    }
+}
+
 impl Core {
     /// The agents the web UI can start. The registry's copy is brought up to
     /// date in the background the first time someone looks, not whenever a

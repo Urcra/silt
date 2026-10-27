@@ -258,6 +258,9 @@ pub struct Core {
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
     pub(crate) registry_checked: bool,
+    /// The program this daemon started from, and that file as it was then,
+    /// to tell when an install replaced it.
+    pub(crate) exe: Option<(PathBuf, ExeStamp)>,
     /// When this daemon last asked each agent what it offers, by registry
     /// id, so one that doesn't answer isn't asked again on every look.
     pub(crate) asked: HashMap<String, i64>,
@@ -496,6 +499,7 @@ impl Core {
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
             asked: HashMap::new(),
+            exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
             resident,
             adopted: HashSet::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
@@ -549,6 +553,7 @@ impl Core {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
+            Request::DaemonBuild => Response::ok(self.daemon_build()),
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
@@ -2239,6 +2244,32 @@ pub(crate) fn to_response<T: serde::Serialize>(result: Result<T, CoreError>) -> 
     match result {
         Ok(value) => Response::ok(value),
         Err(error) => Response::failure(&error),
+    }
+}
+
+/// What tells one file at a path from another put there since: an install
+/// may keep the modification time it shipped with, but not the creation
+/// time, where the file system keeps one, and the size too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExeStamp {
+    created: Option<SystemTime>,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl ExeStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self { created: metadata.created().ok(), modified: metadata.modified().ok(), len: metadata.len() })
+    }
+}
+
+impl Core {
+    fn daemon_build(&self) -> crate::protocol::DaemonBuild {
+        let replaced = self.exe.as_ref().is_some_and(|(exe, at)| ExeStamp::of(exe).is_some_and(|now| now != *at));
+        let agents = self.acp.values().filter(|run| run.working()).count();
+        let recording = self.sessions.iter().filter(|session| session.live).count();
+        crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working: agents + recording }
     }
 }
 
