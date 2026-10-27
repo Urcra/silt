@@ -1,5 +1,40 @@
-import type { KeyboardEvent, ReactNode } from 'react'
+import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { Icon, type IconName, cx } from '../ui'
+import { ComposerFolded } from './composerFolded'
+
+/**
+ * Folds the row whose tools `content` holds when they're wider than `room`, and unfolds it once they'd fit
+ * again. Folded, a change in what the row holds, such as another agent's settings, measures it unfolded anew.
+ */
+function useFolded() {
+  const room = useRef<HTMLSpanElement>(null)
+  const content = useRef<HTMLSpanElement>(null)
+  const [folded, setFolded] = useState(false)
+  const unfolded = useRef(0)
+  const foldedWidth = useRef<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    const [outer, inner] = [room.current, content.current]
+    if (!outer || !inner || typeof ResizeObserver === 'undefined') return undefined
+    const fit = () => {
+      const width = inner.offsetWidth
+      if (!folded) {
+        unfolded.current = width
+        if (width > outer.clientWidth) setFolded(true)
+      } else if (foldedWidth.current === undefined) {
+        foldedWidth.current = width
+      } else if (outer.clientWidth >= unfolded.current || width !== foldedWidth.current) {
+        foldedWidth.current = undefined
+        setFolded(false)
+      }
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(outer)
+    observer.observe(inner)
+    return () => observer.disconnect()
+  }, [folded])
+  return { room, content, folded }
+}
 
 /**
  * The one composer (ADR 0044): centred on an empty thread, docked under a
@@ -43,6 +78,7 @@ export function ComposerBox({
   onCycle?: () => void
   className?: string
 }) {
+  const { room, content, folded } = useFolded()
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
     // the button sends. Never while an input method is still composing a character.
@@ -73,9 +109,14 @@ export function ComposerBox({
         className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
       />
       {below}
-      {/* One row however many tools: what doesn't fit scrolls sideways rather than starting a second. */}
+      {/* One row however many tools: the agent's settings fold into one chip where they don't fit, and what still
+          doesn't scrolls sideways rather than starting a second row. */}
       <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-        <span className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] *:shrink-0">{tools}</span>
+        <span ref={room} className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
+          <span ref={content} className="flex w-max items-center gap-1 *:shrink-0">
+            <ComposerFolded.Provider value={folded}>{tools}</ComposerFolded.Provider>
+          </span>
+        </span>
         <span className="flex shrink-0 items-center gap-2">{actions}</span>
       </div>
     </div>

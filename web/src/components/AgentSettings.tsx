@@ -1,7 +1,8 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, type ReactNode, useContext } from 'react'
 import type { AgentChoiceItem, AgentSetting } from '../api'
 import { Icon, Popover } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
+import { ComposerFolded } from './composerFolded'
 
 /** By its tag, or by its id where the agent tags none. */
 function isModel(setting: AgentSetting): boolean {
@@ -16,7 +17,8 @@ function isEffort(setting: AgentSetting): boolean {
 /**
  * An agent's mode and settings as both composers show them, in one row: the
  * mode, the model and how hard it thinks as chips, everything else behind one
- * menu. On a phone that menu, named by the model, holds them all.
+ * menu. On a phone, or where the row has no room for them, that menu, named
+ * by the model, holds them all.
  */
 export function AgentSettings({
   modes,
@@ -40,6 +42,8 @@ export function AgentSettings({
   more?: ReactNode
   narrow: boolean
 }) {
+  const roomless = useContext(ComposerFolded)
+  const folded = narrow || roomless
   // An agent may list its mode among its settings too, which the Mode chip already sets.
   const shown = settings.filter((setting) => !(modes && setting.category === 'mode'))
   const inline = shown.filter((setting) => isModel(setting) || isEffort(setting))
@@ -49,8 +53,9 @@ export function AgentSettings({
       ghost
       key={setting.id}
       label={setting.name.toLowerCase()}
-      // A model names itself; "High" or "Off" need saying what they set.
-      prefix={isModel(setting) ? undefined : setting.name}
+      // A model names itself; "High" or "Off" need saying what they set, which for effort is one word whatever
+      // the agent calls it ("Reasoning Effort", "Thinking").
+      prefix={isModel(setting) ? undefined : isEffort(setting) ? 'Effort' : setting.name}
       value={value(setting)}
       onChange={(chosen) => onSetting(setting.id, chosen)}
       options={setting.choices}
@@ -66,13 +71,13 @@ export function AgentSettings({
       options={modes.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
     />
   )
-  const inMenu = narrow ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]
+  const inMenu = folded ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]
   const model = shown.find(isModel)
   const modelName = model?.choices.find((choice) => choice.id === value(model))?.name
   return (
     <>
-      {!narrow && modeChip}
-      {!narrow && inline.map(chip)}
+      {!folded && modeChip}
+      {!folded && inline.map(chip)}
       {inMenu.some(Boolean) && (
         <Popover
           label="agent settings"
@@ -81,8 +86,8 @@ export function AgentSettings({
           panelClassName="w-72 p-2"
           trigger={
             <span className="inline-flex items-center gap-1 text-fg-2" title="More of the agent's settings">
-              <Icon name={narrow ? 'settings' : 'more'} className="h-3.5 w-3.5" />
-              {narrow && (modelName ?? 'Settings')}
+              <Icon name={folded ? 'settings' : 'more'} className="h-3.5 w-3.5" />
+              {folded && (modelName ?? 'Settings')}
             </span>
           }
         >
