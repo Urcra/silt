@@ -17,8 +17,18 @@ use tokio::sync::oneshot;
 
 use crate::core::{Core, CoreError, Event, now_ms};
 use crate::homes::Home;
-use crate::protocol::{FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Response, Sent};
+use crate::protocol::{BusEvent, FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Response, Sent, error_chain};
 use crate::sessions::{Session, resolve_agent};
+
+/// An import from the web UI under way: the sessions still to import, how
+/// many there were, how many threads it made, and the sessions it couldn't
+/// import.
+pub(crate) struct ImportRun {
+    left: VecDeque<ImportCandidate>,
+    total: usize,
+    made: usize,
+    failed: Vec<String>,
+}
 
 /// Records staged before they are stored in one write.
 const BATCH: usize = 4096;
@@ -148,7 +158,8 @@ impl Core {
         tokio::spawn(async move {
             match candidates(&store, &clones, &paths, None).await {
                 Ok(left) => {
-                    let _ = events.send(Event::Importing { left: left.into(), made: 0, reply });
+                    let run = ImportRun { total: left.len(), left: left.into(), made: 0, failed: Vec::new() };
+                    let _ = events.send(Event::Importing { run, reply });
                 }
                 Err(error) => {
                     let _ = reply.send(Response::error(error));
@@ -158,27 +169,29 @@ impl Core {
     }
 
     /// The next of an import's sessions, then the rest after whatever else
-    /// is waiting.
-    pub(crate) async fn import_next(
-        &mut self,
-        mut left: VecDeque<ImportCandidate>,
-        mut made: usize,
-        reply: oneshot::Sender<Response>,
-    ) {
-        if let Some(candidate) = left.pop_front() {
+    /// is waiting. A session that can't be imported doesn't stop the others;
+    /// the answer names it once they're done.
+    pub(crate) async fn import_next(&mut self, mut run: ImportRun, reply: oneshot::Sender<Response>) {
+        if let Some(candidate) = run.left.pop_front() {
+            let (agent, id) = (candidate.agent.clone(), candidate.id.clone());
             match self.import_session(candidate).await {
-                Ok(Some(_)) => made += 1,
+                Ok(Some(_)) => run.made += 1,
                 Ok(None) => {}
-                Err(error) => {
-                    let _ = reply.send(Response::error(error));
-                    return;
-                }
+                Err(error) => run.failed.push(format!("{agent} session {id}: {}", error_chain(&error))),
             }
+            self.announce(BusEvent::Importing { done: run.total - run.left.len(), total: run.total });
         }
-        if left.is_empty() {
-            let _ = reply.send(Response::ok(made));
+        if !run.left.is_empty() {
+            let _ = self.events.send(Event::Importing { run, reply });
+        } else if let Some(first) = run.failed.first() {
+            let others = match run.failed.len() {
+                1 => String::new(),
+                more => format!(" and {} more", more - 1),
+            };
+            let made = run.made;
+            let _ = reply.send(Response::error(format!("imported {made}; could not import {first}{others}")));
         } else {
-            let _ = self.events.send(Event::Importing { left, made, reply });
+            let _ = reply.send(Response::ok(run.made));
         }
     }
 
@@ -211,6 +224,19 @@ impl Core {
             None => None,
         };
 
+        // Exported before the thread is made, so a session that can't be
+        // leaves no empty thread behind and is offered again.
+        let snapshot = if agent.capture() == Capture::Snapshot {
+            let found = Found { id: candidate.id.clone(), transcript: candidate.transcript.clone() };
+            let ran_in = cwd.clone();
+            let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found, &ran_in))
+                .await?
+                .map_err(|source| CoreError::Agent { doing: "export the session", source })?;
+            Some(lines)
+        } else {
+            None
+        };
+
         let thread = ThreadId(uuid::Uuid::now_v7().as_u128());
         let family_id = FamilyId(uuid::Uuid::now_v7().as_u128());
         self.set_home(family_id, Home::Local).await?;
@@ -240,7 +266,7 @@ impl Core {
         let checkout_root = repo.as_ref().map_or_else(|| cwd.clone(), |repo| repo.root().to_owned());
         self.sessions.push(imported_session(agent, &candidate, thread, family_id, &cwd));
         self.recorded_at = Some(started);
-        let read = self.read_imported(agent, &candidate, &checkout_root, started).await;
+        let read = self.read_imported(agent, &candidate, &checkout_root, started, snapshot).await;
         self.recorded_at = None;
         self.sessions.retain(|session| session.record.session_id != candidate.id || session.record.thread != thread);
         let lines = read?;
@@ -250,7 +276,7 @@ impl Core {
         if !project.is_empty() && !self.clones.contains_key(&project) {
             self.remember_clone(&checkout_root).await;
         }
-        self.announce(crate::protocol::BusEvent::Threads);
+        self.announce(BusEvent::Threads);
         Ok(Some(ImportedThread {
             thread: thread.to_string(),
             agent: agent.id().to_owned(),
@@ -262,25 +288,22 @@ impl Core {
         }))
     }
 
-    /// Records everything the session's files hold, with the times its
-    /// records carry. How many records it read.
+    /// Records everything the session's files hold, or its `snapshot`, with
+    /// the times its records carry. How many records it read.
     async fn read_imported(
         &mut self,
         agent: &'static dyn Agent,
         candidate: &ImportCandidate,
         checkout_root: &Path,
         started: i64,
+        snapshot: Option<Vec<String>>,
     ) -> Result<usize, CoreError> {
         let thread = self.session(&candidate.id).map(|session| session.record.thread).expect("pushed by the caller");
         let family = self.threads[&thread].family;
         let reference = self.session(&candidate.id).expect("pushed by the caller").reference();
         self.append_session_started(family, thread, reference, candidate.cwd.as_deref().unwrap_or(Path::new("")), checkout_root)
             .await?;
-        if agent.capture() == Capture::Snapshot {
-            let found = Found { id: candidate.id.clone(), transcript: candidate.transcript.clone() };
-            let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found))
-                .await?
-                .map_err(|source| CoreError::Agent { doing: "export the session", source })?;
+        if let Some(lines) = snapshot {
             return self.import_lines(&candidate.id, "main", lines, started).await;
         }
         let mut files = vec![("main".to_owned(), candidate.transcript.clone())];
@@ -424,7 +447,7 @@ impl Core {
             self.threads.insert(*thread, record);
         }
         self.drive_sync();
-        self.announce(crate::protocol::BusEvent::Threads);
+        self.announce(BusEvent::Threads);
         Ok(Sent { threads: chosen.len(), server: remote.config.url.clone(), redacted: secrets.len() })
     }
 

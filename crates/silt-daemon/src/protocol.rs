@@ -1063,6 +1063,9 @@ pub enum BusEvent {
     Mrs,
     /// What an agent offers, its modes and settings, is newly known.
     Agents,
+    /// An import from the web UI has gone through `done` of its `total`
+    /// sessions.
+    Importing { done: usize, total: usize },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1078,7 +1081,7 @@ pub enum TextKind {
 
 impl BusEvent {
     /// The topic a socket subscribes to for it: `threads`, `thread:<id>`,
-    /// `inbox` or `mrs`; none for what every socket hears.
+    /// `inbox`, `mrs` or `import`; none for what every socket hears.
     pub fn topic(&self) -> Option<String> {
         match self {
             Self::Threads => Some("threads".to_owned()),
@@ -1088,6 +1091,7 @@ impl BusEvent {
             | Self::Queue { thread } => Some(format!("thread:{thread}")),
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
+            Self::Importing { .. } => Some("import".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }

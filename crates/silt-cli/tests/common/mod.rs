@@ -307,6 +307,13 @@ impl Machine {
     /// Asks this machine's daemon over HTTP, as the web UI does; panics
     /// unless it answers 200.
     pub fn web(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
+        let (status, json) = self.web_answer(method, path, body);
+        assert_eq!(status, "200", "{method} {path}: {json}\ndaemon.log:\n{}", self.daemon_log());
+        serde_json::from_str(&json).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// As [`Machine::web`], the status and body whatever the status.
+    pub fn web_answer(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> (String, String) {
         let url = self.stdout(&["open", "--no-browser"]);
         let (base, token) = web_ui(&url);
         let mut command = Command::new("curl");
@@ -319,8 +326,7 @@ impl Machine {
         let output = command.arg(format!("{base}{path}")).output().expect("curl runs");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = text.rsplit_once('\n').expect("a status line");
-        assert_eq!(status, "200", "{method} {path}: {json}\ndaemon.log:\n{}", self.daemon_log());
-        serde_json::from_str(json).unwrap_or(serde_json::Value::Null)
+        (status.to_owned(), json.to_owned())
     }
 }
 

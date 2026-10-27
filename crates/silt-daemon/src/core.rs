@@ -65,11 +65,9 @@ pub enum Event {
         token: u64,
         found: Option<silt_agents::Found>,
     },
-    /// An import's sessions still to import, one a turn, and how many
-    /// threads it made so far.
+    /// An import's sessions still to import, one a turn.
     Importing {
-        left: std::collections::VecDeque<crate::protocol::ImportCandidate>,
-        made: usize,
+        run: crate::import::ImportRun,
         reply: oneshot::Sender<Response>,
     },
     Snapshotted {

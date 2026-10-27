@@ -633,8 +633,9 @@ impl Core {
             }
             session.snapshot_running = true;
             let events = self.events.clone();
+            let cwd = session.agent_cwd.clone();
             tokio::task::spawn_blocking(move || {
-                let result = agent.snapshot(&found).map_err(|error| error.to_string());
+                let result = agent.snapshot(&found, &cwd).map_err(|error| error.to_string());
                 let _ = events.send(Event::Snapshotted { session_id: found.id, result });
             });
         }
@@ -871,12 +872,12 @@ impl Core {
         let snapshot = self.session(session_id).and_then(|session| {
             let found = Found { id: session_id.to_owned(), transcript: session.transcript.clone()? };
             let agent = session.agent;
-            (agent.capture() == Capture::Snapshot).then_some((agent, found))
+            (agent.capture() == Capture::Snapshot).then(|| (agent, found, session.agent_cwd.clone()))
         });
-        let Some((agent, found)) = snapshot else {
+        let Some((agent, found, cwd)) = snapshot else {
             return self.tail_session_up_to(session_id, limit).await.map(|_| ());
         };
-        let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found)).await?;
+        let lines = tokio::task::spawn_blocking(move || agent.snapshot(&found, &cwd)).await?;
         if let Some(session) = self.session_mut(session_id) {
             session.last_snapshot = Some(Instant::now());
         }
