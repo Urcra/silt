@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode, useContext } from 'react'
+import { presetDriven } from '../agentState'
 import type { AgentChoiceItem, AgentSetting } from '../api'
 import { Icon, Popover } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
@@ -44,8 +45,9 @@ export function AgentSettings({
 }) {
   const roomless = useContext(ComposerFolded)
   const folded = narrow || roomless
-  // An agent may list its mode among its settings too, which the Mode chip already sets.
-  const shown = settings.filter((setting) => !(modes && setting.category === 'mode'))
+  // An agent may list its mode among its settings too, which the Mode chip already sets, and the preset sets its own
+  // switch for asking nothing.
+  const shown = settings.filter((setting) => !(modes && setting.category === 'mode') && !presetDriven(setting))
   const inline = shown.filter((setting) => isModel(setting) || isEffort(setting))
   const rest = shown.filter((setting) => !inline.includes(setting))
   const chip = (setting: AgentSetting) => (

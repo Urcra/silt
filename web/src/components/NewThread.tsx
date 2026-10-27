@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
-import { PRESETS, permissionModes } from '../agentState'
+import { PRESETS, permissionModes, startSettings } from '../agentState'
 import { api, type CloneInfo, type FoundFolder, type Preset, type Project } from '../api'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -411,8 +411,8 @@ export function NewThread() {
   // As this browser last saw the agent run; its mode is the permissions chip's to say.
   // As the agent last ran on this machine, kept by the daemon: its modes and its model, effort and the rest.
   const seen = agents.find((candidate) => candidate.id === agent)
-  const settings = seen?.settings ?? []
   const modes = seen?.modes?.available
+  const settings = startSettings(seen?.settings ?? [], modes)
   const [mode, setMode] = useState<string>()
   const chosenMode = mode ?? seen?.modes?.current
   // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).

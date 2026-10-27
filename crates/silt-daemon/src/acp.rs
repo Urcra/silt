@@ -737,6 +737,9 @@ impl Core {
 
     pub(crate) async fn set_preset(&mut self, thread: ThreadId, preset: Preset) -> Result<&'static str, CoreError> {
         self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
+        if let Some(run) = self.acp.get_mut(&thread) {
+            follow_preset_in_settings(run, preset);
+        }
         // An agent with modes of its own is put in the one that does what the preset says, so the two never disagree.
         if let Some(run) = self.acp.get_mut(&thread)
             && let Some(mode) = run.modes.as_ref().and_then(|modes| mode_for_preset(preset, modes))
@@ -920,6 +923,8 @@ impl Core {
                     setting.current = value.clone();
                     send(run, Command::SetSetting { id, value });
                 }
+                let follows = kept.as_deref().and_then(preset_for_mode).unwrap_or(preset);
+                follow_preset_in_settings(run, follows);
                 if let Some(mode) = kept.filter(|mode| {
                     run.modes
                         .as_ref()
@@ -952,6 +957,7 @@ impl Core {
                 if !temporary {
                     run.back_to = None;
                     let follows = preset_following(&mode, planning, self.preset(thread));
+                    follow_preset_in_settings(self.acp.get_mut(&thread).expect("caller checked"), follows);
                     if follows != self.preset(thread) {
                         self.keep_choice(thread, |record| {
                             record.preset = follows.as_str().to_owned();
@@ -1321,13 +1327,19 @@ fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
     std::fs::read(data_dir.join(SEEN)).ok().and_then(|json| serde_json::from_slice(&json).ok()).unwrap_or_default()
 }
 
+/// A mode's id as Silt knows it: Copilot's are links to the protocol's
+/// page on modes, ending in `#agent`, `#plan` and `#autopilot`.
+fn mode_key(mode: &str) -> &str {
+    mode.rsplit_once('#').map_or(mode, |(_, key)| key)
+}
+
 /// The preset that lets an agent do what its mode `mode` does, by the ids
-/// Claude's and Codex's adapters use.
+/// Claude's, Codex's and Copilot's adapters use.
 fn preset_for_mode(mode: &str) -> Option<Preset> {
-    match mode {
+    match mode_key(mode) {
         "default" | "read-only" => Some(Preset::AskForEverything),
         "acceptEdits" => Some(Preset::AskBeforeCommands),
-        "bypassPermissions" | "auto" | "dontAsk" | "full-access" => Some(Preset::FullAccess),
+        "bypassPermissions" | "auto" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
         _ => None,
     }
 }
@@ -1343,14 +1355,49 @@ fn preset_following(mode: &str, planning: bool, chosen: Preset) -> Preset {
 }
 
 /// The agent's mode that does what `preset` says, among those it offers.
+/// Copilot's `agent` asks as its permissions setting says, which follows
+/// the preset; Full access never moves it into `autopilot`, which also
+/// runs on without the person.
 fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
     let wanted: &[&str] = match preset {
         Preset::Plan => return silt_acp::plan_mode(modes).map(|mode| mode.id.clone()),
-        Preset::AskForEverything => &["default", "read-only"],
-        Preset::AskBeforeCommands => &["acceptEdits"],
+        Preset::AskForEverything => &["default", "read-only", "agent"],
+        Preset::AskBeforeCommands => &["acceptEdits", "agent"],
         Preset::FullAccess => &["bypassPermissions", "full-access", "dontAsk"],
     };
-    wanted.iter().find(|id| modes.available.iter().any(|mode| mode.id == **id)).map(|id| (*id).to_owned())
+    wanted.iter().find_map(|id| modes.available.iter().find(|mode| mode_key(&mode.id) == *id)).map(|mode| mode.id.clone())
+}
+
+/// The value of an agent's own on/off permissions setting, such as
+/// Copilot's Allow All, that does what `preset` says: on for Full access,
+/// off otherwise, so the agent asks and the preset answers. None for a
+/// setting of another kind, which the composer offers as it is.
+fn permission_value(preset: Preset, setting: &silt_acp::Setting) -> Option<String> {
+    if setting.category.as_deref() != Some("permissions") {
+        return None;
+    }
+    let pick =
+        |id: &str| setting.choices.iter().find(|choice| choice.id.eq_ignore_ascii_case(id)).map(|choice| choice.id.clone());
+    let (on, off) = [("on", "off"), ("true", "false"), ("enabled", "disabled")]
+        .into_iter()
+        .find_map(|(on, off)| Some((pick(on)?, pick(off)?)))?;
+    Some(if preset == Preset::FullAccess { on } else { off })
+}
+
+/// Puts the agent's own permissions settings where the preset says.
+fn follow_preset_in_settings(run: &mut AcpRun, preset: Preset) {
+    let changes: Vec<(String, String)> = run
+        .settings
+        .iter_mut()
+        .filter_map(|setting| {
+            let value = permission_value(preset, setting).filter(|value| *value != setting.current)?;
+            setting.current = value.clone();
+            Some((setting.id.clone(), value))
+        })
+        .collect();
+    for (id, value) in changes {
+        send(run, Command::SetSetting { id, value });
+    }
 }
 
 /// Makes the next turn a Plan first one: in the agent's plan mode when it
@@ -1432,6 +1479,38 @@ mod tests {
             Preset::AskBeforeCommands,
             "but leaves Plan, which the agent left"
         );
+    }
+
+    #[test]
+    fn copilot_s_modes_and_allow_all_follow_the_preset() {
+        let modes = silt_acp::Modes {
+            current: "https://agentclientprotocol.com/protocol/session-modes#autopilot".into(),
+            available: ["agent", "plan", "autopilot"]
+                .map(|key| silt_acp::Choice {
+                    id: format!("https://agentclientprotocol.com/protocol/session-modes#{key}"),
+                    name: key.into(),
+                    description: None,
+                })
+                .into(),
+        };
+        let agent = "https://agentclientprotocol.com/protocol/session-modes#agent";
+        assert_eq!(preset_following(&modes.current, false, Preset::AskBeforeCommands), Preset::FullAccess);
+        assert_eq!(mode_for_preset(Preset::AskBeforeCommands, &modes).as_deref(), Some(agent), "out of autopilot");
+        assert_eq!(mode_for_preset(Preset::FullAccess, &modes), None, "never into autopilot");
+        assert!(mode_for_preset(Preset::Plan, &modes).is_some_and(|mode| mode.ends_with("#plan")));
+
+        let choice = |id: &str| silt_acp::Choice { id: id.into(), name: id.into(), description: None };
+        let allow_all = silt_acp::Setting {
+            id: "allow_all".into(),
+            name: "Allow All".into(),
+            category: Some("permissions".into()),
+            current: "on".into(),
+            choices: vec![choice("on"), choice("off")],
+        };
+        assert_eq!(permission_value(Preset::FullAccess, &allow_all).as_deref(), Some("on"));
+        assert_eq!(permission_value(Preset::AskBeforeCommands, &allow_all).as_deref(), Some("off"));
+        let model = silt_acp::Setting { category: Some("model".into()), ..allow_all };
+        assert_eq!(permission_value(Preset::FullAccess, &model), None);
     }
 
     #[test]

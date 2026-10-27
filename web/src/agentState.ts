@@ -1,4 +1,4 @@
-import type { AgentChoiceItem, AgentState, Preset } from './api'
+import type { AgentChoiceItem, AgentSetting, AgentState, Preset } from './api'
 import type { Tone } from './ui'
 
 /** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan,
@@ -19,6 +19,20 @@ const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto',
 /** Whether an agent's modes are its permissions, which then stand in for Silt's preset (ADR 0048). */
 export function permissionModes(modes: AgentChoiceItem[] | null | undefined): boolean {
   return modes?.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
+}
+
+/** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0049). */
+export function presetDriven(setting: AgentSetting): boolean {
+  const ids = new Set(setting.choices.map((choice) => choice.id.toLowerCase()))
+  return setting.category === 'permissions' && [['on', 'off'], ['true', 'false'], ['enabled', 'disabled']].some(([on, off]) => ids.has(on!) && ids.has(off!))
+}
+
+/**
+ * The settings to offer before the agent runs, and start it with: not its mode where it also lists that as a
+ * setting, which its modes or the preset say, nor what the preset sets (ADR 0049).
+ */
+export function startSettings(settings: AgentSetting[], modes: AgentChoiceItem[] | null | undefined): AgentSetting[] {
+  return settings.filter((setting) => !(modes?.length && setting.category === 'mode') && !presetDriven(setting))
 }
 
 /** How a state reads after the agent's name (ADR 0022). */

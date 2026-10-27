@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type SetStateAction, useState } from 'react'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
 import { readAttachment } from '../attachments'
-import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running } from '../agentState'
+import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
@@ -343,6 +343,9 @@ export function AgentDock({
   // Before an agent runs here, its modes and settings as it last ran on this machine, to start it with.
   const seen = agents.find((choice) => choice.id === agent)
   const seenModes = seen?.modes?.available
+  // Before it runs, its mode is offered where its modes are its permissions; else the preset says which it starts in.
+  const startModes = permissionModes(seenModes) ? seenModes : undefined
+  const seenSettings = startSettings(seen?.settings ?? [], seenModes)
   const [mode, setChosenMode] = useState<string>()
   const chosenMode = mode ?? seen?.modes?.current
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
@@ -371,8 +374,8 @@ export function AgentDock({
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
     if (!startable) return
-    const settings = (seen?.settings ?? []).map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
-    act(api.startAgent(agent, { thread }, { preset, mode: permissionModes(seenModes) ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null }), sent(draft))
+    const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
+    act(api.startAgent(agent, { thread }, { preset, mode: startModes ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null }), sent(draft))
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
@@ -507,10 +510,10 @@ export function AgentDock({
       ) : (
         startable && (
           <AgentSettings
-            modes={seenModes}
+            modes={startModes}
             mode={chosenMode}
             onMode={setChosenMode}
-            settings={seen?.settings ?? []}
+            settings={seenSettings}
             value={(setting) => chosenSettings[setting.id] ?? setting.current}
             onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
             narrow={narrow}
