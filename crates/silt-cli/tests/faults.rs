@@ -207,3 +207,58 @@ fn recorded_once_after_fork(machine: &Machine, fork: &str, name: &str, other: &s
     let own = machine.stdout(&["diff", fork]);
     assert!(own.contains(&format!("+fn {name}() {{}}")) && !own.contains(&format!("fn {other}()")), "{own}");
 }
+
+/// `silt` run from `exe`, as `machine` runs it.
+fn silt_from(machine: &Machine, exe: &Path, args: &[&str]) -> Output {
+    let mut command = std::process::Command::new(exe);
+    let like = machine.command(&[], &[]);
+    for (key, value) in like.get_envs() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+    command.args(args).current_dir(&machine.repo).output().expect("silt runs")
+}
+
+#[test]
+fn a_daemon_whose_program_was_replaced_is_restarted_on_the_new_one() {
+    let world = world();
+    let laptop = &world.laptop;
+    laptop.silt(&["daemon", "stop"]);
+    let bin = world.root.path().join("bin");
+    fs::create_dir_all(&bin).expect("mkdir");
+    let installed = bin.join(Path::new(env!("CARGO_BIN_EXE_silt")).file_name().expect("a file name"));
+    let program = fs::read(env!("CARGO_BIN_EXE_silt")).expect("reads silt");
+    fs::write(&installed, &program).expect("installs");
+    silt_os::make_executable(&installed).expect("executable");
+    assert!(silt_from(laptop, &installed, &["log"]).status.success());
+    let before = daemon_pid(laptop);
+
+    // Another build beside it leaves it be.
+    let other = laptop.run(&["log"]);
+    assert!(String::from_utf8_lossy(&other.stderr).is_empty(), "{}", String::from_utf8_lossy(&other.stderr));
+
+    // Installed again, as the running program can't be written over.
+    fs::rename(&installed, bin.join("silt.old")).expect("moves the old one aside");
+    fs::write(&installed, &program).expect("installs again");
+    silt_os::make_executable(&installed).expect("executable");
+    let elsewhere = laptop.run(&["log"]);
+    assert!(
+        String::from_utf8_lossy(&elsewhere.stderr).contains("`silt daemon stop` restarts it"),
+        "another build only says so: {}",
+        String::from_utf8_lossy(&elsewhere.stderr)
+    );
+    assert_eq!(daemon_pid(laptop), before);
+
+    let restarted = silt_from(laptop, &installed, &["log"]);
+    assert!(restarted.status.success(), "{}", String::from_utf8_lossy(&restarted.stderr));
+    assert!(
+        String::from_utf8_lossy(&restarted.stderr).contains("restarted the daemon"),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    assert_ne!(daemon_pid(laptop), before, "a new daemon runs");
+    let again = silt_from(laptop, &installed, &["log"]);
+    assert!(String::from_utf8_lossy(&again.stderr).is_empty(), "once: {}", String::from_utf8_lossy(&again.stderr));
+}

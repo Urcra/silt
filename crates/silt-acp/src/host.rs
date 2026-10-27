@@ -17,7 +17,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::modes::{Modes, Setting, modes_of, settings_of};
@@ -313,11 +313,17 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub struct AgentHandle {
     commands: mpsc::UnboundedSender<Command>,
+    stop: Arc<watch::Sender<bool>>,
 }
 
 impl AgentHandle {
     /// Whether the agent is still there to take it.
     pub fn send(&self, command: Command) -> bool {
+        // Commands are read once the session is ready; a stop is heard
+        // before that too, as an agent can hang while starting.
+        if matches!(command, Command::Stop) {
+            self.stop.send_replace(true);
+        }
         self.commands.send(command).is_ok()
     }
 }
@@ -325,13 +331,14 @@ impl AgentHandle {
 /// Starts the agent; events arrive on `events` until [`Event::Exited`].
 pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle {
     let (commands, receiver) = mpsc::unbounded_channel();
+    let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {
-        if let Err(error) = run(start, events.clone(), receiver).await {
+        if let Err(error) = run(start, events.clone(), receiver, stopped).await {
             let _ = events.send(Event::Failed(Arc::new(error)));
         }
         let _ = events.send(Event::Exited);
     });
-    AgentHandle { commands }
+    AgentHandle { commands, stop: Arc::new(stop) }
 }
 
 fn text_of(block: &ContentBlock) -> String {
@@ -418,6 +425,7 @@ async fn run(
     start: Start,
     events: mpsc::UnboundedSender<Event>,
     mut commands: mpsc::UnboundedReceiver<Command>,
+    mut stopped: watch::Receiver<bool>,
 ) -> Result<(), HostError> {
     let mut command = tokio::process::Command::new(program(&start));
     // Its own process group, so stopping it stops what it started too,
@@ -656,6 +664,7 @@ async fn run(
             Ok(status) => Err(HostError::Exited(status)),
             Err(error) => Err(HostError::Wait(error)),
         },
+        _ = stopped.wait_for(|stopped| *stopped) => Ok(()),
     };
     if let Some(group) = group {
         silt_os::kill_tree(group);

@@ -329,8 +329,8 @@ impl Agent for OpenCode {
         Capture::Snapshot
     }
 
-    fn snapshot(&self, found: &Found) -> Result<Vec<String>, AgentError> {
-        let bytes = opencode(&["export", &found.id], None)?;
+    fn snapshot(&self, found: &Found, cwd: &Path) -> Result<Vec<String>, AgentError> {
+        let bytes = opencode(&["export", &found.id], Some(cwd).filter(|cwd| cwd.is_dir()))?;
         let start = bytes.iter().position(|byte| *byte == b'{').unwrap_or(0);
         let export: Value = serde_json::from_slice(&bytes[start..]).map_err(AgentError::Export)?;
         Ok(export_records(&export))

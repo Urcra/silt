@@ -789,6 +789,8 @@ test('a thread started in the background from a branch plans its first prompt an
 })
 
 test("the agent's modes and model are offered, and the Plan preset plans in its plan mode", async ({ page }) => {
+  // Wide enough for the agent's chips to stand in the row beside the right panel, rather than fold into one.
+  await page.setViewportSize({ width: 1600, height: 900 })
   await startInNewThread(page, 'Fake agent')
   const mode = page.getByLabel('mode', { exact: true })
   await expect(mode).toHaveValue('code')

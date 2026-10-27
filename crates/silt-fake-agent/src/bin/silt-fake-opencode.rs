@@ -24,12 +24,7 @@ fn run() -> Step {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("session") => return list(&store),
-        Some("export") => {
-            let id = args.get(1).cloned().unwrap_or_default();
-            eprintln!("Exporting session: {id}");
-            print!("{}", read(&store.join(format!("{id}.json"))));
-            return Ok(());
-        }
+        Some("export") => return export(&store, args.get(1).map_or("", String::as_str)),
         Some("import") => return import(&store, Path::new(args.get(1).map_or("", String::as_str))),
         _ => {}
     }
@@ -75,6 +70,20 @@ fn run() -> Step {
     });
     write(&store.join(format!("{session}.json")), format!("{export}\n").as_bytes())?;
     std::thread::sleep(Duration::from_secs(4));
+    Ok(())
+}
+
+/// What `opencode export <id>` prints. As OpenCode does, it finds only the
+/// sessions of the project it runs in.
+fn export(store: &Path, id: &str) -> Step {
+    eprintln!("Exporting session: {id}");
+    let meta = read(&store.join(format!("{id}.meta")));
+    let directory = meta.trim_end().splitn(3, ' ').nth(2).unwrap_or_default();
+    let here = |dir: &Path| fs::canonicalize(dir).ok();
+    if here(Path::new(directory)).is_none() || here(Path::new(directory)) != here(&cwd()?) {
+        return Err(Failed(1, format!("Error: Session not found: {id}")));
+    }
+    print!("{}", read(&store.join(format!("{id}.json"))));
     Ok(())
 }
 

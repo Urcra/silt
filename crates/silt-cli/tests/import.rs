@@ -202,3 +202,26 @@ fn every_agent_s_sessions_are_imported() {
     let threads: std::collections::HashSet<&str> = found.lines().filter_map(|line| line.split_whitespace().next()).collect();
     assert!(threads.len() >= 3, "each agent's thread is searchable: {found}");
 }
+
+#[test]
+fn the_web_ui_s_import_goes_past_a_session_it_cannot_read() {
+    let world = world();
+    let laptop = &world.laptop;
+    run_agent_alone(laptop, &common::fake_agent("opencode"), &laptop.repo, &[]);
+    let store = laptop.agents.join("opencode");
+    let export = fs::read_dir(&store)
+        .expect("the fake's store")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .expect("an export");
+    fs::write(&export, "not an export\n").expect("writes");
+    run_agent_alone(laptop, &laptop.fake, &laptop.repo, &["--session-id", "6f1c2d3e-0000-4000-8000-000000000008"]);
+
+    let (status, answer) = laptop.web_answer("POST", "/api/found/import", Some(serde_json::json!({ "paths": [] })));
+    assert_ne!(status, "200", "{answer}");
+    assert!(answer.contains("imported 1; could not import opencode session"), "{answer}");
+    assert_eq!(log_lines(laptop).len(), 1, "the readable session, and no empty thread: {:?}", log_lines(laptop));
+    let found = laptop.web("GET", "/api/found", None).to_string();
+    assert!(found.contains("OpenCode"), "the session that failed is still offered: {found}");
+}

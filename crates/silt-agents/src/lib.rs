@@ -268,7 +268,9 @@ pub trait Agent: Send + Sync {
         Vec::new()
     }
     /// The session's records as of now, for agents read by snapshot.
-    fn snapshot(&self, _found: &Found) -> Result<Vec<String>, AgentError> {
+    /// `cwd` is the folder the session ran in, as an agent that keeps its
+    /// sessions per project finds them only from there.
+    fn snapshot(&self, _found: &Found, _cwd: &Path) -> Result<Vec<String>, AgentError> {
         Err(AgentError::NoSnapshot)
     }
     /// Identifies a snapshot record, so a record is stored once.

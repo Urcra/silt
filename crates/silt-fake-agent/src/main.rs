@@ -6,7 +6,8 @@
 //! and a model setting, and takes images and files, which its answer
 //! names; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
 //! `Ask me` asks a multiple-choice question instead and answers with the
-//! choice. With `FAKE_ACP_CRASH` set it dies on a prompt.
+//! choice. With `FAKE_ACP_CRASH` set it dies on a prompt; with
+//! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -68,6 +69,9 @@ fn notify(connection: &ConnectionTo<Client>, session: &SessionId, update: Sessio
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::var_os("FAKE_ACP_HANG").is_some() {
+        std::future::pending::<()>().await;
+    }
     let state = Arc::new(Mutex::new(State::default()));
     let created = state.clone();
     let loading = state.clone();

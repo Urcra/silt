@@ -17,6 +17,8 @@ pub enum Request {
     /// Where this daemon looks for agents' sessions: each of
     /// `silt_agents::HOME_VARIABLES` with its value here.
     AgentHomes,
+    /// Whether this daemon's program was replaced since it started.
+    DaemonBuild,
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
@@ -570,6 +572,18 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     message
 }
 
+/// The program a daemon runs, as `Request::DaemonBuild` answers: replaced
+/// since it started, as installing Silt again does, it still runs the old
+/// build and serves the old web UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonBuild {
+    pub exe: Option<PathBuf>,
+    pub replaced: bool,
+    /// The agents working in it, which stopping it would end: those the web
+    /// UI started, unless idle, and the sessions being recorded.
+    pub working: usize,
+}
+
 /// What compacting the store gave back: the database file's size before and
 /// after, and how many chunks it compressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1063,6 +1077,9 @@ pub enum BusEvent {
     Mrs,
     /// What an agent offers, its modes and settings, is newly known.
     Agents,
+    /// An import from the web UI has gone through `done` of its `total`
+    /// sessions.
+    Importing { done: usize, total: usize },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1078,7 +1095,7 @@ pub enum TextKind {
 
 impl BusEvent {
     /// The topic a socket subscribes to for it: `threads`, `thread:<id>`,
-    /// `inbox` or `mrs`; none for what every socket hears.
+    /// `inbox`, `mrs` or `import`; none for what every socket hears.
     pub fn topic(&self) -> Option<String> {
         match self {
             Self::Threads => Some("threads".to_owned()),
@@ -1088,6 +1105,7 @@ impl BusEvent {
             | Self::Queue { thread } => Some(format!("thread:{thread}")),
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
+            Self::Importing { .. } => Some("import".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }
