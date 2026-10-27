@@ -7,6 +7,11 @@ silt="${SILT:-$root/target/debug/silt}"
 work=$(mktemp -d /tmp/silt-web-XXXXXX)
 export SILT_HOME="$work/silt"
 export CLAUDE_CONFIG_DIR="$work/claude"
+# Agent sessions on the machine running the tests would show in the import
+# offer, so each machine here has a home of its own.
+export HOME="$work/home"
+unset CODEX_HOME GEMINI_CLI_HOME COPILOT_HOME XDG_DATA_HOME XDG_CONFIG_HOME
+mkdir -p "$HOME"
 export SILT_CLAUDE_BIN="$root/web/e2e/fake-claude.sh"
 export SILT_HOOK="$silt hook"
 mkdir -p "$CLAUDE_CONFIG_DIR" "$work/repo/src"

@@ -4,14 +4,15 @@ import { Icon, cx } from '../ui'
 
 const SHOWN = 12
 
-/** An edit as a small diff in the transcript (ADR 0044); a long one folds to its counts. */
-export function EditCard({ change }: { change: Change }) {
+/** An edit as a small diff in the transcript (ADR 0044); a long one folds to its counts. `bare` leaves out the
+ * line naming the file, for a step row that already names it. */
+export function EditCard({ change, bare = false }: { change: Change; bare?: boolean }) {
   const [all, setAll] = useState(false)
   const rows = [...change.removed.map((text) => ({ sign: '-', text })), ...change.added.map((text) => ({ sign: '+', text }))]
   const shown = all ? rows : rows.slice(0, SHOWN)
   return (
     <div data-testid="edit" className="overflow-hidden rounded-md border border-line bg-elevated">
-      <div className="flex items-center gap-2 border-b border-line-subtle px-3 py-1.5 text-xs">
+      <div className={cx('flex items-center gap-2 border-b border-line-subtle px-3 py-1.5 text-xs', bare && 'hidden')}>
         <Icon name="edit" className="h-3.5 w-3.5 text-fg-2" />
         <span className="text-fg-2">{change.verb}</span>
         <span className="min-w-0 flex-1 truncate font-mono" title={change.file}>

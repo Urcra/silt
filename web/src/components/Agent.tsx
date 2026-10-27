@@ -224,7 +224,8 @@ function StopKey({ onCancel }: { onCancel: () => void }) {
   return <Kbd>Esc</Kbd>
 }
 
-/** What the agent is doing now, before it is recorded: its thinking, its words, the running tool's output, and how long it's been at it. */
+/** What the agent is doing now, before it is recorded: its thinking, its words, and how long it's been at it. The running
+ * tool's output stays in its step, a click away, rather than streaming into the thread (ADR 0049). */
 export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatus; toolOutput: string; onCancel: () => void }) {
   const clock = useTurnClock(status)
   if (!working(status) && !status.streaming) return null
@@ -236,20 +237,12 @@ export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatu
         <details key={thinkingNow ? 'now' : 'done'} open={thinkingNow} className="group/think border-l-2 border-line pl-3">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-fg-2">
             <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
-            {thinkingNow ? 'Thinking' : 'Thought it through'}
+            {thinkingNow ? 'Thinking' : 'Thought'}
           </summary>
           <p className="mt-1.5 text-xs whitespace-pre-wrap text-fg-2 italic">{status.thinking}</p>
         </details>
       )}
       {status.streaming && <Markdown text={status.streaming} />}
-      {toolOutput && (
-        <pre
-          data-testid="tool-output"
-          className="max-h-48 overflow-auto rounded-sm border border-line-subtle bg-bg px-2.5 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2"
-        >
-          {toolOutput}
-        </pre>
-      )}
       {working(status) && (
         <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
           {/* Blocked on the person, not busy: no spinner. */}

@@ -109,16 +109,20 @@ export function rowsOf(entries: HistoryEntry[], turns: TurnInfo[]): Row[] {
 
 export type Piece =
   | { kind: 'entry'; entry: HistoryEntry }
-  | { kind: 'tools'; entries: HistoryEntry[] }
-  /** A command or a question, shown on its own rather than folded. */
+  /** A run of the agent's work between its words: tool calls, commands and thoughts. `until` is when what follows it began. */
+  | { kind: 'tools'; entries: HistoryEntry[]; until: number | null }
+  /** A question, a proposed plan or a failed command, shown on its own rather than folded. */
   | { kind: 'step'; step: ToolStep }
   /** The turn's plan as it stood last; earlier versions of it fold away. */
   | { kind: 'plan'; entry: HistoryEntry }
 
-/** What stands on its own in a turn rather than in a fold: commands, with their output, and questions. */
-const STANDING = new Set(['execute', 'question'])
+/** What stands on its own in a turn rather than in a run: questions, and commands that failed. */
+function stands(step: ToolStep): boolean {
+  if (!step.call) return false
+  const kind = kindOf(step.call)
+  return kind === 'question' || Boolean(proposedPlan(step.call)) || (kind === 'execute' && Boolean(step.result?.outcome?.failed))
+}
 
-/** The pieces of a turn: its words, commands and questions, and runs of the rest of the tool work folded together. */
 /** The plan a call put to the person for approval, as Claude's ExitPlanMode does: its input's `plan`, as Markdown. */
 export function proposedPlan(call: HistoryEntry): string | null {
   const at = call.text.indexOf(' {')
@@ -135,8 +139,8 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
   const steps = stepsOf(entries)
   const standing = new Set<HistoryEntry>()
   for (const step of steps) {
-    // A proposed plan stands in its turn, as what the work after it went by.
-    if (step.call && (STANDING.has(kindOf(step.call)) || proposedPlan(step.call))) {
+    // A proposed plan stands in its turn, as what the work after it went by; a failed command, so it isn't missed.
+    if (step.call && stands(step)) {
       standing.add(step.call)
       if (step.result) standing.add(step.result)
       for (const image of step.images) standing.add(image)
@@ -168,12 +172,67 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
       const call = steps.find((step) => step.result === entry)?.call
       const fold = (call && foldOf.get(call)) ?? (last?.kind === 'tools' ? last : null)
       if (fold) fold.entries.push(entry)
-      else pieces.push({ kind: 'tools', entries: [entry] })
+      else pieces.push({ kind: 'tools', entries: [entry], until: null })
       const into = fold ?? (pieces[pieces.length - 1] as Piece & { kind: 'tools' })
       if (entry.kind === 'tool_call') foldOf.set(entry, into)
     } else pieces.push({ kind: 'entry', entry })
   }
+  // A run's last thought ends where what follows the run begins.
+  for (const piece of pieces) {
+    if (piece.kind !== 'tools') continue
+    const shown = new Set(piece.entries)
+    const last = piece.entries[piece.entries.length - 1].index
+    piece.until = entries.find((entry) => entry.index > last && !shown.has(entry) && !hidden.has(entry))?.time_ms ?? null
+  }
   return pieces
+}
+
+/** A run's thoughts and steps in the order the agent took them; a thought is the thinking between two other things. */
+export type RunItem = { kind: 'thought'; entries: HistoryEntry[]; took: string | null } | { kind: 'step'; step: ToolStep }
+
+export function runItems(entries: HistoryEntry[], until: number | null): RunItem[] {
+  const steps = stepsOf(entries)
+  const anchored = new Map(steps.map((step) => [step.call ?? step.result!, step]))
+  const items: RunItem[] = []
+  for (const entry of entries) {
+    if (entry.kind === 'thinking') {
+      const last = items[items.length - 1]
+      if (last?.kind === 'thought') last.entries.push(entry)
+      else items.push({ kind: 'thought', entries: [entry], took: null })
+      continue
+    }
+    const step = anchored.get(entry)
+    if (step) items.push({ kind: 'step', step })
+  }
+  // A thought took from its first words to whatever came after it.
+  for (const item of items) {
+    if (item.kind !== 'thought') continue
+    const first = item.entries[0]
+    const lastIndex = item.entries[item.entries.length - 1].index
+    const next = entries.find((entry) => entry.index > lastIndex && entry.kind !== 'thinking')
+    const end = next?.time_ms ?? until
+    item.took = end === null ? null : duration(first.time_ms, end)
+  }
+  return items
+}
+
+/** How long a run's thoughts took together, as `12s`, or null when none was timed. */
+export function thoughtTotal(items: RunItem[]): string | null {
+  const seconds = items.reduce((sum, item) => sum + (item.kind === 'thought' && item.took ? secondsOf(item.took) : 0), 0)
+  return seconds > 0 ? duration(0, seconds * 1000) : null
+}
+
+function secondsOf(said: string): number {
+  const match = /^(?:(\d+)m )?(\d+)s$/.exec(said)
+  return match ? Number(match[1] ?? 0) * 60 + Number(match[2]) : 0
+}
+
+/** A thought's headline: its own bold heading, or its first sentence, as a few words to show in a fold. */
+export function headline(text: string): string {
+  const bold = /^\s*\*\*(.+?)\*\*/.exec(text)?.[1]
+  const said = (bold ?? text).trim().replace(/\s+/g, ' ')
+  const sentence = /^(.+?[.!?])(\s|$)/.exec(said)?.[1] ?? said
+  return sentence.length > 160 ? `${sentence.slice(0, 157).trimEnd()}…` : sentence
 }
 
 /** A tool call's name and the file it names, from its entry's `Name {json}` text. */
@@ -200,12 +259,13 @@ export function kindOf(call: HistoryEntry): string {
   return EDITS.has(name) ? 'edit' : file ? 'read' : 'other'
 }
 
+// What changed things comes first: edits, then commands, then what only looked.
 const SAID: Record<string, [string, string, string]> = {
+  edit: ['edited', 'file', 'files'],
+  execute: ['ran', 'command', 'commands'],
+  question: ['asked', 'question', 'questions'],
   search: ['searched', 'pattern', 'patterns'],
   read: ['read', 'file', 'files'],
-  execute: ['ran', 'command', 'commands'],
-  edit: ['edited', 'file', 'files'],
-  question: ['asked', 'question', 'questions'],
   fetch: ['fetched', 'page', 'pages'],
   plan: ['updated the plan', 'time', 'times'],
   other: ['used', 'tool', 'tools'],
@@ -224,7 +284,7 @@ const DOING: Record<string, string> = {
 }
 
 /** What a run of tool work did, as its folded summary says it: `Searched 1 pattern, read 2 files, ran 3 commands`. In a turn still `live`, calls waiting for their result say what they're doing. */
-export function toolSummary(entries: HistoryEntry[], live = false): string {
+export function toolSummary(entries: HistoryEntry[], live = false, most = Infinity): string {
   // Reading or editing one file three times is still one file.
   const done = new Map<string, Set<string>>()
   const doing = new Map<string, Set<string>>()
@@ -245,10 +305,16 @@ export function toolSummary(entries: HistoryEntry[], live = false): string {
         if (kind === 'plan') return count === 1 ? verb : `${verb} ${count} ${many}`
         return `${verb} ${count} ${count === 1 ? one : many}`
       })
-  const finished = said(done, (kind) => SAID[kind]![0]).join(', ')
+  // Past `most` kinds, the rest are only counted, so a busy turn still says it in a line.
+  const counted = (parts: string[], counts: Map<string, Set<string>>) => {
+    if (parts.length <= most) return parts.join(', ')
+    const rest = Object.keys(SAID).filter((kind) => counts.has(kind)).slice(most).reduce((sum, kind) => sum + counts.get(kind)!.size, 0)
+    return [...parts.slice(0, most), `${rest} other ${rest === 1 ? 'step' : 'steps'}`].join(', ')
+  }
+  const finished = counted(said(done, (kind) => SAID[kind]![0]), done)
   const underWay = said(doing, (kind) => DOING[kind]!).join(', ')
   const text = finished && underWay ? `${finished} · now ${underWay}` : finished || underWay
-  if (!text) return entries.some((entry) => entry.kind === 'thinking') ? 'Thought it through' : 'Tool output'
+  if (!text) return entries.some((entry) => entry.kind === 'thinking') ? 'Thought' : 'Tool output'
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 

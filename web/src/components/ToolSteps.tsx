@@ -3,8 +3,11 @@ import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '.
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
 import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
-import { TranscriptDetail } from '../detail'
-import { Button, Dialog, Icon, Kbd, cx } from '../ui'
+import { LiveTool, TranscriptDetail } from '../detail'
+import { useNow } from '../now'
+import { Button, Dialog, Icon, Kbd, Spinner, cx } from '../ui'
+import { changeOf } from '../edits'
+import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 
 /** A picture a prompt or a tool carried, small, opening at full size. */
@@ -48,9 +51,10 @@ function Mark({ step }: { step: ToolStep }) {
 }
 
 const VERB: Record<string, string> = { read: 'Read', search: 'Searched', edit: 'Edited', execute: 'Ran', question: 'Asked', fetch: 'Fetched' }
+const DOING: Record<string, string> = { read: 'Reading', search: 'Searching', edit: 'Editing', execute: 'Running', question: 'Asking', fetch: 'Fetching' }
 
-/** What a step did, in its tool's words: `Read src/upload.rs`, `Searched progress in src`. */
-function Said({ call }: { call: HistoryEntry }) {
+/** What a step did, in its tool's words: `Read src/upload.rs`, `Searched progress in src`; `running`, what it's doing. */
+function Said({ call, running = false }: { call: HistoryEntry; running?: boolean }) {
   const tool = call.tool
   if (call.plan) return <span className="text-fg-2">Updated the plan · {call.plan.length} steps</span>
   if (proposedPlan(call)) return <span className="text-fg-2">Proposed a plan</span>
@@ -63,7 +67,7 @@ function Said({ call }: { call: HistoryEntry }) {
       </span>
     )
   }
-  const verb = tool.kind === 'edit' && /^write/i.test(tool.name) ? 'Wrote' : (VERB[tool.kind] ?? tool.name)
+  const verb = running ? (DOING[tool.kind] ?? tool.name) : tool.kind === 'edit' && /^write/i.test(tool.name) ? 'Wrote' : (VERB[tool.kind] ?? tool.name)
   return (
     <span className="min-w-0">
       <span className="text-fg-2">{verb}</span> <span className="font-mono break-all text-fg-1">{tool.subject}</span>
@@ -101,35 +105,52 @@ export function ProposedPlan({ step }: { step: ToolStep }) {
   )
 }
 
-/** One step in a fold: what it did, with its result a click away. */
-export function StepRow({ step, open: opened = false }: { step: ToolStep; open?: boolean }) {
+/** One step in a run: what it did, with its result, or an edit's diff, a click away. */
+export function StepRow({ step, open: opened = false, running = false }: { step: ToolStep; open?: boolean; running?: boolean }) {
   const [open, setOpen] = useState(opened)
   const result = step.result
   const plan = step.call ? proposedPlan(step.call) : null
+  const change = step.call ? changeOf(step.call) : null
   // A plan's result only tells the model it was saved or approved; the plan itself is what to show.
-  const output = result && result.text.trim() && !step.call?.plan && !plan ? result.text : null
+  const output = result && result.text.trim() && !step.call?.plan && !plan && !change ? result.text : null
+  const openable = Boolean(output || plan || change)
   return (
-    <div className="flex flex-col gap-1">
-      <span className="flex items-start gap-2">
-        <Mark step={step} />
-        <span className="min-w-0 flex-1">{step.call ? <Said call={step.call} /> : <span className="text-fg-2">A tool&apos;s output</span>}</span>
-        {measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>}
-        {(output || plan) && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
-            {plan ? (open ? 'Hide plan' : 'Plan') : open ? 'Hide output' : 'Output'}
-          </button>
+    <div data-testid={change ? 'edit' : undefined} className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={openable ? open : undefined}
+        disabled={!openable}
+        onClick={() => setOpen(!open)}
+        className="group/row flex w-full min-w-0 items-start gap-2 py-px text-left max-md:min-h-11"
+      >
+        <Icon name="chevronRight" className={cx('mt-0.5 h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')} />
+        {running && !result ? <Spinner className="mt-1" /> : <Mark step={step} />}
+        <span className="min-w-0 flex-1 group-enabled/row:group-hover/row:text-accent-fg">
+          {step.call ? <Said call={step.call} running={running && !result} /> : <span className="text-fg-2">A tool&apos;s output</span>}
+        </span>
+        {change ? (
+          <span className="shrink-0 font-mono text-2xs">
+            <span className="text-ok">+{change.added.length}</span> <span className="text-danger">−{change.removed.length}</span>
+          </span>
+        ) : (
+          measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>
         )}
-      </span>
+      </button>
+      {open && change && (
+        <div className="ml-5">
+          <EditCard change={change} bare />
+        </div>
+      )}
       {open && plan && (
-        <div className="ml-[22px] max-h-96 overflow-auto rounded-sm bg-bg px-3 py-2 text-sm text-fg-1">
+        <div className="ml-5 max-h-96 overflow-auto rounded-sm bg-bg px-3 py-2 text-sm text-fg-1">
           <Markdown text={plan} />
         </div>
       )}
       {open && output && (
-        <pre className="ml-[22px] max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{output}</pre>
+        <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{output}</pre>
       )}
       {step.images.map((image) => (
-        <span key={image.index} className="ml-[22px]">
+        <span key={image.index} className="ml-5">
           <ImageThumb entry={image} from="from the tool" />
         </span>
       ))}
@@ -153,75 +174,87 @@ function commandStatus(step: ToolStep): string {
   return parts.length > 0 ? parts.join(' · ') : 'done'
 }
 
-/** A command the agent ran: the command, how it ended, its output's last lines and any pictures it made. */
-export function CommandCard({ step }: { step: ToolStep }) {
+/**
+ * A command the agent ran, closed to one line: what it was for, as the agent said it, then the command
+ * itself, muted, and how it ended. Opened, its output's last lines and any pictures it made. `card` draws
+ * it on its own, as a failed command stands; in a run it is one of the run's rows.
+ */
+export function CommandCard({ step, card = false, running = false }: { step: ToolStep; card?: boolean; running?: boolean }) {
   const [all, setAll] = useState(false)
   const call = step.call!
   const outcome = step.result?.outcome
-  const output = step.result?.text ?? ''
-  // A command that passed is its header line; a failed one, or one still running, shows its output, as Verbose shows every one's.
+  // Under way, its output so far, as the agent streams it; once it ends, what was recorded.
+  const live = useContext(LiveTool)
+  const under = running && !step.result
+  const output = step.result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
   const verbose = useContext(TranscriptDetail) === 'verbose'
-  const [open, setOpen] = useState(verbose || !step.result || Boolean(outcome?.failed))
+  const [open, setOpen] = useState(verbose)
   const tail = tailOf(output)
   const command = call.tool?.subject ?? toolOf(call.text).name
-  // A script of many lines is one line until asked for, so it doesn't take the page.
-  const long = command.length > 160 || command.trim().includes('\n')
-  const [whole, setWhole] = useState(false)
+  const action = call.tool?.detail?.trim()
   const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
+  const openable = under || Boolean(output.trim()) || step.images.length > 0 || command.length > 80 || command.includes('\n')
   return (
-    <div data-testid="command" className="overflow-hidden rounded-md border border-line bg-elevated text-xs">
-      <div className={cx('flex items-start gap-2 px-3 py-1.5', open && output.trim() && 'border-b border-line-subtle')}>
-        <Mark step={step} />
-        {long ? (
-          <button
-            type="button"
-            aria-expanded={whole}
-            onClick={() => setWhole(!whole)}
-            title={whole ? 'Show one line' : 'Show the whole command'}
-            className={cx('min-w-0 flex-1 text-left font-mono', whole ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'truncate')}
-          >
+    <div data-testid="command" className={cx('text-xs', card && 'overflow-hidden rounded-md border border-line bg-elevated')}>
+      <button
+        type="button"
+        aria-expanded={openable ? open : undefined}
+        disabled={!openable}
+        onClick={() => setOpen(!open)}
+        title={command}
+        className={cx('group/row flex w-full min-w-0 items-center gap-2 text-left max-md:min-h-11', card ? 'px-3 py-1.5' : 'py-px', open && card && 'border-b border-line-subtle')}
+      >
+        <Icon name="chevronRight" className={cx('h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')} />
+        {running && !step.result ? <Spinner /> : <Mark step={step} />}
+        <span className={cx('min-w-0 shrink truncate group-enabled/row:group-hover/row:text-accent-fg', outcome?.failed ? 'text-danger' : 'text-fg-1', running && 'font-medium')}>
+          {action ?? <span className="font-mono">{shortCommand(command.trim().split('\n')[0]!)}</span>}
+        </span>
+        {action && <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">{shortCommand(command.trim().split('\n')[0]!)}</span>}
+        <span className={cx('ml-auto min-w-0 shrink truncate tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>
+          {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
+        </span>
+      </button>
+      {open && (
+        <div className={cx('flex flex-col gap-1.5', card ? 'px-3 py-2' : 'mt-1 ml-5 rounded-sm bg-bg px-2.5 py-2')}>
+          <pre className="font-mono text-[11.5px] whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
             <span className="text-fg-2">$ </span>
-            {whole ? command : shortCommand(command.trim().split('\n')[0]!)}
-            {!whole && <span className="text-fg-2"> …</span>}
-          </button>
-        ) : (
-          <span className="min-w-0 flex-1 font-mono break-words" title={command}>
-            <span className="text-fg-2">$ </span>
-            {shortCommand(command)}
-          </span>
-        )}
-        <span className={cx('shrink-0', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>{waiting ? 'waiting for you' : commandStatus(step)}</span>
-        {output.trim() && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="shrink-0 text-fg-2 hover:text-fg-1 max-md:min-h-11">
-            {open ? 'Hide output' : 'Output'}
-          </button>
-        )}
-      </div>
-      {open && call.tool?.detail && <p className="px-3 pt-1.5 text-fg-2">{call.tool.detail}</p>}
-      {open && output.trim() && (
-        <div className="flex flex-col gap-1 px-3 py-2">
-          <pre className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
-            {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
-              <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>
-                {line || ' '}
-              </span>
-            ))}
+            {command}
           </pre>
+          {output.trim() && (
+            <pre data-testid={under ? 'tool-output' : undefined} className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
+              {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
+                <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>
+                  {line || ' '}
+                </span>
+              ))}
+            </pre>
+          )}
           {tail.hidden > 0 && (
             <button type="button" onClick={() => setAll(!all)} className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11">
               {all ? 'Show the last lines' : `Show all ${tail.hidden + tail.lines.length} lines`}
             </button>
           )}
-        </div>
-      )}
-      {step.images.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-3 pb-2.5">
-          {step.images.map((image) => (
-            <ImageThumb key={image.index} entry={image} from="from the command" />
-          ))}
+          {step.images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {step.images.map((image) => (
+                <ImageThumb key={image.index} entry={image} from="from the command" />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+/** A command under way, and how long it has run; its output is a click away. */
+function Running({ since }: { since: number }) {
+  const now = useNow(1000)
+  const seconds = Math.max(0, Math.floor((now - since) / 1000))
+  return (
+    <span>
+      running <span data-volatile>· {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>
+    </span>
   )
 }
 

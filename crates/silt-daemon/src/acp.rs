@@ -42,6 +42,8 @@ pub(crate) struct AcpRun {
     state: AgentState,
     text: String,
     thought: String,
+    /// When the thought being streamed began, which its record keeps.
+    thought_ms: i64,
     asking: Vec<Permission>,
     /// Questions the agent asked and waits on.
     questions: Vec<Question>,
@@ -407,6 +409,7 @@ impl Core {
                 state: AgentState::Starting,
                 text: String::new(),
                 thought: String::new(),
+                thought_ms: 0,
                 asking: Vec::new(),
                 questions: Vec::new(),
                 context: None,
@@ -1076,7 +1079,11 @@ impl Core {
                     self.flush_acp(thread).await?;
                 }
                 self.announce_text(thread, TextKind::Thought, &text);
-                self.acp.get_mut(&thread).expect("caller checked").thought.push_str(&text);
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                if run.thought.is_empty() {
+                    run.thought_ms = now_ms();
+                }
+                run.thought.push_str(&text);
             }
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
@@ -1119,6 +1126,7 @@ impl Core {
     async fn flush_acp(&mut self, thread: ThreadId) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         let thought = std::mem::take(&mut run.thought);
+        let thought_ms = run.thought_ms;
         let text = std::mem::take(&mut run.text);
         if let Some((_, said)) = &mut run.guiding
             && !text.is_empty()
@@ -1129,7 +1137,7 @@ impl Core {
             said.push_str(&text);
         }
         if !thought.is_empty() {
-            self.record_acp(thread, &acp::thought(&thought)).await?;
+            self.record_acp(thread, &acp::thought(&thought, thought_ms)).await?;
         }
         if !text.is_empty() {
             self.record_acp(thread, &acp::message(&text)).await?;
