@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { HistoryEntry } from './api'
-import { foldInherited, imageSize, piecesOf, rowsOf, shortCommand, stepsOf, tailOf, testsOf, toolSummary } from './transcript'
+import { foldInherited, headline, imageSize, piecesOf, rowsOf, runItems, shortCommand, stepsOf, tailOf, testsOf, thoughtTotal, toolSummary } from './transcript'
 
 const entry = (index: number, kind: string, text: string, origin = 'own'): HistoryEntry =>
   ({ index, thread: 't', origin, kind, text, time_ms: index * 1000, rewound: false }) as HistoryEntry
@@ -23,7 +23,7 @@ test('history reads as turns between compaction and origin dividers, with tool w
   if (turn.kind !== 'turn') throw new Error('a turn')
   expect(turn.turn?.number).toBe(1)
   expect(piecesOf(turn.entries).map((piece) => piece.kind)).toEqual(['tools', 'entry'])
-  expect(toolSummary(turn.entries)).toBe('Read 1 file, edited 1 file')
+  expect(toolSummary(turn.entries)).toBe('Edited 1 file, read 1 file')
   const compaction = rows[4]
   expect(compaction.kind === 'compaction' && compaction.summary?.text).toBe('Summary: farewell added.')
 
@@ -55,15 +55,16 @@ test('each call gets the result that answers it, and the run is summed up by kin
     ['c', 5],
     ['d', null],
   ])
-  expect(toolSummary(entries)).toBe('Searched 1 pattern, ran 2 commands, edited 1 file')
-  expect(toolSummary([...entries, call(7, 'e', 'edit', 'src/upload.rs')])).toBe('Searched 1 pattern, ran 2 commands, edited 1 file')
+  expect(toolSummary(entries)).toBe('Edited 1 file, ran 2 commands, searched 1 pattern')
+  expect(toolSummary([...entries, call(7, 'e', 'edit', 'src/upload.rs')])).toBe('Edited 1 file, ran 2 commands, searched 1 pattern')
+  expect(toolSummary(entries, false, 1)).toBe('Edited 1 file, 3 other steps')
   expect(tailOf('one\ntwo\nthree\nfour\nfive\n', 2)).toEqual({ lines: ['four', 'five'], hidden: 3 })
 })
 
-test("a call's update replaces it, and a result joins its call's fold across a command", () => {
+test("a call's update replaces it, commands fold into the run, and a result joins its call's run across a failed command", () => {
   const announced = { ...call(0, 'a', 'execute', ''), text: 'Terminal {}' } as HistoryEntry
   const updated = { ...call(1, 'a', 'execute', 'python3 -m unittest'), text: '`python3 -m unittest` {"command":"python3 -m unittest"}' } as HistoryEntry
-  const entries = [announced, updated, call(2, 'r', 'read', 'calc.py'), call(3, 'b', 'execute', 'ls'), result(4, 'r', 'def add'), result(5, 'b', 'README.md'), result(6, 'a', 'OK')]
+  const entries = [announced, updated, call(2, 'r', 'read', 'calc.py'), call(3, 'b', 'execute', 'ls'), result(4, 'r', 'def add'), result(5, 'b', 'ls: no such file', true), result(6, 'a', 'OK')]
   const steps = stepsOf(entries)
   expect(steps.map((step) => [step.call?.index, step.result?.index])).toEqual([
     [1, 6],
@@ -71,7 +72,9 @@ test("a call's update replaces it, and a result joins its call's fold across a c
     [3, 5],
   ])
   const pieces = piecesOf(entries)
-  expect(pieces.map((piece) => (piece.kind === 'tools' ? piece.entries.map((each) => each.index) : piece.kind))).toEqual(['step', [2, 4], 'step'])
+  expect(pieces.map((piece) => (piece.kind === 'tools' ? piece.entries.map((each) => each.index) : piece.kind))).toEqual([[1, 2, 4, 6], 'step'])
+  const passed = piecesOf([...entries.slice(0, 5), result(5, 'b', 'README.md'), result(6, 'a', 'OK')])
+  expect(passed.map((piece) => (piece.kind === 'tools' ? piece.entries.map((each) => each.index) : piece.kind))).toEqual([[1, 2, 3, 4, 5, 6]])
 })
 
 test('a turn shows its plan once, as it stood last', () => {
@@ -88,7 +91,7 @@ test('a turn shows its plan once, as it stood last', () => {
 test('a call still waiting for its result says what it is doing, while its turn runs', () => {
   const entries = [call(0, 'a', 'read', 'src/lib.rs'), result(1, 'a', 'fn x() {}'), call(2, 'b', 'edit', 'src/main.rs')]
   expect(toolSummary(entries, true)).toBe('Read 1 file · now editing 1 file')
-  expect(toolSummary(entries)).toBe('Read 1 file, edited 1 file')
+  expect(toolSummary(entries)).toBe('Edited 1 file, read 1 file')
 })
 
 test('a command says how its tests went, and an image how big it is', () => {
@@ -102,4 +105,27 @@ test('a command says how its tests went, and an image how big it is', () => {
 test('a long command shrinks its URLs to their last segment', () => {
   expect(shortCommand('npx playwright screenshot http://localhost:5173/upload upload.png')).toBe('npx playwright screenshot …/upload upload.png')
   expect(shortCommand('cargo test upload')).toBe('cargo test upload')
+})
+
+test('a run keeps its thoughts between its steps, each timed to what came after it', () => {
+  const thinking = (index: number, text: string, at: number): HistoryEntry => ({ ...entry(index, 'thinking', text), time_ms: at }) as HistoryEntry
+  const at = (made: HistoryEntry, ms: number) => ({ ...made, time_ms: ms }) as HistoryEntry
+  const entries = [
+    thinking(0, 'Check which store the client loads.', 0),
+    at(call(1, 'a', 'execute', 'cargo tree'), 3000),
+    at(result(2, 'a', 'native-tls'), 4000),
+    thinking(3, '**Empty store** The image has no certificates.', 4000),
+    thinking(4, 'Add them.', 5000),
+    at(call(5, 'b', 'edit', 'core-image.bb'), 9000),
+    thinking(6, 'Build it again.', 10_000),
+  ]
+  const [run] = piecesOf([...entries, at(entry(7, 'assistant', 'Done.'), 12_000)])
+  expect(run.kind === 'tools' && run.until).toBe(12_000)
+  const items = runItems(entries, 12_000)
+  expect(items.map((item) => (item.kind === 'thought' ? `thought ${item.took}` : item.step.call?.tool?.id))).toEqual(['thought 3s', 'a', 'thought 5s', 'b', 'thought 2s'])
+  expect(thoughtTotal(items)).toBe('10s')
+  // An agent that didn't say when its thought began has no duration to show.
+  expect(runItems([thinking(0, 'Hm.', 5000), at(call(1, 'a', 'read', 'x'), 5000)], null)[0]).toMatchObject({ took: null })
+  expect(headline('**Empty store** The image has no certificates.')).toBe('Empty store')
+  expect(headline('The directory is empty. So add the package.')).toBe('The directory is empty.')
 })

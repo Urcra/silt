@@ -38,6 +38,11 @@ oss_url=$(serve oss)
 
 export SILT_HOME="$work/ada/silt"
 export CLAUDE_CONFIG_DIR="$work/ada/claude"
+# Agent sessions on the machine running the tests would show in the import
+# offer, so each machine here has a home of its own.
+export HOME="$work/ada/home"
+unset CODEX_HOME GEMINI_CLI_HOME COPILOT_HOME XDG_DATA_HOME XDG_CONFIG_HOME
+mkdir -p "$HOME"
 mkdir -p "$CLAUDE_CONFIG_DIR" "$SILT_HOME"
 fake="$root/target/debug/silt-fake-agent"
 printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}]\n' "$fake" > "$SILT_HOME/agents.json"

@@ -58,8 +58,10 @@ pub fn message(text: &str) -> String {
     json!({"t": "message", "text": text}).to_string()
 }
 
-pub fn thought(text: &str) -> String {
-    json!({"t": "thought", "text": text}).to_string()
+/// A thought, stamped with when it began: it is recorded once it ends, and
+/// what follows it is when it ended, so the history can say how long it took.
+pub fn thought(text: &str, started_ms: i64) -> String {
+    json!({"t": "thought", "text": text, "timestamp": crate::time::format_timestamp(started_ms)}).to_string()
 }
 
 pub fn tool_call(id: &str, title: &str, kind: &str, input: Option<&Value>) -> String {
@@ -237,7 +239,7 @@ mod tests {
         let lines = [
             session("fake", "Fake agent", "s1"),
             prompt("add acp", "alice", &[], &[]),
-            thought("planning"),
+            thought("planning", 1_767_323_045_250),
             tool_call("c1", "Edit src/main.rs", "edit", Some(&json!({"path": "src/main.rs"}))),
             tool_result("c1", "completed", Some("edited")),
             message("Done"),
@@ -256,6 +258,7 @@ mod tests {
         assert_eq!(marks.last(), Some(&Mark::Stopped));
         assert_eq!(session_of(&lines[0]), Some(("fake".into(), "s1".into())));
         assert_eq!(session_of(&lines[1]), None);
+        assert_eq!(crate::time::line_time(&lines[2]), Some(1_767_323_045_250), "a thought keeps when it began");
     }
 
     #[test]
