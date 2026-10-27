@@ -1,8 +1,10 @@
-//! `silt open` across WSL and Windows (ADR 0045): in a
-//! distribution it opens the Windows app on this distribution's backend,
-//! and on Windows a folder inside a distribution opens there.
+//! `silt open` in the desktop app when it's installed
+//! (ADR 0045): on this machine, from a distribution in the Windows app on
+//! that distribution's backend, and on Windows a folder inside a
+//! distribution there.
 
-use std::path::Path;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// The `silt://` link that shows `project`, a directory in `distribution`,
@@ -10,6 +12,11 @@ use std::process::{Command, Stdio};
 /// both, then asks that distribution's `silt` for its own address.
 pub fn wsl_link(distribution: &str, project: &str) -> String {
     format!("silt://open/?project={}&backend=wsl:{distribution}", encode(project))
+}
+
+/// The `silt://` link that shows `project` on this machine's own backend.
+pub fn native_link(project: &str) -> String {
+    format!("silt://open/?project={}&backend=native", encode(project))
 }
 
 fn encode(text: &str) -> String {
@@ -28,6 +35,35 @@ pub fn open_from_wsl(cwd: &Path) -> bool {
         return false;
     };
     app_installed() && open_link(&wsl_link(&distribution, &cwd.to_string_lossy()))
+}
+
+/// Opens this directory in the app on this machine, when it's installed.
+/// An app already open takes the link and shows it. Says whether it did.
+pub fn open_native(cwd: &Path) -> bool {
+    let link = native_link(&cwd.to_string_lossy());
+    if cfg!(windows) {
+        return app_installed() && open_link(&link);
+    }
+    let Some(app) = app_program() else {
+        return false;
+    };
+    let mut command = Command::new(app);
+    command.arg(link).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // A new app runs the `silt` that opened it, not another on the `PATH`.
+    if let Ok(silt) = env::current_exe() {
+        command.env("SILT_BIN", silt);
+    }
+    silt_os::spawn_detached(&mut command).is_ok()
+}
+
+/// The app beside this `silt`, where `just install` puts it, else the
+/// `PATH`'s.
+fn app_program() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|silt| Some(silt.parent()?.join("silt-desktop")))
+        .filter(|beside| beside.is_file())
+        .or_else(|| silt_os::find_program("silt-desktop", &env::var_os("PATH")?))
 }
 
 /// Opens a folder inside a distribution, reached from Windows, in that
@@ -84,6 +120,7 @@ mod tests {
             wsl_link("Ubuntu-24.04", "/home/me/a b&c=d#e"),
             "silt://open/?project=/home/me/a%20b%26c%3Dd%23e&backend=wsl:Ubuntu-24.04"
         );
+        assert_eq!(native_link("/home/me/a b"), "silt://open/?project=/home/me/a%20b&backend=native");
     }
 
     #[test]

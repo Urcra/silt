@@ -970,6 +970,10 @@ pub fn open(no_browser: bool) -> Result<(), Exn<CliError>> {
         eprintln!("silt: opened in the Silt app on Windows");
         return Ok(());
     }
+    if !no_browser && cwd.as_deref().is_some_and(crate::desktop::open_native) {
+        eprintln!("silt: opened in the Silt app");
+        return Ok(());
+    }
     // A browser's arguments are visible to other users, so it gets an
     // address that works once rather than one with the lasting token.
     let url: String = call(&Request::OpenWeb { cwd, once: !no_browser })?;

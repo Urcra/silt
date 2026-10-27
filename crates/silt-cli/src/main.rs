@@ -199,9 +199,9 @@ enum Command {
         #[arg(long, value_parser = commands::parse_date)]
         until: Option<i64>,
     },
-    /// Open the web UI: threads, search, history, merge requests and comments
+    /// Open the web UI, in the desktop app when it's installed: threads, search, history, merge requests and comments
     Open {
-        /// Print the address instead of opening a browser
+        /// Print the address instead of opening the app or a browser
         #[arg(long)]
         no_browser: bool,
     },
