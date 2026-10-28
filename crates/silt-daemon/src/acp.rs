@@ -2,7 +2,7 @@
 //! thread's checkout on this machine and recorded as a session of the `acp`
 //! adapter, so history, search, forks and handoffs treat it like any other.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -79,16 +79,19 @@ pub(crate) struct AcpRun {
     /// The agent says when it works and stops (ACP v2), so work it takes up
     /// by itself runs like a prompt's turn (ADR 0050).
     reports_work: bool,
-    /// An agent that doesn't say when it works went on by itself: its turn
-    /// is open until the next prompt, as nothing else says it ended.
+    /// An agent that doesn't say when it works went on by itself: it works
+    /// until it has been quiet a while, as nothing else says it stopped.
     own_turn: bool,
     /// When the agent last said something.
     said_at: Option<Instant>,
+    /// Tool calls the agent started and hasn't finished.
+    calls_running: HashSet<String>,
 }
 
 /// How long an agent that went on by itself, and won't say when it stops,
-/// is quiet before what it said so far is recorded.
-const OWN_TURN_QUIET: Duration = Duration::from_secs(2);
+/// is quiet, with no tool call running and nothing asked, before its turn
+/// is taken to have ended. Copilot and Claude pause 2–4s between steps.
+const OWN_TURN_QUIET: Duration = Duration::from_secs(5);
 
 /// A prompt an agent was started with.
 struct First {
@@ -467,6 +470,7 @@ impl Core {
                 reports_work: false,
                 own_turn: false,
                 said_at: None,
+                calls_running: HashSet::new(),
             },
         );
         self.agent_changed(thread).await;
@@ -1074,6 +1078,7 @@ impl Core {
                 run.asking.clear();
                 run.tool_kinds.clear();
                 run.tool_said.clear();
+                run.calls_running.clear();
                 self.questions_dropped(thread).await?;
                 self.next_prompt(thread).await?;
             }
@@ -1141,7 +1146,10 @@ impl Core {
         run.said_at = Some(Instant::now());
         let says = matches!(update, Update::AgentText(_) | Update::Thought(_) | Update::ToolCall { .. });
         if says && !run.reports_work && !run.own_turn && run.state == AgentState::Idle {
+            // Working, so a prompt sent meanwhile waits for it rather than
+            // being folded into what it does.
             run.own_turn = true;
+            run.state = AgentState::Working;
             self.agent_woke(thread).await?;
         }
         let run = self.acp.get_mut(&thread).expect("caller checked");
@@ -1166,6 +1174,7 @@ impl Core {
             }
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
+                run.calls_running.insert(id.clone());
                 run.tool_kinds.insert(id.clone(), kind.clone());
                 run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
                 self.flush_acp(thread).await?;
@@ -1188,7 +1197,9 @@ impl Core {
                     self.announce_tool_output(thread, &id, &before, output);
                 }
                 if let Some(status @ ("completed" | "failed")) = status.as_deref() {
-                    self.acp.get_mut(&thread).expect("caller checked").tool_output.remove(&id);
+                    let run = self.acp.get_mut(&thread).expect("caller checked");
+                    run.tool_output.remove(&id);
+                    run.calls_running.remove(&id);
                     self.flush_acp(thread).await?;
                     self.record_acp(thread, &acp::tool_result(&id, status, output.as_deref())).await?;
                 }
@@ -1219,22 +1230,31 @@ impl Core {
         self.record_acp(thread, &acp::stop(silt_acp::StopReason::EndTurn.as_str())).await
     }
 
-    /// Records what agents that went on by themselves, and won't say when
-    /// they stop, said before they went quiet; their turns stay open.
-    pub(crate) async fn record_quiet_own_turns(&mut self) {
+    /// Ends the turns agents that won't say when they stop opened by
+    /// themselves, once they have gone quiet with no tool call running and
+    /// nothing asked, and sends what was queued meanwhile.
+    pub(crate) async fn end_quiet_own_turns(&mut self) {
         let quiet: Vec<ThreadId> = self
             .acp
             .iter()
             .filter(|(_, run)| {
                 run.own_turn
-                    && (!run.text.is_empty() || !run.thought.is_empty())
+                    && run.calls_running.is_empty()
+                    && run.asking.is_empty()
+                    && run.questions.is_empty()
                     && run.said_at.is_some_and(|said| said.elapsed() >= OWN_TURN_QUIET)
             })
             .map(|(thread, _)| *thread)
             .collect();
         for thread in quiet {
-            if let Err(error) = self.flush_acp(thread).await {
-                warn!(%error, "could not record what the agent said");
+            if let Err(error) = self.own_turn_ended(thread).await {
+                warn!(%error, "could not record the end of the agent's turn");
+            }
+            if let Some(run) = self.acp.get_mut(&thread).filter(|run| run.state == AgentState::Working) {
+                run.state = AgentState::Idle;
+            }
+            if let Err(error) = self.next_prompt(thread).await {
+                warn!(%error, "could not send the next prompt");
             }
             self.agent_changed(thread).await;
         }

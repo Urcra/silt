@@ -818,7 +818,7 @@ impl Core {
         if let Err(error) = self.check_commits().await {
             warn!(%error, "could not record new commits");
         }
-        self.record_quiet_own_turns().await;
+        self.end_quiet_own_turns().await;
         self.poll_sessions();
         let ids: Vec<String> = self
             .sessions

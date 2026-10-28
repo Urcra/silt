@@ -486,15 +486,20 @@ fn work_an_agent_speaking_v2_takes_up_by_itself_is_its_own_turn() {
 }
 
 /// An agent speaking v1, as Copilot does, can't say it went on by itself:
-/// what it says once its turn ended opens a turn of its own, closed by the
-/// next prompt, which comes after it.
+/// what it says once its turn ended opens a turn of its own, which works
+/// until it goes quiet, and a prompt sent meanwhile waits for it.
 #[test]
 fn what_an_agent_speaking_v1_says_after_its_turn_is_its_own_turn_before_the_next_prompt() {
     let env = Env::new();
     let api = Api::open(&env);
     let thread = start_fake_acp(&env, &api, "v1", "add acp Later");
-    settled_history(&api, &thread, "Went on by itself.");
-    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "and then"})));
+    let woke = eventually(|| {
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        history["entries"].as_array().is_some_and(|entries| entries.iter().any(|entry| entry["kind"] == "wake"))
+    });
+    assert!(woke, "the agent went on by itself");
+    let sent = api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "and then"})));
+    assert_eq!(sent, "queued", "it waits for the agent's own turn");
     let entries = settled_history(&api, &thread, "Done: and then");
     assert_eq!(
         said(&entries),
