@@ -2,9 +2,10 @@
 //! takes (ACP's prompt capabilities).
 
 use agent_client_protocol::schema::v1::{
-    BlobResourceContents, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, PromptCapabilities,
-    TextContent, TextResourceContents,
+    BlobResourceContents, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, TextContent,
+    TextResourceContents,
 };
+use agent_client_protocol::schema::v2;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -38,10 +39,6 @@ pub struct Accepts {
 }
 
 impl Accepts {
-    pub(crate) fn of(capabilities: &PromptCapabilities) -> Self {
-        Self { image: capabilities.image, embedded: capabilities.embedded_context }
-    }
-
     /// Whether the agent can be given `attachment`: an image only as one,
     /// and any text, embedded or written into the prompt; other files only
     /// embedded.
@@ -80,6 +77,16 @@ pub(crate) fn blocks(text: &str, attachments: &[Attachment], accepts: Accepts) -
     blocks
 }
 
+/// [`blocks`] for an agent speaking v2, whose text, images and resources
+/// read as v1's.
+pub(crate) fn blocks_v2(
+    text: &str,
+    attachments: &[Attachment],
+    accepts: Accepts,
+) -> Result<Vec<v2::ContentBlock>, serde_json::Error> {
+    blocks(text, attachments, accepts).into_iter().map(|block| serde_json::from_value(serde_json::to_value(block)?)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +123,24 @@ mod tests {
             &given[3],
             ContentBlock::Resource(EmbeddedResource { resource: EmbeddedResourceResource::BlobResourceContents(_), .. })
         ));
+    }
+
+    #[test]
+    fn v2_takes_the_same_blocks() {
+        let files = [
+            attachment("shot.png", "image/png", &[0x89, b'P', b'N', b'G']),
+            attachment("notes.txt", "text/plain", b"remember this"),
+            attachment("data.bin", "application/octet-stream", &[0xff, 0xfe]),
+        ];
+        let all = Accepts { image: true, embedded: true };
+        let v1: Vec<serde_json::Value> =
+            blocks("look", &files, all).iter().map(|block| serde_json::to_value(block).expect("json")).collect();
+        let v2: Vec<serde_json::Value> = blocks_v2("look", &files, all)
+            .expect("v2 blocks")
+            .iter()
+            .map(|block| serde_json::to_value(block).expect("json"))
+            .collect();
+        assert_eq!(v1, v2);
+        assert!(matches!(blocks_v2("look", &files, all).expect("v2 blocks")[1], v2::ContentBlock::Image(_)));
     }
 }

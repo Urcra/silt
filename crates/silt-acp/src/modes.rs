@@ -4,6 +4,7 @@
 use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions, SessionModeState,
 };
+use agent_client_protocol::schema::v2;
 
 /// A mode, or one value of a setting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +117,39 @@ fn setting_of(option: SessionConfigOption) -> Option<Setting> {
             .map(|value| Choice { id: value.value.0.to_string(), name: value.name, description: value.description })
             .collect(),
     })
+}
+
+/// v2's settings, as v1's: settings of other kinds than choices are left out.
+pub(crate) fn settings_v2(options: Vec<v2::SessionConfigOption>) -> Vec<Setting> {
+    options.into_iter().filter_map(setting_v2).collect()
+}
+
+fn setting_v2(option: v2::SessionConfigOption) -> Option<Setting> {
+    let v2::SessionConfigKind::Select(select) = option.kind else {
+        return None;
+    };
+    let values: Vec<v2::SessionConfigSelectOption> = match select.options {
+        v2::SessionConfigSelectOptions::Ungrouped(values) => values,
+        v2::SessionConfigSelectOptions::Grouped(groups) => groups.into_iter().flat_map(|group| group.options).collect(),
+        _ => return None,
+    };
+    Some(Setting {
+        id: option.config_id.0.to_string(),
+        name: option.name,
+        category: option.category.as_ref().map(crate::host::label),
+        current: select.current_value.0.to_string(),
+        choices: values
+            .into_iter()
+            .map(|value| Choice { id: value.value.0.to_string(), name: value.name, description: value.description })
+            .collect(),
+    })
+}
+
+/// A v2 agent's modes: its setting of the `mode` category, which v1 sent
+/// apart.
+pub(crate) fn modes_in(settings: &[Setting]) -> Option<(String, Modes)> {
+    let mode = settings.iter().find(|setting| setting.category.as_deref() == Some("mode"))?;
+    Some((mode.id.clone(), Modes { current: mode.current.clone(), available: mode.choices.clone() }))
 }
 
 /// The mode to plan in, when the agent has one.

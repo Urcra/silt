@@ -1,27 +1,26 @@
 //! One agent process speaking ACP, driven by the daemon: commands come in
 //! over a channel and everything the agent does goes out as [`Event`]s.
+//! Silt asks for ACP v2 and speaks v1 to an agent that answers with it
+//! (ADR 0050): both come out as the same events.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
-    ElicitationCapabilities, ElicitationFormCapabilities, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionConfigId, SessionConfigValueId, SessionId, SessionModeId, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest, ToolCallContent,
-};
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Responder};
+use agent_client_protocol::{ByteStreams, Client};
+use futures::io::{AsyncRead, AsyncWrite};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::modes::{Modes, Setting, modes_of, settings_of};
-use crate::prompt::{Accepts, Attachment, blocks};
+use crate::modes::{Modes, Setting};
+use crate::prompt::{Accepts, Attachment};
+
+/// What Silt calls itself to agents.
+pub(crate) const NAME: &str = "silt";
 
 /// How to start the agent.
 #[derive(Debug, Clone)]
@@ -135,11 +134,12 @@ pub struct QuestionChoice {
 }
 
 impl Question {
-    /// Reads a form request's fields; a URL elicitation, which sends the
-    /// person to a page, isn't one Silt can show.
-    fn of(id: u64, request: &CreateElicitationRequest) -> Option<Self> {
-        let raw = serde_json::to_value(request).ok()?;
+    /// Reads a form request's fields, as both protocols write it; a URL
+    /// elicitation, which sends the person to a page, isn't one Silt can
+    /// show.
+    pub(crate) fn of(id: u64, raw: &Value) -> Option<Self> {
         (raw.get("mode")?.as_str()? == "form").then_some(())?;
+        let message = raw.get("message").and_then(Value::as_str).unwrap_or_default().to_owned();
         let schema = raw.get("requestedSchema")?;
         let required: Vec<&str> =
             schema.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
@@ -162,7 +162,7 @@ impl Question {
             .collect();
         // Required fields first, in the order the schema names them.
         fields.sort_by_key(|field| required.iter().position(|key| *key == field.key).unwrap_or(usize::MAX));
-        Some(Self { id, message: request.message.clone(), fields })
+        Some(Self { id, message, fields })
     }
 }
 
@@ -194,8 +194,12 @@ fn choices_of(schema: &Value) -> Vec<QuestionChoice> {
         .collect()
 }
 
-/// The response that gives `answers`, or declines.
-fn answered(answers: Option<Vec<(String, Vec<String>)>>, multi: &HashMap<String, bool>) -> CreateElicitationResponse {
+/// The response that gives `answers`, or declines, as both protocols
+/// write it.
+pub(crate) fn answered<Response: DeserializeOwned>(
+    answers: Option<Vec<(String, Vec<String>)>>,
+    multi: &HashMap<String, bool>,
+) -> Response {
     let value = match answers {
         Some(answers) => {
             let content: serde_json::Map<String, Value> = answers
@@ -231,18 +235,6 @@ pub enum StopReason {
 }
 
 impl StopReason {
-    fn of(reason: agent_client_protocol::schema::v1::StopReason) -> Self {
-        use agent_client_protocol::schema::v1::StopReason as Acp;
-        match reason {
-            Acp::EndTurn => Self::EndTurn,
-            Acp::MaxTokens => Self::MaxTokens,
-            Acp::MaxTurnRequests => Self::MaxTurnRequests,
-            Acp::Refusal => Self::Refusal,
-            Acp::Cancelled => Self::Cancelled,
-            other => Self::Other(label(&other)),
-        }
-    }
-
     /// The protocol's name for it.
     pub fn as_str(&self) -> &str {
         match self {
@@ -283,7 +275,13 @@ pub enum Event {
         modes: Option<Modes>,
         settings: Vec<Setting>,
         accepts: Accepts,
+        /// The agent says when it works and when it stops (ACP v2), so work
+        /// it takes up by itself, between prompts, starts with
+        /// [`Event::Working`] and ends with [`Event::TurnEnded`] too.
+        reports_work: bool,
     },
+    /// The agent works, on a prompt or on something it took up by itself.
+    Working,
     Update(Update),
     ModeChanged(String),
     /// The agent's settings as they now stand.
@@ -341,73 +339,22 @@ pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle 
     AgentHandle { commands, stop: Arc::new(stop) }
 }
 
-fn text_of(block: &ContentBlock) -> String {
-    match block {
-        ContentBlock::Text(text) => text.text.clone(),
-        _ => String::new(),
-    }
-}
-
 pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
-fn tool_output(content: &[ToolCallContent]) -> Option<String> {
-    let text: Vec<String> = content
-        .iter()
-        .map(|item| match item {
-            ToolCallContent::Content(content) => text_of(&content.content),
-            ToolCallContent::Diff(diff) => format!("edited {}", diff.path.display()),
-            _ => String::new(),
-        })
-        .filter(|text| !text.is_empty())
-        .collect();
-    (!text.is_empty()).then(|| text.join("\n"))
+/// What a session in either protocol starts from: how the agent was
+/// started, where its events go, and the daemon's commands, which the
+/// session the agent settles on takes.
+#[derive(Clone)]
+pub(crate) struct Shared {
+    pub(crate) start: Start,
+    pub(crate) events: mpsc::UnboundedSender<Event>,
+    pub(crate) commands: Arc<Mutex<Option<mpsc::UnboundedReceiver<Command>>>>,
 }
 
-fn event_of(update: SessionUpdate) -> Option<Event> {
-    match update {
-        SessionUpdate::CurrentModeUpdate(update) => Some(Event::ModeChanged(update.current_mode_id.0.to_string())),
-        SessionUpdate::ConfigOptionUpdate(update) => Some(Event::Settings(settings_of(update.config_options))),
-        SessionUpdate::UsageUpdate(update) => Some(Event::Context { used: update.used, size: update.size }),
-        update => simplify(update).map(Event::Update),
-    }
-}
-
-fn simplify(update: SessionUpdate) -> Option<Update> {
-    Some(match update {
-        SessionUpdate::UserMessageChunk(chunk) => Update::UserText(text_of(&chunk.content)),
-        SessionUpdate::AgentMessageChunk(chunk) => Update::AgentText(text_of(&chunk.content)),
-        SessionUpdate::AgentThoughtChunk(chunk) => Update::Thought(text_of(&chunk.content)),
-        SessionUpdate::ToolCall(call) => Update::ToolCall {
-            id: call.tool_call_id.to_string(),
-            title: call.title,
-            kind: label(&call.kind),
-            input: call.raw_input,
-        },
-        SessionUpdate::ToolCallUpdate(update) => Update::ToolUpdate {
-            id: update.tool_call_id.to_string(),
-            status: update.fields.status.as_ref().map(label),
-            output: update.fields.content.as_deref().and_then(tool_output).or_else(|| {
-                update.fields.raw_output.as_ref().map(|output| match output {
-                    // A message, as Claude's tools answer, rather than data to show as JSON.
-                    Value::String(text) => text.clone(),
-                    other => other.to_string(),
-                })
-            }),
-            title: update.fields.title,
-            input: update.fields.raw_input,
-        },
-        SessionUpdate::Plan(plan) => {
-            Update::Plan(plan.entries.into_iter().map(|entry| (entry.content, label(&entry.status))).collect())
-        }
-        _ => return None,
-    })
-}
-
-type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
-/// Questions waiting on the person, with which of their fields take several choices.
-type Asking = Arc<Mutex<HashMap<u64, (Responder<CreateElicitationResponse>, HashMap<String, bool>)>>>;
+type Outgoing = Pin<Box<dyn AsyncWrite + Send>>;
+type Incoming = Pin<Box<dyn AsyncRead + Send>>;
 
 /// The program to start. Windows runs only what it's given in full, so a
 /// bare `npx` is looked up there, `npx.cmd` included, on the agent's own
@@ -424,7 +371,7 @@ fn program(start: &Start) -> std::path::PathBuf {
 async fn run(
     start: Start,
     events: mpsc::UnboundedSender<Event>,
-    mut commands: mpsc::UnboundedReceiver<Command>,
+    commands: mpsc::UnboundedReceiver<Command>,
     mut stopped: watch::Receiver<bool>,
 ) -> Result<(), HostError> {
     let mut command = tokio::process::Command::new(program(&start));
@@ -446,214 +393,21 @@ async fn run(
     let group = child.id();
     let stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
-    let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
-
-    let replaying = Arc::new(AtomicBool::new(false));
-    let waiting: Waiting = Arc::default();
-    let asking: Asking = Arc::default();
-    let next_id = Arc::new(AtomicU64::new(1));
-    let question_ids = next_id.clone();
-    let questioned = events.clone();
-    let held = asking.clone();
-    let mcp_servers: Vec<McpServer> = start
-        .mcp
-        .iter()
-        .map(|(command, args)| McpServer::Stdio(McpServerStdio::new("silt", command.clone()).args(args.clone())))
-        .collect();
-
-    let updates = events.clone();
-    let quiet = replaying.clone();
-    let asked = events.clone();
-    let parked = waiting.clone();
+    let mut transport: Option<ByteStreams<Outgoing, Incoming>> =
+        Some(ByteStreams::new(Box::pin(stdin.compat_write()), Box::pin(stdout.compat())));
+    let shared = Shared { start, events, commands: Arc::new(Mutex::new(Some(commands))) };
+    let (v1, v2) = (shared.clone(), shared);
     let session = Client
-        .builder()
-        .name("silt")
-        .on_receive_notification(
-            async move |notification: SessionNotification, _connection| {
-                if !quiet.load(Ordering::SeqCst)
-                    && let Some(event) = event_of(notification.update)
-                {
-                    let _ = updates.send(event);
-                }
-                Ok(())
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_request(
-            async move |request: RequestPermissionRequest, responder, _connection| {
-                let id = next_id.fetch_add(1, Ordering::SeqCst);
-                let options = request.options.iter().map(|option| (option.option_id.to_string(), option.name.clone())).collect();
-                let option_kinds =
-                    request.options.iter().map(|option| (option.option_id.to_string(), label(&option.kind))).collect();
-                let title = request.tool_call.fields.title.clone().unwrap_or_else(|| "a tool call".to_owned());
-                let tool_kind = request.tool_call.fields.kind.as_ref().map(label);
-                let tool_call_id = request.tool_call.tool_call_id.to_string();
-                parked.lock().expect("lock").insert(id, responder);
-                let _ = asked.send(Event::Permission(Permission { id, title, options, tool_kind, tool_call_id, option_kinds }));
-                Ok(())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: CreateElicitationRequest, responder, _connection| {
-                let id = question_ids.fetch_add(1, Ordering::SeqCst);
-                match Question::of(id, &request) {
-                    Some(question) => {
-                        let multi = question.fields.iter().map(|field| (field.key.clone(), field.multi)).collect();
-                        held.lock().expect("lock").insert(id, (responder, multi));
-                        let _ = questioned.send(Event::Question(question));
-                    }
-                    None => responder.respond(answered(None, &HashMap::new()))?,
-                }
-                Ok(())
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .connect_with(transport, async move |connection: ConnectionTo<Agent>| {
-            // Silt shows a form of choices and text as a question; it has no browser to send the person to.
-            let capabilities =
-                ClientCapabilities::new().elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
-            let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
-                .block_task()
-                .await?;
-            let agent = init.agent_info.as_ref().map_or_else(|| start.program.clone(), |info| info.name.clone());
-            let accepts = Accepts::of(&init.agent_capabilities.prompt_capabilities);
-            let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
-                Some(id) => {
-                    replaying.store(true, Ordering::SeqCst);
-                    let loaded = connection
-                        .send_request(
-                            LoadSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
-                                .mcp_servers(mcp_servers.clone()),
-                        )
-                        .block_task()
-                        .await;
-                    replaying.store(false, Ordering::SeqCst);
-                    // A session made on another machine can't be loaded
-                    // here; the daemon primes a new one instead.
-                    loaded.ok().map(|response| (id, response.modes, response.config_options))
-                }
-                None => None,
-            };
-            let session: SessionId = match loaded {
-                Some((id, modes, options)) => {
-                    let _ = events.send(Event::Ready {
-                        session: id.clone(),
-                        loaded: true,
-                        agent,
-                        modes: modes_of(modes),
-                        settings: settings_of(options.unwrap_or_default()),
-                        accepts,
-                    });
-                    SessionId::new(id)
-                }
-                None => {
-                    let created = connection
-                        .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
-                        .block_task()
-                        .await?;
-                    let _ = events.send(Event::Ready {
-                        session: created.session_id.to_string(),
-                        loaded: false,
-                        agent,
-                        modes: modes_of(created.modes),
-                        settings: settings_of(created.config_options.unwrap_or_default()),
-                        accepts,
-                    });
-                    created.session_id
-                }
-            };
-            while let Some(command) = commands.recv().await {
-                match command {
-                    Command::Prompt { text, attachments } => {
-                        let request = PromptRequest::new(session.clone(), blocks(&text, &attachments, accepts));
-                        let ended = events.clone();
-                        // Sent here rather than in the task, so a mode set
-                        // just before reaches the agent first.
-                        let sent = connection.send_request(request);
-                        connection.spawn(async move {
-                            match sent.block_task().await {
-                                Ok(response) => {
-                                    if let Some(usage) = &response.usage {
-                                        let _ = ended
-                                            .send(Event::TurnUsage { input: usage.input_tokens, output: usage.output_tokens });
-                                    }
-                                    let _ = ended.send(Event::TurnEnded { reason: StopReason::of(response.stop_reason) });
-                                }
-                                Err(error) => {
-                                    let _ = ended.send(Event::Failed(Arc::new(HostError::Protocol(error))));
-                                    let _ = ended.send(Event::TurnEnded { reason: StopReason::Error });
-                                }
-                            }
-                            Ok(())
-                        })?;
-                    }
-                    Command::Cancel => {
-                        connection.send_notification(CancelNotification::new(session.clone()))?;
-                        // The protocol asks clients to answer every pending
-                        // permission request once they cancel.
-                        let parked: Vec<_> = waiting.lock().expect("lock").drain().map(|(_, responder)| responder).collect();
-                        for responder in parked {
-                            responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled))?;
-                        }
-                        let asked: Vec<_> = asking.lock().expect("lock").drain().map(|(_, (responder, _))| responder).collect();
-                        for responder in asked {
-                            responder.respond(
-                                serde_json::from_value(serde_json::json!({"action": "cancel"})).expect("a cancel action"),
-                            )?;
-                        }
-                    }
-                    Command::Answer { id, option } => {
-                        let responder = waiting.lock().expect("lock").remove(&id);
-                        if let Some(responder) = responder {
-                            let outcome = match option {
-                                Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
-                                None => RequestPermissionOutcome::Cancelled,
-                            };
-                            responder.respond(RequestPermissionResponse::new(outcome))?;
-                        }
-                    }
-                    Command::AnswerQuestion { id, answers } => {
-                        let held = asking.lock().expect("lock").remove(&id);
-                        if let Some((responder, multi)) = held {
-                            responder.respond(answered(answers, &multi))?;
-                        }
-                    }
-                    Command::SetMode(mode) => {
-                        let request = SetSessionModeRequest::new(session.clone(), SessionModeId::new(mode.clone()));
-                        let told = events.clone();
-                        let sent = connection.send_request(request);
-                        connection.spawn(async move {
-                            let event = match sent.block_task().await {
-                                Ok(_) => Event::ModeChanged(mode),
-                                Err(error) => Event::Refused(format!("the agent kept its mode: {error}")),
-                            };
-                            let _ = told.send(event);
-                            Ok(())
-                        })?;
-                    }
-                    Command::SetSetting { id, value } => {
-                        let request = SetSessionConfigOptionRequest::new(
-                            session.clone(),
-                            SessionConfigId::new(id),
-                            SessionConfigValueId::new(value),
-                        );
-                        let told = events.clone();
-                        let sent = connection.send_request(request);
-                        connection.spawn(async move {
-                            let event = match sent.block_task().await {
-                                Ok(response) => Event::Settings(settings_of(response.config_options)),
-                                Err(error) => Event::Refused(format!("the agent kept its setting: {error}")),
-                            };
-                            let _ = told.send(event);
-                            Ok(())
-                        })?;
-                    }
-                    Command::Stop => break,
-                }
-            }
-            Ok(())
+        .protocol_connector()
+        .with_v2(move || crate::v2::V2(v2.clone()))
+        .with_v1(move || crate::v1::V1(v1.clone()))
+        // Silt's v1 `initialize` says what its v2 one does, so an agent that
+        // answers with v1 goes on over the same connection; were it asked
+        // for another, nothing would answer it and the session would end.
+        .connect_to(move || {
+            transport.take().unwrap_or_else(|| {
+                ByteStreams::new(Box::pin(futures::io::sink()) as Outgoing, Box::pin(futures::io::empty()) as Incoming)
+            })
         });
     // The agent may die without closing the connection cleanly; its exit
     // ends the session either way.

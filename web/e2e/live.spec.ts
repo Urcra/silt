@@ -739,6 +739,22 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await expect(createPr).toHaveAttribute('title', /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)
 })
 
+test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
+  await startInNewThread(page, 'Fake v2 agent')
+  await page.getByLabel('draft').fill('add acp Later')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: add acp Later')).toBeVisible()
+  const wake = page.getByTestId('wake')
+  await expect(wake).toHaveText('The agent went on by itself, without a prompt.')
+  await expect(page.getByText('Went on by itself.')).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake v2 agent is ready')
+  // Its words are its own turn's reply, after the notice that opened it, not the turn before's.
+  const turns = page.locator('[id^="turn-"]')
+  await expect(turns).toHaveCount(2)
+  await expect(turns.nth(1)).toContainText('Went on by itself.')
+  await expect(turns.nth(0)).not.toContainText('Went on by itself.')
+})
+
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')

@@ -45,6 +45,7 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
                 push(Role::User, format!("Summary of the earlier conversation:\n{summary}"));
             }
             Entry::Thinking { .. }
+            | Entry::Woke { .. }
             | Entry::Image { .. }
             | Entry::Usage { .. }
             | Entry::Compaction { summary: None }

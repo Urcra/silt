@@ -16,7 +16,7 @@ use silt_log::{
 };
 use silt_proto::view::{
     CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrGuide,
-    MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
+    MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo, opens_turn,
 };
 use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
@@ -364,7 +364,7 @@ fn indexed_turns(history: &crate::index::History) -> Vec<TurnInfo> {
         .zip(&history.prompts)
         .map(|(number, &began)| {
             // The latest prompt said at or before the mark.
-            let prompt = entries.iter().rposition(|(_, entry)| entry.kind == "user" && entry.time_ms <= began);
+            let prompt = entries.iter().rposition(|(_, entry)| opens_turn(&entry.kind) && entry.time_ms <= began);
             TurnInfo { number, entry: prompt, prompt: prompt.map(|at| entries[at].1.text.clone()).unwrap_or_default() }
         })
         .collect()
@@ -375,7 +375,7 @@ fn turn_infos(log: &[Delta], thread: ThreadId, history: &[(DeltaId, HistoryEntry
     for delta in log.iter().filter(|delta| delta.thread == thread) {
         if let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = delta.op {
             // The latest prompt said at or before the mark.
-            let prompt = history.iter().rev().find(|(_, entry)| entry.kind == "user" && entry.time_ms <= delta.time_ms);
+            let prompt = history.iter().rev().find(|(_, entry)| opens_turn(&entry.kind) && entry.time_ms <= delta.time_ms);
             turns.push(TurnInfo {
                 number: turns.len() + 1,
                 entry: prompt.map(|(_, entry)| entry.index),

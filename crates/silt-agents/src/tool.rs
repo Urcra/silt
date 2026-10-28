@@ -217,6 +217,7 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
         Entry::Compaction { summary } => {
             Shown::plain("compaction", summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()))
         }
+        Entry::Woke { text } => Shown::plain("wake", text),
         other => {
             let kind = other.kind().to_owned();
             Shown::plain(&kind, other.into_searchable_text().unwrap_or_default())

@@ -5129,6 +5129,8 @@ name = "silt-fake-agent"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "base64 0.23.1",
+ "serde",
  "serde_json",
  "silt-acp",
  "tempfile",

@@ -322,8 +322,9 @@ pub struct HistoryEntry {
     pub thread: String,
     /// `own`, `inherited` (before the fork) or `upstream` (brought in by a pull).
     pub origin: String,
-    /// `user`, `assistant`, `thinking`, `tool_call`, `tool_result`,
-    /// `compaction`, `merge` or `pull`.
+    /// `user`, `wake` (the agent went on by itself), `assistant`,
+    /// `thinking`, `tool_call`, `tool_result`, `compaction`, `merge` or
+    /// `pull`.
     pub kind: String,
     pub text: String,
     pub time_ms: i64,
@@ -485,9 +486,16 @@ pub struct ReplyView {
 pub struct TurnInfo {
     /// 1-based, as `silt diff --turn` counts them.
     pub number: usize,
-    /// The history entry of the turn's prompt.
+    /// The history entry of the turn's prompt, or of the agent going on
+    /// by itself for a turn it opened.
     pub entry: Option<usize>,
     pub prompt: String,
+}
+
+/// Whether a history entry of `kind` starts a turn: a prompt, or the agent
+/// going on by itself.
+pub fn opens_turn(kind: &str) -> bool {
+    matches!(kind, "user" | "wake")
 }
 
 /// A notification, with the thread id as text like everywhere in this API.

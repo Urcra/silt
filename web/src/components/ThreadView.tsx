@@ -262,6 +262,14 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
     )
   if (entry.kind === 'user')
     return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
+  // A turn the agent opened itself, as Claude does once a background task ends: nobody said anything.
+  if (entry.kind === 'wake')
+    return (
+      <p data-testid="wake" className="flex w-fit items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs text-fg-2">
+        <Icon name="agent" className="h-3.5 w-3.5 shrink-0" />
+        {entry.text}
+      </p>
+    )
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
     // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.

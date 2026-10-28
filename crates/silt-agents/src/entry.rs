@@ -47,6 +47,11 @@ pub enum Entry {
     Compaction {
         summary: Option<String>,
     },
+    /// The agent went on by itself, without a prompt, as Claude does once a
+    /// background task it started ends: what follows is a turn it opened.
+    Woke {
+        text: String,
+    },
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {
         kind: String,
@@ -71,6 +76,7 @@ impl Entry {
             Self::Usage { .. } => "usage",
             Self::Plan { .. } => "plan",
             Self::Compaction { .. } => "compaction",
+            Self::Woke { .. } => "wake",
             Self::Other { kind } => kind,
         }
     }
@@ -84,7 +90,7 @@ impl Entry {
             Self::ToolCall { name, input, .. } => Some(call_text(name, input)),
             Self::Plan { steps } => Some(plan_text(steps)),
             Self::Compaction { summary } => summary.clone(),
-            Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
+            Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }
 
@@ -98,7 +104,7 @@ impl Entry {
             Self::ToolCall { name, input, .. } => Some(call_text(&name, &input)),
             Self::Plan { steps } => Some(plan_text(&steps)),
             Self::Compaction { summary } => summary,
-            Self::Image { .. } | Self::Usage { .. } | Self::Other { .. } => None,
+            Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }
 }

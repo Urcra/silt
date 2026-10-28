@@ -52,6 +52,11 @@ export function foldInherited(rows: Row[]): Row[] {
 /** Entries the agent's tools made, folded together: its calls, their results and its thinking. */
 export const FOLDED = new Set(['tool_call', 'tool_result', 'thinking', 'image'])
 
+/** A prompt, or the agent going on by itself without one, as Claude does once a background task ends: either starts a turn. */
+function opensTurn(entry: HistoryEntry): boolean {
+  return entry.kind === 'user' || entry.kind === 'wake'
+}
+
 function isMarker(entry: HistoryEntry): boolean {
   return entry.kind === 'compaction' && entry.text.startsWith('(context compacted')
 }
@@ -89,13 +94,13 @@ export function rowsOf(entries: HistoryEntry[], turns: TurnInfo[]): Row[] {
       current = null
       continue
     }
-    if (entry.kind === 'user' || current === null) {
+    if (opensTurn(entry) || current === null) {
       current = {
         kind: 'turn',
         key: `turn-${entry.index}`,
-        prompt: entry.kind === 'user' ? entry : null,
+        prompt: opensTurn(entry) ? entry : null,
         images: [],
-        entries: entry.kind === 'user' ? [] : [entry],
+        entries: opensTurn(entry) ? [] : [entry],
         turn: turnAt.get(entry.index) ?? null,
         tokens: 0,
       }

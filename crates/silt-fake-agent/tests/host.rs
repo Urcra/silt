@@ -90,6 +90,82 @@ fn options(dir: &std::path::Path, env: Vec<(String, String)>) -> Start {
 }
 
 #[tokio::test]
+async fn an_agent_that_answers_v2_with_v1_is_spoken_to_in_v1() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), Vec::new()), sender);
+    assert!(matches!(next(&mut events).await, Event::Ready { reports_work: false, .. }));
+    agent.send(Command::Stop);
+}
+
+/// What an agent speaking v2 does over one prompt, up to its stop.
+async fn turn_v2(events: &mut mpsc::UnboundedReceiver<Event>, agent: &silt_acp::AgentHandle) -> Vec<Event> {
+    let mut seen = Vec::new();
+    loop {
+        let event = next(events).await;
+        if let Event::Permission(permission) = &event {
+            assert_eq!(permission.title, "Edit src/main.rs");
+            assert_eq!((permission.tool_call_id.as_str(), permission.tool_kind.as_deref()), ("edit-1", Some("edit")));
+            assert!(agent.send(Command::Answer { id: permission.id, option: Some("allow".into()) }));
+        }
+        let ended = matches!(event, Event::TurnEnded { .. });
+        seen.push(event);
+        if ended {
+            return seen;
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_agent_speaking_v2_says_when_it_works_also_on_what_it_takes_up_by_itself() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let agent = start(options(dir.path(), vec![("FAKE_ACP_V2".into(), "1".into())]), sender);
+    let Event::Ready { modes: Some(modes), settings, reports_work: true, loaded: false, agent: name, .. } =
+        next(&mut events).await
+    else {
+        panic!("the session starts in v2, with its mode among its settings");
+    };
+    assert_eq!(name, "fake-agent");
+    assert_eq!(modes.current, "code");
+    assert_eq!(settings.iter().map(|setting| setting.id.as_str()).collect::<Vec<_>>(), ["mode", "model"]);
+
+    assert!(agent.send(prompt("add acp Later")));
+    let turn = turn_v2(&mut events, &agent).await;
+    assert!(matches!(turn[0], Event::Working));
+    assert!(
+        turn.iter().any(|event| matches!(event, Event::Update(Update::Thought(text)) if text == "Thinking about the prompt."))
+    );
+    let output = turn.iter().find_map(|event| match event {
+        Event::Update(Update::ToolUpdate { id, status: Some(status), output, .. }) if id == "run-1" && status == "completed" => {
+            output.clone()
+        }
+        _ => None,
+    });
+    assert_eq!(output.as_deref(), Some("fn main() {}\n"), "a command's result is what its terminal printed");
+    assert!(turn.iter().any(|event| matches!(event, Event::Update(Update::AgentText(text)) if text == "Done: add acp Later")));
+    assert!(matches!(
+        &turn[turn.len() - 2..],
+        [Event::TurnUsage { input: 1_600, output: 240 }, Event::TurnEnded { reason: StopReason::EndTurn }]
+    ));
+    assert_eq!(std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"), "fn main() {}\nfn acp() {}\n");
+
+    // Nobody prompted it: it went on by itself and says so, and when it stops.
+    let own = turn_v2(&mut events, &agent).await;
+    assert!(matches!(own[0], Event::Working));
+    assert!(own.iter().any(|event| matches!(event, Event::Update(Update::AgentText(text)) if text == "Went on by itself.")));
+    assert!(matches!(own.last(), Some(Event::TurnEnded { reason: StopReason::EndTurn })));
+
+    agent.send(Command::SetMode("plan".into()));
+    assert!(matches!(next(&mut events).await, Event::ModeChanged(mode) if mode == "plan"));
+    assert!(matches!(next(&mut events).await, Event::Settings(settings) if settings[0].current == "plan"));
+    agent.send(Command::SetMode("nonsense".into()));
+    assert!(matches!(next(&mut events).await, Event::Refused(_)));
+    agent.send(Command::Stop);
+    while !matches!(next(&mut events).await, Event::Exited) {}
+}
+
+#[tokio::test]
 async fn an_agent_that_dies_is_reported_gone() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (sender, mut events) = mpsc::unbounded_channel();

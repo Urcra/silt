@@ -307,11 +307,11 @@ fn render(log: &[Delta], thread: ThreadId, owner: &str, frozen_at: Option<i64>) 
     for (_, entry) in &entries {
         let rewound = if entry.rewound { " rewound" } else { "" };
         let class = match entry.kind.as_str() {
-            "user" => {
+            kind @ ("user" | "wake") => {
                 turn += 1;
                 let note = if entry.rewound { " · rewound by a revert" } else { "" };
                 body.push_str(&format!("<div class=\"turn{rewound}\">Turn {turn}{note}</div>"));
-                "user"
+                if kind == "wake" { "compaction" } else { "user" }
             }
             "tool_call" => "tool",
             "compaction" => "compaction",

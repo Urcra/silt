@@ -56,8 +56,8 @@ machine() {
     export SILT_HOOK="$silt hook"
     mkdir -p "$CLAUDE_CONFIG_DIR" "$SILT_HOME"
     fake="$root/target/debug/silt-fake-agent"
-    printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}, {"id": "plain", "name": "Plain agent", "command": "%s", "env": {"FAKE_ACP_NO_MODES": "1"}}]\n' \
-        "$fake" "$fake" > "$SILT_HOME/agents.json"
+    printf '[{"id": "fake", "name": "Fake agent", "command": "%s"}, {"id": "plain", "name": "Plain agent", "command": "%s", "env": {"FAKE_ACP_NO_MODES": "1"}}, {"id": "fake-v2", "name": "Fake v2 agent", "command": "%s", "env": {"FAKE_ACP_V2": "1"}}]\n' \
+        "$fake" "$fake" "$fake" > "$SILT_HOME/agents.json"
     git clone -q "$work/origin.git" "$work/$home/repo"
     cd "$work/$home/repo"
     printf '%s\n' "$password" | "$silt" auth login --server "$url" --user "$user" --name "$home" > /dev/null

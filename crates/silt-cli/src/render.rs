@@ -54,6 +54,7 @@ pub fn show(lines: &[ShowLine]) -> String {
         let _ = match line {
             ShowLine::Entry { kind, text } => match kind.as_str() {
                 "user" => writeln!(out, "\n> {}", text.trim()),
+                "wake" => writeln!(out, "\n» {}", text.trim()),
                 "assistant" => writeln!(out, "{}", text.trim()),
                 "thinking" => writeln!(out, "  (thinking) {}", clip(text, 160)),
                 "tool_result" => writeln!(out, "    ↳ {}", clip(text, 160)),

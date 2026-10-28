@@ -33,6 +33,24 @@ test('history reads as turns between compaction and origin dividers, with tool w
   expect(folded[1].kind === 'origin' && folded[1].origin).toBe('own')
 })
 
+test('an agent going on by itself starts a turn of its own, as a prompt does', () => {
+  const entries = [
+    entry(0, 'user', 'run the gate'),
+    entry(1, 'assistant', 'The gate is running.'),
+    entry(2, 'wake', 'The agent went on by itself, without a prompt.'),
+    entry(3, 'tool_call', 'Read {"file_path":"gate.log"}'),
+    entry(4, 'assistant', 'The gate passed.'),
+  ]
+  const rows = rowsOf(entries, [
+    { number: 1, entry: 0, prompt: 'run the gate' },
+    { number: 2, entry: 2, prompt: 'The agent went on by itself, without a prompt.' },
+  ])
+  expect(rows.map((row) => row.kind === 'turn' && [row.prompt?.kind, row.turn?.number, row.entries.map((entry) => entry.index)])).toEqual([
+    ['user', 1, [1]],
+    ['wake', 2, [3, 4]],
+  ])
+})
+
 const call = (index: number, id: string, kind: string, subject: string): HistoryEntry =>
   ({ ...entry(index, 'tool_call', `${kind} {}`), tool: { id, name: kind, kind, subject, detail: null }, outcome: null }) as HistoryEntry
 const result = (index: number, id: string, text: string, failed = false): HistoryEntry =>

@@ -1,7 +1,7 @@
 //! Sessions of agents the web UI starts over ACP (ADR 0014). Silt writes
 //! these records itself as the agent works, one JSON object per line:
-//! `session`, `prompt`, `message`, `thought`, `tool_call`, `tool_result`,
-//! `plan` and `stop`.
+//! `session`, `prompt`, `wake`, `message`, `thought`, `tool_call`,
+//! `tool_result`, `plan` and `stop`.
 
 use std::path::{Path, PathBuf};
 
@@ -52,6 +52,15 @@ pub fn prompt(text: &str, by: &str, attached: &[String], images: &[(String, Stri
 fn with_attached(text: String, record: &Value) -> String {
     let attached: Vec<&str> = record["attached"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     if attached.is_empty() { text } else { format!("{text}\n\n(attached: {})", attached.join(", ")) }
+}
+
+/// What a turn the agent opened itself says it began with.
+pub const WOKE: &str = "The agent went on by itself, without a prompt.";
+
+/// The agent went on by itself, as Claude does once a background task it
+/// started ends: a turn opens as with a prompt, but nobody said anything.
+pub fn wake() -> String {
+    json!({"t": "wake"}).to_string()
 }
 
 pub fn message(text: &str) -> String {
@@ -133,6 +142,10 @@ pub fn read_line(line: &str) -> Read {
                     read.entries.push(Entry::Image { media_type: media_type.to_owned(), data: data.to_owned() });
                 }
             }
+        }
+        "wake" => {
+            read.marks.push(Mark::PromptSubmitted);
+            read.entries.push(Entry::Woke { text: WOKE.to_owned() });
         }
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
@@ -283,6 +296,14 @@ mod tests {
         );
         assert_eq!(text("42"), "42");
         assert_eq!(text("```a\n1\n```\nthen\n```b\n2\n```"), "```a\n1\n```\nthen\n```b\n2\n```", "two blocks keep theirs");
+    }
+
+    #[test]
+    fn a_turn_the_agent_opened_itself_is_a_turn_without_a_prompt() {
+        let read = read_line(&wake());
+        assert_eq!(read.marks, [Mark::PromptSubmitted]);
+        assert_eq!(read.entries, [Entry::Woke { text: WOKE.into() }]);
+        assert_eq!(read.entries[0].kind(), "wake");
     }
 
     #[test]

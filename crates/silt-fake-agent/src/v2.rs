@@ -1,0 +1,157 @@
+//! The scripted agent speaking ACP v2, with `FAKE_ACP_V2` set, in the shapes
+//! Claude's adapter sends: each prompt makes it say it works, think, run a
+//! command whose output comes over its terminal, ask permission to edit
+//! `src/main.rs`, append `FAKE_ACP_LINE` when allowed, answer and say it
+//! stopped. A prompt saying `Later` makes it go on by itself once it
+//! stopped, as Claude does when a background task ends, and stop again.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use agent_client_protocol::schema::v2;
+use agent_client_protocol::{Agent, Client, Responder, Result, Stdio, V2ConnectionTo};
+use base64::Engine;
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct State {
+    cwd: HashMap<String, PathBuf>,
+    mode: HashMap<String, String>,
+    model: HashMap<String, String>,
+}
+
+fn options(mode: &str, model: &str) -> Value {
+    json!([
+        {"configId": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
+         "options": [{"value": "code", "name": "Code"}, {"value": "plan", "name": "Plan"}]},
+        {"configId": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
+         "options": [{"value": "fast", "name": "Fast"}, {"value": "smart", "name": "Smart"}]}
+    ])
+}
+
+fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
+    serde_json::from_value(value).map_err(agent_client_protocol::Error::into_internal_error)
+}
+
+fn say(connection: &V2ConnectionTo<Client>, session: &v2::SessionId, update: Value) -> Result<()> {
+    connection.send_notification(v2::UpdateSessionNotification::new(session.clone(), parse::<v2::SessionUpdate>(update)?))
+}
+
+pub async fn main() -> Result<()> {
+    let state = Arc::new(Mutex::new(State::default()));
+    let (created, resumed, configured, prompted) = (state.clone(), state.clone(), state.clone(), state);
+    Agent
+        .v2()
+        .name("silt-fake-agent")
+        .on_receive_request(
+            async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: V2ConnectionTo<Client>| {
+                responder.respond(parse(json!({
+                    "protocolVersion": request.protocol_version,
+                    "info": {"name": "fake-agent", "version": "2.0"},
+                    "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}}
+                }))?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v2::NewSessionRequest, responder: Responder<v2::NewSessionResponse>, _connection: V2ConnectionTo<Client>| {
+                let mut state = created.lock().expect("lock");
+                let id = format!("fake-v2-{}", state.cwd.len() + 1);
+                state.cwd.insert(id.clone(), request.cwd.into_inner());
+                responder.respond(parse(json!({"sessionId": id, "configOptions": options("code", "fast")}))?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v2::ResumeSessionRequest, responder: Responder<v2::ResumeSessionResponse>, _connection: V2ConnectionTo<Client>| {
+                let mut state = resumed.lock().expect("lock");
+                let id = request.session_id.to_string();
+                if !state.cwd.contains_key(&id) {
+                    return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such session"));
+                }
+                state.cwd.insert(id.clone(), request.cwd.into_inner());
+                let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
+                let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
+                responder.respond(parse(json!({"configOptions": options(&mode, &model)}))?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, _connection: V2ConnectionTo<Client>| {
+                let value = serde_json::to_value(&request.value)?.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let (id, config) = (request.session_id.to_string(), request.config_id.to_string());
+                let mut state = configured.lock().expect("lock");
+                match (config.as_str(), value.as_str()) {
+                    ("mode", "code" | "plan") => state.mode.insert(id.clone(), value),
+                    ("model", "fast" | "smart") => state.model.insert(id.clone(), value),
+                    _ => return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting")),
+                };
+                let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
+                let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
+                responder.respond(parse(json!({"configOptions": options(&mode, &model)}))?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v2::PromptRequest, responder: Responder<v2::PromptResponse>, connection: V2ConnectionTo<Client>| {
+                responder.respond(parse(json!({"messageId": "user-1"}))?)?;
+                let state = prompted.clone();
+                let worker = connection.clone();
+                connection.spawn(async move {
+                    let session = request.session_id.clone();
+                    let prompt: String = request
+                        .prompt
+                        .iter()
+                        .filter_map(|block| match block {
+                            v2::ContentBlock::Text(text) => Some(text.text.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
+                    say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "run-1"}]}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "rawInput": {"command": "cat src/main.rs"}, "title": "cat src/main.rs"}))?;
+                    let printed = tokio::fs::read_to_string(cwd.join("src/main.rs")).await.unwrap_or_default();
+                    let data = base64::engine::general_purpose::STANDARD.encode(printed);
+                    say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "run-1", "output": {"data": data}}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "status": "completed"}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "edit-1", "name": "Edit", "rawInput": {"path": "src/main.rs"}, "status": "pending", "title": "Edit src/main.rs", "kind": "edit"}))?;
+                    let asked: v2::RequestPermissionRequest = parse(json!({
+                        "sessionId": session.to_string(),
+                        "title": "Edit src/main.rs",
+                        "subject": {"type": "tool_call", "toolCall": {"toolCallId": "edit-1", "kind": "edit", "title": "Edit src/main.rs"}},
+                        "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}, {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]
+                    }))?;
+                    let answer = serde_json::to_value(worker.send_request(asked).block_task().await?)?;
+                    let allowed = answer["outcome"]["optionId"] == "allow";
+                    if allowed {
+                        let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
+                        let path = cwd.join("src/main.rs");
+                        let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+                        content.push_str(&line);
+                        content.push('\n');
+                        tokio::fs::write(&path, content).await.ok();
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    }
+                    let status = if allowed { "completed" } else { "failed" };
+                    say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "edit-1", "status": status}))?;
+                    let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
+                    say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": reply}}))?;
+                    say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn", "usage": {"inputTokens": 1_600, "outputTokens": 240, "totalTokens": 1_840}}))?;
+                    if prompt.contains("Later") {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-1", "content": {"type": "text", "text": "Went on by itself."}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30}}))?;
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_to(Stdio::new())
+        .await
+}

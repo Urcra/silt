@@ -6,13 +6,21 @@
 //! and a model setting, and takes images and files, which its answer
 //! names; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
 //! `Ask me` asks a multiple-choice question instead and answers with the
-//! choice. With `FAKE_ACP_CRASH` set it dies on a prompt; with
+//! choice. A prompt saying `Later` makes it say more once the prompt was
+//! answered, as an agent going on by itself, without saying it works or
+//! stops, as v1 can't. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
+//! It speaks ACP v1, as Copilot does, answering a client that asks for v2
+//! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
+//! does (see `v2`).
+
+mod v2;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
@@ -72,6 +80,9 @@ async fn main() -> Result<()> {
     if std::env::var_os("FAKE_ACP_HANG").is_some() {
         std::future::pending::<()>().await;
     }
+    if std::env::var_os("FAKE_ACP_V2").is_some() {
+        return v2::main().await;
+    }
     let state = Arc::new(Mutex::new(State::default()));
     let created = state.clone();
     let loading = state.clone();
@@ -82,9 +93,9 @@ async fn main() -> Result<()> {
         .builder()
         .name("silt-fake-agent")
         .on_receive_request(
-            async move |initialize: InitializeRequest, responder, _connection| {
+            async move |_initialize: InitializeRequest, responder, _connection| {
                 responder.respond(
-                    InitializeResponse::new(initialize.protocol_version)
+                    InitializeResponse::new(ProtocolVersion::V1)
                         .agent_capabilities(
                             AgentCapabilities::new()
                                 .load_session(true)
@@ -259,6 +270,7 @@ async fn main() -> Result<()> {
                     )?;
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                    let later = prompt.contains("Later");
                     state
                         .lock()
                         .expect("lock")
@@ -266,7 +278,12 @@ async fn main() -> Result<()> {
                         .entry(session.to_string())
                         .or_default()
                         .extend([(true, prompt), (false, reply)]);
-                    responder.respond(PromptResponse::new(StopReason::EndTurn).usage(Usage::new(1_840, 1_600, 240)))
+                    responder.respond(PromptResponse::new(StopReason::EndTurn).usage(Usage::new(1_840, 1_600, 240)))?;
+                    if later {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text("Went on by itself.")))?;
+                    }
+                    Ok(())
                 })
             },
             agent_client_protocol::on_receive_request!(),

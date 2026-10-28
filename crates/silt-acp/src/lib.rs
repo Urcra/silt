@@ -6,6 +6,8 @@ mod host;
 mod modes;
 mod prompt;
 pub mod registry;
+mod v1;
+mod v2;
 
 pub use host::{
     AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, Update, start,

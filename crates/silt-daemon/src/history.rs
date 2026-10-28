@@ -9,7 +9,7 @@ use silt_agents::tool::Shown;
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
 use silt_log::{Author, ConvOp, Delta, Family, GraphEvent, HistorySource, Op, TurnMark};
-use silt_proto::view::{GraphQuery, GraphRow};
+use silt_proto::view::{GraphQuery, GraphRow, opens_turn};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
@@ -268,7 +268,7 @@ impl Core {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
         let mut transcripts = Transcripts::default();
         silt_log::turn_end_by(family.log(), thread, turn, |delta| {
-            entry_texts(&mut transcripts, delta).iter().any(|shown| shown.kind == "user")
+            entry_texts(&mut transcripts, delta).iter().any(|shown| opens_turn(&shown.kind))
         })
     }
 
@@ -385,7 +385,7 @@ impl Core {
         let mut transcripts = Transcripts::default();
         for item in family.history(thread) {
             for shown in entry_texts(&mut transcripts, item.delta) {
-                if shown.kind == "user" {
+                if opens_turn(&shown.kind) {
                     last_prompt = Some((entries, shown.text));
                 }
                 entries += 1;

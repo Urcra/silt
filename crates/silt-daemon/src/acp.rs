@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -75,7 +76,19 @@ pub(crate) struct AcpRun {
     /// The merge request whose change guide this turn writes, and what the
     /// agent has said in it so far (ADR 0025).
     guiding: Option<(silt_types::DeltaId, String)>,
+    /// The agent says when it works and stops (ACP v2), so work it takes up
+    /// by itself runs like a prompt's turn (ADR 0050).
+    reports_work: bool,
+    /// An agent that doesn't say when it works went on by itself: its turn
+    /// is open until the next prompt, as nothing else says it ended.
+    own_turn: bool,
+    /// When the agent last said something.
+    said_at: Option<Instant>,
 }
+
+/// How long an agent that went on by itself, and won't say when it stops,
+/// is quiet before what it said so far is recorded.
+const OWN_TURN_QUIET: Duration = Duration::from_secs(2);
 
 /// A prompt an agent was started with.
 struct First {
@@ -451,6 +464,9 @@ impl Core {
                 first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments }),
                 accepts: Accepts::default(),
                 guiding: None,
+                reports_work: false,
+                own_turn: false,
+                said_at: None,
             },
         );
         self.agent_changed(thread).await;
@@ -635,6 +651,10 @@ impl Core {
         if let Some(primer) = self.acp.get_mut(&thread).and_then(|run| run.primer.take()) {
             prompt = format!("{primer}\n\n{prompt}");
         }
+        // What the agent said before the prompt, as when it went on by
+        // itself, comes before it.
+        self.flush_acp(thread).await?;
+        self.own_turn_ended(thread).await?;
         let attached = self.record_attachments(thread, &attachments).await?;
         let images: Vec<(String, String)> = attachments
             .iter()
@@ -945,7 +965,8 @@ impl Core {
                 run.error = Some(error);
                 run.state = AgentState::Error;
             }
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, .. }) => {
+            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, reports_work, .. }) => {
+                run.reports_work = reports_work;
                 let preset = self.preset(thread);
                 // A thread whose mode was never chosen starts in the one its preset says; Plan's is
                 // entered by its first prompt, which knows to come back from it.
@@ -1015,11 +1036,21 @@ impl Core {
                 self.remember_seen(thread);
             }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
+            AcpEvent::Agent(silt_acp::Event::Working) => {
+                // Working on a prompt of Silt's, it is already; else it took
+                // something up by itself, and stops at its own turn's end.
+                if matches!(run.state, AgentState::Idle | AgentState::AwaitingInput) {
+                    self.agent_woke(thread).await?;
+                    self.acp.get_mut(&thread).expect("caller checked").state = AgentState::Working;
+                }
+            }
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
             AcpEvent::Agent(silt_acp::Event::Context { used, size }) => run.context = Some(ContextUse { used, size }),
             AcpEvent::Agent(silt_acp::Event::TurnUsage { input, output }) => {
+                // What the turn cost comes after what it said.
+                self.flush_acp(thread).await?;
                 let id = uuid::Uuid::now_v7().simple().to_string();
                 self.record_acp(thread, &acp::usage(&id, input, output)).await?;
             }
@@ -1028,6 +1059,7 @@ impl Core {
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 self.guide_written(thread, &reason).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
+                run.own_turn = false;
                 let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
                 run.state = if planned && run.still_planning() {
                     AgentState::AwaitingInput
@@ -1048,6 +1080,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
+                self.own_turn_ended(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.state = AgentState::Stopped;
                 run.handle = None;
@@ -1105,6 +1138,13 @@ impl Core {
 
     async fn acp_update(&mut self, thread: ThreadId, update: Update) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.said_at = Some(Instant::now());
+        let says = matches!(update, Update::AgentText(_) | Update::Thought(_) | Update::ToolCall { .. });
+        if says && !run.reports_work && !run.own_turn && run.state == AgentState::Idle {
+            run.own_turn = true;
+            self.agent_woke(thread).await?;
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
         match update {
             Update::AgentText(text) => {
                 if !run.thought.is_empty() {
@@ -1159,6 +1199,45 @@ impl Core {
             }
         }
         Ok(())
+    }
+
+    /// The agent went on by itself, without a prompt: what it said before
+    /// is the turn before's, and a turn of its own opens (ADR 0050).
+    async fn agent_woke(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        self.flush_acp(thread).await?;
+        self.record_acp(thread, &acp::wake()).await
+    }
+
+    /// Ends the turn an agent that doesn't say when it stops opened by
+    /// itself, before what comes after it.
+    async fn own_turn_ended(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        if !std::mem::take(&mut run.own_turn) {
+            return Ok(());
+        }
+        self.flush_acp(thread).await?;
+        self.record_acp(thread, &acp::stop(silt_acp::StopReason::EndTurn.as_str())).await
+    }
+
+    /// Records what agents that went on by themselves, and won't say when
+    /// they stop, said before they went quiet; their turns stay open.
+    pub(crate) async fn record_quiet_own_turns(&mut self) {
+        let quiet: Vec<ThreadId> = self
+            .acp
+            .iter()
+            .filter(|(_, run)| {
+                run.own_turn
+                    && (!run.text.is_empty() || !run.thought.is_empty())
+                    && run.said_at.is_some_and(|said| said.elapsed() >= OWN_TURN_QUIET)
+            })
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in quiet {
+            if let Err(error) = self.flush_acp(thread).await {
+                warn!(%error, "could not record what the agent said");
+            }
+            self.agent_changed(thread).await;
+        }
     }
 
     /// Records the message or thought streamed so far.

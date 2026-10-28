@@ -236,6 +236,7 @@ impl Core {
                                 }
                             }
                             Entry::Compaction { summary } => lines.push(ShowLine::Compaction { summary }),
+                            Entry::Woke { text } => lines.push(ShowLine::Entry { kind: "wake".into(), text }),
                             Entry::Other { .. } => {}
                             other => lines.push(ShowLine::Entry {
                                 kind: other.kind().to_owned(),

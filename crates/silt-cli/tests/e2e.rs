@@ -416,6 +416,101 @@ fn the_web_ui_forks_offers_and_trashes_without_the_cli() {
     assert!(!ok && answer["error"].is_string(), "{answer}");
 }
 
+/// Starts `agent` of the scripted ones on `prompt`: `v1`, which speaks ACP
+/// v1 as Copilot does, or `v2`, which speaks v2 as Claude's adapter does.
+fn start_fake_acp(env: &Env, api: &Api, agent: &str, prompt: &str) -> String {
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([
+        {"id": "v1", "name": "Fake v1", "command": fake},
+        {"id": "v2", "name": "Fake v2", "command": fake, "env": {"FAKE_ACP_V2": "1"}}
+    ]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started =
+        api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": agent, "prompt": prompt})));
+    started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned())
+}
+
+/// The thread's history as kind and text, once its agent is idle and the
+/// history says `last`.
+fn settled_history(api: &Api, thread: &str, last: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    let settled = eventually(|| {
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        entries = history["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| {
+                (entry["kind"].as_str().unwrap_or_default().to_owned(), entry["text"].as_str().unwrap_or_default().to_owned())
+            })
+            .collect();
+        let idle = api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "idle";
+        idle && entries.iter().any(|(_, text)| text == last)
+    });
+    assert!(settled, "the agent never settled on {last:?}: {entries:?}");
+    entries
+}
+
+fn said(entries: &[(String, String)]) -> Vec<(&str, &str)> {
+    entries
+        .iter()
+        .filter(|(kind, _)| ["user", "wake", "assistant"].contains(&kind.as_str()))
+        .map(|(kind, text)| (kind.as_str(), text.as_str()))
+        .collect()
+}
+
+/// Claude goes on by itself once a background task it started ends: an
+/// agent speaking v2 says when that work starts and stops, so it is a turn
+/// of its own, shown working, and a prompt sent meanwhile waits for it.
+#[test]
+fn work_an_agent_speaking_v2_takes_up_by_itself_is_its_own_turn() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Later");
+    let entries = settled_history(&api, &thread, "Went on by itself.");
+    assert_eq!(
+        said(&entries),
+        [
+            ("user", "add acp Later"),
+            ("assistant", "Done: add acp Later"),
+            ("wake", silt_agents::acp::WOKE),
+            ("assistant", "Went on by itself.")
+        ]
+    );
+    let kinds: Vec<&str> = entries.iter().map(|(kind, _)| kind.as_str()).collect();
+    let reply = kinds.iter().position(|kind| *kind == "assistant").expect("a reply");
+    assert_eq!(kinds[reply + 1], "usage", "a turn's cost comes after what it said: {kinds:?}");
+    let turns = api.ok("GET", &format!("/api/threads/{thread}/turns"), None);
+    assert_eq!(turns.as_array().map(Vec::len), Some(2), "{turns}");
+    assert_eq!(entries[turns[1]["entry"].as_u64().expect("its entry") as usize].0, "wake", "{turns}");
+}
+
+/// An agent speaking v1, as Copilot does, can't say it went on by itself:
+/// what it says once its turn ended opens a turn of its own, closed by the
+/// next prompt, which comes after it.
+#[test]
+fn what_an_agent_speaking_v1_says_after_its_turn_is_its_own_turn_before_the_next_prompt() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Later");
+    settled_history(&api, &thread, "Went on by itself.");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "and then"})));
+    let entries = settled_history(&api, &thread, "Done: and then");
+    assert_eq!(
+        said(&entries),
+        [
+            ("user", "add acp Later"),
+            ("assistant", "Done: add acp Later"),
+            ("wake", silt_agents::acp::WOKE),
+            ("assistant", "Went on by itself."),
+            ("user", "and then"),
+            ("assistant", "Done: and then")
+        ]
+    );
+    let turns = api.ok("GET", &format!("/api/threads/{thread}/turns"), None);
+    assert_eq!(turns.as_array().map(Vec::len), Some(3), "{turns}");
+}
+
 /// The next event on the socket that `wanted` accepts, within the wait.
 async fn event_where(
     socket: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
