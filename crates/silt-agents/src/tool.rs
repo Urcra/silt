@@ -55,6 +55,12 @@ pub struct ToolUse {
 /// (ACP agents give one) and its input.
 pub fn describe(name: &str, kind: Option<&str>, input: &Value) -> ToolUse {
     let kind = kind.and_then(acp_kind).unwrap_or_else(|| kind_of(name));
+    // Copilot over ACP names its task tool by what the subagent does.
+    let kind = if kind == ToolKind::Other && ["agent_type", "subagent_type"].iter().any(|key| input.get(*key).is_some()) {
+        ToolKind::Subagent
+    } else {
+        kind
+    };
     let text = |keys: &[&str]| keys.iter().find_map(|key| input.get(*key).and_then(string_of));
     let (subject, detail) = match kind {
         ToolKind::Execute => (text(&["command", "cmd"]), text(&["description"])),
@@ -371,6 +377,15 @@ mod tests {
         let asked = describe("AskUserQuestion", None, &json!({"questions": [{"question": "Which one?", "options": []}]}));
         assert_eq!((asked.kind, asked.subject.as_deref()), (ToolKind::Question, Some("Which one?")));
         assert_eq!(describe("TodoWrite", None, &json!({})).kind, ToolKind::Other);
+        let copilot = describe(
+            "Count README lines",
+            Some("other"),
+            &json!({"name": "readme-lines", "agent_type": "explore", "description": "Count README lines", "prompt": "How many?"}),
+        );
+        assert_eq!(
+            (copilot.kind, copilot.subject.as_deref(), copilot.detail.as_deref()),
+            (ToolKind::Subagent, Some("Count README lines"), Some("explore"))
+        );
     }
 
     #[test]

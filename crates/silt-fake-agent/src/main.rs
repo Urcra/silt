@@ -272,6 +272,26 @@ async fn main() -> Result<()> {
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                     let later = prompt.contains("Later");
+                    if prompt.contains("Subagent") {
+                        // As Copilot does: the subagent's calls are tagged with its own id, its words aren't.
+                        let task = ToolCall::new("task-1", "Count lines").kind(ToolKind::Other).raw_input(
+                            serde_json::json!({"name": "count", "agent_type": "explore", "description": "Count lines", "prompt": "Count the lines."}),
+                        );
+                        notify(&worker, &session, SessionUpdate::ToolCall(task))?;
+                        let tagged = serde_json::json!({"github.com/copilot": {"agentId": "sub-1"}});
+                        let mut count = ToolCall::new("count-1", "wc -l src/main.rs").kind(ToolKind::Execute);
+                        count.meta = tagged.as_object().cloned();
+                        notify(&worker, &session, SessionUpdate::ToolCall(count))?;
+                        let mut counted = ToolCallUpdate::new(
+                            "count-1",
+                            ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("2 src/main.rs")),
+                        );
+                        counted.meta = tagged.as_object().cloned();
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(counted))?;
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text("It has 2 lines.")))?;
+                        let reported = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("2 lines"));
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("task-1", reported)))?;
+                    }
                     let detached = prompt.contains("Detached");
                     if detached {
                         let shell = ToolCall::new("shell-1", "Run a command in the background")

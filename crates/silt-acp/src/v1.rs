@@ -61,16 +61,16 @@ impl ConnectTo<Agent> for V1 {
         let quiet = replaying.clone();
         let asked = events.clone();
         let parked = waiting.clone();
-        let detached: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+        let following: Arc<Mutex<Following>> = Arc::default();
         Client
             .builder()
             .name(crate::host::NAME)
             .on_receive_notification(
                 async move |notification: SessionNotification, _connection| {
                     if !quiet.load(Ordering::SeqCst)
-                        && let Some(event) = event_of(notification.update)
+                        && let Some((agent, event)) = event_of(notification.update)
                     {
-                        let followed = follow_detached(&mut detached.lock().expect("lock"), event);
+                        let followed = following.lock().expect("lock").follow(agent, event);
                         for event in followed {
                             let _ = updates.send(event);
                         }
@@ -298,44 +298,134 @@ fn tool_output(content: &[ToolCallContent]) -> Option<String> {
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
-fn event_of(update: SessionUpdate) -> Option<Event> {
-    match update {
-        SessionUpdate::CurrentModeUpdate(update) => Some(Event::ModeChanged(update.current_mode_id.0.to_string())),
-        SessionUpdate::ConfigOptionUpdate(update) => Some(Event::Settings(settings_of(update.config_options))),
-        SessionUpdate::UsageUpdate(update) => Some(Event::Context { used: update.used, size: update.size }),
-        update => simplify(update).map(Event::Update),
+/// The event an update is, and the subagent it is tagged with, as Copilot
+/// tags its subagents' tool calls with `_meta["github.com/copilot"].agentId`.
+fn event_of(update: SessionUpdate) -> Option<(Option<String>, Event)> {
+    let meta = match &update {
+        SessionUpdate::ToolCall(call) => call.meta.as_ref(),
+        SessionUpdate::ToolCallUpdate(update) => update.meta.as_ref(),
+        SessionUpdate::AgentMessageChunk(chunk) | SessionUpdate::AgentThoughtChunk(chunk) => chunk.meta.as_ref(),
+        _ => None,
+    };
+    let agent = meta.and_then(|meta| meta.get("github.com/copilot")?.get("agentId")?.as_str().map(str::to_owned));
+    let event = match update {
+        SessionUpdate::CurrentModeUpdate(update) => Event::ModeChanged(update.current_mode_id.0.to_string()),
+        SessionUpdate::ConfigOptionUpdate(update) => Event::Settings(settings_of(update.config_options)),
+        SessionUpdate::UsageUpdate(update) => Event::Context { used: update.used, size: update.size },
+        update => Event::Update(simplify(update)?),
+    };
+    Some((agent, event))
+}
+
+/// Work an agent on v1 names only in its own words, as Copilot does: the
+/// subagents it starts and the shells it detaches.
+#[derive(Debug, Default)]
+struct Following {
+    /// The call that started each detached shell, by the shell's id.
+    detached: HashMap<String, String>,
+    /// Subagent calls still running, oldest first.
+    subagents: Vec<Subagent>,
+}
+
+#[derive(Debug)]
+struct Subagent {
+    call: String,
+    /// The id its updates are tagged with, once one is.
+    agent: Option<String>,
+    /// The agent waits for it, so whatever it says meanwhile is the subagent's.
+    waited: bool,
+}
+
+impl Following {
+    fn follow(&mut self, agent: Option<String>, event: Event) -> Vec<Event> {
+        if let Some(agent) = agent {
+            // The first update of a subagent comes after the call that started it.
+            let subagent = match self.subagents.iter().position(|subagent| subagent.agent.as_deref() == Some(&agent)) {
+                Some(at) => Some(at),
+                None => self.subagents.iter().position(|subagent| subagent.agent.is_none()),
+            };
+            return match subagent {
+                Some(at) => {
+                    self.subagents[at].agent = Some(agent);
+                    vec![within(&self.subagents[at].call, event)]
+                }
+                None => vec![event],
+            };
+        }
+        match &event {
+            Event::Update(Update::ToolCall { id, input: Some(input), .. }) if input.get("agent_type").is_some() => {
+                let waited = input.get("mode").and_then(Value::as_str) != Some("background");
+                self.subagents.push(Subagent { call: id.clone(), agent: None, waited });
+                let started = news(id, id, "subagent", "running");
+                vec![event, started]
+            }
+            Event::Update(Update::AgentText(_) | Update::Thought(_)) => {
+                match self.subagents.iter().rev().find(|subagent| subagent.waited) {
+                    Some(subagent) => vec![within(&subagent.call, event)],
+                    None => vec![event],
+                }
+            }
+            Event::Update(Update::ToolUpdate { id, status: Some(status), task: None, .. })
+                if matches!(status.as_str(), "completed" | "failed")
+                    && self.subagents.iter().any(|subagent| subagent.call == *id) =>
+            {
+                self.subagents.retain(|subagent| subagent.call != *id);
+                let ended = news(id, id, "subagent", status);
+                vec![event, ended]
+            }
+            _ => self.follow_detached(event),
+        }
+    }
+
+    /// News of shells an agent detached: "<command started in detached
+    /// background with shellId: 0>", and, when it reads one that ended,
+    /// "<detached command with shellId: 0 completed with exit code 0>". The
+    /// news of its end is the call's that started it.
+    fn follow_detached(&mut self, mut event: Event) -> Vec<Event> {
+        let Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), task, .. }) = &mut event else {
+            return vec![event];
+        };
+        if status != "completed" || task.is_some() {
+            return vec![event];
+        }
+        if let Some(shell) = shell_id(output, "started in detached background with shellId: ") {
+            self.detached.insert(shell.clone(), id.clone());
+            *task =
+                Some(Box::new(TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: "running".to_owned() }));
+            return vec![event];
+        }
+        let Some(shell) = shell_id(output, "detached command with shellId: ") else {
+            return vec![event];
+        };
+        let Some(call) = self.detached.remove(&shell) else {
+            return vec![event];
+        };
+        let ended =
+            output.split_once("completed with exit code ").and_then(|(_, code)| code.split(|c: char| !c.is_ascii_digit()).next());
+        let status = if ended == Some("0") { "completed" } else { "failed" };
+        vec![news(&call, &shell, "background", status), event]
     }
 }
 
-/// News of shells an agent detached, which it names only in its answers,
-/// as Copilot does: "<command started in detached background with shellId:
-/// 0>", and, when it reads one that ended, "<detached command with shellId:
-/// 0 completed with exit code 0>". `detached` keeps the call that started
-/// each, by its shell's id, so the news of its end is that call's.
-fn follow_detached(detached: &mut HashMap<String, String>, mut event: Event) -> Vec<Event> {
-    let Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), task, .. }) = &mut event else {
-        return vec![event];
-    };
-    if status != "completed" || task.is_some() {
-        return vec![event];
+/// `event` as what the subagent the call `call` started did.
+fn within(call: &str, event: Event) -> Event {
+    match event {
+        Event::Update(update) => Event::Update(Update::Within { parent: call.to_owned(), update: Box::new(update) }),
+        other => other,
     }
-    if let Some(shell) = shell_id(output, "started in detached background with shellId: ") {
-        detached.insert(shell.clone(), id.clone());
-        *task = Some(Box::new(TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: "running".to_owned() }));
-        return vec![event];
-    }
-    let Some(shell) = shell_id(output, "detached command with shellId: ") else {
-        return vec![event];
-    };
-    let Some(call) = detached.remove(&shell) else {
-        return vec![event];
-    };
-    let ended =
-        output.split_once("completed with exit code ").and_then(|(_, code)| code.split(|c: char| !c.is_ascii_digit()).next());
-    let status = if ended == Some("0") { "completed" } else { "failed" };
-    let news = TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: status.to_owned() };
-    let news = Update::ToolUpdate { id: call, status: None, output: None, title: None, input: None, task: Some(Box::new(news)) };
-    vec![Event::Update(news), event]
+}
+
+/// News of work the call `call` left running beside the turn.
+fn news(call: &str, task: &str, kind: &str, status: &str) -> Event {
+    let news = TaskNews { id: Some(task.to_owned()), kind: Some(kind.to_owned()), status: status.to_owned() };
+    Event::Update(Update::ToolUpdate {
+        id: call.to_owned(),
+        status: None,
+        output: None,
+        title: None,
+        input: None,
+        task: Some(Box::new(news)),
+    })
 }
 
 /// The shell id `output` names right after `before`.
@@ -469,23 +559,57 @@ mod tests {
             }
             _ => None,
         };
-        let mut detached = HashMap::new();
-        let started = follow_detached(&mut detached, completed("t1", "<command started in detached background with shellId: 0>"));
+        let mut following = Following::default();
+        let started = following.follow(None, completed("t1", "<command started in detached background with shellId: 0>"));
         assert_eq!(news(&started[0]), Some(("t1".into(), Some("0".into()), "running".into())));
-        let read = follow_detached(
-            &mut detached,
-            completed("r1", "Output:\nCOPILOT_BG\n<detached command with shellId: 0 completed with exit code 0>"),
-        );
+        let read = following
+            .follow(None, completed("r1", "Output:\nCOPILOT_BG\n<detached command with shellId: 0 completed with exit code 0>"));
         assert_eq!(news(&read[0]), Some(("t1".into(), Some("0".into()), "completed".into())), "the news is the starting call's");
         assert!(matches!(&read[1], Event::Update(Update::ToolUpdate { id, task: None, .. }) if id == "r1"));
-        let failed = follow_detached(&mut detached, completed("t2", "<command started in detached background with shellId: 3>"));
+        let failed = following.follow(None, completed("t2", "<command started in detached background with shellId: 3>"));
         assert_eq!(failed.len(), 1);
-        let ended =
-            follow_detached(&mut detached, completed("r2", "<detached command with shellId: 3 completed with exit code 2>"));
+        let ended = following.follow(None, completed("r2", "<detached command with shellId: 3 completed with exit code 2>"));
         assert_eq!(news(&ended[0]).map(|news| news.2), Some("failed".into()));
-        let unknown =
-            follow_detached(&mut detached, completed("r3", "<detached command with shellId: 9 completed with exit code 0>"));
+        let unknown = following.follow(None, completed("r3", "<detached command with shellId: 9 completed with exit code 0>"));
         assert_eq!(unknown.len(), 1, "a shell it never saw start is left alone");
+    }
+
+    /// Copilot (1.0.104) running an explore subagent, as recorded: its tool
+    /// calls are tagged with its own id, and its words aren't tagged at all.
+    #[test]
+    fn a_subagent_copilot_tags_by_its_own_id_is_kept_inside_the_call_that_started_it() {
+        let mut following = Following::default();
+        let update = |json: Value| event_of(serde_json::from_value(json).expect("an update")).expect("an event");
+        let (agent, call) = update(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "task-1", "title": "Count README lines", "kind": "other", "status": "pending", "rawInput": {"name": "readme-lines", "prompt": "How many lines?", "agent_type": "explore", "description": "Count README lines"}}),
+        );
+        let started = following.follow(agent, call);
+        assert!(
+            matches!(&started[1], Event::Update(Update::ToolUpdate { id, task: Some(task), .. }) if id == "task-1" && task.kind.as_deref() == Some("subagent") && task.status == "running")
+        );
+        let tagged = json!({"github.com/copilot": {"agentId": "715dcc7e"}});
+        let (agent, run) = update(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "wc-1", "title": "Count lines", "kind": "execute", "status": "pending", "rawInput": {"command": "wc -l README.md"}, "_meta": tagged}),
+        );
+        assert_eq!(agent.as_deref(), Some("715dcc7e"));
+        assert!(
+            matches!(&following.follow(agent, run)[..], [Event::Update(Update::Within { parent, .. })] if parent == "task-1")
+        );
+        let (agent, said) = update(
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "README.md has 3 lines."}}),
+        );
+        assert!(
+            matches!(&following.follow(agent, said)[..], [Event::Update(Update::Within { parent, .. })] if parent == "task-1"),
+            "the agent waits on it"
+        );
+        let (agent, done) = update(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "task-1", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "README.md has 3 lines."}}]}),
+        );
+        let ended = following.follow(agent, done);
+        assert!(matches!(&ended[1], Event::Update(Update::ToolUpdate { task: Some(task), .. }) if task.status == "completed"));
+        let (agent, own) =
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "lines counted"}}));
+        assert!(matches!(&following.follow(agent, own)[..], [Event::Update(Update::AgentText(text))] if text == "lines counted"));
     }
 
     #[test]

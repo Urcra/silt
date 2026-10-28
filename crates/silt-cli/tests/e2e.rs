@@ -639,6 +639,31 @@ fn once_stopped_an_agent_isn_t_set_going_by_what_it_left_running() {
     );
 }
 
+/// Copilot over v1 tags its subagent's calls with the subagent's own id and
+/// leaves its words untagged while it waits on it: all of it is the
+/// subagent's, inside the call that started it.
+#[test]
+fn a_subagent_of_an_agent_speaking_v1_is_kept_inside_the_call_that_started_it() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Subagent");
+    settled_history(&api, &thread, "Done: add acp Subagent");
+    let entries = history_entries(&api, &thread);
+    let side = |text: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["text"].as_str().is_some_and(|said| said.starts_with(text)))
+            .map(|entry| entry["side"].clone())
+    };
+    assert_eq!(side("wc -l src/main.rs"), Some(serde_json::json!("task-1")), "its call");
+    assert_eq!(side("It has 2 lines."), Some(serde_json::json!("task-1")), "its words");
+    let news: Vec<(&str, &str)> =
+        entries.iter().filter_map(|entry| Some((entry["task"]["call"].as_str()?, entry["task"]["status"].as_str()?))).collect();
+    assert_eq!(news, [("task-1", "running"), ("task-1", "completed")]);
+    let call = entries.iter().find(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "task-1").expect("its call");
+    assert_eq!((call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str()), (Some("Count lines"), Some("explore")));
+}
+
 /// An agent on v1, as Copilot, ignores a cancel when no prompt is out, so
 /// once the person stopped it, the agent that goes on by itself is stopped
 /// as Stop agent does, and the next prompt starts it again.
