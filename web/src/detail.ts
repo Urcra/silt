@@ -26,6 +26,9 @@ export const ThoughtsOpen = createContext<{ open: boolean; times: number }>({ op
 /** What the running tool printed so far, by its call's id, for its step to show. */
 export const LiveTool = createContext<{ id: string | null; text: string }>({ id: null, text: '' })
 
+/** What the agent is thinking now, not recorded yet, for the running turn's card to show where it will land. */
+export const LiveThought = createContext('')
+
 const KEY = 'silt.transcript-detail'
 const GROUPING_KEY = 'silt.transcript-grouping'
 

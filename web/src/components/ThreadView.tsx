@@ -20,7 +20,7 @@ import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
 import { type Piece, type Row, type ToolStep, duration, foldInherited, headline, kindOf, originOf, piecesOf, proposedPlan, rowsOf, runItems, shortCommand, tasked, thoughtTotal, tokens, toolOf, toolSummary } from '../transcript'
-import { SessionLive, type TaskState, TasksContext, mayRun, tasksOf } from '../tasks'
+import { SessionLive, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
 import {
   Avatar,
@@ -50,7 +50,7 @@ import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
-import { DETAILS, GROUPINGS, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
+import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -465,6 +465,7 @@ function RunFold({ entries, until, live = false, ...props }: EntryProps & { entr
  */
 function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: HistoryEntry[]; wrote: boolean }) {
   const verbose = useContext(TranscriptDetail) === 'verbose'
+  const thinking = useContext(LiveThought)
   const [all, setAll] = useState(false)
   const items = runItems(entries, null)
   const steps = items.flatMap((item) => (item.kind === 'step' ? [item.step] : []))
@@ -478,8 +479,10 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
   const shown = verbose || all
   const recent = done.slice(-3)
   const thoughts = items.filter((item) => item.kind === 'thought').length
+  // The thought under way is the newest, so it heads the card until it is recorded and becomes the one that led.
+  const said = thinking ? headline(thinking) : led?.kind === 'thought' ? headline(led.entries.map((entry) => entry.text).join(' ')) : null
   // What the card leaves out: earlier steps, and thoughts other than the headline it shows.
-  const hidden = done.length - recent.length + thoughts - (led ? 1 : 0)
+  const hidden = done.length - recent.length + thoughts - (led && !thinking ? 1 : 0)
   return (
     <section data-testid="activity" aria-label="the agent's work so far" className="flex flex-col gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs">
       <p className="flex min-w-0 items-center gap-1.5 text-fg-2">
@@ -488,7 +491,7 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
         {thought && <span className="shrink-0 text-fg-3">· thought for {thought}</span>}
         {failed > 0 && <span className="shrink-0 text-danger">· {failed} failed</span>}
       </p>
-      {led?.kind === 'thought' && !shown && <p className="line-clamp-2 text-fg-2 italic">{headline(led.entries.map((entry) => entry.text).join(' '))}</p>}
+      {said && !shown && <p className="line-clamp-2 text-fg-2 italic">{said}</p>}
       <div className="flex flex-col gap-1">
         {shown
           ? items.map((item) =>
@@ -506,6 +509,7 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
               )),
               current && <StepItem key={current.call!.index} step={current} running {...props} />,
             ]}
+        {shown && thinking && <p className="border-l-2 border-line pl-3 whitespace-pre-wrap text-fg-2 italic">{thinking}</p>}
       </div>
       {!verbose && hidden > 0 && (
         <button type="button" onClick={() => setAll(!all)} className="w-fit text-accent-fg hover:text-fg-1 max-md:min-h-11">
@@ -664,6 +668,23 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
   )
 }
 
+/** What the person decided, a question they answered or a plan put to them, stays out of the fold. */
+function decided(piece: Piece): boolean {
+  return piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
+}
+
+/**
+ * Grouped by turn, a turn still running shows the work since the agent last wrote as one card; what it said and
+ * what waits on the person stay outside it. `activity` is the card's entries, empty when there is no card.
+ */
+function sinceWrote(pieces: Piece[], tasks: Tasks) {
+  const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
+  const since = pieces.slice(wrote + 1)
+  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)))
+  const activity = carded.some((piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking'))) ? carded.flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : [])).sort((a, b) => a.index - b.index) : []
+  return { wrote, since, carded, activity }
+}
+
 /** `running`: the turn is still under way, so it has no totals or actions yet. `onUnfold` shows what a fork inherited. */
 function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
   const [summary, setSummary] = useState(false)
@@ -694,8 +715,6 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   // Grouped by turn, a finished turn's work folds under one line, leaving its last reply showing (ADR 0049).
   const last = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
   const folded = grouping === 'turn' && !running && Boolean(row.turn) && last >= 0 && pieces.length > 1
-  // What the person decided, a question they answered or a plan put to them, stays out of the fold.
-  const decided = (piece: Piece) => piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
   // A subagent or background command stays in sight while it runs; once done it folds with the rest of the work.
   const runs = (piece: Piece) => {
     if (piece.kind !== 'step' || !tasked(piece.step, tasks)) return false
@@ -705,12 +724,7 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   }
   const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece) && !runs(piece)) : []
   const reply = folded ? [...pieces.filter((piece) => decided(piece) || runs(piece)), pieces[last]] : []
-  // Grouped by turn, a turn still running shows the work since the agent last wrote as one card; what it said
-  // and what waits on the person stay outside it.
-  const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
-  const since = grouping === 'turn' && running ? pieces.slice(wrote + 1) : []
-  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)))
-  const activity = carded.some((piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking'))) ? carded.flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : [])).sort((a, b) => a.index - b.index) : []
+  const { wrote, since, carded, activity } = grouping === 'turn' && running ? sinceWrote(pieces, tasks) : { wrote: -1, since: [], carded: [], activity: [] }
   const final = row.entries[row.entries.length - 1]
   const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
   const drawn = (piece: Piece) =>
@@ -1533,6 +1547,9 @@ function ThreadBody({
   const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
   // A plan waiting for approval is still that turn's to finish.
   const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input'
+  // The running turn's card shows the thought under way where it will be recorded, so the tail doesn't show it too.
+  const lastRow = rows[rows.length - 1]
+  const thoughtCarded = agent?.state === 'working' && grouping === 'turn' && lastRow?.kind === 'turn' && sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
 
   return (
     <TasksContext.Provider value={tasks}>
@@ -1541,6 +1558,7 @@ function ThreadBody({
     <TranscriptGrouping.Provider value={grouping}>
     <ThoughtsOpen.Provider value={thoughts}>
     <LiveTool.Provider value={tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool}>
+    <LiveThought.Provider value={thoughtCarded ? agent.thinking : ''}>
     <LiveQuestions.Provider
       value={
         agent
@@ -1664,7 +1682,7 @@ function ThreadBody({
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
           {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
-          {agent && <AgentTail status={agent} toolOutput={tool.id !== null && planCalls.current.has(tool.id) ? '' : tool.text} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
+          {agent && <AgentTail status={agent} thoughtShown={thoughtCarded} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
         </div>
         <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
           {files && files.length > 0 && totals && !busy && (
@@ -1690,6 +1708,7 @@ function ThreadBody({
       </div>
     </Page>
     </LiveQuestions.Provider>
+    </LiveThought.Provider>
     </LiveTool.Provider>
     </ThoughtsOpen.Provider>
     </TranscriptGrouping.Provider>
