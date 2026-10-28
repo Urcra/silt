@@ -755,6 +755,31 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
   await expect(turns.nth(0)).not.toContainText('Went on by itself.')
 })
 
+test("an agent's subagent and the command it left running show as cards, and the turn the command's end sets off names it", async ({ page }) => {
+  await startInNewThread(page, 'Fake v2 agent')
+  await page.getByLabel('draft').fill('add acp Subagent Background')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: add acp Subagent Background')).toBeVisible()
+  const cards = page.getByTestId('task')
+  // The command runs on after the turn: its card stays out of the turn's fold, and it is listed above the composer until it ends.
+  await expect(cards.filter({ hasText: 'sleep 1 && echo BG' })).toBeVisible()
+  await expect(page.getByTestId('running-tasks')).toContainText('sleep 1 && echo BG')
+  const wake = page.getByTestId('wake')
+  await expect(wake).toHaveText('sleep 1 && echo BG finished in the background, and the agent went on by itself.')
+  await expect(wake.locator('code')).toHaveText('sleep 1 && echo BG')
+  await expect(page.getByText('The background command printed BG.')).toBeVisible()
+  await expect(page.getByTestId('running-tasks')).toBeHidden()
+  // The subagent finished within the turn, so its card folded with the turn's work; its words are in it, not the thread's.
+  await expect(page.getByText('Counted the lines.')).toBeHidden()
+  await page.getByTestId('worked').first().locator(':scope > summary').click()
+  const subagent = cards.filter({ hasText: 'Count lines' })
+  await expect(subagent).toBeVisible()
+  await subagent.getByRole('button', { expanded: false }).first().click()
+  await expect(subagent).toContainText('Counted the lines.')
+  await expect(subagent).toContainText('Reported back')
+  await expect(subagent).toContainText('2 lines')
+})
+
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')

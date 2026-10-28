@@ -3,6 +3,7 @@
 // elsewhere.
 
 import type { HistoryEntry, TurnInfo } from './api'
+import { NO_TASKS, type Tasks } from './tasks'
 
 export type Row =
   /** Where the history moves to another thread's part, or back to this fork's own; `folded` turns of it hidden behind it. */
@@ -69,6 +70,8 @@ export function rowsOf(entries: HistoryEntry[], turns: TurnInfo[]): Row[] {
   // An agent may record one message over several lines, each with its cost.
   const counted = new Set<string>()
   for (const entry of entries) {
+    // A subagent's entries show inside the call that started it, not as the thread's own turns.
+    if (entry.side) continue
     if (entry.kind === 'usage') {
       if (current && entry.usage && !counted.has(entry.usage.message)) {
         counted.add(entry.usage.message)
@@ -121,11 +124,18 @@ export type Piece =
   /** The turn's plan as it stood last; earlier versions of it fold away. */
   | { kind: 'plan'; entry: HistoryEntry }
 
-/** What stands on its own in a turn rather than in a run: questions, and commands that failed. */
-function stands(step: ToolStep): boolean {
+/** What stands on its own in a turn rather than in a run: questions, commands that failed, and work left running beside the turn. */
+function stands(step: ToolStep, tasks: Tasks): boolean {
   if (!step.call) return false
   const kind = kindOf(step.call)
-  return kind === 'question' || Boolean(proposedPlan(step.call)) || (kind === 'execute' && Boolean(step.result?.outcome?.failed))
+  return kind === 'question' || Boolean(proposedPlan(step.call)) || (kind === 'execute' && Boolean(step.result?.outcome?.failed)) || tasked(step, tasks)
+}
+
+/** Whether a step started a subagent or left a command running in the background. */
+export function tasked(step: ToolStep, tasks: Tasks): boolean {
+  const call = step.call
+  if (!call) return false
+  return kindOf(call) === 'subagent' || (call.tool !== null && call.tool !== undefined && tasks.byCall.has(call.tool.id))
 }
 
 /** The plan a call put to the person for approval, as Claude's ExitPlanMode does: its input's `plan`, as Markdown. */
@@ -140,12 +150,12 @@ export function proposedPlan(call: HistoryEntry): string | null {
   }
 }
 
-export function piecesOf(entries: HistoryEntry[]): Piece[] {
+export function piecesOf(entries: HistoryEntry[], tasks: Tasks = NO_TASKS): Piece[] {
   const steps = stepsOf(entries)
   const standing = new Set<HistoryEntry>()
   for (const step of steps) {
     // A proposed plan stands in its turn, as what the work after it went by; a failed command, so it isn't missed.
-    if (step.call && stands(step)) {
+    if (step.call && stands(step, tasks)) {
       standing.add(step.call)
       if (step.result) standing.add(step.result)
       for (const image of step.images) standing.add(image)
@@ -160,6 +170,8 @@ export function piecesOf(entries: HistoryEntry[]): Piece[] {
     hidden.add(entry)
   }
   for (const step of steps) if (step.call?.plan && step.result) hidden.add(step.result)
+  // News of a subagent or background command shows on the call that started it.
+  for (const entry of entries) if (entry.kind === 'task') hidden.add(entry)
   // A call an update of it replaced shows as the update.
   const calls = new Set(steps.map((step) => step.call))
   for (const entry of entries) if (entry.kind === 'tool_call' && !calls.has(entry)) hidden.add(entry)
@@ -268,6 +280,7 @@ export function kindOf(call: HistoryEntry): string {
 const SAID: Record<string, [string, string, string]> = {
   edit: ['edited', 'file', 'files'],
   execute: ['ran', 'command', 'commands'],
+  subagent: ['started', 'subagent', 'subagents'],
   question: ['asked', 'question', 'questions'],
   search: ['searched', 'pattern', 'patterns'],
   read: ['read', 'file', 'files'],
@@ -281,6 +294,7 @@ const DOING: Record<string, string> = {
   search: 'searching',
   read: 'reading',
   execute: 'running',
+  subagent: 'waiting on',
   edit: 'editing',
   question: 'asking',
   fetch: 'fetching',

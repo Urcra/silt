@@ -4,9 +4,13 @@
 //! `src/main.rs`, append `FAKE_ACP_LINE` when allowed, answer and say it
 //! stopped. A prompt saying `Later` makes it go on by itself once it
 //! stopped, as Claude does when a background task ends, and stop again.
+//! `Subagent` makes it run a subagent in a session of its own, as Claude's
+//! Agent tool does; `Background` makes it leave a command running, which
+//! ends after the turn and sets the agent going again, unless cancelled.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v2;
@@ -41,9 +45,18 @@ fn say(connection: &V2ConnectionTo<Client>, session: &v2::SessionId, update: Val
 pub async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(State::default()));
     let (created, resumed, configured, prompted) = (state.clone(), state.clone(), state.clone(), state);
+    let stopping = Arc::new(AtomicBool::new(false));
+    let cancelling = stopping.clone();
     Agent
         .v2()
         .name("silt-fake-agent")
+        .on_receive_notification(
+            async move |_cancel: v2::CancelSessionNotification, _connection: V2ConnectionTo<Client>| {
+                cancelling.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: V2ConnectionTo<Client>| {
                 responder.respond(parse(json!({
@@ -97,6 +110,7 @@ pub async fn main() -> Result<()> {
             async move |request: v2::PromptRequest, responder: Responder<v2::PromptResponse>, connection: V2ConnectionTo<Client>| {
                 responder.respond(parse(json!({"messageId": "user-1"}))?)?;
                 let state = prompted.clone();
+                let cancelled = stopping.clone();
                 let worker = connection.clone();
                 connection.spawn(async move {
                     let session = request.session_id.clone();
@@ -138,9 +152,38 @@ pub async fn main() -> Result<()> {
                     }
                     let status = if allowed { "completed" } else { "failed" };
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "edit-1", "status": status}))?;
+                    if prompt.contains("Subagent") {
+                        let child = v2::SessionId::new("fake-child-1");
+                        say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "title": "general-purpose", "description": "Count lines", "capabilities": {"cancel": {}}, "state": {"state": "running"}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "session_message", "messageId": "agent-1", "senderSessionId": session.to_string(), "recipientSessionId": "fake-child-1", "content": [{"type": "text", "text": "Count the lines of src/main.rs."}]}))?;
+                        say(&worker, &child, json!({"sessionUpdate": "agent_message_chunk", "messageId": "child-1", "content": {"type": "text", "text": "Counted the lines."}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "state": {"state": "idle", "stopReason": "end_turn"}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "session_message", "messageId": "agent-1:reply", "senderSessionId": "fake-child-1", "recipientSessionId": session.to_string(), "content": [{"type": "text", "text": "2 lines"}]}))?;
+                    }
+                    let background = prompt.contains("Background");
+                    if background {
+                        let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgfake1.");
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "name": "Bash", "rawInput": {"command": "sleep 1 && echo BG", "run_in_background": true}, "status": "pending", "title": "sleep 1 && echo BG", "kind": "execute", "content": [{"type": "terminal", "terminalId": "bg-1"}]}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "bg-1", "output": {"data": answer}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "status": "completed"}))?;
+                    }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": reply}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn", "usage": {"inputTokens": 1_600, "outputTokens": 240, "totalTokens": 1_840}}))?;
+                    if background {
+                        // The command ends once the turn has; the agent goes on about it unless stopped.
+                        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+                        cancelled.store(false, Ordering::SeqCst);
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "bg-1", "exitStatus": {}}))?;
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        if cancelled.load(Ordering::SeqCst) {
+                            return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                        }
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-bg", "content": {"type": "text", "text": "The background command printed BG."}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
                     if prompt.contains("Later") {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;

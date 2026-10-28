@@ -346,6 +346,33 @@ pub struct HistoryEntry {
     /// On a `plan`, or a `tool_call` that writes one: its steps.
     #[serde(default)]
     pub plan: Option<Vec<PlanStepView>>,
+    /// The subagent transcript the entry is from, by its name; none for the
+    /// session's own. A `task` entry names the call that started it.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// On a `task`: news of a subagent or background command.
+    #[serde(default)]
+    pub task: Option<TaskView>,
+}
+
+/// News of work an agent started that runs beside its turn: a subagent, or
+/// a command left running in the background. Each says what it knows, and
+/// later ones for the same task say more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TaskView {
+    /// The agent's id for the task.
+    pub id: String,
+    /// The tool call that started it, when known.
+    pub call: Option<String>,
+    /// `subagent` or `background`, when this news says.
+    pub kind: Option<String>,
+    /// `running`, `completed`, `failed` or `stopped`.
+    pub status: String,
+    /// A subagent's transcript, by the name its entries' `side` gives.
+    pub side: Option<String>,
+    /// What the agent said of how it went.
+    pub summary: Option<String>,
 }
 
 /// A step of an agent's plan.

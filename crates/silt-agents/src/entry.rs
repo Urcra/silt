@@ -52,6 +52,8 @@ pub enum Entry {
     Woke {
         text: String,
     },
+    /// News of a subagent or a background command the agent started.
+    Task(Task),
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {
         kind: String,
@@ -77,6 +79,7 @@ impl Entry {
             Self::Plan { .. } => "plan",
             Self::Compaction { .. } => "compaction",
             Self::Woke { .. } => "wake",
+            Self::Task(_) => "task",
             Self::Other { kind } => kind,
         }
     }
@@ -90,6 +93,7 @@ impl Entry {
             Self::ToolCall { name, input, .. } => Some(call_text(name, input)),
             Self::Plan { steps } => Some(plan_text(steps)),
             Self::Compaction { summary } => summary.clone(),
+            Self::Task(task) => task.summary.clone(),
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }
@@ -103,8 +107,70 @@ impl Entry {
             }
             Self::ToolCall { name, input, .. } => Some(call_text(&name, &input)),
             Self::Plan { steps } => Some(plan_text(&steps)),
-            Self::Compaction { summary } => summary,
+            Self::Compaction { summary } | Self::Task(Task { summary, .. }) => summary,
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
+        }
+    }
+}
+
+/// Work an agent started that runs beside its turn, as one record says it:
+/// it started, or it ended and how. Later news of the same `id` says more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Task {
+    /// The agent's id for it.
+    pub id: String,
+    /// The tool call that started it, when the record names it.
+    pub call: Option<String>,
+    /// Which kind, when the record says.
+    pub kind: Option<TaskKind>,
+    pub status: TaskStatus,
+    /// A subagent's side transcript, by name.
+    pub side: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskKind {
+    Subagent,
+    /// A command left running while the agent goes on.
+    Background,
+}
+
+impl TaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Subagent => "subagent",
+            Self::Background => "background",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskStatus {
+    Running,
+    Completed,
+    Failed,
+    /// Stopped before it finished, by the agent or the person.
+    Stopped,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    /// A status as agents word it: `completed`, `failed`, `killed`…
+    pub fn parse(said: &str) -> Self {
+        match said.to_ascii_lowercase().as_str() {
+            "completed" | "complete" | "done" | "success" | "succeeded" | "finished" => Self::Completed,
+            "failed" | "error" | "errored" | "failure" => Self::Failed,
+            "killed" | "stopped" | "cancelled" | "canceled" | "aborted" | "interrupted" | "terminated" => Self::Stopped,
+            _ => Self::Running,
         }
     }
 }

@@ -8,7 +8,8 @@
 //! `Ask me` asks a multiple-choice question instead and answers with the
 //! choice. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
-//! stops, as v1 can't. With `FAKE_ACP_CRASH` set it dies on a prompt; with
+//! stops, as v1 can't. `Detached` makes it leave a shell running and read
+//! it once the turn is over, as Copilot does. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
@@ -271,6 +272,17 @@ async fn main() -> Result<()> {
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                     let later = prompt.contains("Later");
+                    let detached = prompt.contains("Detached");
+                    if detached {
+                        let shell = ToolCall::new("shell-1", "Run a command in the background")
+                            .kind(ToolKind::Execute)
+                            .raw_input(serde_json::json!({"command": "sleep 1 && echo DETACHED", "mode": "async", "detach": true}));
+                        notify(&worker, &session, SessionUpdate::ToolCall(shell))?;
+                        let started = ToolCallUpdateFields::new()
+                            .status(ToolCallStatus::Completed)
+                            .raw_output(serde_json::json!("<command started in detached background with shellId: 0>"));
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("shell-1", started)))?;
+                    }
                     state
                         .lock()
                         .expect("lock")
@@ -282,6 +294,19 @@ async fn main() -> Result<()> {
                     if later {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text("Went on by itself.")))?;
+                    }
+                    if detached {
+                        // As Copilot does once the shell ends: it reads it first.
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let read = ToolCall::new("read-1", "Reading shell output")
+                            .kind(ToolKind::Read)
+                            .raw_input(serde_json::json!({"shellId": "0", "delay": 0}));
+                        notify(&worker, &session, SessionUpdate::ToolCall(read))?;
+                        let output = "Output:\nDETACHED\n<detached command with shellId: 0 completed with exit code 0>";
+                        let ended = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!(output));
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-1", ended)))?;
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text("The detached shell printed DETACHED.")))?;
                     }
                     Ok(())
                 })

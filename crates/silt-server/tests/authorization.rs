@@ -1362,3 +1362,52 @@ async fn org_members_list_their_projects_and_owners_set_them_up() {
     };
     assert_eq!(world.alice.change(elsewhere).await, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn the_hosted_app_shows_a_subagent_inside_its_call_and_not_as_a_turn() {
+    use silt_log::{ConvOp, SessionFile, SessionRef, TurnMark};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let session = SessionRef { agent: "claude-code".into(), id: "s".into() };
+    let ops = [
+        Op::Conv(ConvOp::Native {
+            session: session.clone(),
+            file: SessionFile::Main,
+            line: r#"{"type":"user","message":{"role":"user","content":"Look into the lexer"}}"#.into(),
+        }),
+        Op::Conv(ConvOp::Turn { session: session.clone(), mark: TurnMark::PromptSubmitted }),
+        Op::Conv(ConvOp::Native {
+            session: session.clone(),
+            file: SessionFile::Main,
+            line: r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a","name":"Agent","input":{"description":"Investigate","prompt":"Investigate the lexer"}}]}}"#.into(),
+        }),
+        Op::Conv(ConvOp::Native {
+            session: session.clone(),
+            file: SessionFile::Subagent("agent-a1".into()),
+            line: r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"Investigate the lexer"}}"#.into(),
+        }),
+        Op::Conv(ConvOp::Native {
+            session: session.clone(),
+            file: SessionFile::Main,
+            line: r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"fine"}]},"toolUseResult":{"agentId":"a1","status":"completed"}}"#.into(),
+        }),
+    ];
+    let family = &mut world.family;
+    let deltas: Vec<Delta> = (10..)
+        .zip(ops)
+        .map(|(time, op)| applied(family, family.delta(ActorId(1), THREAD, Author::User, time, family.thread_head(THREAD), op)))
+        .collect();
+    assert_eq!(world.alice.push(deltas).await, StatusCode::OK);
+
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let (status, page) = alice.get(&format!("/threads/{THREAD}/history")).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let entries = page["entries"].as_array().cloned().unwrap_or_default();
+    let side: Vec<&serde_json::Value> = entries.iter().filter(|entry| entry["side"] == "agent-a1").collect();
+    assert_eq!(side.len(), 1, "{entries:?}");
+    assert_eq!(side[0]["text"], "Investigate the lexer");
+    let tied = entries.iter().find(|entry| entry["task"]["call"] == "toolu_a" && entry["task"]["side"] == "agent-a1");
+    assert!(tied.is_some(), "the subagent's transcript is tied to its call: {entries:?}");
+    let (_, turns) = alice.get(&format!("/threads/{THREAD}/turns")).await;
+    assert_eq!(turns.as_array().map(Vec::len), Some(1), "{turns}");
+    assert_eq!(turns[0]["prompt"], "Look into the lexer", "the turn's prompt is the thread's own, not the subagent's");
+}

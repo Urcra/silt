@@ -271,6 +271,46 @@ fn the_web_ui_reads_a_diff_a_page_of_files_at_a_time() {
 }
 
 #[test]
+fn a_subagent_nests_under_its_call_and_a_background_command_says_how_it_ended() {
+    let env = Env::with_claude("beside");
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    let url = env.stdout(&["open", "--no-browser"]);
+    let (base, token) = web_ui(&url);
+    let get = |path: &str| -> serde_json::Value {
+        let output = Command::new("curl")
+            .args(["-s", "-H"])
+            .arg(format!("Authorization: Bearer {token}"))
+            .arg(format!("{base}/api/threads/{thread}/{path}"))
+            .output()
+            .expect("curl runs");
+        serde_json::from_slice(&output.stdout).expect("json")
+    };
+    let entries = || get("history")["entries"].as_array().cloned().unwrap_or_default();
+    assert!(eventually(|| entries().iter().any(|entry| entry["kind"] == "assistant"
+        && entry["side"].is_null()
+        && entry["text"].as_str().is_some_and(|text| text.contains("failed to start")))));
+    let entries = entries();
+    let side: Vec<&str> =
+        entries.iter().filter(|entry| entry["side"] == "agent-a1").filter_map(|entry| entry["text"].as_str()).collect();
+    assert_eq!(side, ["Investigate the lexer", "Read lexer.rs: nothing wrong with it."], "the subagent's own entries, marked");
+    let news: Vec<&serde_json::Value> =
+        entries.iter().filter_map(|entry| entry["task"].as_object().map(|_| &entry["task"])).collect();
+    assert!(
+        news.iter().any(|task| task["call"] == "toolu_a" && task["side"] == "agent-a1" && task["status"] == "completed"),
+        "{news:?}"
+    );
+    assert!(
+        news.iter().any(|task| task["call"] == "toolu_b" && task["kind"] == "background" && task["status"] == "running"),
+        "{news:?}"
+    );
+    assert!(news.iter().any(|task| task["id"] == "bg1" && task["status"] == "failed"), "{news:?}");
+    assert_eq!(get("turns").as_array().map(Vec::len), Some(1), "the subagent's prompt starts no turn of the thread's");
+    let show = env.stdout(&["show", &thread]);
+    assert!(!show.contains("nothing wrong with it"), "the thread's own conversation leaves the subagent's out:\n{show}");
+}
+
+#[test]
 fn a_hook_that_finds_no_daemon_starts_one_for_the_hooks_after_it() {
     let env = Env::new();
     env.silt(&["claude"]);
@@ -514,6 +554,107 @@ fn what_an_agent_speaking_v1_says_after_its_turn_is_its_own_turn_before_the_next
     );
     let turns = api.ok("GET", &format!("/api/threads/{thread}/turns"), None);
     assert_eq!(turns.as_array().map(Vec::len), Some(3), "{turns}");
+}
+
+/// The thread's history entries as the API gives them.
+fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
+    api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
+}
+
+/// Over v2 a subagent runs in a session of its own and a command left in
+/// the background ends after the turn: both are tasks of the call that
+/// started them, the subagent's words are its own, and the turn the
+/// command's end sets off names it.
+#[test]
+fn subagents_and_background_commands_of_an_agent_speaking_v2_are_tasks() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Subagent Background");
+    settled_history(&api, &thread, "The background command printed BG.");
+    let entries = history_entries(&api, &thread);
+    let news: Vec<(String, String, String)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let task = entry.get("task").filter(|task| !task.is_null())?;
+            let field = |key: &str| task[key].as_str().unwrap_or_default().to_owned();
+            Some((field("call"), field("kind"), field("status")))
+        })
+        .collect();
+    let at = |call: &str, kind: &str, status: &str| (call.to_owned(), kind.to_owned(), status.to_owned());
+    for expected in [
+        at("agent-1", "subagent", "running"),
+        at("agent-1", "subagent", "completed"),
+        at("bg-1", "background", "running"),
+        at("bg-1", "background", "completed"),
+    ] {
+        assert!(news.contains(&expected), "{expected:?} in {news:?}");
+    }
+    let own_words = entries.iter().find(|entry| entry["text"] == "Counted the lines.").expect("the subagent's words");
+    assert_eq!(own_words["side"], "agent-1", "the subagent's, not the thread's");
+    let call = entries.iter().find(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "agent-1").expect("its call");
+    assert_eq!(call["tool"]["subject"], "Count lines");
+    let wake = entries.iter().find(|entry| entry["kind"] == "wake").expect("the turn it set off");
+    assert_eq!(wake["text"], "`sleep 1 && echo BG` finished in the background, and the agent went on by itself.");
+    let turns = api.ok("GET", &format!("/api/threads/{thread}/turns"), None);
+    assert_eq!(turns.as_array().map(Vec::len), Some(2), "the subagent's prompt opens no turn: {turns}");
+}
+
+/// Over v1 an agent such as Copilot names a shell it detached only in its
+/// answers, and goes on by itself by reading it once it ended: the shell is
+/// a task of the call that started it, and the turn it set off names it.
+#[test]
+fn a_shell_an_agent_speaking_v1_detached_is_a_task_that_names_the_turn_it_sets_off() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Detached");
+    settled_history(&api, &thread, "The detached shell printed DETACHED.");
+    let raw = history_entries(&api, &thread);
+    let calls: Vec<(&str, &str)> =
+        raw.iter().filter_map(|entry| Some((entry["task"]["call"].as_str()?, entry["task"]["status"].as_str()?))).collect();
+    assert_eq!(calls, [("shell-1", "running"), ("shell-1", "completed")], "both are news of the call that started it");
+    let wake = raw.iter().find(|entry| entry["kind"] == "wake").expect("the turn it set off");
+    assert_eq!(wake["text"], "`sleep 1 && echo DETACHED` ended in the background, and the agent went on by itself.");
+}
+
+/// Once the person stops the agent, a command it left running doesn't get
+/// to set it going again before they prompt it.
+#[test]
+fn once_stopped_an_agent_isn_t_set_going_by_what_it_left_running() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Background");
+    settled_history(&api, &thread, "Done: add acp Background");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/cancel"), None);
+    let woke = eventually(|| {
+        let idle = api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "idle";
+        idle && history_entries(&api, &thread).iter().any(|entry| entry["kind"] == "wake")
+    });
+    assert!(woke, "the command's end set the agent going");
+    let entries = history_entries(&api, &thread);
+    let wake = entries.iter().find(|entry| entry["kind"] == "wake").expect("the turn");
+    assert!(wake["text"].as_str().is_some_and(|text| text.ends_with("Silt stopped it, as you had stopped the agent.")), "{wake}");
+    assert!(
+        !entries.iter().any(|entry| entry["text"] == "The background command printed BG."),
+        "it was stopped before it went on"
+    );
+}
+
+/// An agent on v1, as Copilot, ignores a cancel when no prompt is out, so
+/// once the person stopped it, the agent that goes on by itself is stopped
+/// as Stop agent does, and the next prompt starts it again.
+#[test]
+fn once_stopped_an_agent_speaking_v1_that_goes_on_by_itself_is_stopped() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Detached");
+    settled_history(&api, &thread, "Done: add acp Detached");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/cancel"), None);
+    let stopped = eventually(|| api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "stopped");
+    assert!(stopped, "the agent was stopped once it went on");
+    let entries = history_entries(&api, &thread);
+    let wake = entries.iter().find(|entry| entry["kind"] == "wake").expect("the turn it set off");
+    assert!(wake["text"].as_str().is_some_and(|text| text.ends_with("Silt stopped it, as you had stopped the agent.")), "{wake}");
+    assert!(!entries.iter().any(|entry| entry["text"] == "The detached shell printed DETACHED."), "it said nothing more");
 }
 
 /// The next event on the socket that `wanted` accepts, within the wait.

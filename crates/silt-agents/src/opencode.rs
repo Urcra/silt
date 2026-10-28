@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::{
     Agent, AgentError, Capture, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Rewrites,
-    SessionIds, Start,
+    SessionIds, Start, Task, TaskKind, TaskStatus,
 };
 
 pub const AGENT: &str = "opencode";
@@ -118,9 +118,10 @@ impl Reader for OpenCodeReader {
         let role =
             part.get("messageID").and_then(Value::as_str).and_then(|id| self.roles.get(id)).map_or("assistant", String::as_str);
         match field("type").as_str() {
-            "text" if part.get("synthetic").and_then(Value::as_bool) == Some(true) => {
-                read.entries.push(Entry::Other { kind: "synthetic".into() });
-            }
+            "text" if part.get("synthetic").and_then(Value::as_bool) == Some(true) => match reported(&field("text")) {
+                Some(task) => read.entries.push(Entry::Task(task)),
+                None => read.entries.push(Entry::Other { kind: "synthetic".into() }),
+            },
             "text" if role == "user" => read.entries.push(Entry::User { text: field("text") }),
             "text" => read.entries.push(Entry::Assistant { text: field("text") }),
             "reasoning" => read.entries.push(Entry::Thinking { text: field("text") }),
@@ -133,6 +134,7 @@ impl Reader for OpenCodeReader {
                     .map(|value| value.as_str().map_or_else(|| value.to_string(), str::to_owned))
                     .unwrap_or_default();
                 let tool = field("tool");
+                let task = started(&id, &tool, &state);
                 read.marks.push(Mark::ToolStarted { tool_use_id: id.clone(), tool: tool.clone() });
                 read.marks.push(Mark::ToolFinished { tool_use_id: id.clone() });
                 read.entries.push(Entry::ToolCall {
@@ -146,6 +148,7 @@ impl Reader for OpenCodeReader {
                     text: output,
                     is_error: state.get("status").and_then(Value::as_str) == Some("error"),
                 });
+                read.entries.extend(task.map(Entry::Task));
             }
             "compaction" => read.entries.push(Entry::Compaction { summary: None }),
             "step-finish" if field("reason") == "stop" => {
@@ -156,6 +159,56 @@ impl Reader for OpenCodeReader {
         }
         read
     }
+}
+
+/// The child session a `task` (or `subagent`) call runs, or the shell a
+/// command left in the background, from the call's state.
+fn started(call: &str, tool: &str, state: &Value) -> Option<Task> {
+    let metadata = state.get("metadata");
+    let from = |keys: &[&str]| {
+        keys.iter().find_map(|key| metadata.and_then(|metadata| metadata.get(*key)).and_then(Value::as_str).map(str::to_owned))
+    };
+    let (id, kind) = match tool {
+        "task" | "subagent" => (from(&["sessionId", "sessionID"])?, TaskKind::Subagent),
+        _ => (from(&["shellID", "shellId"])?, TaskKind::Background),
+    };
+    let status = match state.get("status").and_then(Value::as_str) {
+        Some("error") => TaskStatus::Failed,
+        Some("completed") if kind == TaskKind::Subagent => TaskStatus::Completed,
+        _ => TaskStatus::Running,
+    };
+    Some(Task { id, call: Some(call.to_owned()), kind: Some(kind), status, side: None, summary: None })
+}
+
+/// What OpenCode tells the agent once a background subagent or shell
+/// ends: `<subagent sessionID="…" state="completed" …>` or
+/// `<shell id="…" state="error" …>`, with what it said inside.
+fn reported(text: &str) -> Option<Task> {
+    let text = text.trim_start();
+    let (kind, rest) = if let Some(rest) = text.strip_prefix("<subagent ") {
+        (TaskKind::Subagent, rest)
+    } else {
+        (TaskKind::Background, text.strip_prefix("<shell ")?)
+    };
+    let head = &rest[..rest.find('>')?];
+    let attribute = |name: &str| {
+        let start = head.find(&format!("{name}=\""))? + name.len() + 2;
+        Some(head[start..start + head[start..].find('"')?].to_owned())
+    };
+    let id = attribute(if kind == TaskKind::Subagent { "sessionID" } else { "id" })?;
+    let status = attribute("state").map_or(TaskStatus::Completed, |state| match state.as_str() {
+        "error" => TaskStatus::Failed,
+        other => TaskStatus::parse(other),
+    });
+    let body = rest[head.len() + 1..].rsplit_once("</").map_or("", |(body, _)| body).trim();
+    let summary = attribute("description").or_else(|| attribute("command"));
+    let summary = match (summary, body.is_empty()) {
+        (Some(summary), false) => Some(format!("{summary}\n\n{body}")),
+        (Some(summary), true) => Some(summary),
+        (None, false) => Some(body.to_owned()),
+        (None, true) => None,
+    };
+    Some(Task { id, call: None, kind: Some(kind), status, side: None, summary })
 }
 
 /// The export restoring `session` imports. A fork's records get ids of
@@ -416,6 +469,22 @@ mod tests {
         assert!(matches!(&entries[1], Entry::ToolCall { name, .. } if name == "glob"));
         assert_eq!(entries[3], Entry::Assistant { text: "One file.".into() });
         assert!(reads.last().expect("reads").marks.contains(&Mark::Stopped));
+    }
+
+    #[test]
+    fn a_task_call_and_a_report_name_the_work_left_running() {
+        let state = json!({"status": "running", "input": {"description": "look"}, "metadata": {"sessionId": "ses_child"}});
+        let task = started("c1", "task", &state).expect("a subagent");
+        assert_eq!((task.id.as_str(), task.kind, task.status), ("ses_child", Some(TaskKind::Subagent), TaskStatus::Running));
+        assert!(started("c2", "bash", &json!({"status": "completed"})).is_none());
+        let shell = reported("<shell id=\"job-1\" state=\"error\" command=\"npm test\">1 failed</shell>").expect("a shell");
+        assert_eq!(
+            (shell.id.as_str(), shell.status, shell.summary.as_deref()),
+            ("job-1", TaskStatus::Failed, Some("npm test\n\n1 failed"))
+        );
+        let child = reported("<subagent sessionID=\"ses_child\" state=\"completed\" description=\"look\">found it</subagent>");
+        assert_eq!(child.map(|task| (task.id, task.status)), Some(("ses_child".into(), TaskStatus::Completed)));
+        assert!(reported("plain text").is_none());
     }
 
     #[test]

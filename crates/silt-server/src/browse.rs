@@ -10,7 +10,7 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use silt_agents::Transcripts;
+use silt_agents::history::HistoryReader;
 use silt_log::{
     CommentTarget, ConvOp, Delta, GraphEvent, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in,
 };
@@ -160,21 +160,17 @@ impl Readable {
 
 /// A thread's own history entries, each with the delta it came from.
 pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
-    let mut transcripts = Transcripts::default();
+    let mut reader = HistoryReader::default();
     let rewound = silt_log::rewound_in(log, thread);
     let mut out = Vec::new();
     for delta in log.iter().filter(|delta| delta.thread == thread) {
         let shown: Vec<silt_agents::tool::Shown> = match &delta.op {
             Op::Conv(ConvOp::Native { session, file, line }) => {
-                let file = match file {
-                    SessionFile::Main => "main".to_owned(),
-                    SessionFile::Subagent(name) => format!("subagent:{name}"),
+                let side = match file {
+                    SessionFile::Main => None,
+                    SessionFile::Subagent(name) => Some(name.as_str()),
                 };
-                transcripts
-                    .entries(&session.agent, &session.id, &file, line)
-                    .into_iter()
-                    .filter_map(silt_agents::tool::shown)
-                    .collect()
+                reader.line(&session.agent, &session.id, side, line)
             }
             Op::Conv(ConvOp::Merged { from, title, summary, .. }) => vec![merged_text(*from, title, summary)],
             _ => Vec::new(),
@@ -231,7 +227,7 @@ pub(crate) fn title(own: &[&Delta], first_prompt: Option<&str>) -> Option<String
 
 /// The text of the first prompt among `history`'s entries.
 pub(crate) fn first_prompt(history: &[(DeltaId, HistoryEntry)]) -> Option<&str> {
-    history.iter().find(|(_, entry)| entry.kind == "user").map(|(_, entry)| entry.text.as_str())
+    history.iter().find(|(_, entry)| entry.kind == "user" && entry.side.is_none()).map(|(_, entry)| entry.text.as_str())
 }
 
 /// The titles of the threads the person sees, as their thread list shows them.
@@ -364,7 +360,8 @@ fn indexed_turns(history: &crate::index::History) -> Vec<TurnInfo> {
         .zip(&history.prompts)
         .map(|(number, &began)| {
             // The latest prompt said at or before the mark.
-            let prompt = entries.iter().rposition(|(_, entry)| opens_turn(&entry.kind) && entry.time_ms <= began);
+            let prompt =
+                entries.iter().rposition(|(_, entry)| opens_turn(&entry.kind) && entry.side.is_none() && entry.time_ms <= began);
             TurnInfo { number, entry: prompt, prompt: prompt.map(|at| entries[at].1.text.clone()).unwrap_or_default() }
         })
         .collect()
@@ -375,7 +372,10 @@ fn turn_infos(log: &[Delta], thread: ThreadId, history: &[(DeltaId, HistoryEntry
     for delta in log.iter().filter(|delta| delta.thread == thread) {
         if let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = delta.op {
             // The latest prompt said at or before the mark.
-            let prompt = history.iter().rev().find(|(_, entry)| opens_turn(&entry.kind) && entry.time_ms <= delta.time_ms);
+            let prompt = history
+                .iter()
+                .rev()
+                .find(|(_, entry)| opens_turn(&entry.kind) && entry.side.is_none() && entry.time_ms <= delta.time_ms);
             turns.push(TurnInfo {
                 number: turns.len() + 1,
                 entry: prompt.map(|(_, entry)| entry.index),

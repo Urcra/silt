@@ -9,7 +9,7 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ClientSessionCapabilities, ContentBlock, CreateElicitationRequest,
     CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest,
-    LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    LoadSessionRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId, SessionConfigValueId,
     SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
     ToolCallContent,
@@ -17,7 +17,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
 use serde_json::Value;
 
-use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, Update, answered, label};
+use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
 use crate::modes::{modes_of, settings_of};
 use crate::prompt::{Accepts, blocks};
 
@@ -61,6 +61,7 @@ impl ConnectTo<Agent> for V1 {
         let quiet = replaying.clone();
         let asked = events.clone();
         let parked = waiting.clone();
+        let detached: Arc<Mutex<HashMap<String, String>>> = Arc::default();
         Client
             .builder()
             .name(crate::host::NAME)
@@ -69,7 +70,10 @@ impl ConnectTo<Agent> for V1 {
                     if !quiet.load(Ordering::SeqCst)
                         && let Some(event) = event_of(notification.update)
                     {
-                        let _ = updates.send(event);
+                        let followed = follow_detached(&mut detached.lock().expect("lock"), event);
+                        for event in followed {
+                            let _ = updates.send(event);
+                        }
                     }
                     Ok(())
                 },
@@ -303,7 +307,91 @@ fn event_of(update: SessionUpdate) -> Option<Event> {
     }
 }
 
+/// News of shells an agent detached, which it names only in its answers,
+/// as Copilot does: "<command started in detached background with shellId:
+/// 0>", and, when it reads one that ended, "<detached command with shellId:
+/// 0 completed with exit code 0>". `detached` keeps the call that started
+/// each, by its shell's id, so the news of its end is that call's.
+fn follow_detached(detached: &mut HashMap<String, String>, mut event: Event) -> Vec<Event> {
+    let Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), task, .. }) = &mut event else {
+        return vec![event];
+    };
+    if status != "completed" || task.is_some() {
+        return vec![event];
+    }
+    if let Some(shell) = shell_id(output, "started in detached background with shellId: ") {
+        detached.insert(shell.clone(), id.clone());
+        *task = Some(Box::new(TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: "running".to_owned() }));
+        return vec![event];
+    }
+    let Some(shell) = shell_id(output, "detached command with shellId: ") else {
+        return vec![event];
+    };
+    let Some(call) = detached.remove(&shell) else {
+        return vec![event];
+    };
+    let ended =
+        output.split_once("completed with exit code ").and_then(|(_, code)| code.split(|c: char| !c.is_ascii_digit()).next());
+    let status = if ended == Some("0") { "completed" } else { "failed" };
+    let news = TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: status.to_owned() };
+    let news = Update::ToolUpdate { id: call, status: None, output: None, title: None, input: None, task: Some(Box::new(news)) };
+    vec![Event::Update(news), event]
+}
+
+/// The shell id `output` names right after `before`.
+fn shell_id(output: &str, before: &str) -> Option<String> {
+    let (_, rest) = output.split_once(before)?;
+    let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    (!id.is_empty()).then_some(id)
+}
+
+/// Claude's adapter says in `_meta.claudeCode` which subagent call an
+/// update is inside, as `parentToolUseId`.
+fn parent_of(meta: Option<&Meta>) -> Option<String> {
+    meta?.get("claudeCode")?.get("parentToolUseId")?.as_str().map(str::to_owned)
+}
+
+/// What a call's update says it left running or saw end: Claude's adapter
+/// passes the tool's structured result as `_meta.claudeCode.toolResponse`,
+/// naming the subagent (`agentId`) or background command
+/// (`backgroundTaskId`) it started, and the exit of a background command as
+/// `_meta.terminal_exit` once it ends. Claude Code gives that no exit code:
+/// the command ran its course.
+fn task_of(meta: Option<&Meta>) -> Option<TaskNews> {
+    let meta = meta?;
+    let response = meta.get("claudeCode").and_then(|claude| claude.get("toolResponse"));
+    let field = |key: &str| response.and_then(|response| response.get(key)).and_then(Value::as_str).map(str::to_owned);
+    if let Some(agent) = field("agentId") {
+        let status = match field("status").as_deref() {
+            None | Some("async_launched") => "running".to_owned(),
+            Some(status) => status.to_owned(),
+        };
+        return Some(TaskNews { id: Some(agent), kind: Some("subagent".into()), status });
+    }
+    if let Some(background) = field("backgroundTaskId") {
+        return Some(TaskNews { id: Some(background), kind: Some("background".into()), status: "running".into() });
+    }
+    let exit = meta.get("terminal_exit")?;
+    let code = exit.get("exit_code").and_then(Value::as_i64);
+    let status = if code.is_none_or(|code| code == 0) { "completed" } else { "failed" };
+    Some(TaskNews { id: None, kind: None, status: status.to_owned() })
+}
+
 fn simplify(update: SessionUpdate) -> Option<Update> {
+    let parent = match &update {
+        SessionUpdate::AgentMessageChunk(chunk) | SessionUpdate::AgentThoughtChunk(chunk) => parent_of(chunk.meta.as_ref()),
+        SessionUpdate::ToolCall(call) => parent_of(call.meta.as_ref()),
+        SessionUpdate::ToolCallUpdate(update) => parent_of(update.meta.as_ref()),
+        _ => None,
+    };
+    let simple = simplify_own(update)?;
+    Some(match parent {
+        Some(parent) => Update::Within { parent, update: Box::new(simple) },
+        None => simple,
+    })
+}
+
+fn simplify_own(update: SessionUpdate) -> Option<Update> {
     Some(match update {
         SessionUpdate::UserMessageChunk(chunk) => Update::UserText(text_of(&chunk.content)),
         SessionUpdate::AgentMessageChunk(chunk) => Update::AgentText(text_of(&chunk.content)),
@@ -315,6 +403,7 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
             input: call.raw_input,
         },
         SessionUpdate::ToolCallUpdate(update) => Update::ToolUpdate {
+            task: task_of(update.meta.as_ref()).map(Box::new),
             id: update.tool_call_id.to_string(),
             status: update.fields.status.as_ref().map(label),
             output: update.fields.content.as_deref().and_then(tool_output).or_else(|| {
@@ -332,4 +421,94 @@ fn simplify(update: SessionUpdate) -> Option<Update> {
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_client_protocol::schema::v1::{ContentChunk, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
+    use serde_json::json;
+
+    use super::*;
+
+    fn meta(value: Value) -> Option<Meta> {
+        value.as_object().cloned()
+    }
+
+    #[test]
+    fn a_subagent_s_updates_are_kept_inside_the_call_that_started_it() {
+        let mut call = ToolCall::new("t2", "Read");
+        call.meta = meta(json!({"claudeCode": {"parentToolUseId": "t1", "toolName": "Read"}}));
+        let Some(Update::Within { parent, update }) = simplify(SessionUpdate::ToolCall(call)) else {
+            panic!("inside its call");
+        };
+        assert_eq!(parent, "t1");
+        assert!(matches!(*update, Update::ToolCall { ref id, .. } if id == "t2"));
+        let mut chunk = ContentChunk::new(ContentBlock::from("found it"));
+        chunk.meta = meta(json!({"claudeCode": {"parentToolUseId": "t1"}}));
+        assert!(matches!(simplify(SessionUpdate::AgentMessageChunk(chunk)), Some(Update::Within { .. })));
+        let own = ContentChunk::new(ContentBlock::from("mine"));
+        assert_eq!(simplify(SessionUpdate::AgentMessageChunk(own)), Some(Update::AgentText("mine".into())));
+    }
+
+    /// Copilot (1.0.104) detaching a shell and reading it once it ended, as recorded.
+    #[test]
+    fn a_shell_an_agent_detached_runs_until_it_reads_that_it_ended() {
+        let completed = |id: &str, output: &str| {
+            Event::Update(Update::ToolUpdate {
+                id: id.into(),
+                status: Some("completed".into()),
+                output: Some(output.into()),
+                title: None,
+                input: None,
+                task: None,
+            })
+        };
+        let news = |event: &Event| match event {
+            Event::Update(Update::ToolUpdate { id, task: Some(task), .. }) => {
+                Some((id.clone(), task.id.clone(), task.status.clone()))
+            }
+            _ => None,
+        };
+        let mut detached = HashMap::new();
+        let started = follow_detached(&mut detached, completed("t1", "<command started in detached background with shellId: 0>"));
+        assert_eq!(news(&started[0]), Some(("t1".into(), Some("0".into()), "running".into())));
+        let read = follow_detached(
+            &mut detached,
+            completed("r1", "Output:\nCOPILOT_BG\n<detached command with shellId: 0 completed with exit code 0>"),
+        );
+        assert_eq!(news(&read[0]), Some(("t1".into(), Some("0".into()), "completed".into())), "the news is the starting call's");
+        assert!(matches!(&read[1], Event::Update(Update::ToolUpdate { id, task: None, .. }) if id == "r1"));
+        let failed = follow_detached(&mut detached, completed("t2", "<command started in detached background with shellId: 3>"));
+        assert_eq!(failed.len(), 1);
+        let ended =
+            follow_detached(&mut detached, completed("r2", "<detached command with shellId: 3 completed with exit code 2>"));
+        assert_eq!(news(&ended[0]).map(|news| news.2), Some("failed".into()));
+        let unknown =
+            follow_detached(&mut detached, completed("r3", "<detached command with shellId: 9 completed with exit code 0>"));
+        assert_eq!(unknown.len(), 1, "a shell it never saw start is left alone");
+    }
+
+    #[test]
+    fn a_call_s_update_names_what_it_left_running_and_when_that_ended() {
+        let news = |value: Value| {
+            let mut update = ToolCallUpdate::new("t1", ToolCallUpdateFields::new());
+            update.meta = meta(value);
+            match simplify(SessionUpdate::ToolCallUpdate(update)) {
+                Some(Update::ToolUpdate { task, .. }) => task,
+                other => panic!("an update, not {other:?}"),
+            }
+        };
+        let background = TaskNews { id: Some("b3r".into()), kind: Some("background".into()), status: "running".into() };
+        assert_eq!(
+            news(json!({"claudeCode": {"toolResponse": {"backgroundTaskId": "b3r", "stdout": ""}}})),
+            Some(Box::new(background))
+        );
+        let subagent = news(json!({"claudeCode": {"toolResponse": {"agentId": "ad7", "status": "completed"}}}));
+        assert_eq!(subagent.map(|news| (news.kind, news.status)), Some((Some("subagent".into()), "completed".into())));
+        let exited = news(json!({"terminal_exit": {"exit_code": 1, "terminal_id": "t1"}}));
+        assert_eq!(exited.map(|news| news.status), Some("failed".into()));
+        let ran = news(json!({"terminal_exit": {"exit_code": null, "signal": null, "terminal_id": "t1"}}));
+        assert_eq!(ran.map(|news| news.status), Some("completed".into()), "Claude Code gives a background command no code");
+        assert_eq!(news(json!({"claudeCode": {"toolName": "Bash"}})), None);
+    }
 }

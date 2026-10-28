@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::conventions::NativeConventions;
 use crate::{
     Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
-    SessionIds, Start, Write, translated_text,
+    SessionIds, Start, Task, TaskKind, TaskStatus, Write, translated_text,
 };
 
 pub const AGENT: &str = "gemini-cli";
@@ -224,6 +224,8 @@ struct Seen {
 pub struct GeminiReader {
     messages: HashMap<String, Seen>,
     results: HashSet<String>,
+    /// Calls whose subagent was already named.
+    subagents: HashSet<String>,
 }
 
 impl GeminiReader {
@@ -342,6 +344,12 @@ impl GeminiReader {
                             kind: None,
                         });
                     }
+                    let agent = call.get("agentId").and_then(Value::as_str).filter(|agent| crate::is_safe_id(agent));
+                    if let Some(agent) = agent
+                        && self.subagents.insert(call_id.clone())
+                    {
+                        read.entries.push(Entry::Task(subagent(agent, &call_id, TaskStatus::Running)));
+                    }
                     if let Some(result) = call.get("result").filter(|result| !result.is_null()) {
                         let text = parts(Some(result))
                             .iter()
@@ -349,11 +357,30 @@ impl GeminiReader {
                             .collect::<Vec<_>>()
                             .join("\n");
                         let failed = call.get("status").and_then(Value::as_str).is_some_and(|status| status == "error");
-                        results.push((call_id, text, failed));
+                        let background = call.pointer("/args/is_background").and_then(Value::as_bool) == Some(true);
+                        results.push((call_id, text, failed, agent.map(str::to_owned), background));
                     }
                 }
-                for (call, text, failed) in results {
+                for (call, text, failed, agent, background) in results {
+                    if self.results.contains(&call) {
+                        continue;
+                    }
+                    let task = match agent {
+                        Some(agent) => {
+                            Some(subagent(&agent, &call, if failed { TaskStatus::Failed } else { TaskStatus::Completed }))
+                        }
+                        None if background && !failed => background_pid(&text).map(|pid| Task {
+                            id: pid,
+                            call: Some(call.clone()),
+                            kind: Some(TaskKind::Background),
+                            status: TaskStatus::Running,
+                            side: None,
+                            summary: None,
+                        }),
+                        None => None,
+                    };
                     self.result(read, &call, text, failed);
+                    read.entries.extend(task.map(Entry::Task));
                 }
             }
             "error" => {
@@ -367,6 +394,27 @@ impl GeminiReader {
             other => read.entries.push(Entry::Other { kind: other.to_owned() }),
         }
     }
+}
+
+/// News of the subagent `agent` a call started, whose session is the side
+/// file of that name.
+fn subagent(agent: &str, call: &str, status: TaskStatus) -> Task {
+    Task {
+        id: agent.to_owned(),
+        call: Some(call.to_owned()),
+        kind: Some(TaskKind::Subagent),
+        status,
+        side: Some(agent.to_owned()),
+        summary: None,
+    }
+}
+
+/// The process a command moved to the background runs as, from what
+/// `run_shell_command` answers: `Command moved to background (PID: 4242)`.
+fn background_pid(text: &str) -> Option<String> {
+    let after = &text[text.find("PID:")? + 4..];
+    let pid: String = after.trim_start().chars().take_while(char::is_ascii_digit).collect();
+    (!pid.is_empty()).then_some(pid)
 }
 
 fn parts(content: Option<&Value>) -> Vec<Value> {
@@ -633,6 +681,31 @@ mod tests {
         let marks: Vec<Mark> = reads.into_iter().flat_map(|read| read.marks).collect();
         assert_eq!(marks.first(), Some(&Mark::PromptSubmitted));
         assert_eq!(marks.last(), Some(&Mark::Stopped));
+    }
+
+    #[test]
+    fn a_subagent_or_background_command_a_call_started_is_named() {
+        let mut reader = GeminiReader::default();
+        let tasks = |reader: &mut GeminiReader, line: &str| -> Vec<Task> {
+            reader
+                .push(line)
+                .entries
+                .into_iter()
+                .filter_map(|entry| if let Entry::Task(task) = entry { Some(task) } else { None })
+                .collect()
+        };
+        let running = r#"{"id":"g","timestamp":"t","type":"gemini","content":"","toolCalls":[{"id":"c1","name":"invoke_agent","args":{"agent_name":"codebase_investigator","prompt":"look"},"agentId":"a-1"}]}"#;
+        assert_eq!(tasks(&mut reader, running), vec![subagent("a-1", "c1", TaskStatus::Running)]);
+        assert_eq!(tasks(&mut reader, running), vec![], "named once");
+        let done = r#"{"id":"g","timestamp":"t","type":"gemini","content":"","toolCalls":[{"id":"c1","name":"invoke_agent","args":{},"agentId":"a-1","result":[{"functionResponse":{"id":"c1","response":{"output":"found it"}}}],"status":"success"}]}"#;
+        assert_eq!(tasks(&mut reader, done), vec![subagent("a-1", "c1", TaskStatus::Completed)]);
+        assert_eq!(tasks(&mut reader, done), vec![]);
+        let shell = r#"{"id":"h","timestamp":"t","type":"gemini","content":"","toolCalls":[{"id":"c2","name":"run_shell_command","args":{"command":"npm run dev","is_background":true},"result":[{"functionResponse":{"id":"c2","response":{"output":"Command moved to background (PID: 4242). Output: /tmp/x.log"}}}],"status":"success"}]}"#;
+        let started = tasks(&mut reader, shell);
+        assert_eq!(
+            (started[0].id.as_str(), started[0].call.as_deref(), started[0].kind),
+            ("4242", Some("c2"), Some(TaskKind::Background))
+        );
     }
 
     #[test]

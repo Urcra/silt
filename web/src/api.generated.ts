@@ -393,7 +393,16 @@ usage: UsageView | null,
 /**
  * On a `plan`, or a `tool_call` that writes one: its steps.
  */
-plan: Array<PlanStepView> | null, };
+plan: Array<PlanStepView> | null, 
+/**
+ * The subagent transcript the entry is from, by its name; none for the
+ * session's own. A `task` entry names the call that started it.
+ */
+side: string | null, 
+/**
+ * On a `task`: news of a subagent or background command.
+ */
+task: TaskView | null, };
 
 export type ToolView = { id: string, name: string, 
 /**
@@ -440,6 +449,32 @@ export type PlanStepView = { text: string,
  * `pending`, `in_progress` or `completed`.
  */
 status: string, };
+
+export type TaskView = { 
+/**
+ * The agent's id for the task.
+ */
+id: string, 
+/**
+ * The tool call that started it, when known.
+ */
+call: string | null, 
+/**
+ * `subagent` or `background`, when this news says.
+ */
+kind: string | null, 
+/**
+ * `running`, `completed`, `failed` or `stopped`.
+ */
+status: string, 
+/**
+ * A subagent's transcript, by the name its entries' `side` gives.
+ */
+side: string | null, 
+/**
+ * What the agent said of how it went.
+ */
+summary: string | null, };
 
 export type QuestionView = { 
 /**

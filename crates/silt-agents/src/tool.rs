@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 use silt_proto::view::{
-    AnswerView, ChoiceView, HistoryEntry, ImageView, PlanStepView, QuestionView, ToolOutcome, ToolView, UsageView,
+    AnswerView, ChoiceView, HistoryEntry, ImageView, PlanStepView, QuestionView, TaskView, ToolOutcome, ToolView, UsageView,
 };
 
 /// What a tool call does.
@@ -22,6 +22,8 @@ pub enum ToolKind {
     Question,
     /// Fetches a page or searches the web.
     Fetch,
+    /// Hands work to a subagent.
+    Subagent,
     Other,
 }
 
@@ -34,6 +36,7 @@ impl ToolKind {
             Self::Edit => "edit",
             Self::Question => "question",
             Self::Fetch => "fetch",
+            Self::Subagent => "subagent",
             Self::Other => "other",
         }
     }
@@ -61,6 +64,10 @@ pub fn describe(name: &str, kind: Option<&str>, input: &Value) -> ToolUse {
         ToolKind::Search => (text(&["pattern", "query", "glob", "regex"]), text(&["path", "dir_path", "include"])),
         ToolKind::Question => (question(input), None),
         ToolKind::Fetch => (text(&["url", "query"]), None),
+        ToolKind::Subagent => (
+            text(&["description", "title", "prompt", "task", "message", "query"]),
+            text(&["subagent_type", "agent_type", "agent", "agent_name", "name"]),
+        ),
         ToolKind::Other => (None, None),
     };
     ToolUse { kind, subject, detail }
@@ -91,6 +98,7 @@ fn kind_of(name: &str) -> ToolKind {
         | "create" | "patch" => ToolKind::Edit,
         "askuserquestion" | "request_user_input" => ToolKind::Question,
         "webfetch" | "websearch" | "web_fetch" | "google_web_search" | "fetch" => ToolKind::Fetch,
+        "task" | "agent" | "invoke_agent" | "spawn_agent" | "subagent" => ToolKind::Subagent,
         _ => ToolKind::Other,
     }
 }
@@ -152,11 +160,24 @@ pub struct Shown {
     pub image: Option<ImageView>,
     pub usage: Option<UsageView>,
     pub plan: Option<Vec<PlanStepView>>,
+    /// The subagent transcript it is from; none for the session's own.
+    pub side: Option<String>,
+    pub task: Option<TaskView>,
 }
 
 impl Shown {
     pub fn plain(kind: &str, text: String) -> Self {
-        Self { kind: kind.to_owned(), text, tool: None, outcome: None, image: None, usage: None, plan: None }
+        Self {
+            kind: kind.to_owned(),
+            text,
+            tool: None,
+            outcome: None,
+            image: None,
+            usage: None,
+            plan: None,
+            side: None,
+            task: None,
+        }
     }
 
     /// The history entry at `index` of `thread`.
@@ -174,6 +195,8 @@ impl Shown {
             image: self.image,
             usage: self.usage,
             plan: self.plan,
+            side: self.side,
+            task: self.task,
         }
     }
 }
@@ -218,6 +241,18 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
             Shown::plain("compaction", summary.unwrap_or_else(|| "(context compacted; everything above is still here)".into()))
         }
         Entry::Woke { text } => Shown::plain("wake", text),
+        Entry::Task(task) => {
+            let view = TaskView {
+                id: task.id,
+                call: task.call,
+                kind: task.kind.map(|kind| kind.as_str().to_owned()),
+                status: task.status.as_str().to_owned(),
+                side: task.side,
+                summary: task.summary,
+            };
+            let text = view.summary.clone().unwrap_or_else(|| format!("{} {}", view.id, view.status));
+            Shown { task: Some(view), ..Shown::plain("task", text) }
+        }
         other => {
             let kind = other.kind().to_owned();
             Shown::plain(&kind, other.into_searchable_text().unwrap_or_default())

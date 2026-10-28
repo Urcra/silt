@@ -13,6 +13,7 @@ pub mod copilot;
 mod entry;
 mod error;
 pub mod gemini;
+pub mod history;
 pub mod opencode;
 mod render;
 mod rewrite;
@@ -23,7 +24,7 @@ pub mod tool;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub use entry::Entry;
+pub use entry::{Entry, Task, TaskKind, TaskStatus};
 pub use error::AgentError;
 pub use render::{Role, render_transcript, translated_text};
 pub use rewrite::{CheckedSession, RecordedSession, Rewrites, is_safe_id, is_side_file_name};
@@ -46,6 +47,10 @@ pub enum Mark {
 pub struct Read {
     pub entries: Vec<Entry>,
     pub marks: Vec<Mark>,
+    /// The subagent the record is from, for agents that write a subagent's
+    /// records into the session's own file; named as its `Task` news names
+    /// its `side`.
+    pub side: Option<String>,
 }
 
 /// A file that restoring a session writes.
@@ -94,7 +99,7 @@ impl Restore {
 
 impl Read {
     pub fn unparseable() -> Self {
-        Self { entries: vec![Entry::unparseable()], marks: Vec::new() }
+        Self { entries: vec![Entry::unparseable()], ..Self::default() }
     }
 }
 

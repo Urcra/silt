@@ -9,7 +9,7 @@ use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_agents::conventions::{self, Skill};
-use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult};
+use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult, TaskView};
 use silt_daemon::{client, paths};
 
 use crate::CliError;
@@ -205,9 +205,23 @@ fn render_page(page: &HistoryPage) -> String {
         };
         // An agent must not take a rewound turn as part of the conversation (ADR 0029).
         let rewound = if entry.rewound { " (rewound by a revert, no longer part of the conversation)" } else { "" };
-        let _ = writeln!(out, "[{}] {}{origin}{rewound}: {}", entry.index, entry.kind, entry.text.trim());
+        let side = entry.side.as_deref().map(|side| format!(" (in subagent {side})")).unwrap_or_default();
+        let text = match &entry.task {
+            Some(task) => task_line(task),
+            None => entry.text.trim().to_owned(),
+        };
+        let _ = writeln!(out, "[{}] {}{origin}{side}{rewound}: {text}", entry.index, entry.kind);
     }
     out
+}
+
+/// News of a subagent or background command, as one line.
+fn task_line(task: &TaskView) -> String {
+    let what = task.kind.as_deref().unwrap_or("task");
+    let call = task.call.as_deref().map(|call| format!(", started by tool call {call}")).unwrap_or_default();
+    let side = task.side.as_deref().map(|side| format!(", its entries marked subagent {side}")).unwrap_or_default();
+    let summary = task.summary.as_deref().map(|summary| format!(": {}", summary.trim())).unwrap_or_default();
+    format!("{what} {} {}{call}{side}{summary}", task.id, task.status)
 }
 
 fn clip(text: &str) -> String {

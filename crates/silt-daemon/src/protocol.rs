@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
     AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
     DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink,
-    PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, ThreadLink,
+    PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, TaskView, ThreadLink,
     ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked};
@@ -1202,6 +1202,7 @@ mod tests {
             ImageView::decl(&config),
             UsageView::decl(&config),
             PlanStepView::decl(&config),
+            TaskView::decl(&config),
             QuestionView::decl(&config),
             ChoiceView::decl(&config),
             AnswerView::decl(&config),

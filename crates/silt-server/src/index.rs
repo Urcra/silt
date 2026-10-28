@@ -4,7 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use silt_agents::{Entry, Transcripts};
+use silt_agents::Entry;
+use silt_agents::history::HistoryReader;
 use silt_crdt::{InodeId, InodeKind, Parent};
 use silt_log::{CommentOp, ConvOp, Delta, GitOp, MrOp, Op, TurnMark};
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Lamport, ThreadId};
@@ -34,7 +35,7 @@ pub(crate) struct Index {
     /// The deltas that refer to each blob: whoever may read one of them
     /// may fetch the blob.
     blobs: HashMap<BlobHash, Vec<(FamilyId, DeltaId)>>,
-    transcripts: Transcripts,
+    transcripts: HistoryReader,
     /// Who took part in each comment, its author first, by the comment's id.
     comment_people: HashMap<DeltaId, Vec<String>>,
     /// Each reply's comment.
@@ -151,19 +152,23 @@ impl Index {
                 Some(*inode)
             }
             Op::Conv(ConvOp::Native { session, file, line }) => {
-                let file = match file {
-                    silt_log::SessionFile::Main => "main".to_owned(),
-                    silt_log::SessionFile::Subagent(name) => format!("subagent:{name}"),
+                let side = match file {
+                    silt_log::SessionFile::Main => None,
+                    silt_log::SessionFile::Subagent(name) => Some(name.as_str()),
                 };
-                for entry in self.transcripts.entries(&session.agent, &session.id, &file, line) {
-                    self.conversations.entry(thread).or_default().take(&entry);
+                let conversation = self.conversations.entry(thread).or_default();
+                let shown = self.transcripts.line_with(&session.agent, &session.id, side, line, |entry| {
+                    // A subagent's prompts and replies aren't the thread's own.
+                    if side.is_none() {
+                        conversation.take(entry);
+                    }
                     if let Some(body) = entry.searchable_text().filter(|body| !body.trim().is_empty()) {
                         rows.push(Row::Text { thread, kind: entry.kind().to_owned(), body, time_ms });
                     }
-                    if let Some(shown) = silt_agents::tool::shown(entry) {
-                        let entry = crate::browse::history_entry(shown, thread, time_ms);
-                        self.histories.entry(thread).or_default().entries.push((delta.span.first(), entry));
-                    }
+                });
+                let history = self.histories.entry(thread).or_default();
+                for shown in shown {
+                    history.entries.push((delta.span.first(), crate::browse::history_entry(shown, thread, time_ms)));
                 }
                 None
             }

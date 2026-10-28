@@ -10,7 +10,8 @@ mod v1;
 mod v2;
 
 pub use host::{
-    AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, Update, start,
+    AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, TaskNews,
+    Update, start,
 };
 pub use modes::{Choice, Modes, Setting, built_in, plan_mode};
 pub use prompt::{Accepts, Attachment};

@@ -60,6 +60,9 @@ pub(crate) struct AcpRun {
     /// Each tool call's title and input as last recorded, so an update
     /// that says no more is left out.
     tool_said: HashMap<String, (String, Option<serde_json::Value>)>,
+    /// A subagent's message so far, by the call that started it; it is
+    /// recorded apart from the agent's own.
+    within: Option<(String, String)>,
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
     /// Settings chosen before the agent was up, by id and value, set once it
@@ -86,6 +89,19 @@ pub(crate) struct AcpRun {
     said_at: Option<Instant>,
     /// Tool calls the agent started and hasn't finished.
     calls_running: HashSet<String>,
+    /// What each call is, as a person names it: its command, or its
+    /// subagent's description, by the call.
+    labels: HashMap<String, String>,
+    /// What ended between turns, such as a command left in the background,
+    /// which is likely what the agent goes on about when it goes on by
+    /// itself.
+    woke_by: Vec<String>,
+    /// Commands left running in the background: the call that started
+    /// each, by the agent's id for it.
+    background: HashMap<String, String>,
+    /// The person stopped the agent and hasn't prompted it since: what it
+    /// left running in the background doesn't get to start it again.
+    stopped: bool,
 }
 
 /// How long an agent that went on by itself, and won't say when it stops,
@@ -459,6 +475,7 @@ impl Core {
                 steering: None,
                 tool_kinds: HashMap::new(),
                 tool_said: HashMap::new(),
+                within: None,
                 modes: None,
                 settings: Vec::new(),
                 chosen_settings: options.settings,
@@ -471,6 +488,10 @@ impl Core {
                 own_turn: false,
                 said_at: None,
                 calls_running: HashSet::new(),
+                labels: HashMap::new(),
+                woke_by: Vec::new(),
+                background: HashMap::new(),
+                stopped: false,
             },
         );
         self.agent_changed(thread).await;
@@ -659,6 +680,9 @@ impl Core {
         // itself, comes before it.
         self.flush_acp(thread).await?;
         self.own_turn_ended(thread).await?;
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.stopped = false;
+        run.woke_by.clear();
         let attached = self.record_attachments(thread, &attachments).await?;
         let images: Vec<(String, String)> = attachments
             .iter()
@@ -688,6 +712,9 @@ impl Core {
                 return Err(CoreError::Invalid("the agent didn't offer that option".into()));
             }
             run.asking.retain(|asked| asked.id != *id);
+        }
+        if command == Command::Cancel {
+            run.stopped = true;
         }
         send(run, command);
         self.agent_changed(thread).await;
@@ -1150,6 +1177,16 @@ impl Core {
             // being folded into what it does.
             run.own_turn = true;
             run.state = AgentState::Working;
+            // An agent that can't say why it went on, as Copilot, goes first
+            // for the output of the shell whose end set it off.
+            let read = match &update {
+                Update::ToolCall { input: Some(input), .. } => input.get("shellId").and_then(serde_json::Value::as_str),
+                _ => None,
+            };
+            if let Some(call) = read.and_then(|shell| run.background.get(shell)) {
+                let label = run.labels.get(call).cloned();
+                run.woke_by.push(ended(Some("background"), label.as_deref(), "ended"));
+            }
             self.agent_woke(thread).await?;
         }
         let run = self.acp.get_mut(&thread).expect("caller checked");
@@ -1175,17 +1212,19 @@ impl Core {
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
                 run.calls_running.insert(id.clone());
+                run.labels.insert(id.clone(), label_of(&title, &kind, input.as_ref()));
                 run.tool_kinds.insert(id.clone(), kind.clone());
                 run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::tool_call(&id, &title, &kind, input.as_ref())).await?;
             }
-            Update::ToolUpdate { id, status, output, title, input } => {
+            Update::ToolUpdate { id, status, output, title, input, task } => {
                 if let Some((said_title, said_input)) = run.tool_said.get(&id).cloned() {
                     let title = title.unwrap_or_else(|| said_title.clone());
                     let input = input.or_else(|| said_input.clone());
                     if (&title, &input) != (&said_title, &said_input) {
                         let kind = run.tool_kinds.get(&id).cloned().unwrap_or_default();
+                        run.labels.insert(id.clone(), label_of(&title, &kind, input.as_ref()));
                         run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
                         self.flush_acp(thread).await?;
                         self.record_acp(thread, &acp::tool_update(&id, &title, &kind, input.as_ref())).await?;
@@ -1203,11 +1242,30 @@ impl Core {
                     self.flush_acp(thread).await?;
                     self.record_acp(thread, &acp::tool_result(&id, status, output.as_deref())).await?;
                 }
+                if let Some(news) = task {
+                    let run = self.acp.get_mut(&thread).expect("caller checked");
+                    if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
+                        if news.status == "running" {
+                            run.background.insert(task.clone(), id.clone());
+                        } else {
+                            run.background.remove(task);
+                        }
+                    }
+                    // Between turns, what ended is what the agent will likely go on about.
+                    if news.status != "running" && run.state == AgentState::Idle {
+                        let label = run.labels.get(&id).cloned();
+                        run.woke_by.push(ended(news.kind.as_deref(), label.as_deref(), &news.status));
+                    }
+                    self.flush_acp(thread).await?;
+                    let record = acp::task(&id, news.id.as_deref(), news.kind.as_deref(), &news.status);
+                    self.record_acp(thread, &record).await?;
+                }
             }
             Update::Plan(steps) => {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::plan(&steps)).await?;
             }
+            Update::Within { parent, update } => self.acp_within(thread, parent, *update).await?,
         }
         Ok(())
     }
@@ -1216,7 +1274,18 @@ impl Core {
     /// is the turn before's, and a turn of its own opens (ADR 0050).
     async fn agent_woke(&mut self, thread: ThreadId) -> Result<(), CoreError> {
         self.flush_acp(thread).await?;
-        self.record_acp(thread, &acp::wake()).await
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        let cause = (!run.woke_by.is_empty()).then(|| std::mem::take(&mut run.woke_by).join("; "));
+        // Once stopped, nothing the agent left running starts it again
+        // before the person does: ACP can't stop a background command, but
+        // what the agent would do about it is stopped. An agent on v1, as
+        // Copilot, ignores a cancel with no prompt to cancel, so it is
+        // stopped as Stop agent does; the next prompt starts it again.
+        let stopped = run.stopped;
+        if stopped {
+            send(run, if run.reports_work { Command::Cancel } else { Command::Stop });
+        }
+        self.record_acp(thread, &acp::wake(cause.as_deref(), stopped)).await
     }
 
     /// Ends the turn an agent that doesn't say when it stops opened by
@@ -1260,8 +1329,60 @@ impl Core {
         }
     }
 
+    /// Records what a subagent did, inside the call `parent` that started
+    /// it: its messages, tool calls and their results, and the work it left
+    /// running. Its thoughts and plan stay its own.
+    async fn acp_within(&mut self, thread: ThreadId, parent: String, update: Update) -> Result<(), CoreError> {
+        match update {
+            Update::AgentText(text) => {
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                if let Some((call, said)) = &mut run.within
+                    && *call == parent
+                {
+                    said.push_str(&text);
+                    return Ok(());
+                }
+                self.flush_within(thread).await?;
+                self.acp.get_mut(&thread).expect("caller checked").within = Some((parent, text));
+            }
+            Update::ToolCall { id, title, kind, input } => {
+                self.flush_within(thread).await?;
+                self.record_acp(thread, &acp::within(&acp::tool_call(&id, &title, &kind, input.as_ref()), &parent)).await?;
+            }
+            Update::ToolUpdate { id, status, output, title, input, task } => {
+                self.flush_within(thread).await?;
+                if let Some(title) = title {
+                    let record = acp::tool_update(&id, &title, "", input.as_ref());
+                    self.record_acp(thread, &acp::within(&record, &parent)).await?;
+                }
+                if let Some(status @ ("completed" | "failed")) = status.as_deref() {
+                    let record = acp::tool_result(&id, status, output.as_deref());
+                    self.record_acp(thread, &acp::within(&record, &parent)).await?;
+                }
+                if let Some(news) = task {
+                    let record = acp::task(&id, news.id.as_deref(), news.kind.as_deref(), &news.status);
+                    self.record_acp(thread, &acp::within(&record, &parent)).await?;
+                }
+            }
+            Update::Thought(_) | Update::UserText(_) | Update::Plan(_) | Update::Within { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// Records a subagent's message streamed so far.
+    async fn flush_within(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        match run.within.take() {
+            Some((call, said)) if !said.trim().is_empty() => {
+                self.record_acp(thread, &acp::within(&acp::message(&said), &call)).await
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Records the message or thought streamed so far.
     async fn flush_acp(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        self.flush_within(thread).await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
         let thought = std::mem::take(&mut run.thought);
         let thought_ms = run.thought_ms;
@@ -1454,6 +1575,31 @@ const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64)
+}
+
+/// A call as a person names it: the command it runs, or what its subagent
+/// was asked to do.
+fn label_of(title: &str, kind: &str, input: Option<&serde_json::Value>) -> String {
+    let subject = silt_agents::tool::describe(title, Some(kind), input.unwrap_or(&serde_json::Value::Null)).subject;
+    let label = subject.unwrap_or_else(|| title.to_owned());
+    let line = label.lines().next().unwrap_or_default();
+    if line.chars().count() > 80 { format!("{}…", line.chars().take(79).collect::<String>()) } else { line.to_owned() }
+}
+
+/// What ended, as the notice of the turn it set off says it.
+fn ended(kind: Option<&str>, label: Option<&str>, status: &str) -> String {
+    let how = match status {
+        "completed" => "finished",
+        "failed" => "failed",
+        "ended" => "ended",
+        _ => "was stopped",
+    };
+    match (kind, label) {
+        (Some("subagent"), Some(label)) => format!("The subagent “{label}” {how}"),
+        (Some("subagent"), None) => format!("A subagent {how}"),
+        (_, Some(label)) => format!("`{label}` {how} in the background"),
+        (_, None) => format!("A command in the background {how}"),
+    }
 }
 
 /// Asks `info`'s agent what it offers: opens a session in a folder of the daemon's own, which nothing is

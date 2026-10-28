@@ -12,7 +12,10 @@
 //! `FAKE_SCRIPT` picks another session for the single-machine tests:
 //! `short`, one turn ending in a compaction, after `FAKE_PAUSE` seconds;
 //! `tools`, two turns with tools of every kind Silt treats apart and an
-//! edit by hand between them.
+//! edit by hand between them; `beside`, one turn with a subagent, whose
+//! transcript is its own file, and a command left in the background that
+//! reports back while the turn goes on; with `FAKE_UNFINISHED`, the
+//! subagent runs on in the background and the command never reports.
 
 use std::env;
 use std::fs;
@@ -84,6 +87,7 @@ fn run() -> Step {
         (true, _) => resumed(&run, &config),
         (false, Ok("short")) => short(&run),
         (false, Ok("tools")) => tools(&run),
+        (false, Ok("beside")) => beside(&run),
         (false, _) => first(&run),
     }
 }
@@ -306,6 +310,50 @@ fn tools(run: &Run) -> Step {
     run.finish("toolu_4", "Write", &notes)?;
     run.reply("Noted.")?;
     stop()
+}
+
+/// A subagent, its transcript in `subagents/agent-a1.jsonl`, and a command
+/// left running in the background, which reports back mid-turn.
+fn beside(run: &Run) -> Step {
+    let unfinished = env::var_os("FAKE_UNFINISHED").is_some();
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    run.prompt("Look into the lexer and start the dev server")?;
+    let look = json!({"description": "Investigate the lexer", "subagent_type": "Explore", "prompt": "Investigate the lexer"});
+    run.start("toolu_a", "Agent", &look)?;
+    let subagents = run.dir.join(&run.session).join("subagents");
+    fs::create_dir_all(&subagents).map_err(io)?;
+    let side = subagents.join("agent-a1.jsonl");
+    let said = |record: Value| append(&side, &format!("{record}\n"));
+    said(
+        json!({"type": "user", "isSidechain": true, "agentId": "a1", "message": {"role": "user", "content": "Investigate the lexer"}}),
+    )?;
+    said(json!({"type": "assistant", "isSidechain": true, "agentId": "a1", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Read lexer.rs: nothing wrong with it."},
+    ]}}))?;
+    write(&subagents.join("agent-a1.meta.json"), br#"{"agentType":"Explore","toolUseId":"toolu_a"}"#)?;
+    run.hook("PostToolUse", &run.about("PostToolUse", "Agent", "toolu_a", &look), None)?;
+    run.say(&json!({
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_a", "content": "The lexer is fine."}]},
+        "toolUseResult": {"status": if unfinished { "async_launched" } else { "completed" }, "agentId": "a1"},
+    }))?;
+    let serve = json!({"command": "npm run dev", "description": "Start the dev server", "run_in_background": true});
+    run.start("toolu_b", "Bash", &serve)?;
+    run.hook("PostToolUse", &run.about("PostToolUse", "Bash", "toolu_b", &serve), None)?;
+    run.say(&json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_b", "content": "Command running in background with ID: bg1."},
+        ]},
+        "toolUseResult": {"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "bg1"},
+    }))?;
+    let report = "<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>toolu_b</tool-use-id>\n<status>failed</status>\n\
+                  <summary>Background command \"Start the dev server\" failed with exit code 1</summary>\n</task-notification>";
+    if !unfinished {
+        run.say(&json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": report}}))?;
+    }
+    run.reply("The lexer is fine; the dev server failed to start.")?;
+    run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None)
 }
 
 fn tool_use(id: &str) -> Value {

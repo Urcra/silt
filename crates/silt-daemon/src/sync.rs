@@ -243,7 +243,7 @@ impl Core {
         let mut rows = Vec::new();
         for delta in deltas {
             if let Op::Conv(ConvOp::Native { .. }) = &delta.op {
-                for entry in crate::transcripts::native_entries(&mut self.index_transcripts, delta) {
+                for entry in crate::transcripts::all_entries(&mut self.index_transcripts, delta) {
                     if let Some(body) = entry.searchable_text().filter(|text| !text.trim().is_empty()) {
                         rows.push(SearchRow {
                             thread: delta.thread,

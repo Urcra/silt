@@ -3,6 +3,7 @@
 //! `{timestamp, type, payload}` record per line (docs/research/agents.md).
 //! Codex picks the id itself, so a new session is found by its cwd.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::{
     Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
-    SessionIds, Start, Stateless, Write, translated_text,
+    SessionIds, Start, Task, TaskKind, TaskStatus, Write, translated_text,
 };
 
 pub const AGENT: &str = "codex";
@@ -88,7 +89,7 @@ pub fn discover_in(home: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> 
         .filter(|(id, _)| !known.contains(id))
         .filter_map(|(id, path)| {
             let meta = session_meta(&path)?;
-            (meta.get("cwd").and_then(Value::as_str) == Some(&*cwd)).then_some(())?;
+            (meta.get("cwd").and_then(Value::as_str) == Some(&*cwd) && parent_of(&meta).is_none()).then_some(())?;
             let started = meta.get("timestamp").and_then(Value::as_str).and_then(crate::time::parse_timestamp)?;
             (started >= since_ms).then_some((started, id, path))
         })
@@ -103,6 +104,8 @@ pub fn on_disk_in(home: &Path) -> Vec<OnDisk> {
         .filter_map(|path| {
             let id = rollout_id(&path)?;
             let meta = session_meta(&path);
+            // A subagent's rollout is read with its parent's session.
+            meta.as_ref().and_then(parent_of).is_none().then_some(())?;
             let field = |key: &str| meta.as_ref()?.get(key)?.as_str().map(str::to_owned);
             let cwd = field("cwd").map(PathBuf::from);
             let started_ms = field("timestamp").as_deref().and_then(crate::time::parse_timestamp);
@@ -151,6 +154,129 @@ pub fn plan_restore(
 fn session_meta(path: &Path) -> Option<Value> {
     let value: Value = serde_json::from_str(&crate::first_line(path)?).ok()?;
     (value.get("type")?.as_str()? == "session_meta").then(|| value.get("payload").cloned()).flatten()
+}
+
+/// The thread a subagent's rollout says spawned it.
+fn parent_of(meta: &Value) -> Option<&str> {
+    meta.get("parent_thread_id")
+        .or_else(|| meta.pointer("/source/subagent/thread_spawn/parent_thread_id"))
+        .and_then(Value::as_str)
+}
+
+/// The rollouts of the subagents `transcript`'s session spawned, by their
+/// thread id: those from its day on whose `session_meta` names it.
+pub fn subagent_rollouts(transcript: &Path) -> Vec<(String, PathBuf)> {
+    let Some(id) = rollout_id(transcript) else {
+        return Vec::new();
+    };
+    let day: Vec<String> = transcript
+        .ancestors()
+        .skip(1)
+        .take(3)
+        .filter_map(|dir| dir.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .collect();
+    let (Some(home), [day, month, year]) = (transcript.ancestors().nth(5), day.as_slice()) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, PathBuf)> = rollouts_from(home, &[year, month, day])
+        .into_iter()
+        // A rollout's name starts with when it started, and a subagent starts after its parent.
+        .filter(|path| path != transcript && started_name(path) >= started_name(transcript))
+        .filter_map(|path| {
+            let child = rollout_id(&path).filter(|child| crate::is_safe_id(child))?;
+            (parent_of(&session_meta(&path)?)? == id).then_some((child, path))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// `rollout-YYYY-MM-DDThh-mm-ss`, the part of a rollout's name that says
+/// when it started.
+fn started_name(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().chars().take(27).collect()).unwrap_or_default()
+}
+
+/// Reads rollout lines, remembering which background session each
+/// `write_stdin` call wrote to, as its output doesn't say.
+#[derive(Default)]
+pub struct CodexReader {
+    stdin: HashMap<String, String>,
+}
+
+impl Reader for CodexReader {
+    fn push(&mut self, line: &str) -> Read {
+        let mut read = read_line(line);
+        let mut news = Vec::new();
+        for entry in &read.entries {
+            match entry {
+                Entry::ToolCall { id, name, input, .. } if name == "write_stdin" => {
+                    let session = input.get("session_id").map(|session| match session {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    });
+                    if let Some(session) = session {
+                        self.stdin.insert(id.clone(), session);
+                    }
+                }
+                Entry::ToolResult { tool_use_id, text, .. } => {
+                    if let Some(session) = running_session(text) {
+                        news.push(Task {
+                            id: session,
+                            call: Some(tool_use_id.clone()),
+                            kind: Some(TaskKind::Background),
+                            status: TaskStatus::Running,
+                            side: None,
+                            summary: None,
+                        });
+                    } else if let (Some(code), Some(session)) = (exit_code(text), self.stdin.remove(tool_use_id)) {
+                        news.push(Task {
+                            id: session,
+                            call: None,
+                            kind: Some(TaskKind::Background),
+                            status: if code == 0 { TaskStatus::Completed } else { TaskStatus::Failed },
+                            side: None,
+                            summary: Some(format!("Exited with code {code}")),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        read.entries.extend(news.into_iter().map(Entry::Task));
+        read
+    }
+}
+
+/// The session a unified-exec command still runs in, from its output:
+/// `Process running with session ID 3`.
+fn running_session(output: &str) -> Option<String> {
+    const SAID: &str = "Process running with session ID ";
+    let after = &output[output.find(SAID)? + SAID.len()..];
+    let id: String = after.chars().take_while(char::is_ascii_alphanumeric).collect();
+    (!id.is_empty()).then_some(id)
+}
+
+/// How a background command ended, from the output that saw it end:
+/// `Process exited with code 1`.
+fn exit_code(output: &str) -> Option<i32> {
+    const SAID: &str = "Process exited with code ";
+    let after = &output[output.find(SAID)? + SAID.len()..];
+    after.split_whitespace().next()?.parse().ok()
+}
+
+/// The subagent a `spawn_agent` call started, from its output's `agent_id`.
+fn spawned(call: &str, output: &str) -> Option<Task> {
+    let output: Value = serde_json::from_str(output).ok()?;
+    let agent = output.get("agent_id")?.as_str().filter(|agent| crate::is_safe_id(agent))?;
+    Some(Task {
+        id: agent.to_owned(),
+        call: Some(call.to_owned()),
+        kind: Some(TaskKind::Subagent),
+        status: TaskStatus::Running,
+        side: Some(agent.to_owned()),
+        summary: None,
+    })
 }
 
 /// The conversation steps and turn marks in one rollout line.
@@ -208,7 +334,27 @@ pub fn read_line(line: &str) -> Read {
                 other => content_text(other),
             };
             read.marks.push(Mark::ToolFinished { tool_use_id: id.clone() });
+            let task = spawned(&id, &text);
             read.entries.push(Entry::ToolResult { tool_use_id: id, text, is_error: false });
+            read.entries.extend(task.map(Entry::Task));
+        }
+        ("event_msg", "item_completed") if payload.pointer("/item/type").and_then(Value::as_str) == Some("SubAgentActivity") => {
+            let item = &payload["item"];
+            let status = item.get("kind").and_then(Value::as_str).map_or(TaskStatus::Running, |kind| match kind {
+                "interrupted" => TaskStatus::Stopped,
+                other => TaskStatus::parse(other),
+            });
+            match item.get("agent_thread_id").and_then(Value::as_str).filter(|agent| crate::is_safe_id(agent)) {
+                Some(agent) if status != TaskStatus::Running => read.entries.push(Entry::Task(Task {
+                    id: agent.to_owned(),
+                    call: None,
+                    kind: Some(TaskKind::Subagent),
+                    status,
+                    side: Some(agent.to_owned()),
+                    summary: None,
+                })),
+                _ => read.entries.push(Entry::Other { kind: "event_msg:item_completed".into() }),
+            }
         }
         ("compacted", _) => {
             let message = field("message");
@@ -328,7 +474,7 @@ impl Agent for Codex {
     }
 
     fn reader(&self) -> Box<dyn Reader> {
-        Box::new(Stateless(read_line))
+        Box::new(CodexReader::default())
     }
 
     fn session_ids(&self) -> SessionIds {
@@ -337,6 +483,10 @@ impl Agent for Codex {
 
     fn transcript(&self, _cwd: &Path, id: &str) -> Option<PathBuf> {
         rollouts(&home()?).into_iter().find(|path| rollout_id(path).as_deref() == Some(id))
+    }
+
+    fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
+        subagent_rollouts(transcript)
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
@@ -487,5 +637,77 @@ mod tests {
         assert_eq!(found[0].id, id);
         assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/w/repo")));
         assert!(found[0].started_ms.is_some());
+    }
+
+    #[test]
+    fn a_subagent_s_rollout_is_its_parent_s_side_transcript_not_a_session() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let (parent, child, other) = (
+            "0199a213-81c0-7800-8aa1-bbab2a035a53",
+            "0199a213-81c0-7800-8aa1-bbab2a035a54",
+            "0199a213-81c0-7800-8aa1-bbab2a035a55",
+        );
+        let write = |day: &str, id: &str, meta: Value| {
+            let dir = home.path().join("sessions").join(day);
+            fs::create_dir_all(&dir).expect("mkdir");
+            let path = dir.join(format!("rollout-2026-01-02T03-04-05-{id}.jsonl"));
+            fs::write(&path, format!("{}\n", json!({"type": "session_meta", "payload": meta}))).expect("writes");
+            path
+        };
+        let main = write("2026/01/02", parent, json!({"id": parent, "timestamp": "2026-01-02T03:04:05.000Z", "cwd": "/w/repo"}));
+        let spawned = write(
+            "2026/01/03",
+            child,
+            json!({"id": child, "timestamp": "2026-01-03T00:00:01.000Z", "cwd": "/w/repo",
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent, "depth": 1}}}}),
+        );
+        write("2026/01/02", other, json!({"id": other, "cwd": "/w/repo", "parent_thread_id": "someone-else"}));
+        let earlier =
+            home.path().join("sessions/2026/01/02/rollout-2026-01-02T01-00-00-0199a213-81c0-7800-8aa1-bbab2a035a56.jsonl");
+        let claims = json!({"type": "session_meta", "payload": {"id": "x", "parent_thread_id": parent}});
+        fs::write(&earlier, format!("{claims}\n")).expect("writes");
+        assert_eq!(subagent_rollouts(&main), vec![(child.to_owned(), spawned)]);
+        assert_eq!(on_disk_in(home.path()).iter().map(|found| found.id.as_str()).collect::<Vec<_>>(), vec![parent]);
+    }
+
+    #[test]
+    fn a_spawned_subagent_and_a_background_command_are_named_until_they_end() {
+        let mut reader = CodexReader::default();
+        let mut tasks = |line: Value| -> Vec<Task> {
+            let read = reader.push(&line.to_string());
+            read.entries.into_iter().filter_map(|entry| if let Entry::Task(task) = entry { Some(task) } else { None }).collect()
+        };
+        let item = |payload: Value| json!({"timestamp": "t", "type": "response_item", "payload": payload});
+        let spawned = tasks(item(
+            json!({"type": "function_call_output", "call_id": "c1", "output": "{\"agent_id\":\"kid-1\",\"nickname\":\"Ada\"}"}),
+        ));
+        assert_eq!(
+            spawned,
+            vec![Task {
+                id: "kid-1".into(),
+                call: Some("c1".into()),
+                kind: Some(TaskKind::Subagent),
+                status: TaskStatus::Running,
+                side: Some("kid-1".into()),
+                summary: None
+            }]
+        );
+        let started = tasks(item(
+            json!({"type": "function_call_output", "call_id": "c2", "output": "Wall time: 1s\nProcess running with session ID 7\nOutput:\nlistening"}),
+        ));
+        assert_eq!(
+            (started[0].id.as_str(), started[0].call.as_deref(), started[0].status),
+            ("7", Some("c2"), TaskStatus::Running)
+        );
+        tasks(item(
+            json!({"type": "function_call", "name": "write_stdin", "arguments": "{\"session_id\":7,\"chars\":\"\"}", "call_id": "c3"}),
+        ));
+        let ended = tasks(item(
+            json!({"type": "function_call_output", "call_id": "c3", "output": "Process exited with code 2\nOutput:\nboom"}),
+        ));
+        assert_eq!((ended[0].id.as_str(), ended[0].status), ("7", TaskStatus::Failed));
+        let finished = tasks(json!({"timestamp": "t", "type": "event_msg", "payload": {"type": "item_completed",
+            "item": {"type": "SubAgentActivity", "kind": "completed", "agent_thread_id": "kid-1"}}}));
+        assert_eq!(finished[0].status, TaskStatus::Completed);
     }
 }

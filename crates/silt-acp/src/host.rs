@@ -83,9 +83,26 @@ pub enum Update {
         /// than it did when it announced the call.
         title: Option<String>,
         input: Option<Value>,
+        task: Option<Box<TaskNews>>,
     },
     /// The agent's plan: each step and its status.
     Plan(Vec<(String, String)>),
+    /// What a subagent did, inside the tool call `parent` that started it.
+    Within {
+        parent: String,
+        update: Box<Update>,
+    },
+}
+
+/// What a call's update says of work it left running beside the turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskNews {
+    /// The agent's id for it, when the update names it.
+    pub id: Option<String>,
+    /// `subagent` or `background`, when the update says.
+    pub kind: Option<String>,
+    /// `running`, `completed`, `failed` or `stopped`.
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

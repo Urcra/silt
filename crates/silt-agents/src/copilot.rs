@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::conventions::NativeConventions;
 use crate::{
     Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, OnDisk, Read, Reader, Restore, Rewrites, Role,
-    SessionIds, Start, Write, translated_text,
+    SessionIds, Start, Task, TaskKind, TaskStatus, Write, translated_text,
 };
 
 pub const AGENT: &str = "copilot-cli";
@@ -40,6 +40,11 @@ pub struct CopilotReader {
 impl Reader for CopilotReader {
     fn push(&mut self, line: &str) -> Read {
         let mut read = read_line(line);
+        // A subagent's events neither start nor end the session's turns.
+        if read.side.is_some() {
+            read.marks.clear();
+            return read;
+        }
         let kind = serde_json::from_str::<Value>(line)
             .ok()
             .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
@@ -80,7 +85,39 @@ pub fn read_line(line: &str) -> Read {
         _ => String::new(),
     };
     let mut read = Read::default();
+    let agent = value.get("agentId").and_then(Value::as_str).filter(|agent| crate::is_safe_id(agent)).map(str::to_owned);
+    if !kind.starts_with("subagent.") {
+        read.side.clone_from(&agent);
+    }
+    let subagent = |status: TaskStatus, call: Option<String>, summary: Option<String>| {
+        agent.clone().map(|agent| Task {
+            id: agent.clone(),
+            call,
+            kind: Some(TaskKind::Subagent),
+            status,
+            side: Some(agent),
+            summary,
+        })
+    };
     match kind {
+        "subagent.started" => {
+            let name = ["agentDisplayName", "agentName"].iter().find_map(|key| data.get(*key).and_then(Value::as_str));
+            let call = Some(text("toolCallId")).filter(|call| !call.is_empty());
+            read.entries.extend(subagent(TaskStatus::Running, call, name.map(str::to_owned)).map(Entry::Task));
+        }
+        "subagent.completed" => {
+            let cancelled = data.get("cancelled").and_then(Value::as_bool) == Some(true);
+            let status = if cancelled { TaskStatus::Stopped } else { TaskStatus::Completed };
+            read.entries.extend(subagent(status, None, None).map(Entry::Task));
+        }
+        "subagent.failed" => {
+            let error = Some(text("error")).filter(|error| !error.is_empty());
+            read.entries.extend(subagent(TaskStatus::Failed, None, error).map(Entry::Task));
+        }
+        "system.notification" => match notified(&data) {
+            Some(task) => read.entries.push(Entry::Task(task)),
+            None => read.entries.push(Entry::Other { kind: kind.to_owned() }),
+        },
         "user.message" => {
             read.marks.push(Mark::PromptSubmitted);
             read.entries.push(Entry::User { text: text("content") });
@@ -123,6 +160,38 @@ pub fn read_line(line: &str) -> Read {
         other => read.entries.push(Entry::Other { kind: other.to_owned() }),
     }
     read
+}
+
+/// What a `system.notification` says ended: a shell left running, or a
+/// subagent.
+fn notified(data: &Value) -> Option<Task> {
+    let kind = data.get("kind")?;
+    let field = |key: &str| kind.get(key).and_then(Value::as_str).map(str::to_owned);
+    match kind.get("type")?.as_str()? {
+        "shell_completed" | "shell_detached_completed" => {
+            let code = kind.get("exitCode").and_then(Value::as_i64);
+            Some(Task {
+                id: field("shellId")?,
+                call: None,
+                kind: Some(TaskKind::Background),
+                status: if code.is_none_or(|code| code == 0) { TaskStatus::Completed } else { TaskStatus::Failed },
+                side: None,
+                summary: field("description"),
+            })
+        }
+        "agent_completed" => {
+            let agent = field("agentId").filter(|agent| crate::is_safe_id(agent))?;
+            Some(Task {
+                id: agent.clone(),
+                call: None,
+                kind: Some(TaskKind::Subagent),
+                status: field("status").map_or(TaskStatus::Completed, |status| TaskStatus::parse(&status)),
+                side: Some(agent),
+                summary: None,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// The newest session started in `cwd` no earlier than `since_ms` in the
@@ -423,6 +492,34 @@ mod tests {
         assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"1"}"#)), vec![Mark::Stopped]);
         assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"2"}"#)), Vec::new());
         assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"2"}"#)), vec![Mark::Stopped], "an empty or cancelled reply");
+    }
+
+    #[test]
+    fn a_subagent_s_events_are_its_own_and_its_news_ties_it_to_its_call() {
+        let mut reader = CopilotReader::default();
+        let started = reader.push(r#"{"type":"subagent.started","agentId":"math-helper-0","data":{"toolCallId":"call_1","agentName":"math","agentDisplayName":"Math helper","executionMode":"background"}}"#);
+        assert_eq!(started.side, None);
+        assert_eq!(
+            started.entries,
+            vec![Entry::Task(Task {
+                id: "math-helper-0".into(),
+                call: Some("call_1".into()),
+                kind: Some(TaskKind::Subagent),
+                status: TaskStatus::Running,
+                side: Some("math-helper-0".into()),
+                summary: Some("Math helper".into()),
+            })]
+        );
+        let said = reader.push(r#"{"type":"user.message","agentId":"math-helper-0","data":{"content":"Add 2 and 2"}}"#);
+        assert_eq!((said.side.as_deref(), said.marks.len()), (Some("math-helper-0"), 0));
+        let done =
+            reader.push(r#"{"type":"subagent.completed","agentId":"math-helper-0","data":{"durationMs":10,"cancelled":true}}"#);
+        assert!(matches!(&done.entries[0], Entry::Task(Task { status: TaskStatus::Stopped, .. })));
+        let shell = reader.push(r#"{"type":"system.notification","data":{"content":"<system_notification>done","kind":{"type":"shell_completed","shellId":"sh-3","exitCode":1,"description":"npm test"}}}"#);
+        assert!(
+            matches!(&shell.entries[0], Entry::Task(Task { id, status: TaskStatus::Failed, kind: Some(TaskKind::Background), .. }) if id == "sh-3")
+        );
+        assert_eq!(reader.push(r#"{"type":"user.message","data":{"content":"next"}}"#).marks, vec![Mark::PromptSubmitted]);
     }
 
     #[test]

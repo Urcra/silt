@@ -49,6 +49,7 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
             | Entry::Image { .. }
             | Entry::Usage { .. }
             | Entry::Compaction { summary: None }
+            | Entry::Task(_)
             | Entry::Other { .. } => {}
         }
     }

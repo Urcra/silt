@@ -11,8 +11,9 @@ use agent_client_protocol::schema::v2::{
     self, CancelSessionNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
     ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest, McpServer, McpServerStdio,
     NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    RequestPermissionSubject, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionUpdate,
-    SetSessionConfigOptionRequest, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, UpdateSessionNotification,
+    RequestPermissionSubject, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionMessage,
+    SessionUpdate, SetSessionConfigOptionRequest, StateUpdate, SubagentUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    UpdateSessionNotification,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{Agent, Client, ConnectTo, Responder, V2ConnectionTo};
@@ -20,7 +21,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 
-use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, Update, answered, label};
+use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
 use crate::modes::{Setting, modes_in, settings_v2};
 use crate::prompt::{Accepts, blocks_v2};
 
@@ -161,6 +162,11 @@ impl ConnectTo<Agent> for V2 {
                         }
                         Command::Cancel => {
                             connection.send_notification(CancelSessionNotification::new(session.clone()))?;
+                            // A subagent left running in the background outlives
+                            // its parent's cancel; each is stopped by its own.
+                            for child in reading.lock().expect("lock").running_children() {
+                                connection.send_notification(CancelSessionNotification::new(child))?;
+                            }
                             // The protocol asks clients to answer every pending
                             // permission request once they cancel.
                             let parked: Vec<_> = waiting.lock().expect("lock").drain().map(|(_, responder)| responder).collect();
@@ -284,6 +290,25 @@ pub(crate) struct Reading {
     terminals: HashMap<String, String>,
     /// The setting that is the agent's mode, and its value.
     mode: Option<(String, String)>,
+    /// Each call's input as last said, by the call.
+    inputs: HashMap<String, Value>,
+    /// Commands left running in the background: the agent's id for each,
+    /// by the call that started it.
+    background: HashMap<String, String>,
+    /// The agent's subagents, by their sessions.
+    children: HashMap<String, Child>,
+}
+
+/// A subagent, as its parent's updates say it: v2 runs each in a session
+/// of its own (ACP's subagents RFD).
+#[derive(Debug, Default)]
+struct Child {
+    /// The call that started it, which the prompt the parent sent it names.
+    call: Option<String>,
+    /// Its kind, as Claude's `subagent_type`.
+    title: Option<String>,
+    description: Option<String>,
+    ended: bool,
 }
 
 impl Reading {
@@ -313,12 +338,118 @@ impl Reading {
         events
     }
 
-    /// What an update of `session` says, as Silt's events. Updates of
-    /// other sessions, such as a subagent's, are left out.
+    /// The subagents still running, by their sessions, which a cancel of
+    /// their own stops.
+    pub(crate) fn running_children(&self) -> Vec<SessionId> {
+        self.children.iter().filter(|(_, child)| !child.ended).map(|(id, _)| SessionId::new(id.clone())).collect()
+    }
+
+    /// What an update of `session` says, as Silt's events. A subagent's
+    /// session is recorded inside the call that started it; others are left
+    /// out.
     pub(crate) fn read(&mut self, session: &SessionId, update: SessionUpdate) -> Vec<Event> {
         if self.session.as_ref() != Some(session) {
+            return self.child(session, update);
+        }
+        match update {
+            SessionUpdate::SubagentUpdate(update) => self.subagent(update),
+            SessionUpdate::SessionMessage(message) => self.message(message),
+            SessionUpdate::ConfigOptionUpdate(update) => self.settings(settings_v2(update.config_options)),
+            SessionUpdate::UsageUpdate(usage) => vec![Event::Context { used: usage.used, size: usage.size }],
+            update => self.said(update),
+        }
+    }
+
+    /// What a subagent's own session says, inside the call that started it.
+    fn child(&mut self, session: &SessionId, update: SessionUpdate) -> Vec<Event> {
+        let Some(parent) = self.children.get(&session.to_string()).and_then(|child| child.call.clone()) else {
+            return Vec::new();
+        };
+        if matches!(update, SessionUpdate::StateUpdate(_)) {
             return Vec::new();
         }
+        self.said(update)
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Update(update) => Some(Event::Update(Update::Within { parent: parent.clone(), update: Box::new(update) })),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// News of a subagent: what it is, and how it ended.
+    fn subagent(&mut self, update: SubagentUpdate) -> Vec<Event> {
+        let id = update.session_id.to_string();
+        let child = self.children.entry(id.clone()).or_default();
+        if let MaybeUndefined::Value(title) = update.title {
+            child.title = Some(title);
+        }
+        if let MaybeUndefined::Value(description) = update.description {
+            child.description = Some(description);
+        }
+        let MaybeUndefined::Value(StateUpdate::Idle(idle)) = update.state else {
+            return Vec::new();
+        };
+        child.ended = true;
+        let status = match idle.stop_reason {
+            None | Some(v2::StopReason::EndTurn) => "completed",
+            Some(v2::StopReason::Cancelled) => "stopped",
+            Some(_) => "failed",
+        };
+        child.call.clone().map(|call| news(&call, &id, "subagent", status)).into_iter().collect()
+    }
+
+    /// A message between the agent and a subagent: the prompt it gave one,
+    /// which names the call that started it, or what one reported back.
+    fn message(&mut self, message: SessionMessage) -> Vec<Event> {
+        let (Some(sender), Some(recipient), Some(main)) =
+            (message.sender_session_id, message.recipient_session_id, self.session.clone())
+        else {
+            return Vec::new();
+        };
+        let text = match &message.content {
+            MaybeUndefined::Value(content) => all_text(content),
+            _ => String::new(),
+        };
+        if sender == main {
+            let child = self.children.entry(recipient.to_string()).or_default();
+            // A later message to a subagent already started goes on its work.
+            if child.call.is_some() {
+                return Vec::new();
+            }
+            let call = message.message_id.to_string();
+            child.call = Some(call.clone());
+            let input = serde_json::json!({"description": child.description, "subagent_type": child.title, "prompt": text});
+            self.calls.insert(call.clone());
+            return vec![
+                Event::Update(Update::ToolCall {
+                    id: call.clone(),
+                    title: "Agent".to_owned(),
+                    kind: "other".to_owned(),
+                    input: Some(input),
+                }),
+                news(&call, &recipient.to_string(), "subagent", "running"),
+            ];
+        }
+        if recipient != main {
+            return Vec::new();
+        }
+        let Some(call) = self.children.get(&sender.to_string()).and_then(|child| child.call.clone()) else {
+            return Vec::new();
+        };
+        let ended = Update::ToolUpdate {
+            id: call,
+            status: Some("completed".to_owned()),
+            output: Some(text),
+            title: None,
+            input: None,
+            task: None,
+        };
+        vec![Event::Update(ended)]
+    }
+
+    /// What the agent itself did: its words, thoughts, tool calls and plan.
+    fn said(&mut self, update: SessionUpdate) -> Vec<Event> {
         match update {
             SessionUpdate::StateUpdate(StateUpdate::Running(_) | StateUpdate::RequiresAction(_)) => {
                 self.working = true;
@@ -378,13 +509,22 @@ impl Reading {
                 }
             }
             SessionUpdate::TerminalUpdate(terminal) => {
-                let MaybeUndefined::Value(output) = terminal.output else {
-                    return Vec::new();
-                };
                 let Some(call) = self.terminal_call(&terminal.terminal_id.to_string()) else {
                     return Vec::new();
                 };
-                self.print(&call, &decoded(&output.data), false)
+                if let MaybeUndefined::Value(output) = terminal.output {
+                    return self.print(&call, &decoded(&output.data), false);
+                }
+                // A command left in the background ends with its terminal,
+                // which Claude Code gives no exit code; it ran its course.
+                match (terminal.exit_status, self.background.remove(&call)) {
+                    (MaybeUndefined::Value(exit), Some(task)) => {
+                        let code = serde_json::to_value(&exit).ok().and_then(|exit| exit.get("exitCode")?.as_i64());
+                        let status = if code.is_none_or(|code| code == 0) { "completed" } else { "failed" };
+                        vec![news(&call, &task, "background", status)]
+                    }
+                    _ => Vec::new(),
+                }
             }
             SessionUpdate::TerminalOutputChunk(chunk) => {
                 let Some(call) = self.terminal_call(&chunk.terminal_id.to_string()) else {
@@ -399,8 +539,6 @@ impl Reading {
                 }
                 _ => Vec::new(),
             },
-            SessionUpdate::ConfigOptionUpdate(update) => self.settings(settings_v2(update.config_options)),
-            SessionUpdate::UsageUpdate(usage) => vec![Event::Context { used: usage.used, size: usage.size }],
             _ => Vec::new(),
         }
     }
@@ -428,6 +566,9 @@ impl Reading {
         let mut events = Vec::new();
         let title = call.title.take().or_else(|| call.name.take());
         let input = call.raw_input.take();
+        if let Some(input) = &input {
+            self.inputs.insert(id.clone(), input.clone());
+        }
         if self.calls.insert(id.clone()) {
             events.push(Event::Update(Update::ToolCall {
                 id: id.clone(),
@@ -459,10 +600,24 @@ impl Reading {
         });
         let ended = matches!(status.as_deref(), Some("completed" | "failed"));
         let output = if ended { output.or_else(|| self.printed.remove(&id)) } else { output };
+        let task = (status.as_deref() == Some("completed")).then(|| self.left_running(&id, output.as_deref())).flatten();
         if status.is_some() || output.is_some() || (events.is_empty() && (title.is_some() || input.is_some())) {
-            events.push(Event::Update(Update::ToolUpdate { id, status, output, title, input }));
+            events.push(Event::Update(Update::ToolUpdate { id, status, output, title, input, task }));
         }
         events
+    }
+
+    /// News that a command which completed went on in the background, as
+    /// Claude's Bash does with `run_in_background`, under the id its answer
+    /// gives it.
+    fn left_running(&mut self, call: &str, output: Option<&str>) -> Option<Box<TaskNews>> {
+        let background = self.inputs.get(call)?.get("run_in_background")?.as_bool()?;
+        if !background {
+            return None;
+        }
+        let task = output.and_then(background_id).unwrap_or_else(|| call.to_owned());
+        self.background.insert(call.to_owned(), task.clone());
+        Some(Box::new(TaskNews { id: Some(task), kind: Some("background".to_owned()), status: "running".to_owned() }))
     }
 
     fn watch(&mut self, call: &str, content: &ToolCallContent) {
@@ -484,8 +639,36 @@ impl Reading {
         }
         printed.push_str(text);
         let output = Some(printed.clone());
-        vec![Event::Update(Update::ToolUpdate { id: call.to_owned(), status: None, output, title: None, input: None })]
+        vec![Event::Update(Update::ToolUpdate {
+            id: call.to_owned(),
+            status: None,
+            output,
+            title: None,
+            input: None,
+            task: None,
+        })]
     }
+}
+
+/// News of work the call `call` left running beside the turn.
+fn news(call: &str, task: &str, kind: &str, status: &str) -> Event {
+    let news = TaskNews { id: Some(task.to_owned()), kind: Some(kind.to_owned()), status: status.to_owned() };
+    Event::Update(Update::ToolUpdate {
+        id: call.to_owned(),
+        status: None,
+        output: None,
+        title: None,
+        input: None,
+        task: Some(Box::new(news)),
+    })
+}
+
+/// The id Claude Code gives a command it left running, from its answer:
+/// "Command running in background with ID: bjc3wn7du. Output is …".
+fn background_id(output: &str) -> Option<String> {
+    let (_, rest) = output.split_once("with ID: ")?;
+    let id: String = rest.chars().take_while(char::is_ascii_alphanumeric).collect();
+    (!id.is_empty()).then_some(id)
 }
 
 fn stop_reason(reason: v2::StopReason) -> StopReason {
@@ -669,6 +852,113 @@ mod tests {
             serde_json::json!({"sessionUpdate": "agent_message", "messageId": "m1", "content": [{"type": "text", "text": "Hello world"}]}),
         );
         assert!(again.is_empty());
+    }
+
+    fn task_of(event: &Event) -> Option<(&str, Option<&str>, Option<&str>, &str)> {
+        match event {
+            Event::Update(Update::ToolUpdate { id, task: Some(task), .. }) => {
+                Some((id.as_str(), task.id.as_deref(), task.kind.as_deref(), task.status.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Claude's adapter (0.98) running a subagent, as recorded.
+    #[test]
+    fn a_subagent_s_session_is_recorded_inside_the_call_that_started_it() {
+        let (mut reading, s) = reading();
+        let child = SessionId::new("a260308e0ffbde619");
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "title": "general-purpose", "description": "Say ok", "capabilities": {"cancel": {}}, "state": {"state": "running"}}),
+        );
+        assert!(read(&mut reading, &child, serde_json::json!({"sessionUpdate": "state_update", "state": "running"})).is_empty());
+        let started = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "session_message", "messageId": "toolu_A", "senderSessionId": "s1", "recipientSessionId": "a260308e0ffbde619", "content": [{"type": "text", "text": "Reply with exactly: SUB_OK."}]}),
+        );
+        let Event::Update(Update::ToolCall { id, title, input: Some(input), .. }) = &started[0] else {
+            panic!("the call that started it: {started:?}");
+        };
+        assert_eq!((id.as_str(), title.as_str()), ("toolu_A", "Agent"));
+        assert_eq!((input["description"].as_str(), input["subagent_type"].as_str()), (Some("Say ok"), Some("general-purpose")));
+        assert_eq!(task_of(&started[1]), Some(("toolu_A", Some("a260308e0ffbde619"), Some("subagent"), "running")));
+        assert_eq!(reading.running_children(), std::slice::from_ref(&child));
+
+        let said = read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": "SUB_OK"}, "_meta": {"claudeCode": {"parentToolUseId": "toolu_A"}}}),
+        );
+        assert!(
+            matches!(&said[..], [Event::Update(Update::Within { parent, update })] if parent == "toolu_A" && **update == Update::AgentText("SUB_OK".into()))
+        );
+        let ended = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "state": {"state": "idle", "stopReason": "end_turn"}}),
+        );
+        assert_eq!(task_of(&ended[0]), Some(("toolu_A", Some("a260308e0ffbde619"), Some("subagent"), "completed")));
+        assert!(reading.running_children().is_empty());
+        let reported = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "session_message", "messageId": "toolu_A:reply", "senderSessionId": "a260308e0ffbde619", "recipientSessionId": "s1", "content": [{"type": "text", "text": "SUB_OK"}]}),
+        );
+        assert!(
+            matches!(&reported[..], [Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), .. })] if id == "toolu_A" && status == "completed" && output == "SUB_OK")
+        );
+    }
+
+    /// Claude's Bash with `run_in_background`, as recorded: it completes at
+    /// once, and its terminal ends, with no exit code, once the command does.
+    #[test]
+    fn a_command_left_in_the_background_runs_until_its_terminal_ends() {
+        let (mut reading, s) = reading();
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "t1"}]}),
+        );
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "rawInput": {"command": "sleep 8 && echo BG_DONE", "run_in_background": true}, "title": "sleep 8 && echo BG_DONE"}),
+        );
+        let answer = base64::engine::general_purpose::STANDARD
+            .encode("Command running in background with ID: bjc3wn7du. Output is being written to: /tmp/x.output");
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": "t1", "output": {"data": answer}}),
+        );
+        let left = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}),
+        );
+        assert_eq!(task_of(&left[0]), Some(("t1", Some("bjc3wn7du"), Some("background"), "running")));
+        let ended =
+            read(&mut reading, &s, serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": "t1", "exitStatus": {}}));
+        assert_eq!(task_of(&ended[0]), Some(("t1", Some("bjc3wn7du"), Some("background"), "completed")));
+        assert!(
+            read(&mut reading, &s, serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": "t1", "exitStatus": {}}))
+                .is_empty()
+        );
+
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t2", "name": "Bash", "rawInput": {"command": "ls"}, "status": "pending", "title": "ls", "kind": "execute", "content": [{"type": "terminal", "terminalId": "t2"}]}),
+        );
+        let foreground = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed"}),
+        );
+        assert!(foreground.iter().all(|event| task_of(event).is_none()), "a command that ran to its end left nothing running");
     }
 
     #[test]

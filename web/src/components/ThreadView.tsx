@@ -19,7 +19,9 @@ import { threadTone, threadWhere } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { type Piece, type Row, type ToolStep, duration, foldInherited, headline, kindOf, originOf, piecesOf, proposedPlan, rowsOf, runItems, shortCommand, thoughtTotal, tokens, toolOf, toolSummary } from '../transcript'
+import { type Piece, type Row, type ToolStep, duration, foldInherited, headline, kindOf, originOf, piecesOf, proposedPlan, rowsOf, runItems, shortCommand, tasked, thoughtTotal, tokens, toolOf, toolSummary } from '../transcript'
+import { SessionLive, type TaskState, TasksContext, mayRun, tasksOf } from '../tasks'
+import { RunningStrip, TaskCard } from './Tasks'
 import {
   Avatar,
   Button,
@@ -265,10 +267,11 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
   // A turn the agent opened itself, as Claude does once a background task ends: nobody said anything.
   if (entry.kind === 'wake')
     return (
-      <p data-testid="wake" className="flex w-fit items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs text-fg-2">
-        <Icon name="agent" className="h-3.5 w-3.5 shrink-0" />
-        {entry.text}
-      </p>
+      <div data-testid="wake" className="flex w-fit items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5">
+        <Icon name="agent" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+        {/* What set it off names a command as code. */}
+        <Markdown text={entry.text} className="text-xs leading-normal text-fg-2" />
+      </div>
     )
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
@@ -328,9 +331,58 @@ function failedIn(entries: HistoryEntry[]): number {
   return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed).length
 }
 
+/** A subagent's own transcript, inside the card of the call that started it: its prompt, its work and what it said. */
+function SideTranscript({ side, ...props }: EntryProps & { side: string }) {
+  const tasks = useContext(TasksContext)
+  const entries = tasks.sides.get(side) ?? []
+  if (entries.length === 0) return null
+  return (
+    <div data-testid="subagent-transcript" className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm">
+      {piecesOf(entries, tasks).map((piece) =>
+        piece.kind === 'tools' ? (
+          <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} {...props} />
+        ) : piece.kind === 'step' ? (
+          <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
+            <StepCard step={piece.step} {...props} />
+          </Entry>
+        ) : piece.kind === 'plan' ? (
+          <Entry key={piece.entry.index} entry={piece.entry} {...props}>
+            <PlanSteps entry={piece.entry} />
+          </Entry>
+        ) : (
+          <Entry key={piece.entry.index} entry={piece.entry} {...props}>
+            {piece.entry.kind === 'user' ? <p className="text-xs whitespace-pre-wrap text-fg-2">{piece.entry.text}</p> : <EntryText entry={piece.entry} />}
+          </Entry>
+        ),
+      )}
+    </div>
+  )
+}
+
+/** A step that stands on its own: a plan, a question, a subagent or background command, or a failed command. */
+function StepCard({ step, ...props }: EntryProps & { step: ToolStep }) {
+  const tasks = useContext(TasksContext)
+  const call = step.call!
+  if (proposedPlan(call)) return <ProposedPlan step={step} />
+  if (kindOf(call) === 'question') return <QuestionCard step={step} />
+  if (tasked(step, tasks)) {
+    const side = (call.tool && tasks.byCall.get(call.tool.id)?.side) ?? null
+    return <TaskCard step={step}>{side && <SideTranscript side={side} {...props} />}</TaskCard>
+  }
+  return <CommandCard step={step} card />
+}
+
 /** One of a run's steps, as its row. */
 function StepItem({ step, running, ...props }: EntryProps & { step: ToolStep; running: boolean }) {
   const verbose = useContext(TranscriptDetail) === 'verbose'
+  const tasks = useContext(TasksContext)
+  if (tasked(step, tasks)) {
+    return (
+      <Entry entry={step.call!} {...props}>
+        <StepCard step={step} {...props} />
+      </Entry>
+    )
+  }
   const anchor = step.call ?? step.result!
   return (
     <Entry entry={anchor} {...props}>
@@ -615,6 +667,7 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
 /** `running`: the turn is still under way, so it has no totals or actions yet. `onUnfold` shows what a fork inherited. */
 function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
   const [summary, setSummary] = useState(false)
+  const tasks = useContext(TasksContext)
   const grouping = useContext(TranscriptGrouping)
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const thoughts = useContext(ThoughtsOpen)
@@ -636,20 +689,27 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
       </div>
     )
   }
-  const pieces = piecesOf(row.entries)
+  const pieces = piecesOf(row.entries, tasks)
   const rewound = row.prompt?.rewound ?? row.entries.some((entry) => entry.rewound)
   // Grouped by turn, a finished turn's work folds under one line, leaving its last reply showing (ADR 0049).
   const last = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
   const folded = grouping === 'turn' && !running && Boolean(row.turn) && last >= 0 && pieces.length > 1
   // What the person decided, a question they answered or a plan put to them, stays out of the fold.
   const decided = (piece: Piece) => piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
-  const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece)) : []
-  const reply = folded ? [...pieces.filter(decided), pieces[last]] : []
+  // A subagent or background command stays in sight while it runs; once done it folds with the rest of the work.
+  const runs = (piece: Piece) => {
+    if (piece.kind !== 'step' || !tasked(piece.step, tasks)) return false
+    const id = piece.step.call?.tool?.id
+    const task = id ? tasks.byCall.get(id) : undefined
+    return task ? task.status === 'running' : !piece.step.result
+  }
+  const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece) && !runs(piece)) : []
+  const reply = folded ? [...pieces.filter((piece) => decided(piece) || runs(piece)), pieces[last]] : []
   // Grouped by turn, a turn still running shows the work since the agent last wrote as one card; what it said
   // and what waits on the person stay outside it.
   const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
   const since = grouping === 'turn' && running ? pieces.slice(wrote + 1) : []
-  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece)))
+  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)))
   const activity = carded.some((piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking'))) ? carded.flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : [])).sort((a, b) => a.index - b.index) : []
   const final = row.entries[row.entries.length - 1]
   const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
@@ -662,13 +722,7 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
             </Entry>
           ) : piece.kind === 'step' ? (
             <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
-              {proposedPlan(piece.step.call!) ? (
-                <ProposedPlan step={piece.step} />
-              ) : kindOf(piece.step.call!) === 'question' ? (
-                <QuestionCard step={piece.step} />
-              ) : (
-                <CommandCard step={piece.step} card />
-              )}
+              <StepCard step={piece.step} {...props} />
             </Entry>
           ) : (
             <Entry key={piece.entry.index} entry={piece.entry} {...props}>
@@ -1395,6 +1449,17 @@ function ThreadBody({
   for (const asked of agent?.permissions ?? []) if (asked.plan && asked.tool_call) planCalls.current.add(asked.tool_call)
   const [unfolded, setUnfolded] = useState<string | null>(null)
   const history = rowsOf(entries, turns.data ?? [])
+  const tasks = useMemo(() => tasksOf(entries), [entries])
+  const now = useNow()
+  const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
+  const live = mayRun(Math.max(summary?.last_ms ?? 0, lastSaid), agent !== null && agent !== undefined && agent.state !== 'stopped' && agent.state !== 'error', now)
+  // A running task's line names it as its card does.
+  const calls = useMemo(() => new Map(entries.flatMap((entry) => (entry.kind === 'tool_call' && entry.tool ? [[entry.tool.id, entry] as const] : []))), [entries])
+  const taskTitle = (task: TaskState) => {
+    const call = task.call ? calls.get(task.call) : undefined
+    const said = call?.tool?.kind === 'subagent' || task.kind === 'subagent' ? call?.tool?.subject : (call?.tool?.detail ?? call?.tool?.subject)
+    return said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
+  }
   // A link into the history may name an inherited turn, so it shows them all.
   const rows = unfolded === thread || hash ? history : foldInherited(history)
   const list = useRef<HTMLDivElement>(null)
@@ -1470,6 +1535,8 @@ function ThreadBody({
   const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input'
 
   return (
+    <TasksContext.Provider value={tasks}>
+    <SessionLive.Provider value={live}>
     <TranscriptDetail.Provider value={detail}>
     <TranscriptGrouping.Provider value={grouping}>
     <ThoughtsOpen.Provider value={thoughts}>
@@ -1603,6 +1670,9 @@ function ThreadBody({
           {files && files.length > 0 && totals && !busy && (
             <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
           )}
+          <div className="mb-2 empty:hidden">
+            <RunningStrip titles={taskTitle} />
+          </div>
           <AgentDock
             thread={thread}
             status={agent}
@@ -1624,6 +1694,8 @@ function ThreadBody({
     </ThoughtsOpen.Provider>
     </TranscriptGrouping.Provider>
     </TranscriptDetail.Provider>
+    </SessionLive.Provider>
+    </TasksContext.Provider>
   )
 }
 

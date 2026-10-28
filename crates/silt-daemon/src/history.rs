@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, PoisonError};
 
+use silt_agents::history::HistoryReader;
 use silt_agents::tool::Shown;
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
@@ -14,7 +15,7 @@ use silt_types::{DeltaId, ThreadId};
 
 use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
 use crate::protocol::{CommitView, FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
-use crate::transcripts::native_entries;
+use crate::transcripts::{native_entries, shown_entries};
 
 /// Longest text of one entry in a history page.
 const ENTRY_CHARS: usize = 4000;
@@ -59,7 +60,7 @@ impl Core {
             }
         };
         let mut entries = Vec::new();
-        let mut transcripts = Transcripts::default();
+        let mut reader = HistoryReader::default();
         for (delta, source, rewound) in items {
             let origin = match source {
                 HistorySource::Own => "own",
@@ -71,7 +72,7 @@ impl Core {
                 Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
                 _ => delta.time_ms,
             };
-            for shown in entry_texts(&mut transcripts, delta) {
+            for shown in entry_texts(&mut reader, delta) {
                 let index = entries.len();
                 entries.push((delta.span.first(), shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound)));
             }
@@ -266,9 +267,9 @@ impl Core {
     /// knowing its prompts from its transcripts.
     pub(crate) fn turn_end(&self, thread: ThreadId, turn: usize) -> Option<usize> {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
-        let mut transcripts = Transcripts::default();
+        let mut reader = HistoryReader::default();
         silt_log::turn_end_by(family.log(), thread, turn, |delta| {
-            entry_texts(&mut transcripts, delta).iter().any(|shown| opens_turn(&shown.kind))
+            entry_texts(&mut reader, delta).iter().any(|shown| opens_turn(&shown.kind) && shown.side.is_none())
         })
     }
 
@@ -382,10 +383,10 @@ impl Core {
         let mut turns = Vec::new();
         let mut entries = 0;
         let mut last_prompt: Option<(usize, String)> = None;
-        let mut transcripts = Transcripts::default();
+        let mut reader = HistoryReader::default();
         for item in family.history(thread) {
-            for shown in entry_texts(&mut transcripts, item.delta) {
-                if opens_turn(&shown.kind) {
+            for shown in entry_texts(&mut reader, item.delta) {
+                if opens_turn(&shown.kind) && shown.side.is_none() {
                     last_prompt = Some((entries, shown.text));
                 }
                 entries += 1;
@@ -404,7 +405,7 @@ impl Core {
     /// and where its agent compacted its context, to place a search hit.
     pub(crate) fn timeline(&self, thread: ThreadId) -> Option<Timeline> {
         let family = self.families.get(&self.threads.get(&thread)?.family)?;
-        let mut transcripts = Transcripts::default();
+        let mut reader = HistoryReader::default();
         let items = family
             .history(thread)
             .into_iter()
@@ -414,7 +415,9 @@ impl Core {
                 prompt: item.source == HistorySource::Own
                     && matches!(item.delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })),
                 said: matches!(item.delta.op, Op::Conv(ConvOp::Native { .. })),
-                compaction: entry_texts(&mut transcripts, item.delta).iter().any(|shown| shown.kind == "compaction"),
+                compaction: entry_texts(&mut reader, item.delta)
+                    .iter()
+                    .any(|shown| shown.kind == "compaction" && shown.side.is_none()),
             })
             .collect();
         Some(Timeline { items })
@@ -484,11 +487,9 @@ fn subject(repo: &silt_git::Repo, commit: &str) -> Option<String> {
     (!subject.is_empty()).then_some(subject)
 }
 
-fn entry_texts(transcripts: &mut Transcripts, delta: &Delta) -> Vec<Shown> {
+fn entry_texts(reader: &mut HistoryReader, delta: &Delta) -> Vec<Shown> {
     match &delta.op {
-        Op::Conv(ConvOp::Native { .. }) => {
-            native_entries(transcripts, delta).into_iter().filter_map(silt_agents::tool::shown).collect()
-        }
+        Op::Conv(ConvOp::Native { .. }) => shown_entries(reader, delta),
         Op::Conv(ConvOp::Merged { from, title, summary, .. }) => {
             vec![Shown::plain("merge", format!("merged \"{title}\" from fork {from}: {summary}"))]
         }

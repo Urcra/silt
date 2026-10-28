@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::{Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, SessionIds, Stateless};
+use crate::{
+    Agent, AgentError, CheckedSession, Entry, Found, Launch, LaunchPlan, Mark, Read, Reader, SessionIds, Stateless, Task,
+    TaskKind, TaskStatus,
+};
 
 pub const AGENT: &str = "acp";
 
@@ -59,8 +62,29 @@ pub const WOKE: &str = "The agent went on by itself, without a prompt.";
 
 /// The agent went on by itself, as Claude does once a background task it
 /// started ends: a turn opens as with a prompt, but nobody said anything.
-pub fn wake() -> String {
-    json!({"t": "wake"}).to_string()
+/// `cause` says what ended just before; `stopped`, that Silt stopped the
+/// turn at once, as the person had stopped the agent.
+pub fn wake(cause: Option<&str>, stopped: bool) -> String {
+    let mut record = json!({"t": "wake"});
+    if let Some(cause) = cause {
+        record["cause"] = json!(cause);
+    }
+    if stopped {
+        record["stopped"] = json!(true);
+    }
+    record.to_string()
+}
+
+/// How a turn the agent opened itself reads.
+fn woke(cause: Option<&str>, stopped: bool) -> String {
+    let mut text = match cause {
+        Some(cause) => format!("{cause}, and the agent went on by itself."),
+        None => WOKE.to_owned(),
+    };
+    if stopped {
+        text.push_str(" Silt stopped it, as you had stopped the agent.");
+    }
+    text
 }
 
 pub fn message(text: &str) -> String {
@@ -123,6 +147,22 @@ pub fn usage(id: &str, input: u64, output: u64) -> String {
     json!({"t": "usage", "id": id, "input": input, "output": output}).to_string()
 }
 
+/// A record of what a subagent did, inside the tool call `parent` that
+/// started it; its entries are that subagent's, named by the call.
+pub fn within(record: &str, parent: &str) -> String {
+    let mut record: Value = serde_json::from_str(record).unwrap_or(Value::Null);
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("parent".into(), Value::String(parent.to_owned()));
+    }
+    record.to_string()
+}
+
+/// News of work the call `call` left running beside the turn: a subagent,
+/// or a command in the background, with the agent's id for it.
+pub fn task(call: &str, id: Option<&str>, kind: Option<&str>, status: &str) -> String {
+    json!({"t": "task", "call": call, "id": id, "kind": kind, "status": status}).to_string()
+}
+
 pub fn stop(reason: &str) -> String {
     json!({"t": "stop", "reason": reason}).to_string()
 }
@@ -145,7 +185,7 @@ pub fn read_line(line: &str) -> Read {
         }
         "wake" => {
             read.marks.push(Mark::PromptSubmitted);
-            read.entries.push(Entry::Woke { text: WOKE.to_owned() });
+            read.entries.push(Entry::Woke { text: woke(record["cause"].as_str(), record["stopped"] == true) });
         }
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
@@ -192,7 +232,28 @@ pub fn read_line(line: &str) -> Read {
             read.marks.push(Mark::Stopped);
             read.entries.push(Entry::Other { kind: "stop".into() });
         }
+        "task" => {
+            let call = field("call");
+            let kind = match record["kind"].as_str() {
+                Some("subagent") => Some(TaskKind::Subagent),
+                Some("background") => Some(TaskKind::Background),
+                _ => None,
+            };
+            read.entries.push(Entry::Task(Task {
+                id: record["id"].as_str().map_or_else(|| call.clone(), str::to_owned),
+                // A subagent's records name the call that started it.
+                side: (kind == Some(TaskKind::Subagent)).then(|| call.clone()),
+                call: Some(call),
+                kind,
+                status: TaskStatus::parse(&field("status")),
+                summary: None,
+            }));
+        }
         other => read.entries.push(Entry::Other { kind: other.to_owned() }),
+    }
+    if let Some(parent) = record["parent"].as_str().filter(|parent| crate::is_safe_id(parent)) {
+        read.side = Some(parent.to_owned());
+        read.marks.clear();
     }
     read
 }
@@ -300,7 +361,14 @@ mod tests {
 
     #[test]
     fn a_turn_the_agent_opened_itself_is_a_turn_without_a_prompt() {
-        let read = read_line(&wake());
+        let named = read_line(&wake(Some("`sleep 8` finished in the background"), false));
+        assert_eq!(
+            named.entries,
+            [Entry::Woke { text: "`sleep 8` finished in the background, and the agent went on by itself.".into() }]
+        );
+        let stopped = read_line(&wake(None, true));
+        assert_eq!(stopped.entries, [Entry::Woke { text: format!("{WOKE} Silt stopped it, as you had stopped the agent.") }]);
+        let read = read_line(&wake(None, false));
         assert_eq!(read.marks, [Mark::PromptSubmitted]);
         assert_eq!(read.entries, [Entry::Woke { text: WOKE.into() }]);
         assert_eq!(read.entries[0].kind(), "wake");
@@ -316,5 +384,25 @@ mod tests {
                 Entry::Image { media_type: "image/png".into(), data: "AAAA".into() }
             ]
         );
+    }
+
+    #[test]
+    fn a_subagent_s_records_are_its_own_and_task_news_ties_it_to_its_call() {
+        let inside = read_line(&within(&tool_call("t2", "Read", "read", None), "t1"));
+        assert_eq!((inside.side.as_deref(), inside.marks.len()), (Some("t1"), 0));
+        assert_eq!(read_line(&message("mine")).side, None);
+        assert_eq!(
+            read_line(&task("t1", Some("ad7"), Some("subagent"), "running")).entries,
+            vec![Entry::Task(Task {
+                id: "ad7".into(),
+                call: Some("t1".into()),
+                kind: Some(TaskKind::Subagent),
+                status: TaskStatus::Running,
+                side: Some("t1".into()),
+                summary: None,
+            })]
+        );
+        let ended = read_line(&task("t3", None, None, "failed"));
+        assert!(matches!(&ended.entries[0], Entry::Task(Task { id, status: TaskStatus::Failed, side: None, .. }) if id == "t3"));
     }
 }

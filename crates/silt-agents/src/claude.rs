@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
-use crate::entry::Entry;
+use crate::entry::{Entry, Task, TaskKind, TaskStatus};
 use crate::{
     Agent, AgentError, Capture, CheckedSession, Found, Launch, LaunchPlan, OnDisk, Read, Reader, Restore, Rewrites, Role,
     SessionIds, Start, Stateless, Write, translated_text,
@@ -185,7 +185,7 @@ impl Agent for ClaudeCode {
     }
 
     fn reader(&self) -> Box<dyn Reader> {
-        Box::new(Stateless(|line| Read { entries: normalize(line), marks: Vec::new() }))
+        Box::new(Stateless(|line| Read { entries: normalize(line), ..Read::default() }))
     }
 
     fn capture(&self) -> Capture {
@@ -349,6 +349,92 @@ struct Fields {
     meta: Option<Value>,
     subtype: Option<Value>,
     message: Option<Message>,
+    /// What a tool's result says beside its text: the subagent or
+    /// background command it started.
+    #[serde(rename = "toolUseResult", default, deserialize_with = "started")]
+    started: Option<Started>,
+    attachment: Option<Attachment>,
+}
+
+/// The ids a tool's structured result gives the work it left running.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Started {
+    agent: Option<String>,
+    background: Option<String>,
+    status: Option<String>,
+}
+
+/// What Claude Code adds to the conversation on its own; a
+/// `queued_command` is something that came in while it worked, such as a
+/// background task's report.
+#[derive(Deserialize)]
+struct Attachment {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    prompt: Option<Value>,
+}
+
+/// Reads only `agentId`, `backgroundTaskId` and `status` of a structured
+/// result, skipping its output, which can be long; a result that isn't an
+/// object gives none.
+fn started<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Started>, D::Error> {
+    use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
+
+    struct Fields;
+    impl<'de> Visitor<'de> for Fields {
+        type Value = Option<Started>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a tool's structured result")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut started = Started::default();
+            while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                let field = match key.as_ref() {
+                    "agentId" => &mut started.agent,
+                    "backgroundTaskId" => &mut started.background,
+                    "status" => &mut started.status,
+                    _ => {
+                        map.next_value::<IgnoredAny>()?;
+                        continue;
+                    }
+                };
+                *field = map.next_value::<Value>()?.as_str().map(str::to_owned);
+            }
+            Ok((started != Started::default()).then_some(started))
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+    deserializer.deserialize_any(Fields)
 }
 
 #[derive(Deserialize)]
@@ -369,6 +455,11 @@ impl Fields {
                 content: message.get("content").cloned(),
                 id: message.get("id").and_then(Value::as_str).map(str::to_owned),
                 usage: message.get("usage").cloned(),
+            }),
+            started: value.get("toolUseResult").and_then(|result| started(result).ok().flatten()),
+            attachment: value.get("attachment").map(|attachment| Attachment {
+                kind: attachment.get("type").and_then(Value::as_str).map(str::to_owned),
+                prompt: attachment.get("prompt").cloned(),
             }),
         }
     }
@@ -391,8 +482,24 @@ fn entries(fields: Fields) -> Vec<Entry> {
         // What Claude Code adds as the user's turn, such as a skill's text,
         // hook feedback or a note on an image, which nobody typed.
         "user" if flag(&fields.meta) => vec![Entry::Other { kind: "meta".into() }],
+        "attachment" => {
+            let attachment = fields.attachment.filter(|attachment| attachment.kind.as_deref() == Some("queued_command"));
+            match attachment.and_then(|attachment| attachment.prompt).as_ref().and_then(Value::as_str).and_then(task_notification)
+            {
+                Some(task) => vec![Entry::Task(task)],
+                None => vec![Entry::Other { kind: "attachment".into() }],
+            }
+        }
         role @ ("user" | "assistant") => {
             let mut entries = message_entries(role, content);
+            if role == "user" {
+                let reported = entries.iter().find_map(|entry| match entry {
+                    Entry::User { text } => task_notification(text),
+                    _ => None,
+                });
+                entries.extend(reported.map(Entry::Task));
+                entries.extend(fields.started.and_then(|started| started_task(started, &entries)).map(Entry::Task));
+            }
             if let Some((message, usage)) = usage.filter(|_| role == "assistant") {
                 let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
                 let input = count("input_tokens") + count("cache_read_input_tokens") + count("cache_creation_input_tokens");
@@ -405,6 +512,50 @@ fn entries(fields: Fields) -> Vec<Entry> {
         }
         other => vec![Entry::Other { kind: other.to_owned() }],
     }
+}
+
+/// The work a tool's result says it left running, or a subagent's that
+/// ran to its end, tied to the call the result answers.
+fn started_task(started: Started, entries: &[Entry]) -> Option<Task> {
+    let call = entries.iter().find_map(|entry| match entry {
+        Entry::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+        _ => None,
+    });
+    let (id, kind) = match (started.agent, started.background) {
+        (Some(agent), _) => (agent, TaskKind::Subagent),
+        (None, Some(background)) => (background, TaskKind::Background),
+        (None, None) => return None,
+    };
+    let status = match started.status.as_deref() {
+        None | Some("async_launched") => TaskStatus::Running,
+        Some(status) => TaskStatus::parse(status),
+    };
+    let side = (kind == TaskKind::Subagent).then(|| format!("agent-{id}"));
+    Some(Task { id, call, kind: Some(kind), status, side, summary: None })
+}
+
+/// A background task's report, which Claude Code puts in the conversation
+/// as `<task-notification>` with its id, the call that started it, its
+/// status, and a summary and result.
+pub fn task_notification(text: &str) -> Option<Task> {
+    let body = text.trim_start().strip_prefix("<task-notification>")?;
+    let field = |tag: &str| {
+        let start = body.find(&format!("<{tag}>"))? + tag.len() + 2;
+        let end = body[start..].find(&format!("</{tag}>")).map_or(body.len(), |end| start + end);
+        Some(body[start..end].trim().to_owned()).filter(|value| !value.is_empty())
+    };
+    let summary = match (field("summary"), field("result")) {
+        (Some(summary), Some(result)) => Some(format!("{summary}\n\n{result}")),
+        (summary, result) => summary.or(result),
+    };
+    Some(Task {
+        id: field("task-id")?,
+        call: field("tool-use-id"),
+        kind: None,
+        status: field("status").map_or(TaskStatus::Running, |status| TaskStatus::parse(&status)),
+        side: None,
+        summary,
+    })
 }
 
 fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
@@ -551,6 +702,50 @@ mod tests {
         assert_eq!(paths.transcript, Path::new("/c/projects/-repo/abc.jsonl"));
         assert_eq!(paths.subagents, Path::new("/c/projects/-repo/abc/subagents"));
         assert_eq!(paths.tool_results, Path::new("/c/projects/-repo/abc/tool-results"));
+    }
+
+    fn task(id: &str, call: Option<&str>, kind: Option<TaskKind>, status: TaskStatus) -> Task {
+        Task { id: id.into(), call: call.map(str::to_owned), kind, status, side: None, summary: None }
+    }
+
+    #[test]
+    fn a_result_names_the_background_command_or_subagent_it_started() {
+        let background = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"Command running in background with ID: b3r","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"b3r"}}"#;
+        assert_eq!(
+            normalize(background)[1],
+            Entry::Task(task("b3r", Some("t1"), Some(TaskKind::Background), TaskStatus::Running))
+        );
+        let launched = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t2","type":"tool_result","content":[{"type":"text","text":"Async agent launched"}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ad7","prompt":"Research"}}"#;
+        assert_eq!(
+            normalize(launched)[1],
+            Entry::Task(Task {
+                side: Some("agent-ad7".into()),
+                ..task("ad7", Some("t2"), Some(TaskKind::Subagent), TaskStatus::Running)
+            })
+        );
+        let finished = launched.replace("async_launched", "completed");
+        assert!(matches!(&normalize(&finished)[1], Entry::Task(Task { status: TaskStatus::Completed, .. })));
+        let plain = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t3","type":"tool_result","content":"ok"}]},"toolUseResult":"Error: no"}"#;
+        assert_eq!(normalize(plain).len(), 1);
+    }
+
+    #[test]
+    fn a_task_report_says_how_it_ended_whether_it_came_idle_or_mid_turn() {
+        let report = "<task-notification>\n<task-id>b3r</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"probe\" completed (exit code 0)</summary>\n</task-notification>";
+        let ended = Task {
+            summary: Some("Background command \"probe\" completed (exit code 0)".into()),
+            ..task("b3r", Some("t1"), None, TaskStatus::Completed)
+        };
+        let idle = json!({"type": "user", "message": {"role": "user", "content": report}}).to_string();
+        assert_eq!(normalize(&idle), vec![Entry::User { text: report.into() }, Entry::Task(ended.clone())]);
+        let queued = json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": report}}).to_string();
+        assert_eq!(normalize(&queued), vec![Entry::Task(ended)]);
+        let typed = json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": "also this"}}).to_string();
+        assert_eq!(normalize(&typed), vec![Entry::Other { kind: "attachment".into() }]);
+        assert_eq!(
+            task_notification("<task-notification><task-id>x</task-id><status>killed</status>").map(|task| task.status),
+            Some(TaskStatus::Stopped)
+        );
     }
 
     #[test]
