@@ -112,7 +112,7 @@ pub(crate) async fn change_thread(
         return Err(not_found());
     }
     let key = id_bytes(thread.0);
-    let mut tx = server.db().begin().await?;
+    let mut tx = crate::write_transaction(server.db()).await?;
     let stored = sqlx::query_scalar!("SELECT state FROM thread_state WHERE user_id = ? AND thread_id = ?", caller.user, key)
         .fetch_optional(&mut *tx)
         .await?;

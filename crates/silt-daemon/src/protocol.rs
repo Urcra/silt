@@ -906,6 +906,8 @@ pub struct StartOptions {
     pub prompt: Option<String>,
     /// The first prompt is a Plan first one.
     pub plan: bool,
+    /// Files sent with the first prompt.
+    pub attachments: Vec<PromptAttachment>,
 }
 
 /// A mode, or one value of a setting.
@@ -1021,6 +1023,13 @@ pub struct AgentChoice {
     /// Its settings, such as its model, as it last listed them here.
     #[serde(default)]
     pub settings: Vec<AgentSetting>,
+    /// Whether it takes images attached to a prompt; none until it's been
+    /// seen here.
+    #[serde(default)]
+    pub takes_images: Option<bool>,
+    /// Files other than text and images, likewise.
+    #[serde(default)]
+    pub takes_files: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

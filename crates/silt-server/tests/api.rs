@@ -188,6 +188,22 @@ async fn data_survives_a_restart_under_a_new_generation() {
 }
 
 #[tokio::test]
+async fn a_server_opening_waits_for_another_writer_to_the_same_file() {
+    let data = tempfile::tempdir().expect("temp dir");
+    start(data.path()).await;
+    let url = format!("sqlite://{}", data.path().join("server.sqlite").display());
+    let mut other = <sqlx::SqliteConnection as sqlx::Connection>::connect(&url).await.expect("connects");
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut other).await.expect("takes the write lock");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        sqlx::query("COMMIT").execute(&mut other).await.expect("commits");
+    });
+
+    Server::open(data.path()).await.expect("opens once the other writer is done");
+    release.await.expect("released");
+}
+
+#[tokio::test]
 async fn a_stored_delta_that_no_longer_applies_does_not_block_pushes() {
     let data = tempfile::tempdir().expect("temp dir");
     let base = start(data.path()).await;

@@ -262,7 +262,7 @@ impl Server {
                 }
             }
         }
-        let mut tx = db.begin().await?;
+        let mut tx = write_transaction(&db).await?;
         index::clear(&mut tx).await?;
         index::write(&mut tx, &index_rows).await?;
         tx.commit().await?;
@@ -427,6 +427,16 @@ pub(crate) async fn open_db(data_dir: &Path) -> Result<SqlitePool, OpenError> {
 
 /// [`open_db`] for the running server, which copies the WAL into the
 /// database in the background rather than in commits.
+/// A transaction that holds the write lock from its start, as every one that
+/// writes must. One that reads first fails, rather than waits, when another
+/// connection writes before it does: a push's index is written while the
+/// next push is, and another server or `silt server` command may write to the
+/// same file. A write to the search index reads first even when it's the
+/// transaction's first statement.
+pub(crate) async fn write_transaction(db: &SqlitePool) -> Result<Transaction<'static, Sqlite>, sqlx::Error> {
+    db.begin_with("BEGIN IMMEDIATE").await
+}
+
 async fn open_serving_db(data_dir: &Path) -> Result<SqlitePool, OpenError> {
     let db = connect_db(db_options(data_dir)?.pragma("wal_autocheckpoint", silt_store::AUTOCHECKPOINT_PAGES)).await?;
     silt_store::checkpoint_in_background(db.clone());
@@ -1180,11 +1190,8 @@ impl Server {
         drop(self.shared.indexing.lock().await);
     }
 
-    /// A transaction that holds the write lock from its start. One that
-    /// reads first fails, rather than waits, when another writer commits
-    /// before it writes; a push's index is written while the next push is.
     async fn write_transaction(&self) -> Result<Transaction<'static, Sqlite>, sqlx::Error> {
-        self.shared.db.begin_with("BEGIN IMMEDIATE").await
+        write_transaction(&self.shared.db).await
     }
 
     /// Writes index rows. The index is rebuilt from the deltas at every

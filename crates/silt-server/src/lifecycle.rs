@@ -166,7 +166,7 @@ impl Server {
         // What changes in memory is decided here and done only after the
         // commit: `None` drops the family's room.
         let mut rebuilt: Vec<(FamilyId, Option<Room>)> = Vec::new();
-        let mut tx = db.begin().await?;
+        let mut tx = crate::write_transaction(db).await?;
         for (thread, family) in threads {
             let (thread, family, now) = (id_bytes(thread.0), id_bytes(family.0), now_ms());
             sqlx::query!(
@@ -249,7 +249,7 @@ impl Server {
                 referenced.extend(blob_of(delta));
             }
         }
-        let mut tx = db.begin().await?;
+        let mut tx = crate::write_transaction(db).await?;
         index::clear(&mut tx).await?;
         index::write(&mut tx, &rows).await?;
         tx.commit().await?;

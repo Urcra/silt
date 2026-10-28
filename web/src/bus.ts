@@ -2,8 +2,8 @@
 // subscribed to the topics the mounted views need. Events say what changed;
 // the views' queries fetch it again.
 
-import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { type QueryClient, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { token, type BusEvent } from './api'
 import { keys } from './query'
 import { apiUrl, hosted } from './served'
@@ -138,6 +138,35 @@ export function useBusEvents(listener: Listener) {
   useEffect(() => bus.listen((event) => latest.current(event)), [])
 }
 
+/**
+ * Fetches again what an event says changed. A fetch under way finishes rather than starting over: a burst of
+ * events, such as an import's, would otherwise restart a slow one until requests pile up past what the browser
+ * allows. What changed after it began is fetched once more when it ends, else a turn's last words could miss it.
+ */
+export class Refetcher {
+  private readonly again = new Set<string>()
+  private readonly queries: QueryClient
+
+  constructor(queries: QueryClient) {
+    this.queries = queries
+  }
+
+  /** Watches for fetches ending; answers how to stop. */
+  start(): () => void {
+    return this.queries.getQueryCache().subscribe(({ query }) => {
+      if (query.state.fetchStatus === 'fetching' || !this.again.delete(query.queryHash)) return
+      void this.queries.invalidateQueries({ queryKey: query.queryKey, exact: true }, { cancelRefetch: false })
+    })
+  }
+
+  refetch(queryKey?: readonly unknown[]) {
+    for (const query of this.queries.getQueryCache().findAll({ queryKey })) {
+      if (query.state.fetchStatus === 'fetching') this.again.add(query.queryHash)
+    }
+    void this.queries.invalidateQueries({ queryKey }, { cancelRefetch: false })
+  }
+}
+
 /** How long a burst of `lagged` events counts as one. */
 const LAGGED_MS = 1000
 
@@ -145,10 +174,9 @@ const LAGGED_MS = 1000
 export function useBusInvalidation() {
   const queries = useQueryClient()
   const laggedAt = useRef(0)
-  // A fetch under way finishes rather than starting over: a burst of events,
-  // such as an import's, would otherwise restart a slow one until requests
-  // pile up past what the browser allows.
-  const refetch = (queryKey?: readonly unknown[]) => void queries.invalidateQueries({ queryKey }, { cancelRefetch: false })
+  const [refetcher] = useState(() => new Refetcher(queries))
+  useEffect(() => refetcher.start(), [refetcher])
+  const refetch = (queryKey?: readonly unknown[]) => refetcher.refetch(queryKey)
   useBusEvents((event) => {
     switch (event.event) {
       case 'threads':

@@ -29,7 +29,8 @@ test.afterAll(() => {
   }
   const pid = Number(readFileSync(join(live.work, 'server.pid'), 'utf8'))
   process.kill(pid)
-  rmSync(live.work, { recursive: true, force: true })
+  // A daemon's agents can still be writing there for a moment after it stops.
+  rmSync(live.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 /** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */
@@ -847,15 +848,71 @@ test('files attached to a prompt reach the agent and are named in the conversati
 test("an agent that takes no images is told a text file's content in the prompt, and an image is refused", async ({ page }) => {
   await startInNewThread(page, 'Plain agent')
   await page.getByLabel('attach files').setInputFiles([SHOT])
-  await page.getByLabel('draft').fill('see this')
-  await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText("Plain agent doesn't take files like shot.png")).toBeVisible()
+  await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 
-  await page.getByRole('button', { name: 'remove shot.png' }).click()
+  await page.getByLabel('draft').fill('see this')
   await page.getByLabel('attach files').setInputFiles([NOTES])
   await page.getByRole('button', { name: 'Send' }).click()
   // The message is Markdown: the file's content shows as a code block.
   await expect(page.getByText(/^Done: see this\s*notes\.txt:\s*hello$/)).toBeVisible()
+})
+
+// A screenshot on the clipboard is named `image.png`, whatever it shows.
+const SCREENSHOT = { ...SHOT, name: 'image.png' }
+
+type Sent = { name: string; mimeType: string; buffer: Buffer }
+
+/** Sends `event` with `files` to the composer labelled `label`, as a paste or a drop does. */
+async function sendFiles(page: Page, label: string, event: 'paste' | 'drop', files: Sent[]) {
+  const sent = files.map((file) => ({ name: file.name, type: file.mimeType, bytes: [...file.buffer] }))
+  await page.getByLabel(label, { exact: true }).evaluate(
+    (box, { event, sent }) => {
+      const data = new DataTransfer()
+      for (const file of sent) data.items.add(new File([new Uint8Array(file.bytes)], file.name, { type: file.type }))
+      const init = { bubbles: true, cancelable: true }
+      box.dispatchEvent(event === 'paste' ? new ClipboardEvent('paste', { ...init, clipboardData: data }) : new DragEvent('drop', { ...init, dataTransfer: data }))
+    },
+    { event, sent },
+  )
+}
+
+test('an image pasted on New thread, and a file attached there, go with the first prompt', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('radio', { name: 'Worktree' }).click()
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByLabel('first prompt').fill('look at this')
+  await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
+  await page.getByLabel('attach files').setInputFiles([NOTES])
+  const attached = page.getByRole('list', { name: 'attached files' })
+  await expect(attached).toContainText('pasted-1.png')
+  await expect(attached).toContainText('notes.txt')
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(page.getByText('Done: look at this (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
+  await expect(page.getByText(/\(attached: prompt\/\w+\/pasted-1\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
+})
+
+test("files pasted and dropped into a running thread's composer reach the agent", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await sendFiles(page, 'draft', 'paste', [SCREENSHOT])
+  await sendFiles(page, 'draft', 'drop', [NOTES])
+  const attached = page.getByRole('list', { name: 'attached files' })
+  await expect(attached).toContainText('pasted-1.png')
+  await expect(attached).toContainText('notes.txt')
+  await page.getByLabel('draft').fill('and these')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: and these (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
+  await expect(attached).toBeHidden()
+})
+
+test('an image pasted for an agent known to take none is refused at once', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByLabel('agent to start').selectOption({ label: 'Plain agent' })
+  // Known once the daemon has asked the agent what it offers.
+  await expect(page.getByTitle('Attach text files; Plain agent takes no images')).toBeVisible({ timeout: 30_000 })
+  await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
+  await expect(page.getByText("Plain agent doesn't take files like pasted-1.png")).toBeVisible()
+  await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 })
 
 test("comments on the agent's last turn go back to it as a prompt", async ({ page }) => {

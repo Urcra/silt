@@ -64,7 +64,16 @@ modes: AgentModes | null,
 /**
  * Its settings, such as its model, as it last listed them here.
  */
-settings: Array<AgentSetting>, };
+settings: Array<AgentSetting>, 
+/**
+ * Whether it takes images attached to a prompt; none until it's been
+ * seen here.
+ */
+takes_images: boolean | null, 
+/**
+ * Files other than text and images, likewise.
+ */
+takes_files: boolean | null, };
 
 export type AgentChoiceItem = { id: string, name: string, description: string | null, };
 
@@ -678,7 +687,11 @@ prompt: string | null,
 /**
  * The first prompt is a Plan first one.
  */
-plan: boolean, };
+plan: boolean, 
+/**
+ * Files sent with the first prompt.
+ */
+attachments: Array<PromptAttachment>, };
 
 export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
 

@@ -91,7 +91,7 @@ pub enum Event {
     /// where it couldn't be asked.
     AgentProbed {
         agent: String,
-        offered: Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)>,
+        offered: Option<crate::acp::Offered>,
     },
     Control(crate::control::ControlEvent),
     /// A server's projects and their git notes settings (ADR 0042).

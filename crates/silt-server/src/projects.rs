@@ -99,7 +99,7 @@ pub(crate) async fn change_settings(db: &SqlitePool, caller: UserId, repo: &str,
     if [&agent, &preset].into_iter().flatten().flatten().any(|id| !valid_id(id)) {
         return Err(bad_request("agents and presets are named by their ids"));
     }
-    let mut tx = db.begin().await?;
+    let mut tx = crate::write_transaction(db).await?;
     if let Some(name) = name {
         sqlx::query!("UPDATE projects SET name = ? WHERE repo = ?", name, repo).execute(&mut *tx).await?;
     }

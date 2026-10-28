@@ -21,8 +21,11 @@ interface World {
 }
 
 let world: World
+/** When the fixture began: the pages' clock stays there, so everything happened "just now" however slow the run. */
+let started: number
 
 test.beforeAll(() => {
+  started = Date.now()
   const output = execFileSync(join(import.meta.dirname, 'screens-fixture.sh'), { encoding: 'utf8' })
   world = JSON.parse(output.trim().split('\n').pop() ?? '{}') as World
 })
@@ -32,7 +35,8 @@ test.afterAll(() => {
     execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(world.work, home, 'silt') } })
   }
   process.kill(Number(readFileSync(join(world.work, 'server.pid'), 'utf8')))
-  rmSync(world.work, { recursive: true, force: true })
+  // A daemon's agents can still be writing there for a moment after it stops.
+  rmSync(world.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 const VARIANTS = [
@@ -45,6 +49,7 @@ const VARIANTS = [
 /** Signs in to Alice's daemon and opens `path` once the app has settled. */
 async function open(page: Page, path: string) {
   const origin = new URL(world.alice).origin
+  await page.clock.setFixedTime(started)
   await page.goto(world.alice)
   await page.goto(`${origin}${path}`)
   await page.waitForLoadState('networkidle')
@@ -283,6 +288,12 @@ async function startFake(page: Page, prompt: string, preset?: string) {
   await page.waitForURL(/\/t\/[0-9a-f]+$/)
 }
 
+/** On a desktop, where the sidebar shows, waits for the thread list to say the thread waits on you. */
+async function expectInNeedsYou(page: Page, title: string) {
+  if ((page.viewportSize()?.width ?? 0) < 768) return
+  await expect(page.getByRole('region', { name: 'needs you' })).toContainText(title)
+}
+
 test('a thread waiting on a permission', async ({ page }) => {
   await startFake(page, 'Add a hello line to main', 'Ask for everything')
   await shoot(page, 'thread-waiting', async (shown) => {
@@ -290,13 +301,20 @@ test('a thread waiting on a permission', async ({ page }) => {
     await expect(shown.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
     // Grouped by turn, a running turn's work is one card, its step under way in the present tense (ADR 0049).
     await expect(shown.getByTestId('activity')).toContainText('Editing src/main.rs')
+    await expectInNeedsYou(shown, 'Add a hello line to main')
   })
 })
 
 test('a plan to approve', async ({ page }) => {
   await startFake(page, 'Retry the upload twice', 'Plan')
   await shoot(page, 'thread-plan', async (shown) => {
+    // The plan card follows the agent's state as it changes, ahead of the transcript, the preset and the
+    // thread list, which are fetched once it does.
     await expect(shown.getByRole('group', { name: 'plan' })).toBeVisible()
+    await expect(shown.getByText('Plan: Retry the upload twice')).toBeVisible()
+    await expect(shown.getByLabel(/^after approving, the /)).toBeVisible()
+    await expect(shown.getByLabel('permissions', { exact: true })).toHaveValue('plan')
+    await expectInNeedsYou(shown, 'Retry the upload twice')
   })
 })
 
@@ -305,5 +323,6 @@ test('a question waiting on you', async ({ page }) => {
   await shoot(page, 'thread-question', async (shown) => {
     await expect(shown.getByRole('region', { name: 'question' })).toContainText('waiting on you')
     await expect(shown.getByText('Waiting on you').filter({ visible: true }).first()).toBeVisible()
+    await expectInNeedsYou(shown, 'Ask me what to count')
   })
 })

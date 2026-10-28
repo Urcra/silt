@@ -188,7 +188,7 @@ pub(crate) async fn change(
             if !valid_name(&org) {
                 return Err(bad_request("org names follow the rules for user names"));
             }
-            let mut tx = db.begin().await?;
+            let mut tx = crate::write_transaction(db).await?;
             let now = now_ms();
             let created = sqlx::query_scalar!(
                 r#"INSERT INTO orgs (name, created_ms) VALUES (?, ?) ON CONFLICT (name) DO NOTHING RETURNING id AS "id!""#,
@@ -208,7 +208,7 @@ pub(crate) async fn change(
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
             let user = named_user(&server, caller.user, &user).await?;
-            let mut tx = db.begin().await?;
+            let mut tx = crate::write_transaction(db).await?;
             add_member(&mut *tx, &org, user, owner).await?;
             keep_an_owner(&mut tx, org_id).await?;
             tx.commit().await?;
@@ -217,7 +217,7 @@ pub(crate) async fn change(
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
             let user = named_user(&server, caller.user, &user).await?;
-            let mut tx = db.begin().await?;
+            let mut tx = crate::write_transaction(db).await?;
             sqlx::query!(
                 "DELETE FROM team_members WHERE user_id = ? AND team_id IN (SELECT id FROM teams WHERE org_id = ?)",
                 user,
@@ -241,7 +241,7 @@ pub(crate) async fn change(
             let org_id = org_id(db, &org).await?;
             require_owner(db, org_id, caller.user).await?;
             let id = team_id(db, org_id, &team).await?;
-            let mut tx = db.begin().await?;
+            let mut tx = crate::write_transaction(db).await?;
             sqlx::query!("DELETE FROM teams WHERE id = ?", id).execute(&mut *tx).await?;
             forget_team_visibility(&mut tx, org_id, &Visibility::Team(team).to_string()).await?;
             tx.commit().await?;
@@ -295,7 +295,7 @@ pub(crate) async fn change(
             if let Some(current) = current.filter(|current| *current != target) {
                 require_owner(db, current, caller.user).await?;
             }
-            let mut tx = db.begin().await?;
+            let mut tx = crate::write_transaction(db).await?;
             sqlx::query!(
                 "INSERT INTO projects (repo, org_id) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET org_id = excluded.org_id",
                 repo,

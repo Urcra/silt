@@ -242,7 +242,8 @@ export function Graph() {
   const describe = (row: GraphRow) => (row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text))
   const picked = chosen && rows.find((row) => row.id === chosen.id) ? chosen : rows[0]
   // By the table's own width, not the window's: the details panel beside it takes what the person gives it.
-  const grid = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 @2xl/table:grid-cols-[minmax(0,1fr)_200px_140px_56px]'
+  // When is as wide whatever it says, so a row doesn't reflow as "just now" becomes "2m".
+  const grid = 'grid grid-cols-[minmax(0,1fr)_56px] items-center gap-3 @2xl/table:grid-cols-[minmax(0,1fr)_200px_140px_56px]'
   // A phone's rows are tall enough to tap; the lanes follow them.
   const rowHeight = useMedia('(max-width: 767px)') ? 44 : 36
   return (

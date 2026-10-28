@@ -1,16 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type SetStateAction, useState } from 'react'
-import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment } from '../api'
-import { readAttachment } from '../attachments'
+import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, Icon, Kbd, Spinner, cx } from '../ui'
+import { Button, Dot, Icon, Kbd, Spinner } from '../ui'
 import { AgentSettings } from './AgentSettings'
-import { ChipSelect, GHOST_CHIP } from './ChipSelect'
+import { type Takes, useAttachments } from '../attachments'
+import { AttachButton, AttachedFiles } from './Attachments'
+import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
@@ -324,7 +325,6 @@ export function AgentDock({
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
   const agents = choices.data?.agents ?? []
   const agent = chosenAgent ?? agents[0]?.id ?? ''
-  const [attached, setAttached] = useState<PromptAttachment[]>([])
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
@@ -342,6 +342,10 @@ export function AgentDock({
   const [mode, setChosenMode] = useState<string>()
   const chosenMode = mode ?? seen?.modes?.current
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
+  const takes: Takes = live
+    ? { agent: status.agent, images: status.takes_images, files: status.takes_files }
+    : { agent: seen?.name ?? 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
+  const { attached, add, remove, clear } = useAttachments(takes)
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenMode(undefined)
@@ -368,7 +372,11 @@ export function AgentDock({
   const start = () => {
     if (!startable) return
     const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
-    act(api.startAgent(agent, { thread }, { preset, mode: startModes ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null }), sent(draft))
+    const options = { preset, mode: startModes ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null, attachments: attached }
+    act(api.startAgent(agent, { thread }, options), () => {
+      clear()
+      sent(draft)()
+    })
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
@@ -377,7 +385,7 @@ export function AgentDock({
     if (now && turning && draft.trim()) return steer()
     if (!live || !sendable) return
     act(api.prompt(thread, draft, false, attached), () => {
-      setAttached([])
+      clear()
       sent(draft)()
     })
   }
@@ -434,42 +442,13 @@ export function AgentDock({
     </>
   )
 
-  const below = attached.length > 0 && (
-    <ul aria-label="attached files" className="flex flex-wrap gap-1.5 px-4 pb-2 text-xs">
-      {attached.map((file, index) => (
-        <li key={`${file.name}-${index}`} className="flex items-center gap-1.5 rounded-sm border border-line bg-surface-1 px-2 py-1">
-          <Icon name={file.mime.startsWith('image/') ? 'image' : 'file'} className="h-3.5 w-3.5 text-fg-2" />
-          {file.name}
-          <button type="button" aria-label={`remove ${file.name}`} className="text-fg-2 hover:text-fg-1" onClick={() => setAttached(attached.filter((_, kept) => kept !== index))}>
-            <Icon name="x" className="h-3 w-3" />
-          </button>
-        </li>
-      ))}
-    </ul>
-  )
+  const below = <AttachedFiles files={attached} onRemove={remove} />
+  const attachable = (live || startable) && !hosted()
+  const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
   const tools = (
     <>
-      {live && !hosted() && (
-        <label
-          className={cx(GHOST_CHIP, 'w-7 cursor-pointer justify-center px-0 text-fg-2')}
-          title={status.takes_images ? 'Attach images or files' : `Attach text files; ${status.agent} takes no images`}
-        >
-          <Icon name="attach" className="h-4 w-4" />
-          <input
-            type="file"
-            multiple
-            aria-label="attach files"
-            className="sr-only"
-            accept={status.takes_images || status.takes_files ? undefined : 'text/*,.md,.json,.ts,.tsx,.rs,.py,.toml,.yaml,.yml'}
-            onChange={(event) => {
-              const files = [...(event.target.files ?? [])]
-              event.target.value = ''
-              act(Promise.all(files.map(readAttachment)).then((read) => setAttached((before) => [...before, ...read])))
-            }}
-          />
-        </label>
-      )}
+      {attachable && <AttachButton takes={takes} onFiles={attach} />}
       {/* The same row as New thread's: which agent, then its mode and settings. Another agent here takes the thread over. */}
       {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
         <ChipSelect
@@ -578,6 +557,7 @@ export function AgentDock({
         onSend={send}
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onCycle={cycle}
+        onFiles={attachable ? attach : undefined}
         placeholder={
           !live
             ? startable

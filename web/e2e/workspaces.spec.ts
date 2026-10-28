@@ -25,7 +25,8 @@ test.afterAll(() => {
   for (const server of ['work', 'oss']) {
     process.kill(Number(readFileSync(join(fixture.dir, `${server}.pid`), 'utf8')))
   }
-  rmSync(fixture.dir, { recursive: true, force: true })
+  // A daemon, or a server just killed, can still be writing there for a moment.
+  rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 const host = (url: string) => new URL(url).host

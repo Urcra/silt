@@ -13,6 +13,8 @@ import { store, stored } from '../stored'
 import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
+import { type Takes, useAttachments } from '../attachments'
+import { AttachButton, AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
@@ -417,6 +419,12 @@ export function NewThread() {
   const chosenMode = mode ?? seen?.modes?.current
   // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
   const modesArePermissions = permissionModes(modes)
+  const takes: Takes = { agent: agentName || 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
+  const { attached, add, remove, clear } = useAttachments(takes)
+  const attach = (files: File[], pasted = false) => {
+    setError(undefined)
+    add(files, pasted).catch((failure: unknown) => setError(message(failure)))
+  }
   const narrow = useMedia('(max-width: 767px)')
   const devices = status.data?.servers?.length ?? 0
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
@@ -440,7 +448,8 @@ export function NewThread() {
     if (!prompt.trim()) return
     saveDrafts([{ text: prompt.trim(), project: repo, at: savedAt() }, ...drafts].slice(0, 10))
     setPrompt('')
-    toast('Saved as a draft', 'ok')
+    toast(attached.length > 0 ? 'Saved as a draft, without its files' : 'Saved as a draft', 'ok')
+    clear()
   }
 
   const start = (background: boolean) => {
@@ -476,10 +485,12 @@ export function NewThread() {
           visibility: null,
           prompt: prompt.trim() ? prompt : null,
           plan: false,
+          attachments: attached,
         },
       )
       .then(
         (thread) => {
+          clear()
           void queries.invalidateQueries({ queryKey: keys.threads })
           if (!background) {
             void navigate({ to: '/t/$id', params: { id: thread } })
@@ -534,9 +545,12 @@ export function NewThread() {
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
             }}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
+            onFiles={chosenWhere === 'cloud' ? undefined : attach}
+            below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
             tools={
               chosenWhere !== 'cloud' && (
                 <>
+                  <AttachButton takes={takes} onFiles={attach} />
                   {agents.length > 0 ? (
                     <ChipSelect
                       ghost

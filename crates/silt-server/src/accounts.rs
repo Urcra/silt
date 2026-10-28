@@ -139,7 +139,7 @@ pub(crate) async fn create_user(db: &SqlitePool, new: &NewUser<'_>) -> Result<Us
         return Err(AccountError::WeakPassword);
     }
     let password_hash = new.password.map(hash_password);
-    let mut tx = db.begin().await?;
+    let mut tx = crate::write_transaction(db).await?;
     let now = now_ms();
     let inserted = sqlx::query_scalar!(
         r#"INSERT INTO users (name, display_name, email, password_hash, admin, created_ms) VALUES (?, ?, ?, ?, ?, ?)
@@ -312,7 +312,7 @@ pub(crate) async fn devices_of(db: &SqlitePool, user: UserId) -> Result<Vec<Devi
 
 /// Signs out `device` if it belongs to `user`; returns whether it did.
 pub(crate) async fn revoke_device(db: &SqlitePool, user: UserId, device: DeviceId) -> Result<bool, sqlx::Error> {
-    let mut tx = db.begin().await?;
+    let mut tx = crate::write_transaction(db).await?;
     let device = id_bytes(device.0);
     let revoked =
         sqlx::query!("DELETE FROM devices WHERE id = ? AND user_id = ?", device, user).execute(&mut *tx).await?.rows_affected()
@@ -324,7 +324,7 @@ pub(crate) async fn revoke_device(db: &SqlitePool, user: UserId, device: DeviceI
 
 /// Signs `user` out of every device and browser.
 pub(crate) async fn sign_out_everywhere(db: &SqlitePool, user: UserId) -> Result<(), sqlx::Error> {
-    let mut tx = db.begin().await?;
+    let mut tx = crate::write_transaction(db).await?;
     sqlx::query!("DELETE FROM leases WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)", user)
         .execute(&mut *tx)
         .await?;

@@ -69,13 +69,19 @@ pub(crate) struct AcpRun {
     /// The mode Plan first switched away from, to go back to once the plan
     /// is approved.
     back_to: Option<String>,
-    /// The prompt to send once the agent is ready, and whether to plan
-    /// first.
-    first: Option<(String, bool)>,
+    /// The prompt to send once the agent is ready.
+    first: Option<First>,
     accepts: Accepts,
     /// The merge request whose change guide this turn writes, and what the
     /// agent has said in it so far (ADR 0025).
     guiding: Option<(silt_types::DeltaId, String)>,
+}
+
+/// A prompt an agent was started with.
+struct First {
+    prompt: String,
+    plan: bool,
+    attachments: Vec<Attachment>,
 }
 
 /// What the fork's agent is asked for a change guide.
@@ -263,14 +269,23 @@ impl Core {
             agents: installed
                 .into_iter()
                 .map(|agent| {
-                    let Seen { modes, settings, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
+                    let Seen { modes, settings, takes, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
                         silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
                             modes: Some((&modes).into()),
                             settings: settings.iter().map(Into::into).collect(),
+                            takes: None,
                             seen_ms: 0,
                         })
                     });
-                    AgentChoice { id: agent.id, name: agent.name, description: agent.description, modes, settings }
+                    AgentChoice {
+                        id: agent.id,
+                        name: agent.name,
+                        description: agent.description,
+                        modes,
+                        settings,
+                        takes_images: takes.map(|takes| takes.images),
+                        takes_files: takes.map(|takes| takes.files),
+                    }
                 })
                 .collect(),
             clones,
@@ -278,13 +293,14 @@ impl Core {
     }
 
     /// Keeps what an agent said it offers when asked, and tells the web UI.
-    pub(crate) fn agent_probed(&mut self, agent: String, offered: Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)>) {
-        let Some((modes, settings)) = offered else {
+    pub(crate) fn agent_probed(&mut self, agent: String, offered: Option<Offered>) {
+        let Some(Offered { modes, settings, accepts }) = offered else {
             return;
         };
         let seen = Seen {
             modes: modes.as_ref().map(Into::into),
             settings: settings.iter().map(Into::into).collect(),
+            takes: Some(accepts.into()),
             seen_ms: now_ms(),
         };
         self.keep_seen(agent, seen);
@@ -311,6 +327,7 @@ impl Core {
         let seen = Seen {
             modes: run.modes.as_ref().map(Into::into),
             settings: run.settings.iter().map(Into::into).collect(),
+            takes: Some(run.accepts.into()),
             seen_ms: now_ms(),
         };
         self.keep_seen(run.info.id.clone(), seen);
@@ -323,7 +340,7 @@ impl Core {
         thread: Option<&str>,
         clone: Option<&Path>,
         agent: &str,
-        options: StartOptions,
+        mut options: StartOptions,
     ) -> Result<String, CoreError> {
         let info = registry::all(&self.data_dir)
             .into_iter()
@@ -331,6 +348,14 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("no agent called {agent}")))?;
         if options.prompt.as_ref().is_some_and(|prompt| prompt.trim().is_empty()) {
             return Err(CoreError::Invalid("the first prompt is empty".into()));
+        }
+        if options.prompt.is_none() && !options.attachments.is_empty() {
+            return Err(CoreError::Invalid("attached files go with the first prompt".into()));
+        }
+        let attachments = decode(std::mem::take(&mut options.attachments))?;
+        let seen_accepts = read_seen(&self.data_dir).remove(&info.id).and_then(|seen| seen.takes).map(Accepts::from);
+        if let Some(refused) = seen_accepts.and_then(|accepts| attachments.iter().find(|attachment| !accepts.takes(attachment))) {
+            return Err(CoreError::Invalid(format!("{} doesn't take files like {}", info.name, refused.name)));
         }
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
@@ -423,7 +448,7 @@ impl Core {
                 chosen_settings: options.settings,
                 planning: false,
                 back_to: None,
-                first: options.prompt.map(|prompt| (prompt, options.plan)),
+                first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments }),
                 accepts: Accepts::default(),
                 guiding: None,
             },
@@ -524,6 +549,20 @@ impl Core {
         let me = self.own_user(thread);
         self.send_prompt(thread, &me, text, attachments).await?;
         Ok("sent")
+    }
+
+    /// Sends the prompt the agent was started with. Files it turned out not
+    /// to take are left out and named, rather than losing the prompt.
+    async fn send_first(&mut self, thread: ThreadId, first: First) -> Result<(), CoreError> {
+        let accepts = self.running(thread)?.accepts;
+        let (taken, refused): (Vec<_>, Vec<_>) = first.attachments.into_iter().partition(|attachment| accepts.takes(attachment));
+        self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, taken).await?;
+        if !refused.is_empty() {
+            let run = self.acp.get_mut(&thread).expect("checked above");
+            let names: Vec<&str> = refused.iter().map(|attachment| attachment.name.as_str()).collect();
+            run.error = Some(format!("{} doesn't take files like {}; sent without them", run.info.name, names.join(", ")));
+        }
+        Ok(())
     }
 
     /// Interrupts the agent's turn to tell it `text`: ACP can't add to a
@@ -943,8 +982,8 @@ impl Core {
                 let first = run.first.take();
                 self.remember_seen(thread);
                 self.acp_ready(thread, &session, loaded).await?;
-                if let Some((prompt, plan)) = first {
-                    self.acp_prompt(&thread.to_string(), &prompt, plan).await?;
+                if let Some(first) = first {
+                    self.send_first(thread, first).await?;
                 }
                 self.next_prompt(thread).await?;
             }
@@ -1274,9 +1313,38 @@ const SEEN: &str = "agents-seen.json";
 struct Seen {
     modes: Option<crate::protocol::AgentModes>,
     settings: Vec<crate::protocol::AgentSetting>,
+    #[serde(default)]
+    takes: Option<Takes>,
     /// When they were seen; an agent's offer older than `ASK_AGAIN_MS` is asked for again.
     #[serde(default)]
     seen_ms: i64,
+}
+
+/// What an agent takes attached to a prompt, as kept beside its modes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct Takes {
+    images: bool,
+    files: bool,
+}
+
+impl From<Accepts> for Takes {
+    fn from(accepts: Accepts) -> Self {
+        Self { images: accepts.image, files: accepts.embedded }
+    }
+}
+
+impl From<Takes> for Accepts {
+    fn from(takes: Takes) -> Self {
+        Self { image: takes.images, embedded: takes.files }
+    }
+}
+
+/// What an agent offers, as a session opened only to ask it said.
+#[derive(Debug)]
+pub(crate) struct Offered {
+    modes: Option<silt_acp::Modes>,
+    settings: Vec<silt_acp::Setting>,
+    accepts: Accepts,
 }
 
 /// How long what an agent offers is taken as current: models and effort levels change with its releases.
@@ -1298,7 +1366,7 @@ fn probe_agent(events: mpsc::UnboundedSender<Event>, info: AgentInfo, data_dir: 
     });
 }
 
-async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<(Option<silt_acp::Modes>, Vec<silt_acp::Setting>)> {
+async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
     let registry::AgentCommand { program, args, env } = registry::command(info, data_dir).await.ok()?;
     let cwd = data_dir.join("asking-agents");
     std::fs::create_dir_all(&cwd).ok()?;
@@ -1315,7 +1383,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<(Option<silt_acp
     let offered = tokio::time::timeout(PROBE_WAIT, async {
         while let Some(event) = receiver.recv().await {
             match event {
-                silt_acp::Event::Ready { modes, settings, .. } => return Some((modes, settings)),
+                silt_acp::Event::Ready { modes, settings, accepts, .. } => return Some(Offered { modes, settings, accepts }),
                 silt_acp::Event::Exited => return None,
                 _ => {}
             }
@@ -1604,5 +1672,31 @@ mod tests {
         let core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
         assert_eq!(core.agent_state(thread), Some(AgentState::Stopped));
         assert_eq!(core.store.agent_runs().await.expect("reads")[&thread].state, "stopped");
+    }
+
+    #[tokio::test]
+    async fn files_for_the_first_prompt_are_refused_before_the_agent_starts() {
+        let data = tempfile::tempdir().expect("temp dir");
+        std::fs::write(data.path().join("agents.json"), r#"[{"id": "plain", "name": "Plain agent", "command": "plain-agent"}]"#)
+            .expect("writes");
+        let store = Store::open(data.path()).await.expect("opens");
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        let shot = PromptAttachment { name: "shot.png".into(), mime: "image/png".into(), data: BASE64.encode([0x89, 0x50]) };
+        let start = |prompt: Option<&str>| StartOptions {
+            prompt: prompt.map(str::to_owned),
+            attachments: vec![shot.clone()],
+            ..StartOptions::default()
+        };
+        let refused = |result: Result<String, CoreError>| result.expect_err("refused").to_string();
+
+        let alone = refused(core.acp_start(None, Some(data.path()), "plain", start(None)).await);
+        assert!(alone.contains("attached files go with the first prompt"), "{alone}");
+
+        let takes_no_images = Seen { takes: Some(Takes { images: false, files: false }), ..Seen::default() };
+        core.keep_seen("plain".into(), takes_no_images);
+        let image = refused(core.acp_start(None, Some(data.path()), "plain", start(Some("look"))).await);
+        assert!(image.contains("Plain agent doesn't take files like shot.png"), "{image}");
+        assert!(core.acp.is_empty(), "nothing was started");
     }
 }

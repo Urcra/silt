@@ -240,7 +240,7 @@ async fn append(
         return Ok(StatusCode::NO_CONTENT);
     }
     write(&server, caller, found.family, found.thread, ops).await?;
-    let mut tx = server.db().begin().await?;
+    let mut tx = crate::write_transaction(server.db()).await?;
     for uuid in &uuids {
         sqlx::query!("INSERT OR IGNORE INTO sdk_entries (thread_id, file, uuid) VALUES (?, ?, ?)", thread_id, name, uuid)
             .execute(&mut *tx)
@@ -366,7 +366,7 @@ async fn delete(
             None => 0,
         };
         let (thread_id, count) = (id_bytes(found.thread.0), i64::try_from(count).unwrap_or(i64::MAX));
-        let mut tx = server.db().begin().await?;
+        let mut tx = crate::write_transaction(server.db()).await?;
         sqlx::query!(
             "INSERT INTO sdk_cleared (thread_id, file, hidden) VALUES (?, ?, ?)
              ON CONFLICT (thread_id, file) DO UPDATE SET hidden = excluded.hidden",

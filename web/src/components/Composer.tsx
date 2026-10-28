@@ -1,4 +1,5 @@
-import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+import { filesFrom } from '../attachments'
 import { Icon, type IconName, cx } from '../ui'
 import { ComposerFolded } from './composerFolded'
 
@@ -55,6 +56,7 @@ export function ComposerBox({
   actions,
   waiting = false,
   onCycle,
+  onFiles,
   className,
 }: {
   id: string
@@ -76,9 +78,31 @@ export function ComposerBox({
   waiting?: boolean
   /** Shift+Tab: the agent's next mode, as in its own terminal. */
   onCycle?: () => void
+  /** Files pasted or dropped into the box; without it, the box takes none. */
+  onFiles?: (files: File[], pasted: boolean) => void
   className?: string
 }) {
   const { room, content, folded } = useFolded()
+  const [dragging, setDragging] = useState(false)
+  const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = filesFrom(event.clipboardData)
+    if (!onFiles || files.length === 0) return
+    // An image copied from a web page brings its address as text too, which still pastes.
+    if (!event.clipboardData.types.includes('text/plain')) event.preventDefault()
+    onFiles(files, true)
+  }
+  const dragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!onFiles || !event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    setDragging(true)
+  }
+  const drop = (event: DragEvent<HTMLDivElement>) => {
+    setDragging(false)
+    const files = filesFrom(event.dataTransfer)
+    if (!onFiles || files.length === 0) return
+    event.preventDefault()
+    onFiles(files, false)
+  }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
     // the button sends. Never while an input method is still composing a character.
@@ -93,7 +117,12 @@ export function ComposerBox({
     }
   }
   return (
-    <div className={cx('flex flex-col rounded-lg border bg-elevated', waiting ? 'border-warn' : 'border-line-strong', className)}>
+    <div
+      onDragOver={dragOver}
+      onDragLeave={() => setDragging(false)}
+      onDrop={drop}
+      className={cx('flex flex-col rounded-lg border bg-elevated', dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong', className)}
+    >
       {above}
       <label htmlFor={id} className="sr-only">
         {label}
@@ -105,6 +134,7 @@ export function ComposerBox({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={keyDown}
+        onPaste={paste}
         placeholder={placeholder}
         className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
       />
