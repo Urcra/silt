@@ -1,10 +1,12 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, type CommentView } from '../api'
 import { keys, message } from '../query'
 import { linesOf, reviewPrompt } from '../review'
 import { useActions } from '../shortcuts'
 import { Button, Input, Select, Skeleton, Tabs, toast } from '../ui'
+import { ChipSelect } from './ChipSelect'
 import { type DiffLayout, DiffView } from './DiffView'
 
 type View = 'last-turn' | 'thread' | 'main' | 'other'
@@ -28,6 +30,7 @@ export function DiffPanel({
   onCommented,
   agent,
   wide = false,
+  controlsIn,
 }: {
   thread: string
   comments: CommentView[]
@@ -36,6 +39,8 @@ export function DiffPanel({
   agent?: string
   /** Room for the diff side by side. */
   wide?: boolean
+  /** Where what it compares and how go, beside the inspector's tabs; above the diff without it. */
+  controlsIn?: HTMLElement | null
 }) {
   const [view, setView] = useState<View>('thread')
   // Side by side only where both sides fit, until the person picks.
@@ -70,14 +75,16 @@ export function DiffPanel({
   const send = (prompt: string) =>
     api.prompt(thread, prompt).then((how) => setSent(how === 'queued' ? 'Queued for the agent' : 'Sent to the agent'))
 
+  // What it compares is a menu, as it's picked once in a while; the layout stays a toggle.
+  const controls = (
+    <>
+      <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
+      <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
+    </>
+  )
   return (
     <section ref={section} aria-label="changes" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Tabs label="compare" tabs={VIEWS} value={view} onChange={setView} />
-        <span className="ml-auto">
-          <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
-        </span>
-      </div>
+      {controlsIn ? createPortal(controls, controlsIn) : <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
       {view === 'other' && (
         <div className="flex flex-wrap items-center gap-2">
           <Select aria-label="diff base" value={other} onChange={(event) => setOther(event.target.value)}>

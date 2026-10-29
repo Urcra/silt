@@ -102,6 +102,7 @@ const PATHS = {
     </>
   ),
   file: <path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3" />,
+  panel: <path d="M2.5 2.5h11v11h-11zM10 2.5v11" />,
   bell: <path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3" />,
   list: <path d="M2.5 4h11M2.5 8h11M2.5 12h7" />,
   folder: <path d="M2 4.5A1 1 0 0 1 3 3.5h3l1.5 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />,
