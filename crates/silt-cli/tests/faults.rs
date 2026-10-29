@@ -210,15 +210,69 @@ fn recorded_once_after_fork(machine: &Machine, fork: &str, name: &str, other: &s
 
 /// `silt` run from `exe`, as `machine` runs it.
 fn silt_from(machine: &Machine, exe: &Path, args: &[&str]) -> Output {
+    command_from(machine, exe, args, &[]).output().expect("silt runs")
+}
+
+fn command_from(machine: &Machine, exe: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::process::Command {
     let mut command = std::process::Command::new(exe);
-    let like = machine.command(&[], &[]);
+    let like = machine.command(&[], envs);
     for (key, value) in like.get_envs() {
         match value {
             Some(value) => command.env(key, value),
             None => command.env_remove(key),
         };
     }
-    command.args(args).current_dir(&machine.repo).output().expect("silt runs")
+    command.args(args).current_dir(&machine.repo);
+    command
+}
+
+/// Copies this build to `bin`, as installing Silt there does. Again, the
+/// old one is moved aside first, as a running program can't be written over.
+fn install(bin: &Path) -> PathBuf {
+    fs::create_dir_all(bin).expect("mkdir");
+    let installed = bin.join(Path::new(env!("CARGO_BIN_EXE_silt")).file_name().expect("a file name"));
+    if installed.exists() {
+        fs::rename(&installed, bin.join("silt.old")).expect("moves the old one aside");
+    }
+    fs::write(&installed, fs::read(env!("CARGO_BIN_EXE_silt")).expect("reads silt")).expect("installs");
+    silt_os::make_executable(&installed).expect("executable");
+    installed
+}
+
+/// A session its wrapper records carries on through the restart: the
+/// wrapper records it meanwhile and hands it to the new daemon.
+#[test]
+fn installing_restarts_the_daemon_under_a_session_it_records() {
+    let world = world();
+    let laptop = &world.laptop;
+    laptop.silt(&["daemon", "stop"]);
+    let bin = world.root.path().join("bin");
+    let installed = install(&bin);
+    assert!(silt_from(laptop, &installed, &["daemon", "start"]).status.success());
+    let marker = world.root.path().join("in-tool");
+    let marker_env = marker.to_string_lossy().into_owned();
+    let agent = command_from(laptop, &installed, &["claude"], &[("FAKE_IN_TOOL", &marker_env)])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("starts");
+    assert!(eventually(|| marker.exists()), "the agent reaches its tool");
+    let before = daemon_pid(laptop);
+
+    install(&bin);
+    let restarted = silt_from(laptop, &installed, &["log"]);
+    assert!(
+        String::from_utf8_lossy(&restarted.stderr).contains("restarted the daemon"),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    assert_ne!(daemon_pid(laptop), before, "a new daemon runs");
+    let_go(&marker);
+    finished(agent);
+
+    let thread = thread_of(laptop);
+    recorded_once(laptop, &thread, "fn farewell() {}");
+    assert_eq!(laptop.stdout(&["show", &thread]).matches("Done: farewell added.").count(), 1);
 }
 
 #[test]
@@ -227,11 +281,7 @@ fn a_daemon_whose_program_was_replaced_is_restarted_on_the_new_one() {
     let laptop = &world.laptop;
     laptop.silt(&["daemon", "stop"]);
     let bin = world.root.path().join("bin");
-    fs::create_dir_all(&bin).expect("mkdir");
-    let installed = bin.join(Path::new(env!("CARGO_BIN_EXE_silt")).file_name().expect("a file name"));
-    let program = fs::read(env!("CARGO_BIN_EXE_silt")).expect("reads silt");
-    fs::write(&installed, &program).expect("installs");
-    silt_os::make_executable(&installed).expect("executable");
+    let installed = install(&bin);
     assert!(silt_from(laptop, &installed, &["log"]).status.success());
     let before = daemon_pid(laptop);
 
@@ -239,10 +289,7 @@ fn a_daemon_whose_program_was_replaced_is_restarted_on_the_new_one() {
     let other = laptop.run(&["log"]);
     assert!(String::from_utf8_lossy(&other.stderr).is_empty(), "{}", String::from_utf8_lossy(&other.stderr));
 
-    // Installed again, as the running program can't be written over.
-    fs::rename(&installed, bin.join("silt.old")).expect("moves the old one aside");
-    fs::write(&installed, &program).expect("installs again");
-    silt_os::make_executable(&installed).expect("executable");
+    install(&bin);
     let elsewhere = laptop.run(&["log"]);
     assert!(
         String::from_utf8_lossy(&elsewhere.stderr).contains("`silt daemon stop` restarts it"),

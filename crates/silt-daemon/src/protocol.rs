@@ -580,7 +580,7 @@ pub struct DaemonBuild {
     pub exe: Option<PathBuf>,
     pub replaced: bool,
     /// The agents working in it, which stopping it would end: those the web
-    /// UI started, unless idle, and the sessions being recorded.
+    /// UI started, unless idle.
     pub working: usize,
 }
 

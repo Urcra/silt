@@ -2289,9 +2289,10 @@ impl ExeStamp {
 impl Core {
     fn daemon_build(&self) -> crate::protocol::DaemonBuild {
         let replaced = self.exe.as_ref().is_some_and(|(exe, at)| ExeStamp::of(exe).is_some_and(|now| now != *at));
-        let agents = self.acp.values().filter(|run| run.working()).count();
-        let recording = self.sessions.iter().filter(|session| session.live).count();
-        crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working: agents + recording }
+        // Sessions it records live on through a restart, as their wrappers
+        // record them meanwhile and hand them to the next daemon (ADR 0018).
+        let working = self.acp.values().filter(|run| run.working()).count();
+        crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working }
     }
 }
 
