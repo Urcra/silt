@@ -47,6 +47,9 @@ struct Cli {
     /// Leave each scenario's data dir and checkouts in /tmp, to look into
     #[arg(long, global = true)]
     keep: bool,
+    /// Pass a budget over its limit by at most this many percent, with a warning
+    #[arg(long, global = true, default_value_t = 0)]
+    tolerance: u32,
 }
 
 #[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
@@ -133,11 +136,20 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     }
     let mut within = true;
     for budget in selected.iter().filter(|budget| budget.status == Status::Enforced) {
-        if over(&selected, limits, &measured, budget.name) {
-            within = false;
-            match measured.get(budget.name) {
-                Some(measured) => eprintln!("{}", budgets::failure(budget, limits, *measured, &machine)),
-                None => eprintln!("over budget: {} was never measured", budget.name),
+        if !over(&selected, limits, &measured, budget.name) {
+            continue;
+        }
+        match measured.get(budget.name) {
+            Some(measured) if budgets::verdict(budget.limit(limits).raised(cli.tolerance), *measured) == Verdict::Within => {
+                eprintln!("{}", budgets::tolerated(budget, limits, *measured, cli.tolerance, &machine));
+            }
+            Some(measured) => {
+                within = false;
+                eprintln!("{}", budgets::failure(budget, limits, *measured, &machine));
+            }
+            None => {
+                within = false;
+                eprintln!("over budget: {} was never measured", budget.name);
             }
         }
     }
