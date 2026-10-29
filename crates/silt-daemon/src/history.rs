@@ -162,7 +162,7 @@ impl Core {
     pub(crate) fn repo_path(&self, cwd: &std::path::Path, path: &str) -> Result<(String, String, Option<ThreadId>), CoreError> {
         let cwd = CanonicalCwd::new(cwd)?;
         let repo = silt_git::Repo::discover(&cwd)?;
-        let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
+        let identity = repo.project()?;
         let here = self.thread_checked_out_at(&cwd);
         let root = here
             .and_then(|_| {

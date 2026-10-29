@@ -193,3 +193,30 @@ fn linked_paths_are_shared_and_prepare_runs_in_the_checkout() {
     assert!(matches!(outcome, Some(PrepareOutcome::Ran { ref status, .. }) if status.success()), "{outcome:?}");
     assert_eq!(fs::read_to_string(checkout.path.join("prepared.txt")).expect("prepared in the checkout"), "ran t5\n");
 }
+
+#[test]
+fn a_repository_without_a_remote_is_the_project_of_its_folder_and_its_clones() {
+    let dir = source_repo();
+    git(dir.path(), &["remote", "remove", "origin"]);
+    let repo = Repo::discover(dir.path()).expect("discovers");
+    let folder = repo.root().to_string_lossy().into_owned();
+    assert_eq!(repo.project().expect("project"), silt_git::normalize_remote(&folder));
+    let base = repo.head_commit().expect("head").expect("commit");
+    let checkout = repo.create_managed_checkout("t1", base, None).expect("creates");
+    assert_eq!(Repo::discover(&checkout.path).expect("discovers").project().expect("project"), repo.project().expect("project"));
+    let elsewhere = tempfile::tempdir().expect("temp dir");
+    let clone = elsewhere.path().join("clone");
+    git(elsewhere.path(), &["clone", "-q", &folder, "clone"]);
+    assert_eq!(Repo::discover(&clone).expect("discovers").project().expect("project"), repo.project().expect("project"));
+    git(dir.path(), &["remote", "add", "origin", "git@github.com:acme/app.git"]);
+    assert_eq!(Repo::discover(dir.path()).expect("discovers").project().expect("project"), "github.com/acme/app");
+}
+
+#[test]
+fn init_makes_the_folder_and_an_empty_repository() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let repo = Repo::init(&dir.path().join("new/app")).expect("inits");
+    assert!(repo.root().ends_with("new/app"));
+    assert_eq!(repo.head_commit().expect("head"), None);
+    assert!(repo.project().expect("project").ends_with("/new/app"));
+}

@@ -340,11 +340,12 @@ impl Core {
         // catching up afterwards takes in what they stored meanwhile.
         core.positions = core.store.positions().await?;
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
-        core.remember_clones_threads_ran_in().await;
         core.homes =
             core.store.family_homes().await?.into_iter().map(|(family, home)| (family, Home::from_stored(home))).collect();
         core.project_homes =
             core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
+        core.follow_clones_to_their_projects().await;
+        core.remember_clones_threads_ran_in().await;
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -731,6 +732,7 @@ impl Core {
             Request::OrgChange { change } => return answer_later(reply, self.org_change(change)),
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
+            Request::NewProject { path } => to_response(self.new_project(&path).await),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),
             Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
@@ -1949,17 +1951,17 @@ impl Core {
         let Ok(repo) = Repo::discover(cwd) else {
             return;
         };
-        let Ok(Some(url)) = repo.remote_url("origin") else {
+        let Ok(identity) = repo.project() else {
             return;
         };
-        let identity = silt_git::normalize_remote(&url);
         if self.clones.get(&identity).map(PathBuf::as_path) == Some(repo.root()) {
             return;
         }
         if let Err(error) = self.store.remember_clone(&identity, repo.root()).await {
             warn!(%error, "could not remember the clone");
         }
-        self.clones.insert(identity, repo.root().to_owned());
+        self.clones.insert(identity.clone(), repo.root().to_owned());
+        self.follow_clone_to(repo.root(), &identity).await;
     }
 
     /// Remembers a clone for each project a thread was recorded in that has

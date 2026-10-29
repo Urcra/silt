@@ -23,7 +23,7 @@ pub use checkout::ManagedCheckout;
 pub use filters::Filters;
 pub use notes::{BlamedLine, NOTES_REF, changed_lines};
 pub use pull::compare_url;
-pub use remote::normalize_remote;
+pub use remote::{is_folder_project, normalize_remote};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -190,6 +190,30 @@ impl Repo {
     /// repository keeps following the user's rewrites.
     pub fn remote_url(&self, name: &str) -> Result<Option<String>, GitError> {
         Ok(self.repo.config_snapshot().string_by("remote", Some(name.into()), "url").map(|url| url.to_str_lossy().into_owned()))
+    }
+
+    /// The project this repository belongs to (ADR 0053): its origin, as
+    /// [`normalize_remote`] reduces it, or without one its own folder, as a
+    /// clone of it names it by its origin. A managed checkout's is its
+    /// source's.
+    pub fn project(&self) -> Result<String, GitError> {
+        if let Some(origin) = self.remote_url("origin")? {
+            return Ok(normalize_remote(&origin));
+        }
+        let managed = self.repo.config_snapshot().boolean(checkout::READY_KEY).unwrap_or(false);
+        let source_git_dir = if managed { self.remote_url("local")? } else { None };
+        let folder = match source_git_dir.as_deref().map(Path::new).and_then(Path::parent) {
+            Some(source) => source.to_owned(),
+            None => self.root.clone(),
+        };
+        Ok(normalize_remote(&folder.to_string_lossy()))
+    }
+
+    /// Makes `path` and an empty repository in it, for a new project.
+    pub fn init(path: &Path) -> Result<Self, GitError> {
+        std::fs::create_dir_all(path)?;
+        run_git(path, &["init", "--quiet"], None)?;
+        Self::discover(path)
     }
 
     /// Every file in `commit`'s tree. Submodules are skipped.

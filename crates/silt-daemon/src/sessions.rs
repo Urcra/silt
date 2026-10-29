@@ -358,8 +358,8 @@ impl Core {
         };
         let thread = ThreadId(uuid::Uuid::now_v7().as_u128());
         let family_id = FamilyId(uuid::Uuid::now_v7().as_u128());
-        let project = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
-        if let Some(home) = self.new_home(&project) {
+        let project = repo.project()?;
+        if let Some(home) = self.new_home_in(&repo, &project)? {
             self.set_home(family_id, home).await?;
         }
         let record = ThreadRecord {

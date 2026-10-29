@@ -430,6 +430,11 @@ pub enum Request {
         url: String,
         path: PathBuf,
     },
+    /// Makes the folder `path` with an empty git repository, then adds it
+    /// (ADR 0053).
+    NewProject {
+        path: PathBuf,
+    },
     /// Where the project `repo`'s new threads go (ADR 0032): a server's
     /// URL, or `local` for this machine only.
     ProjectHome {

@@ -19,6 +19,13 @@ pub fn normalize_remote(url: &str) -> String {
     if path.is_empty() { host } else { format!("{host}/{path}") }
 }
 
+/// Whether `project` names a folder on a machine rather than a host's
+/// repository: a repository without a remote, or one whose origin is
+/// another folder (ADR 0053).
+pub fn is_folder_project(project: &str) -> bool {
+    project.starts_with('/')
+}
+
 /// A path on a Windows drive as WSL names it, so a clone on Windows and
 /// one in a distribution of the same repository agree: `C:\src\app.git`
 /// and `C:/src/app.git` become `/mnt/c/src/app`, as `/mnt/c/src/app.git`

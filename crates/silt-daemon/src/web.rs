@@ -123,6 +123,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
+        .route("/api/projects/new", post(new_project))
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
@@ -632,6 +633,10 @@ async fn device_revoke(State(web): State<Web>, Path(id): Path<String>, Query(on)
 
 async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
     ask(&web, Request::AddClone { path: body.path }).await
+}
+
+async fn new_project(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
+    ask(&web, Request::NewProject { path: body.path }).await
 }
 
 async fn found_folders(State(web): State<Web>) -> HttpResponse {

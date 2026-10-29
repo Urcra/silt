@@ -696,6 +696,28 @@ impl Store {
         Ok(())
     }
 
+    /// Moves `threads` from the project `from` to `to`, as their clone at
+    /// `root` names it now: no longer `from`'s clone, and `from`'s home,
+    /// unless `to` has one.
+    pub async fn move_threads(&self, threads: &[ThreadId], from: &str, to: &str, root: &Path) -> Result<(), StoreError> {
+        let mut tx = self.write_transaction().await?;
+        for thread in threads {
+            let id = id_bytes(thread.0);
+            sqlx::query!("UPDATE threads SET repo = ? WHERE id = ?", to, id).execute(&mut *tx).await?;
+        }
+        let root = path_text(root);
+        sqlx::query!("DELETE FROM clones WHERE repo = ? AND path = ?", from, root).execute(&mut *tx).await?;
+        sqlx::query!(
+            "INSERT OR IGNORE INTO project_homes (repo, home) SELECT ?, home FROM project_homes WHERE repo = ?",
+            to,
+            from
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Clones remembered by repository.
     pub async fn clones(&self) -> Result<Vec<(String, PathBuf)>, StoreError> {
         Ok(sqlx::query!("SELECT repo, path FROM clones")

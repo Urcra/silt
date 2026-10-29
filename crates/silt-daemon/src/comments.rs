@@ -22,9 +22,7 @@ impl Core {
         }
         let records: Vec<ThreadRecord> = self.threads.values().filter(|record| record.family == family_id).cloned().collect();
         let first = records.first().ok_or_else(|| CoreError::Invalid(format!("family {family_id} has no threads here")))?;
-        let here = Repo::discover(cwd).ok().filter(|repo| {
-            repo.remote_url("origin").ok().flatten().is_some_and(|url| silt_git::normalize_remote(&url) == first.repo)
-        });
+        let here = Repo::discover(cwd).ok().filter(|repo| repo.project().is_ok_and(|project| project == first.repo));
         let clone = here
             .or_else(|| {
                 self.threads

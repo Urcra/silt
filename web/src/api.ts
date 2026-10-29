@@ -186,6 +186,7 @@ export const api = {
   found: () => request<FoundFolder[]>('GET', '/api/found'),
   importFound: (paths: string[] = []) => request<number>('POST', '/api/found/import', { paths }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
+  newProject: (path: string) => request<string>('POST', '/api/projects/new', { path }),
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
