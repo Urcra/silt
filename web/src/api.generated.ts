@@ -167,11 +167,22 @@ warnings: Array<string>,
  */
 thread: string | null, };
 
-export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, } | { "at": "unknown" };
+export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, 
+/**
+ * Where they are in the base the comments were asked against, when
+ * they're there: a diff shows a comment on deleted lines beside them.
+ */
+before: LineSpan | null, } | { "at": "unknown" };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, };
+export type LineSpan = { start: number, end: number, };
 
-export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, location: CommentLocation, 
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, };
+
+export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
+/**
+ * It went to the thread's agent, in a review (ADR 0052).
+ */
+sent: boolean, location: CommentLocation, 
 /**
  * The conversation under it, oldest first (ADR 0025).
  */

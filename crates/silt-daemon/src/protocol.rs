@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
     AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
-    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink,
-    PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, TaskView, ThreadLink,
-    ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
+    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile, MrGuide,
+    MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
+    TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked};
 
@@ -259,6 +259,15 @@ pub enum Request {
     },
     Comments {
         thread: String,
+        /// A diff base to place code comments in too, such as `last-turn`.
+        #[serde(default)]
+        base: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Marks comments as sent to the thread's agent (ADR 0052).
+    CommentsSent {
+        thread: String,
+        comments: Vec<String>,
         cwd: PathBuf,
     },
     ResolveComment {
@@ -1179,6 +1188,7 @@ mod tests {
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),
             CommentLocation::decl(&config),
+            LineSpan::decl(&config),
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),

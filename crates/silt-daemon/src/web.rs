@@ -99,6 +99,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
+        .route("/api/threads/{id}/comments/sent", post(comments_sent))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/api/search", get(search))
@@ -391,8 +392,23 @@ fn no_clone() -> std::path::PathBuf {
     std::path::PathBuf::from("/")
 }
 
-async fn comments(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    ask(&web, Request::Comments { thread, cwd: no_clone() }).await
+#[derive(Deserialize)]
+struct CommentsQuery {
+    base: Option<String>,
+}
+
+async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::Comments { thread, base, cwd: no_clone() }).await
+}
+
+#[derive(Deserialize)]
+struct SentComments {
+    comments: Vec<String>,
+}
+
+async fn comments_sent(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<SentComments>) -> HttpResponse {
+    ask(&web, Request::CommentsSent { thread, comments: body.comments, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]

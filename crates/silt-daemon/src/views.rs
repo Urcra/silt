@@ -761,12 +761,12 @@ pub(crate) fn render_diff(changes: &[FileChange]) -> String {
 /// A diff base that is a commit in the clone rather than a version of the
 /// thread: its main branch, or `branch:<rev>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GitBase<'a> {
+pub(crate) enum GitBase<'a> {
     Main,
     Rev(&'a str),
 }
 
-fn git_base(base: &str) -> Option<GitBase<'_>> {
+pub(crate) fn git_base(base: &str) -> Option<GitBase<'_>> {
     match base {
         "main" => Some(GitBase::Main),
         other => other.strip_prefix("branch:").map(GitBase::Rev),
@@ -774,7 +774,7 @@ fn git_base(base: &str) -> Option<GitBase<'_>> {
 }
 
 /// The version a diff of `thread` starts from (ADR 0011's diff bases).
-fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<VersionVector, CoreError> {
+pub(crate) fn diff_base(family: &Family, thread: ThreadId, base: Option<&str>) -> Result<VersionVector, CoreError> {
     let graph = family.graph();
     let head = family.thread_head(thread);
     let in_thread = graph.version_vector(&head);

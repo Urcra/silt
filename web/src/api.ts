@@ -136,7 +136,10 @@ export const api = {
     }
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
-  comments: (id: string) => request<CommentView[]>('GET', `${thread(id)}/comments`),
+  /** With `base`, a diff base, code comments say where they are there too. */
+  comments: (id: string, base?: string) =>
+    request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
   reply: (id: string, comment: string, text: string) =>

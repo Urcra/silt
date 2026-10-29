@@ -9,7 +9,7 @@
 import type { SessionKey, SessionStore, SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
 
 /** The server's `PROTOCOL`: update it with the server. */
-export const SILT_PROTOCOL = 7;
+export const SILT_PROTOCOL = 8;
 
 export interface SiltSessionStoreOptions {
   /** The server's URL, as devices reach it. */

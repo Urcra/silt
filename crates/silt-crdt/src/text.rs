@@ -419,8 +419,13 @@ impl TextDoc {
 
     /// An anchor at `pos` in the text as of `version`.
     pub fn anchor_at(&self, graph: &CausalGraph, version: &Frontier, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
-        let vv = graph.version_vector(version);
-        let len: usize = self.fragments.iter().map(|fragment| fragment.visible_len_at(&vv)).sum();
+        self.anchor_at_vv(&graph.version_vector(version), pos, bias)
+    }
+
+    /// An anchor at `pos` in the text as of the version containing exactly
+    /// the ids in `vv`.
+    pub fn anchor_at_vv(&self, vv: &VersionVector, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
+        let len: usize = self.fragments.iter().map(|fragment| fragment.visible_len_at(vv)).sum();
         if pos > len {
             return Err(TextError::AnchorOutOfBounds { pos, len });
         }
@@ -433,7 +438,7 @@ impl TextDoc {
         let mut seen = 0;
         for fragment in self.fragments.iter() {
             // The characters visible at a version are a prefix of a fragment.
-            let visible = fragment.visible_len_at(&vv);
+            let visible = fragment.visible_len_at(vv);
             if index < seen + visible {
                 return Ok(Anchor { char_id: Some(fragment.first_char().offset(run_len(index - seen))), bias });
             }
@@ -461,18 +466,23 @@ impl TextDoc {
 
     /// Where `anchor` is in the text as of `version`.
     pub fn resolve_at(&self, graph: &CausalGraph, version: &Frontier, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
-        let vv = graph.version_vector(version);
+        self.resolve_at_vv(&graph.version_vector(version), anchor)
+    }
+
+    /// Where `anchor` is in the text as of the version containing exactly
+    /// the ids in `vv`.
+    pub fn resolve_at_vv(&self, vv: &VersionVector, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
         let Some(char_id) = anchor.char_id else {
             let pos = match anchor.bias {
                 Bias::Left => 0,
-                Bias::Right => self.fragments.iter().map(|f| f.visible_len_at(&vv)).sum(),
+                Bias::Right => self.fragments.iter().map(|f| f.visible_len_at(vv)).sum(),
             };
             return Ok(ResolvedAnchor { pos, outdated: false });
         };
         let (locator, offset) = locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
         let mut before = 0;
         for fragment in self.fragments.iter() {
-            let visible = fragment.visible_len_at(&vv);
+            let visible = fragment.visible_len_at(vv);
             if fragment.locator == locator {
                 let offset = offset as usize;
                 // Only a prefix of the fragment may be visible then; a char

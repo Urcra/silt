@@ -142,12 +142,7 @@ pub async fn main() -> Result<()> {
                     let answer = serde_json::to_value(worker.send_request(asked).block_task().await?)?;
                     let allowed = answer["outcome"]["optionId"] == "allow";
                     if allowed {
-                        let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
-                        let path = cwd.join("src/main.rs");
-                        let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                        content.push_str(&line);
-                        content.push('\n');
-                        tokio::fs::write(&path, content).await.ok();
+                        crate::edit_main(&cwd, &prompt).await;
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     }
                     let status = if allowed { "completed" } else { "failed" };

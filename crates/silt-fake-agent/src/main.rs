@@ -1,6 +1,7 @@
 //! A scripted ACP agent for tests. Each prompt makes it think, ask
 //! permission to edit `src/main.rs`, append `FAKE_ACP_LINE` (default
-//! `fn acp() {}`) when allowed, and answer. It can load the sessions it
+//! `fn acp() {}`) when allowed, dropping its first line first when the
+//! prompt says `Rewrite`, or write `FAKE_ACP_CONTENT` over it, and answer. It can load the sessions it
 //! made in the same process, replaying what was said, and refuses others.
 //! It has a `code` and a `plan` mode, where it only answers with a plan,
 //! and a model setting, and takes images and files, which its answer
@@ -255,12 +256,7 @@ async fn main() -> Result<()> {
                     let answer = worker.send_request(asked).block_task().await?;
                     let allowed = matches!(&answer.outcome, RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() == "allow");
                     if allowed {
-                        let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
-                        let path = cwd.join("src/main.rs");
-                        let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                        content.push_str(&line);
-                        content.push('\n');
-                        tokio::fs::write(&path, content).await.ok();
+                        edit_main(&cwd, &prompt).await;
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     }
                     let status = if allowed { ToolCallStatus::Completed } else { ToolCallStatus::Failed };
@@ -335,4 +331,21 @@ async fn main() -> Result<()> {
         )
         .connect_to(Stdio::new())
         .await
+}
+
+/// The edit a prompt makes: `FAKE_ACP_CONTENT` replaces `src/main.rs`, else
+/// `FAKE_ACP_LINE` is appended to it, after its first line is dropped when
+/// the prompt says `Rewrite`.
+pub(crate) async fn edit_main(cwd: &std::path::Path, prompt: &str) {
+    let path = cwd.join("src/main.rs");
+    let content = match std::env::var("FAKE_ACP_CONTENT") {
+        Ok(content) => content,
+        Err(_) => {
+            let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
+            let before = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+            let kept = if prompt.contains("Rewrite") { before.split_once('\n').map_or("", |(_, rest)| rest) } else { &before };
+            format!("{kept}{line}\n")
+        }
+    };
+    tokio::fs::write(&path, content).await.ok();
 }

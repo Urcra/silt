@@ -127,10 +127,14 @@ pub fn history(page: &HistoryPage) -> String {
 
 pub fn comment_location(location: &CommentLocation) -> String {
     match location {
-        CommentLocation::Lines { path, start, end, outdated } => {
-            let lines = if start == end { format!("{start}") } else { format!("{start}-{end}") };
-            let note = if *outdated { " (outdated: the lines were deleted)" } else { "" };
-            format!("{path}:{lines}{note}")
+        CommentLocation::Lines { path, start, end, outdated, before } => {
+            let span = |start: usize, end: usize| if start == end { format!("{start}") } else { format!("{start}-{end}") };
+            let note = match (outdated, before) {
+                (true, Some(before)) => format!(" (deleted: lines {} at the base)", span(before.start, before.end)),
+                (true, None) => " (outdated: the lines were deleted)".to_owned(),
+                (false, _) => String::new(),
+            };
+            format!("{path}:{}{note}", span(*start, *end))
         }
         CommentLocation::Entry { index, excerpt } => format!("entry {index} ({})", clip(excerpt, 60)),
         CommentLocation::Unknown => "an unknown place".into(),
@@ -143,7 +147,11 @@ pub fn comments(comments: &[CommentView]) -> String {
         out.push_str("no comments\n");
     }
     for comment in comments {
-        let resolved = if comment.resolved { " [resolved]" } else { "" };
+        let resolved = match (comment.resolved, comment.sent) {
+            (true, _) => " [resolved]",
+            (false, true) => " [sent to the agent]",
+            (false, false) => "",
+        };
         let _ = writeln!(
             out,
             "{}  {}  {}{resolved}\n    {}",
