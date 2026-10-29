@@ -16,6 +16,8 @@ use crate::CliError;
 use crate::render::short;
 
 const DEFAULT_LIMIT: usize = 40;
+/// Longest text of one history entry an agent reads.
+const ENTRY_CHARS: usize = 4000;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 struct DaemonTools {
@@ -208,11 +210,20 @@ fn render_page(page: &HistoryPage) -> String {
         let side = entry.side.as_deref().map(|side| format!(" (in subagent {side})")).unwrap_or_default();
         let text = match &entry.task {
             Some(task) => task_line(task),
-            None => entry.text.trim().to_owned(),
+            None => clipped(entry.text.trim()),
         };
         let _ = writeln!(out, "[{}] {}{origin}{side}{rewound}: {text}", entry.index, entry.kind);
     }
     out
+}
+
+/// An entry's text as an agent reads it: one long entry mustn't crowd the
+/// rest of its page out of the tool's bounded answer.
+fn clipped(text: &str) -> String {
+    match text.char_indices().nth(ENTRY_CHARS) {
+        Some((end, _)) => format!("{} …", &text[..end]),
+        None => text.to_owned(),
+    }
 }
 
 /// News of a subagent or background command, as one line.

@@ -17,8 +17,6 @@ use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
 use crate::protocol::{CommitView, FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
 use crate::transcripts::{native_entries, shown_entries};
 
-/// Longest text of one entry in a history page.
-const ENTRY_CHARS: usize = 4000;
 /// Threads whose history entries are kept at once.
 const HISTORIES_KEPT: usize = 16;
 
@@ -87,18 +85,7 @@ impl Core {
         HistoryPage {
             thread: thread.to_string(),
             total,
-            entries: entries
-                .iter()
-                .skip(offset)
-                .take(limit)
-                .map(|(_, entry)| {
-                    let mut entry = entry.clone();
-                    if entry.text.chars().count() > ENTRY_CHARS {
-                        entry.text = entry.text.chars().take(ENTRY_CHARS).collect::<String>() + " …";
-                    }
-                    entry
-                })
-                .collect(),
+            entries: entries.iter().skip(offset).take(limit).map(|(_, entry)| entry.clone()).collect(),
         }
     }
 

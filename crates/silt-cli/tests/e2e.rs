@@ -556,6 +556,19 @@ fn what_an_agent_speaking_v1_says_after_its_turn_is_its_own_turn_before_the_next
     assert_eq!(turns.as_array().map(Vec::len), Some(3), "{turns}");
 }
 
+/// The web UI shows a long reply whole; only an agent reading history
+/// through its tools gets entries cut short.
+#[test]
+fn a_long_reply_reaches_the_web_ui_whole() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let prompt = "word ".repeat(1000);
+    let thread = start_fake_acp(&env, &api, "v2", prompt.trim());
+    let reply = format!("Done: {}", prompt.trim());
+    let entries = settled_history(&api, &thread, &reply);
+    assert!(said(&entries).contains(&("assistant", reply.as_str())));
+}
+
 /// The thread's history entries as the API gives them.
 fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
     api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
