@@ -51,6 +51,7 @@ function useGlobalActions() {
     { id: 'search', label: 'Search everything', keys: 'mod+shift+f', run: () => void navigate({ to: '/search' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
+    { id: 'needs-you', label: 'What needs you', keys: 'q', run: () => void navigate({ to: '/needs-you' }) },
   ])
 }
 

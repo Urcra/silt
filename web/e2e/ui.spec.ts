@@ -17,7 +17,7 @@ test('lists threads and searches across compaction', async ({ page }) => {
   await allThreads(page)
   const threads = page.getByTestId('threads')
   await expect(threads).toContainText(thread)
-  await expect(threads.getByRole('listitem').filter({ hasText: fork })).toContainText(`fork of ${thread}`)
+  await expect(threads.getByRole('row').filter({ hasText: fork })).toContainText(`fork of ${thread}`)
 
   await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')

@@ -1,31 +1,39 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { APPROVED } from '../agentState'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import { useTopic } from '../bus'
 import { switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
+import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
-import { keys, message } from '../query'
+import { keys } from '../query'
 import { type Section, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
-import { threadDoing } from '../threadLook'
+import { WAIT_KINDS, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Avatar, Button, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, buttonClass, cx } from '../ui'
+import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Tag, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
-import { PaletteRow } from './Palette'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 const ROW = 'flex min-w-0 items-center gap-2 rounded-sm px-2 text-fg-1 hover:bg-surface-2 max-md:min-h-11'
 const ACTIVE = 'bg-accent-tint text-accent-fg shadow-[inset_2px_0_0_var(--accent)] hover:bg-accent-tint'
 
-/** One thread in the sidebar: its state, its title and how long ago, on one line (ADR 0044). */
-function ThreadItem({ thread, nested = false, aside, current = true }: { thread: ThreadSummary; nested?: boolean; aside?: ReactNode; current?: boolean }) {
+/** What a thread is at, in words, for the line under its title: "Working", "Review requested · 3m". */
+function stateLine(thread: ThreadSummary, now: number): string {
+  const doing = threadDoing(thread) ?? (thread.merged ? 'merged' : thread.mine.settled ? 'settled' : null)
+  const when = ago(thread.last_ms, now)
+  if (!doing) return /^\d/.test(when) ? `${when} ago` : when
+  const said = doing[0]!.toUpperCase() + doing.slice(1)
+  return thread.agent_state === 'working' || thread.agent_state === 'starting' ? said : `${said} · ${when}`
+}
+
+/** One thread in the sidebar (ADR 0044): its state's mark and its title, then what it's at in words, so the title keeps the row's width. */
+function ThreadItem({ thread, nested = false, current = true }: { thread: ThreadSummary; nested?: boolean; current?: boolean }) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
   const actions = useThreadState(thread)
@@ -41,19 +49,21 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
         to="/t/$id"
         params={{ id: thread.id }}
         title={[title, threadDoing(thread)].filter(Boolean).join(' · ')}
-        className={cx(ROW, 'flex-1 py-[5px]', nested ? 'pl-[26px]' : 'pl-2')}
+        className={cx(ROW, 'flex-1 items-start py-[5px] pr-7', nested ? 'pl-[22px]' : 'pl-2')}
         activeProps={current ? { className: ACTIVE } : undefined}
       >
-        <ThreadMark thread={thread} />
-        <span className={cx('min-w-0 flex-1 truncate', unread(thread) && 'font-semibold')}>{title}</span>
-        {thread.mine.pinned && <span className="sr-only"> pinned</span>}
-        {/* Not amber, which the dot before the title keeps for what waits on someone. */}
-        {unread(thread) && <span aria-label="unread" role="img" className="h-1.5 w-1.5 shrink-0 rounded-full bg-info" />}
-        {aside ?? (
-          <span className="min-w-7 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3 group-hover:invisible" data-volatile>
-            {ago(thread.last_ms, now).replace('just now', 'now')}
+        <span className="flex h-[18px] items-center">
+          <ThreadMark thread={thread} />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
+          <span className="truncate text-2xs text-fg-2" data-volatile>
+            {stateLine(thread, now)}
           </span>
-        )}
+        </span>
+        {thread.mine.pinned && <span className="sr-only"> pinned</span>}
+        {/* Not amber, which the mark before the title keeps for what waits on someone. */}
+        {unread(thread) && <span aria-label="unread" role="img" className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-info" />}
       </Link>
       <span className="absolute right-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
@@ -62,74 +72,42 @@ function ThreadItem({ thread, nested = false, aside, current = true }: { thread:
   )
 }
 
-/** What a thread waiting on the person waits for, in a word or two. */
-/** Short and on one line, so a click on Allow beside it approves all of it. */
-function shownWhole(command: string): boolean {
-  return command.length <= 80 && !command.includes('\n')
-}
-
-function waitsFor(thread: ThreadSummary, asks: boolean, plan: boolean): string {
-  if (thread.agent_state === 'awaiting_input' || plan) return 'plan to approve'
-  if (thread.agent_state === 'awaiting_permission') return asks ? 'asks you' : 'asks to run'
-  if (thread.agent_state === 'error') return 'stopped'
-  return 'review'
-}
-
-/** A thread waiting on the person, with what it waits for answerable in place. */
-export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: string }) {
+/**
+ * A thread waiting on the person, one row of one height whatever it waits for: the kind's
+ * icon, its title and how long it has waited. Answering is the queue's or the thread's.
+ */
+function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
+  const now = useNow()
   const status = useAgentStatus(thread.id)
-  const [error, setError] = useState<string>()
-  const act = (action: Promise<unknown>) => {
-    setError(undefined)
-    action.catch((failure: unknown) => setError(message(failure)))
-  }
-  const asked = status?.permissions[0]
+  const kind = waitKind(thread, status)
+  const { icon, word } = WAIT_KINDS[kind]
   const title = thread.title ?? 'Untitled thread'
   // A request waiting for review is named for itself, not for the thread it would merge into.
-  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: thread.review && !asked })
-  const review = thread.review && !asked ? (mrs.data ?? []).find((mr) => mr.target === thread.id && mr.status === 'open') : undefined
-  if (review)
-    return (
-      <li role="group" aria-label={`${review.title} needs you`}>
-        <Link to="/mr/$id" params={{ id: review.id }} className={cx(ROW, 'py-[5px] pl-2')} title={`Merge request into ${title}`}>
-          <Icon name="merge" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
-          <span className="min-w-0 flex-1 truncate">{review.title}</span>
-          <span className="shrink-0 text-2xs text-accent-fg">review</span>
-        </Link>
-      </li>
-    )
-  const first = asked?.options[0]
+  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: kind === 'review' })
+  const review = kind === 'review' ? (mrs.data ?? []).find((mr) => mr.target === thread.id && mr.status === 'open') : undefined
+  const asked = status?.permissions[0]
+  const detail = kind === 'permission' && asked ? `${title} · asks to run ${asked.title}` : review ? `Merge request into ${title}` : `${title} · ${word}`
+  const row = (
+    <>
+      <Icon name={icon} className={cx('h-3.5 w-3.5 shrink-0', kind === 'stopped' ? 'text-danger' : 'text-accent-fg')} />
+      <span className="min-w-0 flex-1 truncate">{review?.title ?? title}</span>
+      <span className="sr-only"> {word}</span>
+      <span className="min-w-7 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
+        {ago(thread.last_ms, now).replace('just now', 'now')}
+      </span>
+    </>
+  )
   return (
-    <li role="group" aria-label={`${title} needs you`}>
-      <ul>
-        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0, Boolean(asked?.plan))}</span>} />
-      </ul>
-      {asked && (
-        <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">
-          <p className="line-clamp-3 whitespace-pre-wrap text-fg-2 [overflow-wrap:anywhere]" title={asked.plan ? 'A plan to approve' : asked.title}>
-            {asked.plan ? 'A plan to approve' : <>Asks to run: <span className="font-mono">{asked.title}</span></>}
-          </p>
-          {/* The first answer here only for what's shown whole; a longer command, and the plan, on the thread's own card. */}
-          <div className="flex min-w-0 gap-1">
-            {first && !asked.plan && shownWhole(asked.title) && (
-              <Button size="sm" variant="primary" className="min-w-0" title={first[1]} onClick={() => act(api.answer(thread.id, asked.id, first[0]))}>
-                <span className="truncate">{first[1]}</span>
-              </Button>
-            )}
-            <Link to="/t/$id" params={{ id: thread.id }} className={buttonClass('secondary', 'sm')}>
-              {asked.plan ? 'Read the plan' : 'Open'}
-            </Link>
-          </div>
-        </div>
+    <li role="group" aria-label={`${review?.title ?? title} needs you`}>
+      {review ? (
+        <Link to="/mr/$id" params={{ id: review.id }} title={detail} className={cx(ROW, 'h-7')} activeProps={{ className: 'bg-elevated' }}>
+          {row}
+        </Link>
+      ) : (
+        <Link to="/t/$id" params={{ id: thread.id }} title={detail} className={cx(ROW, 'h-7')} activeProps={{ className: 'bg-elevated' }}>
+          {row}
+        </Link>
       )}
-      {status?.state === 'awaiting_input' && (
-        <div className="pr-2 pb-2 pl-6">
-          <Button variant="primary" size="sm" onClick={() => act(api.prompt(thread.id, APPROVED))}>
-            Approve plan
-          </Button>
-        </div>
-      )}
-      {error && <p className="pr-2 pb-2 pl-6 text-xs text-danger">{error}</p>}
     </li>
   )
 }
@@ -220,12 +198,11 @@ function NavItem({
 /** This machine at the bottom: its name, how many agents run on it, and Settings. */
 function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const running = threads.filter((thread) => ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
+  const running = threads.filter((thread) => ['working', 'starting'].includes(thread.agent_state ?? '')).length
   const waiting = threads.filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
   const signIn = status.data?.servers?.[0]
   const name = signIn?.name ?? 'this machine'
   const sync = status.data?.sync_error
-  const agents = running === 0 ? null : `${running === 1 ? '1 agent' : `${running} agents`}${waiting > 0 ? `, ${waiting} waiting` : ' running'}`
   const { backends, current } = useBackends()
   return (
     <div className="flex flex-col border-t border-line">
@@ -251,10 +228,18 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
       ) : (
         <Link to="/settings/devices" className="flex min-w-0 flex-1 items-center gap-2 hover:text-fg-1" title={sync ?? undefined}>
           <Dot tone={sync ? 'danger' : signIn ? 'ok' : 'idle'} />
-          <span className="truncate">
-            {[name, sync ? 'sync failing' : agents].filter(Boolean).join(' · ')}
-          </span>
+          <span className="truncate">{sync ? `${name} · sync failing` : name}</span>
         </Link>
+      )}
+      {waiting > 0 && (
+        <Tag tone="accent" className="shrink-0 font-sans">
+          {waiting} waiting
+        </Tag>
+      )}
+      {running > 0 && (
+        <Tag tone="ok" className="shrink-0 font-sans">
+          {running} running
+        </Tag>
       )}
       <Link
         to="/settings"
@@ -297,6 +282,15 @@ export function Sidebar() {
           silt
         </Link>
         {!hosted() && <WorkspaceSwitcher />}
+        <button
+          type="button"
+          aria-label="command palette"
+          title={`Search and commands (${formatKeys('mod+k')})`}
+          onClick={openPalette}
+          className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
+        >
+          <Icon name="search" className="h-[15px] w-[15px]" />
+        </button>
       </div>
       {!hosted() && (
         <Link to="/new" className={cx(ROW, 'h-[30px]', (path === '/' || path === '/new') && ACTIVE)}>
@@ -305,7 +299,6 @@ export function Sidebar() {
           <Kbd>{formatKeys('n')}</Kbd>
         </Link>
       )}
-      <PaletteRow className={cx(ROW, 'h-[30px] w-full text-left')} />
       <NavItem to="/threads" icon="list">
         All threads
       </NavItem>
@@ -322,17 +315,22 @@ export function Sidebar() {
         </div>
       )}
       {grouped.needs_you.length > 0 && (
-        <section aria-label="needs you" className="mt-2">
-          <SectionLabel className="px-2 text-accent-fg" aside={<span className="font-mono">{grouped.needs_you.length}</span>}>
-            <Link to="/needs-you" className={cx('rounded-sm hover:underline', path === '/needs-you' && 'underline underline-offset-4')}>
-              Needs you
-            </Link>
+        <section aria-label="needs you" className="mt-3 mb-1 rounded-md border border-accent bg-accent-tint px-1 pt-1 pb-0.5">
+          <SectionLabel className="px-2 pt-1 text-accent-fg" aside={<span className="font-mono">{grouped.needs_you.length}</span>}>
+            Needs you
           </SectionLabel>
           <ul>
             {grouped.needs_you.map((thread) => (
               <NeedsYouItem key={thread.id} thread={thread} />
             ))}
           </ul>
+          <Link
+            to="/needs-you"
+            className={cx('flex items-center justify-between rounded-sm px-2 py-1.5 text-xs text-accent-fg hover:bg-elevated max-md:min-h-11', path === '/needs-you' && 'bg-elevated')}
+          >
+            Open the queue
+            <Kbd>{formatKeys('q')}</Kbd>
+          </Link>
         </section>
       )}
       {grouped.pinned.length > 0 && (

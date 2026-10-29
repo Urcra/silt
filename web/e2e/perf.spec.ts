@@ -83,7 +83,7 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   await allThreads(page)
   const link = page.getByRole('link', { name: thread })
   // The whole session is recorded once the listing counts all its messages.
-  const row = page.getByTestId('threads').getByRole('listitem').filter({ hasText: thread })
+  const row = page.getByTestId('threads').getByRole('row').filter({ hasText: thread })
   await expect(async () => {
     await page.reload()
     await expect(row).toContainText(`${2 * ROUNDS} messages`, { timeout: 1000 })

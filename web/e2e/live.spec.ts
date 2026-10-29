@@ -244,7 +244,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
     await hosted.reload()
     await expect(waiting).toBeVisible({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
-  await expect(waiting.getByText(/asks to run/).first()).toBeVisible()
+  await expect(waiting).toContainText('asks to run')
 
   // The browser has no daemon: what it asks goes through the server to the machine.
   await waiting.getByRole('link').first().click()
@@ -1005,7 +1005,7 @@ async function startInBackground(page: Page, project: RegExp, prompt: string) {
   await expect(form.getByLabel('first prompt')).toHaveValue('')
 }
 
-test('two agents in two projects queue prompts, are answered from the sidebar, and a fork is offered back', async ({ page }) => {
+test('two agents in two projects queue prompts, are answered from the Needs you queue, and a fork is offered back', async ({ page }) => {
   await page.goto(live.alice)
   await startInBackground(page, /origin/, 'work in origin')
   await startInBackground(page, /tools/, 'work in tools')
@@ -1013,21 +1013,28 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
   const sidebar = page.getByRole('navigation', { name: 'projects' })
   const origin = sidebar.getByRole('group', { name: 'work in origin needs you' })
   const tools = sidebar.getByRole('group', { name: 'work in tools needs you' })
-  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
-  await expect(tools).toContainText('Asks to run: Edit src/main.rs')
+  await expect(origin).toContainText('asks to run')
+  await expect(tools).toContainText('asks to run')
 
-  await origin.getByRole('link', { name: 'work in origin' }).click()
+  await origin.getByRole('link', { name: /^work in origin/ }).click()
   await page.getByLabel('draft').fill('then document it')
   await page.getByRole('button', { name: 'Queue', exact: true }).click()
   await expect(page.getByRole('region', { name: 'queued prompts' })).toContainText('then document it')
 
-  await tools.getByRole('button', { name: 'Allow' }).click()
+  // Each is answered from the queue, which lists both and shows the one chosen.
+  await sidebar.getByRole('link', { name: /Open the queue/ }).click()
+  const queue = page.getByRole('region', { name: 'waiting on you' })
+  await queue.getByRole('button', { name: /^work in tools/ }).click()
+  await queue.getByRole('group', { name: 'work in tools needs you' }).getByRole('button', { name: 'Allow' }).click()
   await expect(tools).toBeHidden()
-  await origin.getByRole('button', { name: 'Allow' }).click()
+  // What was answered leaves the queue, and the one left is shown in its place.
+  const there = queue.getByRole('group', { name: 'work in origin needs you' })
+  await expect(there).toContainText('Edit src/main.rs')
+  await there.getByRole('button', { name: 'Allow' }).click()
+  await sidebar.getByRole('link', { name: /^work in origin/ }).first().click()
   await expect(page.getByText('Done: work in origin')).toBeVisible()
   // The queued prompt went next, and asks in turn.
-  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
-  await origin.getByRole('button', { name: 'Allow' }).click()
+  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: then document it')).toBeVisible()
   await expect(origin).toBeHidden()
 
