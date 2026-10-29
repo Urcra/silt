@@ -361,8 +361,8 @@ function Queue({ waiting, openInto, replies }: { waiting: ThreadSummary[]; openI
         <StatusOf key={thread.id} thread={thread.id} onStatus={onStatus} />
       ))}
       <div className="flex w-[380px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-line px-2 py-2.5">
-        <span className="px-2.5 pb-1 text-2xs text-fg-2" data-volatile>
-          {waiting.length} waiting · oldest {ago(oldest, now)}
+        <span className="px-2.5 pb-1 text-2xs text-fg-2">
+          {waiting.length} waiting · oldest <span data-volatile>{ago(oldest, now)}</span>
         </span>
         {ORDER.filter((kind) => items.some((each) => each.kind === kind)).map((kind) => (
           <section key={kind} aria-label={WAIT_KINDS[kind].heading}>

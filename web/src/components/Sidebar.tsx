@@ -24,12 +24,23 @@ const ROW = 'flex min-w-0 items-center gap-2 rounded-sm px-2 text-fg-1 hover:bg-
 const ACTIVE = 'bg-accent-tint text-accent-fg shadow-[inset_2px_0_0_var(--accent)] hover:bg-accent-tint'
 
 /** What a thread is at, in words, for the line under its title: "Working", "Review requested · 3m". */
-function stateLine(thread: ThreadSummary, now: number): string {
+/** What a thread is at, in words, and since when; the time stands apart, as it changes on its own. */
+function stateLine(thread: ThreadSummary, now: number): { said: string | null; when: string | null } {
   const doing = threadDoing(thread) ?? (thread.merged ? 'merged' : thread.mine.settled ? 'settled' : null)
   const when = ago(thread.last_ms, now)
-  if (!doing) return /^\d/.test(when) ? `${when} ago` : when
+  if (!doing) return { said: null, when: /^\d/.test(when) ? `${when} ago` : when }
   const said = doing[0]!.toUpperCase() + doing.slice(1)
-  return thread.agent_state === 'working' || thread.agent_state === 'starting' ? said : `${said} · ${when}`
+  return { said, when: thread.agent_state === 'working' || thread.agent_state === 'starting' ? null : when }
+}
+
+function StateLine({ said, when }: { said: string | null; when: string | null }) {
+  return (
+    <span className="truncate text-2xs text-fg-2">
+      {said}
+      {said && when && ' · '}
+      {when && <span data-volatile>{when}</span>}
+    </span>
+  )
 }
 
 /** One thread in the sidebar (ADR 0044): its state's mark and its title, then what it's at in words, so the title keeps the row's width. */
@@ -57,9 +68,7 @@ function ThreadItem({ thread, nested = false, current = true }: { thread: Thread
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
-          <span className="truncate text-2xs text-fg-2" data-volatile>
-            {stateLine(thread, now)}
-          </span>
+          <StateLine {...stateLine(thread, now)} />
         </span>
         {thread.mine.pinned && <span className="sr-only"> pinned</span>}
         {/* Not amber, which the mark before the title keeps for what waits on someone. */}

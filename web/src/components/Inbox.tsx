@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { useState } from 'react'
 import { APPROVED } from '../agentState'
 import { api, short, type InboxEntry, type InboxRead, type KindSetting, type MrSummary } from '../api'
 import { useTopic } from '../bus'
@@ -128,8 +128,7 @@ function Switch({ on, label, onChange }: { on: boolean; label: string; onChange:
  * Which kinds notify the browser, by subject. Everything lands in the inbox
  * either way, so the inbox column only says so.
  */
-// Settings still says `open`, from when this was a fold under the inbox; it's always open now.
-export const NotificationSettings: (props: { open?: boolean }) => ReactNode = () => {
+export function NotificationSettings() {
   const queries = useQueryClient()
   const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false, enabled: useHasServer() })
   if (!settings.data) return null

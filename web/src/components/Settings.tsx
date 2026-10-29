@@ -98,7 +98,7 @@ function Notifications() {
     <section aria-label="Notifications" className="flex flex-col gap-3">
       <h2 className={SETTINGS_HEADING}>Notifications</h2>
       <NotificationBanner />
-      <NotificationSettings open />
+      <NotificationSettings />
     </section>
   )
 }

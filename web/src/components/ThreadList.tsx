@@ -119,8 +119,8 @@ function ThreadRow({
           <span className="text-fg-3">—</span>
         )}
       </td>
-      <td className="pr-3 pl-3 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
-        {ago(thread.last_ms, now)}
+      <td className="pr-3 pl-3 text-right font-mono text-2xs whitespace-nowrap text-fg-3">
+        <span data-volatile>{ago(thread.last_ms, now)}</span>
       </td>
     </tr>
   )
