@@ -268,7 +268,7 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
   if (entry.kind === 'wake')
     return (
       <div data-testid="wake" className="flex w-fit items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5">
-        <Icon name="agent" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+        <Icon name="play" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
         {/* What set it off names a command as code. */}
         <Markdown text={entry.text} className="text-xs leading-normal text-fg-2" />
       </div>
