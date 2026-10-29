@@ -139,7 +139,11 @@ key: string, title: string, description: string | null,
 /**
  * Its choices; none for a free answer.
  */
-options: Array<ChoiceAsked>, multi: boolean, };
+options: Array<ChoiceAsked>, multi: boolean, 
+/**
+ * The form can't be sent without it; the rest may be left empty.
+ */
+required: boolean, };
 
 export type ChoiceAsked = { 
 /**

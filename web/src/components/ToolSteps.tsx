@@ -295,7 +295,12 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
-  const complete = asked.fields.every((field) => (chosen[field.key] ?? []).some((value) => value.trim()))
+  const filled = (field: QuestionAsked['fields'][number]) => (chosen[field.key] ?? []).some((value) => value.trim())
+  // Claude's adapter follows each question with an optional box for an answer of your own, and marks nothing required.
+  const optional = (field: QuestionAsked['fields'][number]) => !field.required && field.options.length === 0
+  const questions = asked.fields.filter((field) => !optional(field))
+  const complete = asked.fields.every((field) => !field.required || filled(field)) && asked.fields.some(filled)
+  const answers = () => Object.fromEntries(asked.fields.filter(filled).map((field) => [field.key, chosen[field.key]!]))
   const [own, setOwn] = useState('')
   // A form's choices take no free text, so your own answer steers the agent: the daemon closes the question with it and prompts with it.
   const answerOwn = () => {
@@ -313,11 +318,21 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
         <div key={field.key} className="flex flex-col gap-1.5">
           <div className="flex items-baseline gap-2">
             <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{field.title}</span>
-            <span className="text-sm font-medium">{asked.fields.length === 1 ? asked.message : (field.description ?? field.title)}</span>
-            <span className="ml-auto shrink-0 text-warn">
-              {asked.fields.length > 1 && <span className="mr-2 font-mono text-fg-2">{fieldIndex + 1} of {asked.fields.length}</span>}
-              waiting on you
+            <span className={cx(optional(field) ? 'text-fg-2' : 'text-sm font-medium')}>
+              {questions.length === 1 && !optional(field) ? asked.message : (field.description ?? field.title)}
             </span>
+            {optional(field) ? (
+              <span className="ml-auto shrink-0 text-fg-2">optional</span>
+            ) : (
+              <span className="ml-auto shrink-0 text-warn">
+                {questions.length > 1 && (
+                  <span className="mr-2 font-mono text-fg-2">
+                    {questions.indexOf(field) + 1} of {questions.length}
+                  </span>
+                )}
+                waiting on you
+              </span>
+            )}
           </div>
           {field.options.length === 0 ? (
             <input
@@ -384,7 +399,7 @@ function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked })
       )}
       <span className="flex flex-wrap items-center gap-1.5">
         {!single && (
-          <Button variant="primary" disabled={!complete || sending} onClick={() => send(chosen)}>
+          <Button variant="primary" disabled={!complete || sending} onClick={() => send(answers())}>
             Answer
           </Button>
         )}

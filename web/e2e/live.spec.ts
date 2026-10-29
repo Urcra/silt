@@ -197,6 +197,19 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(again).toContainText('Packets acknowledged')
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(alice.getByText(/I was not allowed to edit/).last()).toBeVisible()
+  // Claude's form follows each question with an optional box of your own and requires nothing: answered once something is chosen.
+  await alice.getByLabel('draft').fill('Ask two things')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  const two = alice.getByRole('region', { name: 'question' }).last()
+  await expect(two).toContainText('2 of 2')
+  const answer = two.getByRole('button', { name: 'Answer', exact: true })
+  await expect(answer).toBeDisabled()
+  await two.getByRole('radio', { name: 'Chunks' }).click()
+  await two.getByRole('radio', { name: 'Footer' }).click()
+  await two.getByLabel('Other').first().fill('every 64 KiB')
+  await answer.click()
+  await expect(alice.getByText('Counting Chunks in the Footer; notes: 1.')).toBeVisible()
+  await expect(two).toContainText('Chunks, every 64 KiB')
 
   const changed = () =>
     alice.evaluate(async (thread) => {

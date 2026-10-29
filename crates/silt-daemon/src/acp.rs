@@ -180,6 +180,7 @@ pub(crate) fn question_asked(question: &Question) -> crate::protocol::QuestionAs
                     })
                     .collect(),
                 multi: field.multi,
+                required: field.required,
             })
             .collect(),
     }
@@ -193,16 +194,14 @@ fn question_call(id: u64) -> String {
 /// A question as Claude Code's `AskUserQuestion` records one, so it reads
 /// back alike whichever agent asked it.
 fn question_input(question: &Question) -> serde_json::Value {
-    let single = question.fields.len() == 1;
     let asked: Vec<serde_json::Value> = question
         .fields
         .iter()
+        .filter(|field| !optional_text(field))
         .map(|field| {
-            let text =
-                if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
             serde_json::json!({
                 "header": field.title,
-                "question": text,
+                "question": asked_text(question, field),
                 "multiSelect": field.multi,
                 "options": field
                     .options
@@ -219,14 +218,14 @@ fn question_input(question: &Question) -> serde_json::Value {
 /// each choice's label; refused when a field isn't asked or a value isn't
 /// offered.
 fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result<String, CoreError> {
-    let single = question.fields.len() == 1;
-    let mut said = Vec::new();
-    for (key, values) in answers {
-        let field = question
-            .fields
-            .iter()
-            .find(|field| field.key == *key)
-            .ok_or_else(|| CoreError::Invalid(format!("the agent didn't ask for {key}")))?;
+    if let Some((key, _)) = answers.iter().find(|(key, _)| !question.fields.iter().any(|field| field.key == *key)) {
+        return Err(CoreError::Invalid(format!("the agent didn't ask for {key}")));
+    }
+    let mut said: Vec<(String, Vec<String>)> = Vec::new();
+    for (index, field) in question.fields.iter().enumerate() {
+        let Some((_, values)) = answers.iter().find(|(key, _)| *key == field.key) else {
+            continue;
+        };
         if !field.multi && values.len() > 1 {
             return Err(CoreError::Invalid(format!("{} takes one answer", field.title)));
         }
@@ -238,11 +237,35 @@ fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result
                 None => Err(CoreError::Invalid(format!("the agent didn't offer {value} for {}", field.title))),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let asked =
-            if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
-        said.push(format!("\"{asked}\"=\"{}\"", labels.join(", ")));
+        // A box of one's own answers the question before it.
+        let of = match index.checked_sub(1).map(|before| &question.fields[before]) {
+            Some(before) if optional_text(field) && !optional_text(before) => before,
+            _ => field,
+        };
+        let asked = asked_text(question, of);
+        match said.last_mut() {
+            Some((last, given)) if *last == asked => given.extend(labels),
+            _ => said.push((asked, labels)),
+        }
     }
+    let said: Vec<String> = said.iter().map(|(asked, given)| format!("\"{asked}\"=\"{}\"", given.join(", "))).collect();
     Ok(format!("User has answered your questions: {}. You can now continue with the user's answers in mind.", said.join(", ")))
+}
+
+/// What `field` asks: the form's message when it's the only question.
+fn asked_text(question: &Question, field: &silt_acp::QuestionField) -> String {
+    let questions = question.fields.iter().filter(|each| !optional_text(each)).count();
+    if questions == 1 && !optional_text(field) {
+        question.message.clone()
+    } else {
+        field.description.clone().unwrap_or_else(|| field.title.clone())
+    }
+}
+
+/// A box for an answer of one's own beside a question, as Claude's adapter
+/// follows each with, rather than a question itself.
+fn optional_text(field: &silt_acp::QuestionField) -> bool {
+    !field.required && field.options.is_empty()
 }
 
 /// An answer in the person's own words, as Claude Code words a result.
@@ -1852,6 +1875,7 @@ mod tests {
                     },
                 ],
                 multi: false,
+                required: true,
             }],
         };
         let said = answer_text(&question, &[("count".into(), vec!["acked".into()])]).unwrap();
@@ -1864,6 +1888,49 @@ mod tests {
         let entry =
             silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: own_answer(&question, " Packets "), is_error: false };
         assert_eq!(silt_agents::tool::shown(entry).unwrap().outcome.unwrap().answers[0].answer, "Packets");
+    }
+
+    /// Claude's adapter follows each question with an optional box for an
+    /// answer of one's own: it reads back as part of that question's answer.
+    #[test]
+    fn a_box_of_ones_own_answers_the_question_before_it() {
+        let choice = |label: &str| silt_acp::QuestionChoice { value: label.into(), label: label.into(), description: None };
+        let field = |key: &str, description: &str, options: Vec<silt_acp::QuestionChoice>| silt_acp::QuestionField {
+            key: key.into(),
+            title: key.into(),
+            description: Some(description.into()),
+            options,
+            multi: false,
+            required: false,
+        };
+        let question = Question {
+            id: 1,
+            message: "Please answer the following questions.".into(),
+            fields: vec![
+                field("question_0", "What should it count?", vec![choice("Bytes"), choice("Chunks")]),
+                field("question_0_custom", "Type your own answer (optional).", vec![]),
+                field("question_1", "Where should it show?", vec![choice("Header"), choice("Footer")]),
+                field("question_1_custom", "Type your own answer (optional).", vec![]),
+            ],
+        };
+        let asked = question_input(&question);
+        let headers: Vec<&str> =
+            asked["questions"].as_array().unwrap().iter().map(|each| each["header"].as_str().unwrap()).collect();
+        assert_eq!(headers, ["question_0", "question_1"]);
+
+        let said = answer_text(
+            &question,
+            &[
+                ("question_1".into(), vec!["Footer".into()]),
+                ("question_0".into(), vec!["Chunks".into()]),
+                ("question_0_custom".into(), vec!["every 64 KiB".into()]),
+            ],
+        )
+        .unwrap();
+        let entry = silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: said, is_error: false };
+        let answers = silt_agents::tool::shown(entry).unwrap().outcome.unwrap().answers;
+        let answers: Vec<(&str, &str)> = answers.iter().map(|each| (each.question.as_str(), each.answer.as_str())).collect();
+        assert_eq!(answers, [("What should it count?", "Chunks, every 64 KiB"), ("Where should it show?", "Footer")]);
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! and a model setting, and takes images and files, which its answer
 //! names; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
 //! `Ask me` asks a multiple-choice question instead and answers with the
-//! choice. A prompt saying `Ponder` makes it think for a while between its
+//! choice; `Ask two` asks two as Claude's adapter does, each followed by an
+//! optional box for an answer of one's own, and none required. A prompt saying `Ponder` makes it think for a while between its
 //! edit and a read. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
 //! stops, as v1 can't. `Detached` makes it leave a shell running and read
@@ -207,6 +208,40 @@ async fn main() -> Result<()> {
                     notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
                     if planning {
                         let reply = format!("Plan: {prompt}");
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                        state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
+                    if prompt.contains("Ask two") {
+                        let asked: CreateElicitationRequest = serde_json::from_value(serde_json::json!({
+                            "mode": "form",
+                            "sessionId": session.to_string(),
+                            "message": "Please answer the following questions.",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "question_0": {"type": "string", "title": "Unit", "description": "What should the progress bar count?", "oneOf": [
+                                        {"const": "Bytes", "title": "Bytes"},
+                                        {"const": "Chunks", "title": "Chunks"}
+                                    ]},
+                                    "question_0_custom": {"type": "string", "title": "Other", "description": "Type your own answer, or add a note to the option you chose above (optional)."},
+                                    "question_1": {"type": "string", "title": "Place", "description": "Where should it show?", "oneOf": [
+                                        {"const": "Header", "title": "Header"},
+                                        {"const": "Footer", "title": "Footer"}
+                                    ]},
+                                    "question_1_custom": {"type": "string", "title": "Other", "description": "Type your own answer, or add a note to the option you chose above (optional)."}
+                                }
+                            }
+                        }))
+                        .expect("a form question");
+                        let answer = serde_json::to_value(worker.send_request(asked).block_task().await?).unwrap_or_default();
+                        let content = &answer["content"];
+                        let reply = match (content["question_0"].as_str(), content["question_1"].as_str()) {
+                            (Some(unit), Some(place)) if answer["action"] == "accept" => {
+                                format!("Counting {unit} in the {place}; notes: {}.", content.as_object().map_or(0, |all| all.len() - 2))
+                            }
+                            _ => "You didn't choose.".to_owned(),
+                        };
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                         state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
                         return responder.respond(PromptResponse::new(StopReason::EndTurn));

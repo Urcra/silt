@@ -140,6 +140,8 @@ pub struct QuestionField {
     pub options: Vec<QuestionChoice>,
     /// More than one choice may be taken.
     pub multi: bool,
+    /// The form can't be sent without it.
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +176,7 @@ impl Question {
                     description: text(property, "description"),
                     options: choices_of(choices),
                     multi,
+                    required: required.contains(&key.as_str()),
                 }
             })
             .collect();
