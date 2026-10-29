@@ -340,6 +340,7 @@ impl Core {
         // catching up afterwards takes in what they stored meanwhile.
         core.positions = core.store.positions().await?;
         core.clones = core.store.clones().await?.into_iter().filter(|(_, path)| path.join(".git").exists()).collect();
+        core.remember_clones_threads_ran_in().await;
         core.homes =
             core.store.family_homes().await?.into_iter().map(|(family, home)| (family, Home::from_stored(home))).collect();
         core.project_homes =
@@ -1959,6 +1960,26 @@ impl Core {
             warn!(%error, "could not remember the clone");
         }
         self.clones.insert(identity, repo.root().to_owned());
+    }
+
+    /// Remembers a clone for each project a thread was recorded in that has
+    /// none here, so its project can start threads: sessions imported before
+    /// imports remembered their folder left none. The latest thread's folder
+    /// wins, and a linked worktree (`.git` a file) is never taken as the clone.
+    async fn remember_clones_threads_ran_in(&mut self) {
+        let mut ran_in: Vec<(i64, String, PathBuf)> = self
+            .threads
+            .values()
+            .filter(|thread| !thread.repo.is_empty() && !self.clones.contains_key(&thread.repo))
+            .filter(|thread| thread.repo_root.join(".git").is_dir())
+            .map(|thread| (thread.created_ms, thread.repo.clone(), thread.repo_root.clone()))
+            .collect();
+        ran_in.sort_by_key(|(created_ms, ..)| std::cmp::Reverse(*created_ms));
+        for (_, repo, root) in ran_in {
+            if !self.clones.contains_key(&repo) {
+                self.remember_clone(&root).await;
+            }
+        }
     }
 
     /// Whether this machine's user may write into `thread`: its owner or a

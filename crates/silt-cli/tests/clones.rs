@@ -42,6 +42,25 @@ fn clones_are_remembered_across_restarts() {
 }
 
 #[test]
+fn a_project_whose_clone_is_gone_takes_another_its_threads_ran_in() {
+    let root = common::temp_root("silt-clones-gone");
+    let origin = origin(root.path());
+    let _server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &_server);
+    laptop.silt(&["claude"]);
+    let other = root.path().join("laptop").join("other");
+    common::git(root.path(), &["clone", "-q", &origin.to_string_lossy(), &other.to_string_lossy()]);
+    let ran = laptop.command(&["claude"], &[]).current_dir(&other).output().expect("silt runs");
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    assert_eq!(known_clones(&laptop), vec![common::canonical(&other)]);
+
+    laptop.silt(&["daemon", "stop"]);
+    std::fs::remove_dir_all(&other).expect("remove the clone");
+    laptop.silt(&["log"]);
+    assert_eq!(known_clones(&laptop), vec![laptop.repo.clone()], "the first clone's thread names it");
+}
+
+#[test]
 fn only_one_daemon_runs_per_data_directory() {
     let root = common::temp_root("silt-one-daemon");
     let origin = origin(root.path());
