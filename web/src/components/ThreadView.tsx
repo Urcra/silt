@@ -264,15 +264,6 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
     )
   if (entry.kind === 'user')
     return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
-  // A turn the agent opened itself, as Claude does once a background task ends: nobody said anything.
-  if (entry.kind === 'wake')
-    return (
-      <div data-testid="wake" className="flex w-fit items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5">
-        <Icon name="play" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
-        {/* What set it off names a command as code. */}
-        <Markdown text={entry.text} className="text-xs leading-normal text-fg-2" />
-      </div>
-    )
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
     // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.
@@ -746,7 +737,7 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   return (
     <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="py-3">
       <div className="flex min-w-0 flex-col gap-3.5">
-        {row.prompt && (
+        {row.prompt?.kind === 'user' && (
           <Entry entry={row.prompt} turn={row.turn?.number} {...props}>
             <EntryText entry={row.prompt} />
             {row.images.length > 0 && (
