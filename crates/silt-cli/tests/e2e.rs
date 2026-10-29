@@ -118,9 +118,31 @@ impl Env {
     }
 }
 
+/// Longer than a daemon started in the background keeps trying for the
+/// data dir's lock, a second.
+const DAEMON_LOCK_WAIT: Duration = Duration::from_millis(1500);
+
 impl Drop for Env {
+    /// A session's wrapper and hooks each start a daemon when none runs, so
+    /// several may start: those that lost the race for the lock take it once
+    /// the winner stops. Stopped until none has held it for as long as they
+    /// try, else one would run on in the data dir once it's removed,
+    /// recreating it.
     fn drop(&mut self) {
-        let _ = Command::new(env!("CARGO_BIN_EXE_silt")).args(["daemon", "stop"]).env("SILT_HOME", &self.silt_home).output();
+        let daemon = |command: &str| {
+            Command::new(env!("CARGO_BIN_EXE_silt")).args(["daemon", command]).env("SILT_HOME", &self.silt_home).output()
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut quiet_since = Instant::now();
+        let _ = daemon("stop");
+        while quiet_since.elapsed() < DAEMON_LOCK_WAIT && Instant::now() < deadline {
+            let status = daemon("status").map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
+            if status.trim() != "not running" {
+                let _ = daemon("stop");
+                quiet_since = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
