@@ -529,12 +529,12 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
               </div>
             )}
             <StatusBar label="editor status">
-              <span className="inline-flex items-center gap-1">
-                <Dot tone="ok" />
-                <Mock id="live.sync-devices">
+              <Mock id="live.sync-devices">
+                <span className="inline-flex items-center gap-1">
+                  <Dot tone="ok" />
                   in sync with {people.length + 1} {people.length === 0 ? 'device' : 'devices'}
-                </Mock>
-              </span>
+                </span>
+              </Mock>
               <span className="max-md:hidden">edits apply live; nothing to save</span>
               {file && (
                 <span className="ml-auto">

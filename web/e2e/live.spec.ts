@@ -720,7 +720,7 @@ test('a comment written in the server-hosted app reaches the machines', async ({
 
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
-  await settings(page, 'Devices')
+  await settings(page, 'Devices and sync')
   const here = page.getByRole('region').filter({ has: page.getByText('this device', { exact: true }) })
   await expect(here.getByText('online', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'alice-laptop' }).getByText('online', { exact: true })).toBeVisible()
@@ -1068,11 +1068,14 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   await page.goto(live.alice)
   await settings(page, 'Projects')
   const list = page.getByTestId('projects')
-  await expect(list.getByRole('listitem', { name: 'tools' })).toContainText(`Here at ${live.work}/alice/tools`)
+  // A clone's path is cut to its last folders, whole in its title.
+  await expect(list.getByRole('listitem', { name: 'tools' })).toContainText('Cloned here at …/alice/tools')
+  await expect(list.getByRole('listitem', { name: 'tools' }).getByTitle(`${live.work}/alice/tools`, { exact: true })).toBeVisible()
   const origin = list.getByRole('listitem', { name: 'origin' })
   await expect(origin).toContainText(/\d+ threads?/)
-  await expect(origin).toContainText(`Here at ${live.work}/alice/repo`)
-  await expect(origin).toContainText('New threads start with Plain agent')
+  await expect(origin.getByTitle(`${live.work}/alice/repo`, { exact: true })).toBeVisible()
+  // The first project opens to its defaults.
+  await expect(origin.getByRole('group', { name: 'defaults for origin' }).getByLabel('Default agent')).toHaveValue('plain')
 
   await page.getByRole('main').getByRole('link', { name: 'Add a project' }).click()
   const add = page.getByRole('region', { name: 'add a project' })
@@ -1085,7 +1088,7 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   await add.getByRole('button', { name: 'Clone', exact: true }).click()
   await expect(add).toContainText(`${live.work}/alice/docs`)
   await page.getByRole('link', { name: 'Done' }).click()
-  await expect(list.getByRole('listitem', { name: 'docs' })).toContainText(`Here at ${live.work}/alice/docs`)
+  await expect(list.getByRole('listitem', { name: 'docs' }).getByTitle(`${live.work}/alice/docs`, { exact: true })).toBeVisible()
   expect(readFileSync(join(live.work, 'alice', 'docs', 'src', 'main.rs'), 'utf8')).toBe('fn tool() {}\n')
 })
 

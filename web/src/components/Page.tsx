@@ -2,7 +2,7 @@ import { type CSSProperties, type ReactNode, type RefObject, useContext, useRef 
 import { useDragWidth } from '../dragWidth'
 import { WIDE, useMedia } from '../media'
 import { MainScroll } from '../scroll'
-import { InSettings } from '../settingsContext'
+import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Drawer } from '../shell'
 import { IconButton, cx } from '../ui'
 
@@ -83,7 +83,7 @@ export function Page({
       <div className="flex min-w-0 flex-col gap-3" data-page={label}>
         {(title || actions) && (
           <div className="flex flex-wrap items-center gap-2.5">
-            {title && <h2 className="text-sm font-medium">{title}</h2>}
+            {title && <h2 className={SETTINGS_HEADING}>{title}</h2>}
             {meta && <span className="min-w-0 font-mono text-2xs text-fg-2">{meta}</span>}
             {actions && <span className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</span>}
           </div>

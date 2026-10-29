@@ -54,8 +54,21 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
   return <textarea className={cx(FIELD, 'block w-full', className)} {...props} />
 }
 
+/**
+ * A native select, so keyboards, screen readers and `selectOption` work as ever, drawn as the app's
+ * fields are: `className` sizes the field, and its text size reaches the select.
+ */
 export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={cx(FIELD, className)} {...props} />
+  const sized = /(^|\s)text-(2xs|xs|sm|base|lg)\b/.test(className ?? '')
+  return (
+    <span className={cx('relative inline-flex min-w-0 align-middle', !sized && 'text-sm max-md:text-base', className)}>
+      <select
+        className="w-full min-w-0 cursor-pointer appearance-none truncate rounded-sm border border-line bg-elevated py-1 pr-7 pl-2 text-[length:inherit] text-fg-1 hover:border-line-strong disabled:cursor-default disabled:text-fg-3 disabled:hover:border-line max-md:min-h-11"
+        {...props}
+      />
+      <Icon name="chevronDown" className="pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 text-fg-2" />
+    </span>
+  )
 }
 
 const TONE = {

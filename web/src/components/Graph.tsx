@@ -6,6 +6,7 @@ import { parseFiles } from '../diffParse'
 import { useTopic } from '../bus'
 import { byFamily, layout } from '../lanes'
 import { useMedia } from '../media'
+import { mocksOn } from '../mocks'
 import { plain } from '../plain'
 import { useNow } from '../now'
 import { keys, message } from '../query'
@@ -120,8 +121,9 @@ function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSumm
         rows={[
           ['Thread', thread?.title ?? short(row.thread)],
           ['By', [row.owner || 'you', row.agent && `with ${row.agent}`].filter(Boolean).join(' ')],
+          // Which device is a mock, so without mocks the row says only when.
           [
-            'On',
+            mocksOn ? 'On' : 'When',
             <span key="on">
               <Mock id="graph.device">workstation · </Mock>
               <span data-volatile>{ago(Number(row.time_ms), now)}</span>

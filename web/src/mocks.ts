@@ -30,3 +30,8 @@ export const mocksOn: boolean = import.meta.env.DEV || import.meta.env.VITE_SILT
 export function mocked<T>(_id: MockId, value: T): T | undefined {
   return mocksOn ? value : undefined
 }
+
+/** Rows, label and value, standing in for data that doesn't exist yet, or none when mocks are off. */
+export function mockRows<Row>(_id: MockId, rows: Row[]): Row[] {
+  return mocksOn ? rows : []
+}
