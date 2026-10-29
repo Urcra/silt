@@ -227,13 +227,14 @@ function StopKey({ onCancel }: { onCancel: () => void }) {
 
 /** What the agent is doing now, before it is recorded: its thinking, its words, and how long it's been at it. The running
  * tool's output stays in its step, a click away, rather than streaming into the thread (ADR 0049). */
-export function AgentTail({ status, toolOutput, onCancel }: { status: AgentStatus; toolOutput: string; onCancel: () => void }) {
+export function AgentTail({ status, thoughtShown, onCancel }: { status: AgentStatus; thoughtShown: boolean; onCancel: () => void }) {
   const clock = useTurnClock(status)
   if (!working(status) && !status.streaming) return null
-  const thinkingNow = status.state === 'working' && !status.streaming && !toolOutput
+  // The daemon records the thought once the agent says something, runs a tool or ends its turn, so one unrecorded is under way.
+  const thinkingNow = status.state === 'working' && !status.streaming
   return (
     <div className="flex flex-col gap-3" aria-live="polite">
-      {status.thinking && (
+      {status.thinking && !thoughtShown && (
         // Open while it's what the agent does; folded once it answers, runs a tool or asks.
         <details key={thinkingNow ? 'now' : 'done'} open={thinkingNow} className="group/think border-l-2 border-line pl-3">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs text-fg-2">

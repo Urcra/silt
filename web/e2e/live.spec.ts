@@ -377,6 +377,18 @@ test('the inbox hears that an agent waits, and answers it in place', async ({ pa
   await stopAgent(page)
 })
 
+test("a running turn's thought under way shows in its card, where it will be recorded", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Ponder the edit')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const activity = page.getByTestId('activity')
+  await expect(activity).toContainText('Checking what the edit left.')
+  // Only there: not in the tail under it as well, to jump into the card once the next step records it.
+  await expect(page.getByText('Checking what the edit left.')).toHaveCount(1)
+  await expect(page.getByText(/^Done: [\s\S]*Ponder the edit$/)).toBeVisible()
+  await stopAgent(page)
+})
+
 test('a waiting agent notifies its person in a tab that is open but not in front', async ({ browser }) => {
   const context = await browser.newContext()
   await context.addInitScript(() => {

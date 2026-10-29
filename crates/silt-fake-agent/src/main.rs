@@ -6,7 +6,8 @@
 //! and a model setting, and takes images and files, which its answer
 //! names; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
 //! `Ask me` asks a multiple-choice question instead and answers with the
-//! choice. A prompt saying `Later` makes it say more once the prompt was
+//! choice. A prompt saying `Ponder` makes it think for a while between its
+//! edit and a read. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
 //! stops, as v1 can't. `Detached` makes it leave a shell running and read
 //! it once the turn is over, as Copilot does. With `FAKE_ACP_CRASH` set it dies on a prompt; with
@@ -269,6 +270,15 @@ async fn main() -> Result<()> {
                         &session,
                         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call-1", ToolCallUpdateFields::new().status(status))),
                     )?;
+                    if prompt.contains("Ponder") {
+                        // Thinks between two steps, long enough to be seen before the next step records it.
+                        notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Checking what the edit left.")))?;
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let read = ToolCall::new("read-2", "Read src/main.rs").kind(ToolKind::Read).raw_input(serde_json::json!({"path": "src/main.rs"}));
+                        notify(&worker, &session, SessionUpdate::ToolCall(read))?;
+                        let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
+                    }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                     let later = prompt.contains("Later");
