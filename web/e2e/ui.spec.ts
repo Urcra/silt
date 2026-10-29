@@ -132,8 +132,9 @@ test('reviews and approves a merge request', async ({ page }) => {
   await expect(page.getByRole('tabpanel', { name: "the fork's conversation" }).getByText('Continuing in a fork')).toBeVisible()
   await page.getByRole('tab', { name: /^Changes/ }).click()
 
-  await page.getByLabel('reason').fill('add a test first')
   await page.getByRole('button', { name: 'Request changes' }).click()
+  await page.getByLabel('reason').fill('add a test first')
+  await page.getByRole('button', { name: 'Send the request' }).click()
   await expect(page.getByTestId('changes-requested')).toContainText('add a test first')
   await expect(page.getByTestId('mr-status')).toHaveText('open')
 
