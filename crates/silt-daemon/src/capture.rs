@@ -62,7 +62,9 @@ pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value
     // hook: the hook's process exits without waiting for it.
     let families = std::mem::take(&mut core.families);
     std::thread::spawn(move || drop(families));
+    let store = core.store.clone();
     drop(core);
+    store.close().await;
     Ok(Captured { reply, thread: Some(thread), deferred: false })
 }
 

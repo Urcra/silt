@@ -433,6 +433,16 @@ impl Store {
         Ok(())
     }
 
+    /// Closes the database now rather than in the background once dropped:
+    /// its last connection copies the WAL into the database as it closes,
+    /// and the next process to open it would wait for that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        if let Ok(watch) = Arc::try_unwrap(self.watch) {
+            let _ = sqlx::Connection::close(watch.into_inner().connection).await;
+        }
+    }
+
     /// Whether anyone committed to the database since the last call, this
     /// process too through its other connections; true the first time.
     pub async fn changed(&self) -> Result<bool, StoreError> {
