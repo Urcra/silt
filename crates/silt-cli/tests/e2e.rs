@@ -666,32 +666,38 @@ fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
     api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
 }
 
-/// A plan turn that ends while a command it left runs on isn't a plan yet:
-/// the agent goes on once the command ends, and its plan is the one to
-/// approve then, not before.
+/// An agent that puts its plan to the person itself, as Claude does with
+/// ExitPlanMode, is the one to say when there's a plan: a plan turn it ends,
+/// here with its plan sent back and a command left running, isn't one to
+/// approve. Silt remembers that the agent plans so.
 #[test]
-fn a_plan_waits_for_what_runs_beside_the_agent_before_it_asks_for_approval() {
+fn an_agent_that_presents_its_own_plans_is_never_taken_to_have_planned_by_its_turns_end() {
     let env = Env::new();
     let api = Api::open(&env);
     let thread = start_fake_acp_in(
         &env,
         &api,
-        &serde_json::json!({"clone": env.repo, "agent": "v2", "prompt": "plan Background", "preset": "plan"}),
+        &serde_json::json!({"clone": env.repo, "agent": "v2", "prompt": "Present Background", "preset": "plan"}),
     );
-    let mut asked_too_soon = false;
-    let planned = eventually(|| {
+    let (mut presented, mut asked_by_silt) = (false, false);
+    let went_on = eventually(|| {
         let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
         for asked in live["agent"]["permissions"].as_array().into_iter().flatten() {
+            presented |= asked["plan"] == "1. Count the lines.";
             let answer = serde_json::json!({"id": asked["id"], "option": "reject"});
             api.call("POST", &format!("/api/threads/{thread}/agent/answer"), Some(answer));
         }
-        let went_on = history_entries(&api, &thread).iter().any(|entry| entry["text"] == "The background command printed BG.");
         let state = live["agent"]["state"].as_str().unwrap_or_default().to_owned();
-        asked_too_soon |= state == "awaiting_input" && !went_on;
-        went_on && state == "awaiting_input"
+        asked_by_silt |= state == "awaiting_input";
+        let printed = history_entries(&api, &thread).iter().any(|entry| entry["text"] == "The background command printed BG.");
+        printed && state == "idle"
     });
-    assert!(!asked_too_soon, "asked to approve a plan while the command still ran");
-    assert!(planned, "the plan waits for approval once the agent went on and stopped");
+    assert!(presented, "the agent put its plan to the person");
+    assert!(!asked_by_silt, "Silt asked to approve a plan of its own reading");
+    assert!(went_on, "the agent went on once the command ended, and stopped");
+    let seen: serde_json::Value =
+        serde_json::from_slice(&fs::read(env.silt_home.join("agents-seen.json")).expect("agents seen")).expect("json");
+    assert_eq!(seen["v2"]["presents_plans"], true, "{seen}");
 }
 
 /// Over v2 a subagent runs in a session of its own and a command left in

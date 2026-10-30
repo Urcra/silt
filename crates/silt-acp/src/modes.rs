@@ -32,6 +32,14 @@ pub struct Setting {
     pub choices: Vec<Choice>,
 }
 
+/// Whether the agent, by its registry id, puts its plan to the person
+/// itself, asking leave to quit its plan mode as Claude's ExitPlanMode does,
+/// so a turn it ends in plan mode isn't a plan to approve: it may be waiting
+/// on its subagents, or asking something.
+pub fn presents_plans(agent: &str) -> bool {
+    agent == "claude-acp"
+}
+
 /// What an agent is known to offer before it has run on this machine, by
 /// its registry id: what a new thread shows until the agent itself says,
 /// as Claude's adapter does when its session opens. A value it no longer

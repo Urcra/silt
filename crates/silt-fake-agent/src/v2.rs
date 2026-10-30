@@ -7,6 +7,8 @@
 //! `Subagent` makes it run a subagent in a session of its own, as Claude's
 //! Agent tool does; `Background` makes it leave a command running, which
 //! ends after the turn and sets the agent going again, unless cancelled.
+//! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
+//! does, by asking leave to quit its plan mode.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -152,6 +154,18 @@ pub async fn main() -> Result<()> {
                     }
                     let status = if allowed { "completed" } else { "failed" };
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "edit-1", "status": status}))?;
+                    if prompt.contains("Present") {
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "plan-1", "name": "ExitPlanMode", "rawInput": {"plan": "1. Count the lines."}, "status": "pending", "title": "Ready to code?", "kind": "switch_mode"}))?;
+                        let asked: v2::RequestPermissionRequest = parse(json!({
+                            "sessionId": session.to_string(),
+                            "title": "Ready to code?",
+                            "subject": {"type": "tool_call", "toolCall": {"toolCallId": "plan-1", "kind": "switch_mode", "title": "Ready to code?"}},
+                            "options": [{"optionId": "exit-plan-accept-edits", "name": "Yes, and auto-accept edits", "kind": "allow_always"}, {"optionId": "reject", "name": "No, keep planning", "kind": "reject_once"}]
+                        }))?;
+                        let answer = serde_json::to_value(worker.send_request(asked).block_task().await?)?;
+                        let status = if answer["outcome"]["optionId"] == "reject" { "failed" } else { "completed" };
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "plan-1", "status": status}))?;
+                    }
                     if prompt.contains("Subagent") {
                         let child = v2::SessionId::new("fake-child-1");
                         say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "title": "general-purpose", "description": "Count lines", "capabilities": {"cancel": {}}, "state": {"state": "running"}}))?;

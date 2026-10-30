@@ -70,6 +70,9 @@ pub(crate) struct AcpRun {
     chosen_settings: Vec<(String, String)>,
     /// The turn running is a Plan first one.
     planning: bool,
+    /// The agent puts its plan to the person itself, so a turn it ends
+    /// while planning isn't one to approve.
+    presents_plans: bool,
     /// The mode Plan first switched away from, to go back to once the plan
     /// is approved.
     back_to: Option<String>,
@@ -99,9 +102,6 @@ pub(crate) struct AcpRun {
     /// Commands left running in the background: the call that started
     /// each, by the agent's id for it.
     background: HashMap<String, String>,
-    /// The calls whose subagent or background command still runs beside
-    /// the agent.
-    tasks_running: HashSet<String>,
     /// The person stopped the agent and hasn't prompted it since: what it
     /// left running in the background doesn't get to start it again.
     stopped: bool,
@@ -333,6 +333,7 @@ impl Core {
                             settings: settings.iter().map(Into::into).collect(),
                             takes: None,
                             seen_ms: 0,
+                            presents_plans: false,
                         })
                     });
                     AgentChoice {
@@ -360,13 +361,16 @@ impl Core {
             settings: settings.iter().map(Into::into).collect(),
             takes: Some(accepts.into()),
             seen_ms: now_ms(),
+            presents_plans: false,
         };
         self.keep_seen(agent, seen);
         self.announce(crate::protocol::BusEvent::Agents);
     }
 
-    fn keep_seen(&self, agent: String, kept: Seen) {
+    fn keep_seen(&self, agent: String, mut kept: Seen) {
         let mut seen = read_seen(&self.data_dir);
+        // Asking what an agent offers doesn't show how it plans.
+        kept.presents_plans |= seen.get(&agent).is_some_and(|old| old.presents_plans);
         seen.insert(agent, kept);
         let written = serde_json::to_vec_pretty(&seen)
             .map_err(std::io::Error::other)
@@ -387,6 +391,7 @@ impl Core {
             settings: run.settings.iter().map(Into::into).collect(),
             takes: Some(run.accepts.into()),
             seen_ms: now_ms(),
+            presents_plans: run.presents_plans,
         };
         self.keep_seen(run.info.id.clone(), seen);
     }
@@ -476,6 +481,8 @@ impl Core {
             )),
             load: load.as_ref().map(|(_, native)| native.clone()),
         };
+        let presents_plans =
+            silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
         self.acp.insert(
             thread,
@@ -506,6 +513,7 @@ impl Core {
                 settings: Vec::new(),
                 chosen_settings: options.settings,
                 planning: false,
+                presents_plans,
                 back_to: None,
                 first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments }),
                 accepts: Accepts::default(),
@@ -517,7 +525,6 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
-                tasks_running: HashSet::new(),
                 stopped: false,
             },
         );
@@ -611,12 +618,8 @@ impl Core {
         }
         if plan {
             plan_first(run);
-        } else {
-            // A plan turn left waiting on its tasks is the person's to move on from.
-            run.planning = false;
-            if let Some(mode) = run.back_to.take() {
-                send(run, Command::SetMode(mode));
-            }
+        } else if let Some(mode) = run.back_to.take() {
+            send(run, Command::SetMode(mode));
         }
         let me = self.own_user(thread);
         self.send_prompt(thread, &me, text, attachments).await?;
@@ -800,6 +803,11 @@ impl Core {
     fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
         let preset = self.preset(thread);
         let run = self.acp.get_mut(&thread).expect("caller checked");
+        if !run.presents_plans && plan_put(run, &permission.tool_call_id).is_some() {
+            run.presents_plans = true;
+            self.remember_seen(thread);
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
         let kind = permission.tool_kind.clone().or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
         match crate::presets::decide(preset, kind.as_deref(), &permission.option_kinds) {
             Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
@@ -979,11 +987,7 @@ impl Core {
                     id: asked.id,
                     title: asked.title.clone(),
                     options: asked.options.clone(),
-                    plan: run
-                        .tool_said
-                        .get(&asked.tool_call_id)
-                        .and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
-                        .map(str::to_owned),
+                    plan: plan_put(run, &asked.tool_call_id).map(str::to_owned),
                     tool_call: Some(asked.tool_call_id.to_string()),
                 })
                 .collect(),
@@ -1122,10 +1126,9 @@ impl Core {
                 self.guide_written(thread, &reason).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.own_turn = false;
-                // A turn that ends to wait for its subagents or commands
-                // goes on by itself once they end, plan and all (ADR 0051).
-                let waiting = reason == silt_acp::StopReason::EndTurn && !run.tasks_running.is_empty();
-                let planned = !waiting && std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
+                // An agent that puts its plan to the person itself asks when it is
+                // one; its turn may end to wait on its subagents, or to ask.
+                let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn && !run.presents_plans;
                 run.state = if planned && run.still_planning() {
                     AgentState::AwaitingInput
                 } else {
@@ -1278,11 +1281,6 @@ impl Core {
                 }
                 if let Some(news) = task {
                     let run = self.acp.get_mut(&thread).expect("caller checked");
-                    if news.status == "running" {
-                        run.tasks_running.insert(id.clone());
-                    } else {
-                        run.tasks_running.remove(&id);
-                    }
                     if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
                         if news.status == "running" {
                             run.background.insert(task.clone(), id.clone());
@@ -1577,6 +1575,9 @@ struct Seen {
     /// When they were seen; an agent's offer older than `ASK_AGAIN_MS` is asked for again.
     #[serde(default)]
     seen_ms: i64,
+    /// It put a plan to the person itself, as Claude's ExitPlanMode does.
+    #[serde(default)]
+    presents_plans: bool,
 }
 
 /// What an agent takes attached to a prompt, as kept beside its modes.
@@ -1683,6 +1684,12 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
 
 /// Each agent's modes and settings as kept, by its registry id; none where
 /// the file is missing or unreadable, which only means none were seen.
+/// The plan the call `tool_call` puts to the person, as Claude's
+/// ExitPlanMode does in its input.
+fn plan_put<'run>(run: &'run AcpRun, tool_call: &str) -> Option<&'run str> {
+    run.tool_said.get(tool_call).and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
+}
+
 fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
     std::fs::read(data_dir.join(SEEN)).ok().and_then(|json| serde_json::from_slice(&json).ok()).unwrap_or_default()
 }
