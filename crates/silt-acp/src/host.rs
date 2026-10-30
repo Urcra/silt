@@ -306,6 +306,8 @@ pub enum Event {
     ModeChanged(String),
     /// The agent's settings as they now stand.
     Settings(Vec<Setting>),
+    /// The commands the agent offers as they now stand.
+    Commands(Vec<crate::SlashCommand>),
     /// The agent turned down a mode or setting.
     Refused(String),
     Permission(Permission),

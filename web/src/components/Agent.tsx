@@ -559,6 +559,7 @@ export function AgentDock({
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onCycle={cycle}
         onFiles={attachable ? attach : undefined}
+        commands={(live ? status.commands : undefined) ?? seen?.commands}
         placeholder={
           !live
             ? startable

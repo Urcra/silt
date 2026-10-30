@@ -666,6 +666,37 @@ fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
     api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
 }
 
+/// The commands an agent offers reach the web UI: over v1 once its session
+/// opens, as Copilot sends them, and over v2 with the session and as they
+/// change, as Claude's adapter does. New thread offers each agent's from its
+/// last run here.
+#[test]
+fn the_commands_an_agent_offers_reach_the_web_ui_and_are_kept_for_new_threads() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let names = |commands: &serde_json::Value| -> Vec<String> {
+        commands.as_array().into_iter().flatten().filter_map(|command| command["name"].as_str().map(str::to_owned)).collect()
+    };
+    let offered = |thread: &str| api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["commands"].clone();
+
+    let v1 = start_fake_acp(&env, &api, "v1", "hello");
+    assert!(eventually(|| names(&offered(&v1)) == ["count", "compact"]), "{}", offered(&v1));
+    let count = offered(&v1)[0].clone();
+    assert_eq!((count["description"].as_str(), count["hint"].as_str()), (Some("Count what you name"), Some("<what to count>")));
+    assert_eq!(offered(&v1)[1]["hint"], serde_json::Value::Null);
+
+    let v2 = start_fake_acp(&env, &api, "v2", "hello");
+    settled_history(&api, &v2, "Done: hello");
+    assert_eq!(names(&offered(&v2)), ["count"], "the agent dropped compact once prompted");
+
+    let choices = api.ok("GET", "/api/agents", None);
+    let kept = |agent: &str| {
+        let choice = choices["agents"].as_array().expect("agents").iter().find(|choice| choice["id"] == agent).cloned();
+        names(&choice.unwrap_or_default()["commands"])
+    };
+    assert_eq!((kept("v1"), kept("v2")), (vec!["count".to_owned(), "compact".to_owned()], vec!["count".to_owned()]), "{choices}");
+}
+
 /// An agent that puts its plan to the person itself, as Claude does with
 /// ExitPlanMode, is the one to say when there's a plan: a plan turn it ends,
 /// here with its plan sent back and a command left running, isn't one to

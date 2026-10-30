@@ -1,5 +1,7 @@
-import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
+import { matching, typedCommand } from '../slashCommands'
 import { Icon, type IconName, cx } from '../ui'
 import { ComposerFolded } from './composerFolded'
 
@@ -37,6 +39,40 @@ function useFolded() {
   return { room, content, folded }
 }
 
+/** The agent's commands that match the one being typed, over the box; the one picked fills in its name. */
+function CommandMenu({ id, offered, active, onPick }: { id: string; offered: AgentCommand[]; active: number; onPick: (command: AgentCommand) => void }) {
+  useEffect(() => {
+    document.getElementById(`${id}-command-${active}`)?.scrollIntoView({ block: 'nearest' })
+  }, [id, active])
+  return (
+    <ul
+      id={`${id}-commands`}
+      role="listbox"
+      aria-label="commands"
+      className="absolute right-0 bottom-full left-0 z-20 mb-1.5 max-h-64 overflow-y-auto rounded-md border border-line bg-elevated p-1 shadow-overlay"
+    >
+      {offered.map((command, index) => (
+        <li
+          key={command.name}
+          id={`${id}-command-${index}`}
+          role="option"
+          aria-selected={index === active}
+          // The box keeps the focus, so typing goes on after a click.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onPick(command)}
+          className={cx('flex cursor-pointer flex-col rounded-sm px-2.5 py-1.5 max-md:min-h-11', index === active && 'bg-surface-2')}
+        >
+          <span className="font-mono text-xs text-fg-1">
+            /{command.name}
+            {command.hint && <span className="text-fg-3"> {command.hint}</span>}
+          </span>
+          {command.description && <span className="truncate text-2xs text-fg-2">{command.description}</span>}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /**
  * The one composer (ADR 0044): centred on an empty thread, docked under a
  * running one. What's above the text, the text, then a row of its tools and
@@ -57,6 +93,7 @@ export function ComposerBox({
   waiting = false,
   onCycle,
   onFiles,
+  commands = [],
   className,
 }: {
   id: string
@@ -80,10 +117,32 @@ export function ComposerBox({
   onCycle?: () => void
   /** Files pasted or dropped into the box; without it, the box takes none. */
   onFiles?: (files: File[], pasted: boolean) => void
+  /** The agent's commands, offered as `/` starts the text. */
+  commands?: AgentCommand[]
   className?: string
 }) {
   const { room, content, folded } = useFolded()
   const [dragging, setDragging] = useState(false)
+  const typed = typedCommand(value)
+  // The text Escape closed the menu on; it opens again once the text changes.
+  const [dismissed, setDismissed] = useState<string>()
+  const [chosen, setChosen] = useState(0)
+  const offered = typed === null || dismissed === value ? [] : matching(commands, typed)
+  const active = Math.min(chosen, offered.length - 1)
+  const edit = (text: string) => {
+    setChosen(0)
+    onChange(text)
+  }
+  const pick = (command: AgentCommand) => edit(`/${command.name} `)
+  const choosing = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const step = { ArrowDown: 1, ArrowUp: offered.length - 1 }[event.key]
+    if (step !== undefined) setChosen((active + step) % offered.length)
+    else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.nativeEvent.isComposing) pick(offered[active]!)
+    else if (event.key === 'Escape') setDismissed(value)
+    else return false
+    event.preventDefault()
+    return true
+  }
   const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = filesFrom(event.clipboardData)
     if (!onFiles || files.length === 0) return
@@ -104,6 +163,7 @@ export function ComposerBox({
     onFiles(files, false)
   }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (offered.length > 0 && choosing(event)) return
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
     // the button sends. Never while an input method is still composing a character.
     const touch = window.matchMedia?.('(pointer: coarse)').matches ?? false
@@ -121,8 +181,9 @@ export function ComposerBox({
       onDragOver={dragOver}
       onDragLeave={() => setDragging(false)}
       onDrop={drop}
-      className={cx('flex flex-col rounded-lg border bg-elevated', dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong', className)}
+      className={cx('relative flex flex-col rounded-lg border bg-elevated', dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong', className)}
     >
+      {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
       {above}
       <label htmlFor={id} className="sr-only">
         {label}
@@ -132,8 +193,10 @@ export function ComposerBox({
         aria-label={label}
         rows={rows}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => edit(event.target.value)}
         onKeyDown={keyDown}
+        aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
+        aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
         onPaste={paste}
         placeholder={placeholder}
         className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"

@@ -1,8 +1,9 @@
-//! What an agent lets the person choose for its session: its modes, and
-//! settings such as its model (ACP's session config options), simplified.
+//! What an agent lets the person choose for its session: its modes,
+//! settings such as its model (ACP's session config options), and the
+//! commands a prompt can run, simplified.
 
 use agent_client_protocol::schema::v1::{
-    SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions, SessionModeState,
+    self, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions, SessionModeState,
 };
 use agent_client_protocol::schema::v2;
 
@@ -30,6 +31,44 @@ pub struct Setting {
     pub category: Option<String>,
     pub current: String,
     pub choices: Vec<Choice>,
+}
+
+/// A command the agent offers, run by a prompt that starts with `/` and its
+/// name (ACP's available commands).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommand {
+    pub name: String,
+    pub description: String,
+    /// What to write after it, such as `<PR URL>`, when it takes anything.
+    pub hint: Option<String>,
+}
+
+pub(crate) fn commands_of(commands: Vec<v1::AvailableCommand>) -> Vec<SlashCommand> {
+    commands
+        .into_iter()
+        .map(|command| SlashCommand {
+            hint: match command.input {
+                Some(v1::AvailableCommandInput::Unstructured(input)) => Some(input.hint),
+                _ => None,
+            },
+            name: command.name,
+            description: command.description,
+        })
+        .collect()
+}
+
+pub(crate) fn commands_v2(commands: Vec<v2::AvailableCommand>) -> Vec<SlashCommand> {
+    commands
+        .into_iter()
+        .map(|command| SlashCommand {
+            hint: match command.input {
+                Some(v2::AvailableCommandInput::Text(input)) => Some(input.hint),
+                _ => None,
+            },
+            name: command.name,
+            description: command.description,
+        })
+        .collect()
 }
 
 /// Whether the agent, by its registry id, puts its plan to the person

@@ -876,6 +876,9 @@ pub struct AgentStatus {
     pub takes_images: bool,
     /// Files other than text and images.
     pub takes_files: bool,
+    /// The commands it offers, which a prompt starting with `/` runs.
+    #[serde(default)]
+    pub commands: Vec<AgentCommand>,
 }
 
 /// A file sent with a prompt.
@@ -972,6 +975,23 @@ impl From<&silt_acp::Setting> for AgentSetting {
     }
 }
 
+/// A command the agent offers, run by a prompt that starts with `/` and its
+/// name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentCommand {
+    pub name: String,
+    pub description: String,
+    /// What to write after it, when it takes anything.
+    pub hint: Option<String>,
+}
+
+impl From<&silt_acp::SlashCommand> for AgentCommand {
+    fn from(command: &silt_acp::SlashCommand) -> Self {
+        Self { name: command.name.clone(), description: command.description.clone(), hint: command.hint.clone() }
+    }
+}
+
 /// A prompt waiting for the thread's agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -1035,6 +1055,9 @@ pub struct AgentChoice {
     /// Files other than text and images, likewise.
     #[serde(default)]
     pub takes_files: Option<bool>,
+    /// The commands it offered when it last ran here.
+    #[serde(default)]
+    pub commands: Vec<AgentCommand>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1173,6 +1196,7 @@ mod tests {
             AgentChoices::decl(&config),
             AgentModes::decl(&config),
             AgentSetting::decl(&config),
+            AgentCommand::decl(&config),
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
             QuestionAsked::decl(&config),

@@ -8,7 +8,8 @@
 //! Agent tool does; `Background` makes it leave a command running, which
 //! ends after the turn and sets the agent going again, unless cancelled.
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
-//! does, by asking leave to quit its plan mode.
+//! does, by asking leave to quit its plan mode. Its session offers the commands
+//! `count` and `compact` as it opens, and drops `compact` on a prompt.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,6 +26,15 @@ struct State {
     cwd: HashMap<String, PathBuf>,
     mode: HashMap<String, String>,
     model: HashMap<String, String>,
+}
+
+/// The commands it offers, tagged as Claude's adapter tags them over v2;
+/// `compact` only until the first prompt, as the adapter drops commands that
+/// work only in a terminal once its first prompt shows which they are.
+fn commands(prompted: bool) -> Value {
+    let count = json!({"type": "command", "name": "count", "description": "Count what you name", "input": {"type": "text", "hint": "<what to count>"}});
+    let compact = json!({"type": "command", "name": "compact", "description": "Summarize the conversation so far"});
+    if prompted { json!([count]) } else { json!([count, compact]) }
 }
 
 fn options(mode: &str, model: &str) -> Value {
@@ -74,7 +84,7 @@ pub async fn main() -> Result<()> {
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-v2-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd.into_inner());
-                responder.respond(parse(json!({"sessionId": id, "configOptions": options("code", "fast")}))?)
+                responder.respond(parse(json!({"sessionId": id, "configOptions": options("code", "fast"), "availableCommands": commands(false)}))?)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -88,7 +98,7 @@ pub async fn main() -> Result<()> {
                 state.cwd.insert(id.clone(), request.cwd.into_inner());
                 let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
                 let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
-                responder.respond(parse(json!({"configOptions": options(&mode, &model)}))?)
+                responder.respond(parse(json!({"configOptions": options(&mode, &model), "availableCommands": commands(false)}))?)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -125,6 +135,7 @@ pub async fn main() -> Result<()> {
                         })
                         .collect();
                     let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
+                    say(&worker, &session, json!({"sessionUpdate": "available_commands_update", "availableCommands": commands(true)}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
                     say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;

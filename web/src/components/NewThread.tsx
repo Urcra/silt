@@ -590,6 +590,7 @@ export function NewThread() {
             }}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
+            commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
             tools={
               chosenWhere !== 'cloud' && (

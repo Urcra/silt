@@ -65,6 +65,7 @@ pub(crate) struct AcpRun {
     within: Option<(String, String)>,
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
+    commands: Vec<silt_acp::SlashCommand>,
     /// Settings chosen before the agent was up, by id and value, set once it
     /// says which it offers.
     chosen_settings: Vec<(String, String)>,
@@ -327,13 +328,14 @@ impl Core {
             agents: installed
                 .into_iter()
                 .map(|agent| {
-                    let Seen { modes, settings, takes, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
+                    let Seen { modes, settings, takes, commands, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
                         silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
                             modes: Some((&modes).into()),
                             settings: settings.iter().map(Into::into).collect(),
                             takes: None,
                             seen_ms: 0,
                             presents_plans: false,
+                            commands: Vec::new(),
                         })
                     });
                     AgentChoice {
@@ -344,6 +346,7 @@ impl Core {
                         settings,
                         takes_images: takes.map(|takes| takes.images),
                         takes_files: takes.map(|takes| takes.files),
+                        commands,
                     }
                 })
                 .collect(),
@@ -362,6 +365,7 @@ impl Core {
             takes: Some(accepts.into()),
             seen_ms: now_ms(),
             presents_plans: false,
+            commands: Vec::new(),
         };
         self.keep_seen(agent, seen);
         self.announce(crate::protocol::BusEvent::Agents);
@@ -369,8 +373,13 @@ impl Core {
 
     fn keep_seen(&self, agent: String, mut kept: Seen) {
         let mut seen = read_seen(&self.data_dir);
-        // Asking what an agent offers doesn't show how it plans.
-        kept.presents_plans |= seen.get(&agent).is_some_and(|old| old.presents_plans);
+        // Asking what an agent offers shows neither how it plans nor its commands.
+        if let Some(old) = seen.get(&agent) {
+            kept.presents_plans |= old.presents_plans;
+            if kept.commands.is_empty() {
+                kept.commands.clone_from(&old.commands);
+            }
+        }
         seen.insert(agent, kept);
         let written = serde_json::to_vec_pretty(&seen)
             .map_err(std::io::Error::other)
@@ -392,6 +401,7 @@ impl Core {
             takes: Some(run.accepts.into()),
             seen_ms: now_ms(),
             presents_plans: run.presents_plans,
+            commands: run.commands.iter().map(Into::into).collect(),
         };
         self.keep_seen(run.info.id.clone(), seen);
     }
@@ -511,6 +521,7 @@ impl Core {
                 within: None,
                 modes: None,
                 settings: Vec::new(),
+                commands: Vec::new(),
                 chosen_settings: options.settings,
                 planning: false,
                 presents_plans,
@@ -998,6 +1009,7 @@ impl Core {
             settings: run.settings.iter().map(Into::into).collect(),
             takes_images: run.accepts.image,
             takes_files: run.accepts.embedded,
+            commands: run.commands.iter().map(Into::into).collect(),
         })
     }
 
@@ -1099,6 +1111,10 @@ impl Core {
             }
             AcpEvent::Agent(silt_acp::Event::Settings(settings)) => {
                 run.settings = settings;
+                self.remember_seen(thread);
+            }
+            AcpEvent::Agent(silt_acp::Event::Commands(commands)) => {
+                run.commands = commands;
                 self.remember_seen(thread);
             }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
@@ -1578,6 +1594,8 @@ struct Seen {
     /// It put a plan to the person itself, as Claude's ExitPlanMode does.
     #[serde(default)]
     presents_plans: bool,
+    #[serde(default)]
+    commands: Vec<crate::protocol::AgentCommand>,
 }
 
 /// What an agent takes attached to a prompt, as kept beside its modes.
