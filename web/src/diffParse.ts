@@ -23,6 +23,16 @@ export interface DiffFile {
   binary: boolean
 }
 
+/** The most of a file's diff drawn unasked, in characters. A generated or
+ * minified file can be megabytes on one line, and laying that out stalls the
+ * page for minutes. */
+export const LARGE_DIFF = 200_000
+
+/** How many characters a file's diff holds. */
+export function diffSize(file: DiffFile): number {
+  return file.hunks.reduce((total, hunk) => hunk.lines.reduce((sum, line) => sum + line.text.length, total), 0)
+}
+
 /** A git-style unified diff, file by file and hunk by hunk. */
 export function parseFiles(text: string): DiffFile[] {
   const files: DiffFile[] = []

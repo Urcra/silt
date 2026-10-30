@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { parseDiff, parseFiles, splitRows } from './diffParse'
+import { LARGE_DIFF, diffSize, parseDiff, parseFiles, splitRows } from './diffParse'
 
 test('a binary file says so, with no lines to count', () => {
   const diff = ['diff --git a/x.pyc b/x.pyc', 'Binary files /dev/null and b/x.pyc differ', 'diff --git a/a.rs b/a.rs', '@@ -1 +1 @@', '-a', '+b'].join('\n')
@@ -67,4 +67,13 @@ test('lines know their file and their number in the new file', () => {
     ['src/main.rs', 3, ' fn last() {}'],
   ])
   expect(lines.find((line) => line.text === '-fn gone() {}')?.path).toBe('gone.rs')
+})
+
+test("a file's size is the characters of its lines, so one minified line counts in full", () => {
+  const minified = 'x'.repeat(LARGE_DIFF + 1)
+  const diff = ['diff --git a/a.rs b/a.rs', '@@ -1 +1 @@', '-ab', '+abc', 'diff --git a/data.json b/data.json', 'new file mode 100644', '@@ -0,0 +1 @@', `+${minified}`].join('\n')
+  expect(parseFiles(diff).map((file) => [file.path, diffSize(file), diffSize(file) > LARGE_DIFF])).toEqual([
+    ['a.rs', 5, false],
+    ['data.json', LARGE_DIFF + 1, true],
+  ])
 })

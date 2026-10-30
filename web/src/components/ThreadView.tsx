@@ -1401,7 +1401,7 @@ function ThreadBody({
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const diff = useQuery({ queryKey: keys.diff(thread, { base: '' }), queryFn: () => api.diff(thread, { base: '' }) })
-  const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(id) })
+  const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
   // Beside the conversation on a desktop, open on Changes (ADR 0044) until closed.
@@ -1510,7 +1510,7 @@ function ThreadBody({
     else toEnd()
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
-  const files = diff.data === undefined ? null : parseFiles(diff.data)
+  const files = useMemo(() => (diff.data === undefined ? null : parseFiles(diff.data)), [diff.data])
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
   const entryProps: EntryProps = {
     thread,
@@ -1615,7 +1615,7 @@ function ThreadBody({
           ) : (
             <div className="px-4 py-4">
               <Unwritten thread={thread} />
-              <DiffPanel thread={thread} comments={comments.data ?? []} onCommented={reloadComments} agent={agent?.agent} wide />
+              <DiffPanel thread={thread} comments={comments.data ?? NO_COMMENTS} onCommented={reloadComments} agent={agent?.agent} wide />
             </div>
           )}
         </div>
@@ -1711,6 +1711,8 @@ function ThreadBody({
 
 /** Entries in a thread's first page of history, which shows on its own while
  * the rest loads. */
+const NO_COMMENTS: CommentView[] = []
+
 const FIRST_PAGE = 50
 /** Entries in each page after the first. */
 const PAGE = 500

@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react'
 import type { CommentView } from '../api'
-import { type CodeLine, type DiffFile, type Hunk, parseFiles, splitRows } from '../diffParse'
+import { type CodeLine, type DiffFile, type Hunk, LARGE_DIFF, diffSize, parseFiles, splitRows } from '../diffParse'
 import { type Token, languageOf, useHighlighted } from '../highlight'
 import { appHref, filePath } from '../permalink'
 import { message } from '../query'
@@ -231,6 +231,24 @@ function HunkView({
   )
 }
 
+/** A file's hunks, or for one too large to draw unasked, its size and a way to draw it anyway. */
+function FileHunks({ file, layout, commenting, bare = false }: { file: DiffFile; layout: DiffLayout; commenting?: Commenting; bare?: boolean }) {
+  const size = diffSize(file)
+  const [shown, setShown] = useState(size <= LARGE_DIFF)
+  if (!shown)
+    return (
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 font-sans text-xs text-fg-2">
+        <span>{Math.round(size / 1024).toLocaleString()} KB of changes, too large to show here unasked.</span>
+        <Button variant="ghost" onClick={() => setShown(true)}>
+          Show anyway
+        </Button>
+      </div>
+    )
+  return file.hunks.map((hunk, index) => (
+    <HunkView key={index} file={file} hunk={hunk} layout={layout} commenting={commenting} bare={bare} first={index === 0} />
+  ))
+}
+
 /**
  * A diff, a block per file: unified or side by side, highlighted, and with
  * `commenting`, comments taken on new lines from their numbers (shift-click
@@ -267,11 +285,9 @@ export function DiffView({
     return (
       <div data-testid="diff" className="overflow-x-auto font-mono text-xs leading-5">
         <div className="min-w-fit">
-          {files.flatMap((file) =>
-            file.hunks.map((hunk, index) => (
-              <HunkView key={`${file.path}:${index}`} file={file} hunk={hunk} layout="unified" commenting={commenting} bare first={index === 0} />
-            )),
-          )}
+          {files.map((file) => (
+            <FileHunks key={file.path} file={file} layout="unified" commenting={commenting} bare />
+          ))}
         </div>
       </div>
     )
@@ -306,9 +322,7 @@ export function DiffView({
         >
           <div className="overflow-x-auto font-mono text-xs leading-5">
             <div className="min-w-fit">
-              {file.hunks.map((hunk, index) => (
-                <HunkView key={index} file={file} hunk={hunk} layout={layout} commenting={commenting} />
-              ))}
+              <FileHunks file={file} layout={layout} commenting={commenting} />
             </div>
           </div>
         </DiffBlock>

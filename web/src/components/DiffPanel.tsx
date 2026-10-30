@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { api, type CommentView } from '../api'
 import { keys, message } from '../query'
 import { linesOf, reviewPrompt } from '../review'
@@ -21,8 +21,9 @@ const LAYOUTS: { id: DiffLayout; label: string }[] = [
   { id: 'split', label: 'Split' },
 ]
 
-/** What the thread changed, by turn, overall or against main, with comments from the gutter. */
-export function DiffPanel({
+/** What the thread changed, by turn, overall or against main, with comments from the gutter.
+ * Memoized, as the thread's page renders again with each key typed in its composer, and a large diff takes long to draw. */
+export const DiffPanel = memo(function DiffPanel({
   thread,
   comments,
   onCommented,
@@ -135,7 +136,7 @@ export function DiffPanel({
       )}
     </section>
   )
-}
+})
 
 /** Files shown in a page of the changes panel: a change touching thousands
  * comes a page at a time. */

@@ -614,7 +614,7 @@ fn message_entries(role: &str, content: Option<Value>) -> Vec<Entry> {
 }
 
 /// An image block's picture, when it carries its bytes rather than a link.
-fn image(block: &serde_json::Map<String, Value>) -> Option<Entry> {
+pub(crate) fn image(block: &serde_json::Map<String, Value>) -> Option<Entry> {
     let source = block.get("source")?;
     (source.get("type")?.as_str()? == "base64").then_some(())?;
     Some(Entry::Image {
@@ -627,7 +627,7 @@ fn text_entry(role: &str, text: String) -> Entry {
     if role == "user" { Entry::User { text } } else { Entry::Assistant { text } }
 }
 
-fn block_text(content: Option<Value>) -> String {
+pub(crate) fn block_text(content: Option<Value>) -> String {
     match content {
         Some(Value::String(text)) => text,
         Some(Value::Array(blocks)) => {

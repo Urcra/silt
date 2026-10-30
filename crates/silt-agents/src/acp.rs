@@ -111,6 +111,32 @@ pub fn tool_update(id: &str, title: &str, kind: &str, input: Option<&Value>) -> 
 /// A tool's output as it reads: a message an earlier Silt kept as a JSON
 /// string, quotes and `\n`s and all, unquoted, and without the one
 /// Markdown fence an agent may wrap it in, such as Claude's ```` ```console ````.
+/// A tool's output and the pictures in it. Claude's ACP adapter passes an
+/// MCP tool's content blocks on as JSON text, so a screenshot would read as
+/// hundreds of kilobytes of base64.
+fn output_parts(output: String) -> (String, Vec<Entry>) {
+    match serde_json::from_str::<Value>(&output) {
+        Ok(Value::Array(blocks)) if !blocks.is_empty() && blocks.iter().all(is_content_block) => {
+            let images = blocks
+                .iter()
+                .filter_map(Value::as_object)
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("image"))
+                .filter_map(crate::claude::image)
+                .collect();
+            (crate::claude::block_text(Some(Value::Array(blocks))), images)
+        }
+        _ => (readable(output), Vec::new()),
+    }
+}
+
+fn is_content_block(block: &Value) -> bool {
+    match block["type"].as_str() {
+        Some("text") => block["text"].is_string(),
+        Some("image") => block["source"].is_object(),
+        _ => false,
+    }
+}
+
 fn readable(output: String) -> String {
     let output = match serde_json::from_str::<Value>(&output) {
         Ok(Value::String(text)) => text,
@@ -202,11 +228,9 @@ pub fn read_line(line: &str) -> Read {
         }
         "tool_result" => {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
-            read.entries.push(Entry::ToolResult {
-                tool_use_id: field("id"),
-                text: readable(field("output")),
-                is_error: field("status") == "failed",
-            });
+            let (text, images) = output_parts(field("output"));
+            read.entries.push(Entry::ToolResult { tool_use_id: field("id"), text, is_error: field("status") == "failed" });
+            read.entries.extend(images);
         }
         "plan" => {
             let steps = record["entries"]
@@ -383,6 +407,27 @@ mod tests {
                 Entry::User { text: "look\n\n(attached: prompt-1/shot.png)".into() },
                 Entry::Image { media_type: "image/png".into(), data: "AAAA".into() }
             ]
+        );
+    }
+
+    #[test]
+    fn content_blocks_passed_on_as_text_read_as_words_and_pictures() {
+        let screenshot = json!([
+            {"type": "text", "text": "Took a screenshot"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}}
+        ]);
+        let read = read_line(&tool_result("c1", "completed", Some(&screenshot.to_string())));
+        assert_eq!(
+            read.entries,
+            [
+                Entry::ToolResult { tool_use_id: "c1".into(), text: "Took a screenshot".into(), is_error: false },
+                Entry::Image { media_type: "image/jpeg".into(), data: "/9j/".into() }
+            ]
+        );
+        let other_json = r#"[{"type":"user","name":"alice"}]"#;
+        assert!(
+            matches!(&read_line(&tool_result("c1", "completed", Some(other_json))).entries[..], [Entry::ToolResult { text, .. }] if text == other_json),
+            "other JSON is output as it is"
         );
     }
 
