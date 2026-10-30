@@ -18,7 +18,7 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
 use serde_json::Value;
 
 use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
-use crate::modes::{modes_of, settings_of};
+use crate::modes::{commands_of, modes_of, settings_of};
 use crate::prompt::{Accepts, blocks};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
@@ -62,6 +62,10 @@ impl ConnectTo<Agent> for V1 {
         let asked = events.clone();
         let parked = waiting.clone();
         let following: Arc<Mutex<Following>> = Arc::default();
+        // An update can come before the session's answer is read, as Copilot
+        // sends its commands once the session is open; it waits for Ready.
+        let early: Arc<Mutex<Option<Vec<Event>>>> = Arc::new(Mutex::new(Some(Vec::new())));
+        let held_back = early.clone();
         Client
             .builder()
             .name(crate::host::NAME)
@@ -71,8 +75,13 @@ impl ConnectTo<Agent> for V1 {
                         && let Some((agent, event)) = event_of(notification.update)
                     {
                         let followed = following.lock().expect("lock").follow(agent, event);
-                        for event in followed {
-                            let _ = updates.send(event);
+                        match held_back.lock().expect("lock").as_mut() {
+                            Some(waiting) => waiting.extend(followed),
+                            None => {
+                                for event in followed {
+                                    let _ = updates.send(event);
+                                }
+                            }
                         }
                     }
                     Ok(())
@@ -168,6 +177,9 @@ impl ConnectTo<Agent> for V1 {
                         created.session_id
                     }
                 };
+                for event in early.lock().expect("lock").take().unwrap_or_default() {
+                    let _ = events.send(event);
+                }
                 while let Some(command) = commands.recv().await {
                     match command {
                         Command::Prompt { text, attachments } => {
@@ -311,6 +323,7 @@ fn event_of(update: SessionUpdate) -> Option<(Option<String>, Event)> {
     let event = match update {
         SessionUpdate::CurrentModeUpdate(update) => Event::ModeChanged(update.current_mode_id.0.to_string()),
         SessionUpdate::ConfigOptionUpdate(update) => Event::Settings(settings_of(update.config_options)),
+        SessionUpdate::AvailableCommandsUpdate(update) => Event::Commands(commands_of(update.available_commands)),
         SessionUpdate::UsageUpdate(update) => Event::Context { used: update.used, size: update.size },
         update => Event::Update(simplify(update)?),
     };
@@ -522,6 +535,21 @@ mod tests {
 
     fn meta(value: Value) -> Option<Meta> {
         value.as_object().cloned()
+    }
+
+    /// As Copilot (1.0.105) lists its commands, once its session opens.
+    #[test]
+    fn the_commands_an_agent_offers_are_named_with_what_they_take() {
+        let update = json!({"sessionUpdate": "available_commands_update", "availableCommands": [
+            {"name": "add-dir", "description": "Allow file access to a directory", "input": {"hint": "directory"}},
+            {"name": "compact", "description": "Summarize the conversation", "input": null}
+        ]});
+        let Some((None, Event::Commands(commands))) = event_of(serde_json::from_value(update).expect("an update")) else {
+            panic!("the commands");
+        };
+        let said: Vec<(&str, Option<&str>)> =
+            commands.iter().map(|command| (command.name.as_str(), command.hint.as_deref())).collect();
+        assert_eq!(said, [("add-dir", Some("directory")), ("compact", None)]);
     }
 
     #[test]

@@ -9,11 +9,11 @@ const root = createRootRoute({ component: Layout })
 /** What the new thread at `/` opens with: a project, the picker open on a tab, or a prompt typed elsewhere. */
 export interface NewThreadSearch {
   project?: string
-  pick?: 'projects' | 'folder' | 'clone' | 'workspace'
+  pick?: 'projects' | 'new' | 'folder' | 'clone' | 'workspace'
   prompt?: string
 }
 
-const PICKS = ['projects', 'folder', 'clone', 'workspace']
+const PICKS = ['projects', 'new', 'folder', 'clone', 'workspace']
 
 function newThreadSearch(search: Record<string, unknown>): NewThreadSearch {
   return {

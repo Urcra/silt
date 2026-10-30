@@ -100,6 +100,50 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
   )
 }
 
+/** The folder holding `path`. */
+function folderOf(path: string): string {
+  return path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
+}
+
+/** `name` in the folder `parent`, with the separator `parent` uses. */
+function inFolder(parent: string, name: string): string {
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/'
+  return `${parent.replace(/[\\/]+$/, '')}${separator}${name}`
+}
+
+/** Makes a folder with an empty git repository and picks it: a project from nothing, whose git is up to you and the agent (ADR 0053). */
+function NewProject({ near, onAdded }: { near?: string; onAdded: (path: string) => void }) {
+  const [name, setName] = useState('')
+  const [parent, setParent] = useState(near ? folderOf(near) : '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const path = name.trim() && parent.trim() ? inFolder(parent.trim(), name.trim()) : ''
+  return (
+    <form
+      className="flex flex-col gap-1.5"
+      onSubmit={(event) => {
+        event.preventDefault()
+        setError(undefined)
+        setBusy(true)
+        api
+          .newProject(path)
+          .then(() => onAdded(path), (failure: unknown) => setError(message(failure)))
+          .finally(() => setBusy(false))
+      }}
+    >
+      <Input aria-label="project name" autoFocus placeholder="my-app" value={name} onChange={(event) => setName(event.target.value)} className="font-mono text-xs" />
+      <span className="flex gap-1.5">
+        <Input aria-label="in the folder" placeholder="/home/me/code" value={parent} onChange={(event) => setParent(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+        <Button type="submit" variant="primary" disabled={busy || !path}>
+          {busy ? 'Creating…' : 'Create'}
+        </Button>
+      </span>
+      <p className="text-2xs text-fg-2">{path ? `Makes ${path} with an empty git repository; no remote until you add one.` : 'A new folder with an empty git repository, for the agent to start from.'}</p>
+      {error && <p className="text-xs text-danger">{error}</p>}
+    </form>
+  )
+}
+
 /** Clones a repository and picks it. */
 function CloneRepository({ onAdded }: { onAdded: (path: string) => void }) {
   const [url, setUrl] = useState('')
@@ -181,11 +225,14 @@ function ProjectPicker({
       }
     >
       {(close) => (
-        <div className="flex flex-col gap-2 font-sans text-sm font-normal">
+        // The picker sits in the new thread's form, and React carries a
+        // portal's events to it: its own forms' submits stop here.
+        <div className="flex flex-col gap-2 font-sans text-sm font-normal" onSubmit={(event) => event.stopPropagation()}>
           <Tabs
             label="open from"
             tabs={[
               { id: 'projects' as const, label: 'Projects' },
+              { id: 'new' as const, label: 'New' },
               { id: 'folder' as const, label: 'Folder' },
               { id: 'clone' as const, label: 'Clone' },
               { id: 'workspace' as const, label: `In your workspace${elsewhere.length ? ` · ${elsewhere.length}` : ''}` },
@@ -216,6 +263,7 @@ function ProjectPicker({
               {clones.length === 0 && <li className="px-2 py-1.5 text-xs text-fg-2">No projects on this machine yet.</li>}
             </ul>
           )}
+          {tab === 'new' && <NewProject near={chosen?.path ?? clones[0]?.path} onAdded={(path) => added(path, close)} />}
           {tab === 'folder' && <OpenFolder found={found.data ?? []} onAdded={(path) => added(path, close)} />}
           {tab === 'clone' && <CloneRepository onAdded={(path) => added(path, close)} />}
           {tab === 'workspace' && (
@@ -249,10 +297,10 @@ function Welcome() {
   const queries = useQueryClient()
   const navigate = useNavigate()
   const found = useQuery({ queryKey: keys.found, queryFn: api.found })
-  const [opening, setOpening] = useState<'folder' | 'clone' | null>(null)
+  const [opening, setOpening] = useState<'new' | 'folder' | 'clone' | null>(null)
   const [error, setError] = useState<string>()
   const folders = found.data ?? []
-  const startable = (folder: FoundFolder) => folder.git && folder.repo !== ''
+  const startable = (folder: FoundFolder) => folder.git
   const firstStartable = folders.find(startable)?.path
   const added = (path: string) => {
     void queries.invalidateQueries({ queryKey: keys.agents })
@@ -292,13 +340,7 @@ function Welcome() {
                       .filter(Boolean)
                       .join(' · ')}
                   </span>
-                  {!startable(folder) && (
-                    <span className="text-xs text-fg-3">
-                      {folder.git
-                        ? 'Threads start in a repository with an origin remote; its sessions can be imported now.'
-                        : 'Threads need git: ask an agent to run git init here. Its sessions can be imported now.'}
-                    </span>
-                  )}
+                  {!startable(folder) && <span className="text-xs text-fg-3">Threads need git: ask an agent to run git init here. Its sessions can be imported now.</span>}
                 </span>
                 {startable(folder) && (
                   <Button variant={folder.path === firstStartable ? 'primary' : 'secondary'} onClick={() => start(folder.path)}>
@@ -312,6 +354,9 @@ function Welcome() {
         {error && <p className="text-xs text-danger">{error}</p>}
       </section>
       <div className="flex flex-wrap gap-2">
+        <Button icon="plus" aria-expanded={opening === 'new'} onClick={() => setOpening(opening === 'new' ? null : 'new')}>
+          New project
+        </Button>
         <Button icon="folder" aria-expanded={opening === 'folder'} onClick={() => setOpening(opening === 'folder' ? null : 'folder')}>
           Open another folder
         </Button>
@@ -319,6 +364,7 @@ function Welcome() {
           Clone a repository
         </Button>
       </div>
+      {opening === 'new' && <NewProject near={folders[0]?.path} onAdded={added} />}
       {opening === 'folder' && <OpenFolder found={[]} onAdded={added} />}
       {opening === 'clone' && <CloneRepository onAdded={added} />}
       <ImportOffer />
@@ -550,6 +596,7 @@ export function NewThread() {
             }}
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
+            commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
             bottom={
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">

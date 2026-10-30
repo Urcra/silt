@@ -140,6 +140,8 @@ pub struct QuestionField {
     pub options: Vec<QuestionChoice>,
     /// More than one choice may be taken.
     pub multi: bool,
+    /// The form can't be sent without it.
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +176,7 @@ impl Question {
                     description: text(property, "description"),
                     options: choices_of(choices),
                     multi,
+                    required: required.contains(&key.as_str()),
                 }
             })
             .collect();
@@ -303,6 +306,8 @@ pub enum Event {
     ModeChanged(String),
     /// The agent's settings as they now stand.
     Settings(Vec<Setting>),
+    /// The commands the agent offers as they now stand.
+    Commands(Vec<crate::SlashCommand>),
     /// The agent turned down a mode or setting.
     Refused(String),
     Permission(Permission),

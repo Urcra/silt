@@ -120,6 +120,16 @@ impl Core {
             .or_else(|| self.default_remote().map(|remote| Home::Server(remote.config.url.clone())))
     }
 
+    /// [`Self::new_home`] for a family started in `clone`: this machine
+    /// only for a repository without a remote, which no other machine can
+    /// clone from, unless its project was given a home (ADR 0053).
+    pub(crate) fn new_home_in(&self, clone: &silt_git::Repo, project: &str) -> Result<Option<Home>, CoreError> {
+        if !self.project_homes.contains_key(project) && clone.remote_url("origin")?.is_none() {
+            return Ok(Some(Home::Local));
+        }
+        Ok(self.new_home(project))
+    }
+
     /// The server a project's new threads sync with, for what needs one.
     pub(crate) fn server_for_project(&self, repo: &str) -> Result<Remote, CoreError> {
         match self.new_home(repo) {

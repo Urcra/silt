@@ -14,6 +14,19 @@ pub enum Limit {
     Described(&'static str),
 }
 
+impl Limit {
+    /// This limit raised by `percent` of itself.
+    pub fn raised(self, percent: u32) -> Self {
+        let factor = 1.0 + f64::from(percent) / 100.0;
+        match self {
+            Self::Time(limit) => Self::Time(limit.mul_f64(factor)),
+            Self::Ratio(limit) => Self::Ratio(limit * factor),
+            Self::CoreShare(limit) => Self::CoreShare(limit * factor),
+            Self::Described(text) => Self::Described(text),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Measured {
     Time(Duration),
@@ -282,6 +295,17 @@ pub fn failure(budget: &Budget, limits: Machine, measured: Measured, machine: &s
     )
 }
 
+/// What the gate prints for an enforced budget that's over, but by no more
+/// than the tolerance it was run with (ADR 0052).
+pub fn tolerated(budget: &Budget, limits: Machine, measured: Measured, tolerance: u32, machine: &str) -> String {
+    format!(
+        "slower than budget: {} ({}) measured {measured}, limit {}, on {machine} with {limits}; passed, as within {tolerance} % of it",
+        budget.name,
+        budget.measures,
+        budget.limit(limits)
+    )
+}
+
 fn verdict_word(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::Within => "within",
@@ -385,6 +409,15 @@ mod tests {
             "over budget: record.import (tracking a 100 MB transcript, the daemon already running) \
              measured 1.50 s, limit < 1.00 s, on 32 cores, ext2/ext3 with dev limits"
         );
+    }
+
+    #[test]
+    fn a_limit_raised_by_half_lets_through_up_to_half_again() {
+        let limit = Limit::Time(Duration::from_secs(1)).raised(50);
+        assert_eq!(verdict(limit, Measured::Time(Duration::from_millis(1490))), Verdict::Within);
+        assert_eq!(verdict(limit, Measured::Time(Duration::from_millis(1500))), Verdict::Over);
+        assert_eq!(verdict(Limit::Ratio(1.5).raised(50), Measured::Ratio(2.25)), Verdict::Within);
+        assert_eq!(Limit::CoreShare(0.001).raised(0), Limit::CoreShare(0.001));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::Path;
 
 use silt_proto::{ProjectInfo, project_name};
+use silt_types::ThreadId;
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -30,7 +31,10 @@ impl Core {
             }
             let mut projects = merged(listed, local);
             for project in &mut projects {
-                project.home = homes.get(&project.repo).cloned();
+                project.home = homes
+                    .get(&project.repo)
+                    .cloned()
+                    .or_else(|| (project.clone.is_some() && project.origin_url.is_none()).then(|| "local".to_owned()));
             }
             Ok(projects)
         }
@@ -67,17 +71,72 @@ impl Core {
         projects
     }
 
-    /// Adds the clone at `path`, which needs an origin to name its project.
+    /// Adds the clone at `path`, naming its project.
     pub(crate) async fn add_clone(&mut self, path: &Path) -> Result<String, CoreError> {
-        let repo = silt_git::Repo::discover(path)?;
-        let origin = repo.remote_url("origin")?.ok_or_else(|| {
-            CoreError::Invalid(format!(
-                "{} has no origin remote; projects without one come with local-only workspaces",
-                repo.root().display()
-            ))
+        let repo = silt_git::Repo::discover(path).map_err(|_| {
+            CoreError::Invalid(format!("{} isn't in a git repository; create it as a new project instead", path.display()))
         })?;
         self.remember_clone(repo.root()).await;
-        Ok(silt_git::normalize_remote(&origin))
+        Ok(repo.project()?)
+    }
+
+    /// Moves the threads recorded in the clone at `root` to `project`, the
+    /// project it names now, from one it named by its folder or not at all:
+    /// a repository without a remote that gained one, or threads recorded
+    /// before such a repository was a project (ADR 0053). Threads that sync
+    /// with a server stay where they are, as others hold them there.
+    pub(crate) async fn follow_clone_to(&mut self, root: &Path, project: &str) {
+        let mut moving: BTreeMap<String, Vec<ThreadId>> = BTreeMap::new();
+        for thread in self.threads.values().filter(|thread| {
+            thread.repo_root == root
+                && thread.repo != project
+                && (thread.repo.is_empty() || silt_git::is_folder_project(&thread.repo))
+                && self.remote_of(thread.family).is_none()
+        }) {
+            moving.entry(thread.repo.clone()).or_default().push(thread.id);
+        }
+        for (from, threads) in moving {
+            if let Err(error) = self.store.move_threads(&threads, &from, project, root).await {
+                warn!(%error, from, to = project, "could not move threads to their clone's project");
+                continue;
+            }
+            for thread in &threads {
+                self.threads.get_mut(thread).expect("listed above").repo = project.to_owned();
+            }
+            if self.clones.get(&from).is_some_and(|path| path == root) {
+                self.clones.remove(&from);
+            }
+            if let Some(home) = self.project_homes.get(&from).cloned() {
+                self.project_homes.entry(project.to_owned()).or_insert(home);
+            }
+            self.announce(crate::protocol::BusEvent::Threads);
+        }
+    }
+
+    /// [`Self::follow_clone_to`] for every clone threads were recorded in,
+    /// as the daemon starts.
+    pub(crate) async fn follow_clones_to_their_projects(&mut self) {
+        let roots: std::collections::BTreeSet<std::path::PathBuf> = self
+            .threads
+            .values()
+            .filter(|thread| thread.repo.is_empty() || silt_git::is_folder_project(&thread.repo))
+            .filter(|thread| thread.repo_root.join(".git").exists())
+            .map(|thread| thread.repo_root.clone())
+            .collect();
+        for root in roots {
+            if let Ok(project) = silt_git::Repo::discover(&root).and_then(|repo| repo.project()) {
+                self.follow_clone_to(&root, &project).await;
+            }
+        }
+    }
+
+    /// Makes the folder `path` and an empty git repository in it, then adds
+    /// it, for a project to start from nothing (ADR 0053).
+    pub(crate) async fn new_project(&mut self, path: &Path) -> Result<String, CoreError> {
+        check_new_folder(path)?;
+        let repo = silt_git::Repo::init(path)?;
+        self.remember_clone(repo.root()).await;
+        Ok(repo.project()?)
     }
 
     /// Clones `url` to `path` off the event loop, then adds the clone
@@ -244,14 +303,20 @@ fn origin_url(clone: &Path) -> Option<String> {
     Some(silt_proto::shareable_url(&url))
 }
 
-/// Where a clone may go: an absolute path whose parent exists, not over
-/// something already there; and a URL git won't read as an option.
+/// Where a clone may go, as a new folder may; and a URL git won't read as
+/// an option.
 fn check_clone_target(url: &str, path: &Path) -> Result<(), CoreError> {
     if url.trim().is_empty() || url.starts_with('-') {
         return Err(CoreError::Invalid("give the URL to clone".into()));
     }
+    check_new_folder(path)
+}
+
+/// Where a new folder may go: an absolute path whose parent exists, not over
+/// something already there.
+fn check_new_folder(path: &Path) -> Result<(), CoreError> {
     if !path.is_absolute() {
-        return Err(CoreError::Invalid("give the clone an absolute path".into()));
+        return Err(CoreError::Invalid("give the folder an absolute path".into()));
     }
     if !path.parent().is_some_and(Path::is_dir) {
         return Err(CoreError::Invalid(format!("{} isn't a folder", path.parent().unwrap_or(path).display())));

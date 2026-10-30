@@ -7,7 +7,7 @@ use silt_types::GitOid;
 use crate::{GitError, Repo, run_git};
 
 /// Set in a managed checkout's git config as the last step of making it.
-const READY_KEY: &str = "silt.ready";
+pub(crate) const READY_KEY: &str = "silt.ready";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedCheckout {

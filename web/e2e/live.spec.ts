@@ -197,6 +197,19 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(again).toContainText('Packets acknowledged')
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(alice.getByText(/I was not allowed to edit/).last()).toBeVisible()
+  // Claude's form follows each question with an optional box of your own and requires nothing: answered once something is chosen.
+  await alice.getByLabel('draft').fill('Ask two things')
+  await alice.getByRole('button', { name: 'Send' }).click()
+  const two = alice.getByRole('region', { name: 'question' }).last()
+  await expect(two).toContainText('2 of 2')
+  const answer = two.getByRole('button', { name: 'Answer', exact: true })
+  await expect(answer).toBeDisabled()
+  await two.getByRole('radio', { name: 'Chunks' }).click()
+  await two.getByRole('radio', { name: 'Footer' }).click()
+  await two.getByLabel('Other').first().fill('every 64 KiB')
+  await answer.click()
+  await expect(alice.getByText('Counting Chunks in the Footer; notes: 1.')).toBeVisible()
+  await expect(two).toContainText('Chunks, every 64 KiB')
 
   const changed = () =>
     alice.evaluate(async (thread) => {
@@ -756,9 +769,8 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
   await page.getByLabel('draft').fill('add acp Later')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: add acp Later')).toBeVisible()
-  const wake = page.getByTestId('wake')
-  await expect(wake).toHaveText('The agent went on by itself, without a prompt.')
   await expect(page.getByText('Went on by itself.')).toBeVisible()
+  await expect(page.getByText('without a prompt')).toHaveCount(0)
   await expect(page.getByTestId('agent-state')).toHaveText('Fake v2 agent is ready')
   // Its words are its own turn's reply, after the notice that opened it, not the turn before's.
   const turns = page.locator('[id^="turn-"]')
@@ -767,7 +779,7 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
   await expect(turns.nth(0)).not.toContainText('Went on by itself.')
 })
 
-test("an agent's subagent and the command it left running show as cards, and the turn the command's end sets off names it", async ({ page }) => {
+test("an agent's subagent and the command it left running show as cards, and the agent goes on once the command ends", async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Subagent Background')
   await page.getByRole('button', { name: 'Send' }).click()
@@ -776,9 +788,6 @@ test("an agent's subagent and the command it left running show as cards, and the
   // The command runs on after the turn: its card stays out of the turn's fold, and it is listed above the composer until it ends.
   await expect(cards.filter({ hasText: 'sleep 1 && echo BG' })).toBeVisible()
   await expect(page.getByTestId('running-tasks')).toContainText('sleep 1 && echo BG')
-  const wake = page.getByTestId('wake')
-  await expect(wake).toHaveText('sleep 1 && echo BG finished in the background, and the agent went on by itself.')
-  await expect(wake.locator('code')).toHaveText('sleep 1 && echo BG')
   await expect(page.getByText('The background command printed BG.')).toBeVisible()
   await expect(page.getByTestId('running-tasks')).toBeHidden()
   // The subagent finished within the turn, so its card folded with the turn's work; its words are in it, not the thread's.
@@ -1088,7 +1097,7 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   const add = page.getByRole('region', { name: 'add a project' })
   await add.getByLabel('clone path').fill(live.work)
   await add.getByRole('button', { name: 'Add', exact: true }).click()
-  await expect(add).toContainText('not inside a git repository')
+  await expect(add).toContainText("isn't in a git repository; create it as a new project instead")
 
   await add.getByLabel('remote URL').fill(`${live.work}/docs.git`)
   await add.getByLabel('where to clone it').fill(`${live.work}/alice/docs`)
@@ -1298,4 +1307,58 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await page.goto(new URL(kept, live.alice).toString())
   await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
   await expect(page.getByText('This machine only', { exact: true })).toHaveCount(0)
+})
+
+test('a new project made from New thread starts its first thread in a folder made for it, kept on this machine', async ({ page }) => {
+  await page.goto(live.alice)
+  await page.getByRole('button', { name: /^project:/ }).click()
+  const picker = page.getByRole('dialog', { name: 'Pick a project' })
+  await picker.getByRole('tab', { name: 'New' }).click()
+  await picker.getByLabel('project name').fill('scratch-app')
+  await picker.getByLabel('in the folder').fill(live.work)
+  await expect(picker).toContainText(`Makes ${live.work}/scratch-app with an empty git repository`)
+  await picker.getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByRole('button', { name: 'project: scratch-app' })).toBeVisible()
+
+  const form = page.getByRole('form', { name: 'new thread' })
+  await expect(form.getByLabel('works in')).toHaveValue('local')
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
+  await page.getByLabel('draft').fill('hello')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: hello')).toBeVisible()
+  await stopAgent(page)
+})
+
+test("the agent's commands are offered as / starts a prompt, in its thread and in a new one", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  const draft = page.getByLabel('draft')
+  const commands = page.getByRole('listbox', { name: 'commands' })
+  await draft.fill('/co')
+  await expect(commands.getByRole('option')).toHaveText(['/count <what to count>Count what you name', '/compactSummarize the conversation so far'])
+  await draft.press('ArrowDown')
+  await expect(commands.getByRole('option').filter({ hasText: '/compact' })).toHaveAttribute('aria-selected', 'true')
+  await draft.press('ArrowUp')
+  await draft.press('Enter')
+  await expect(draft).toHaveValue('/count ')
+  await expect(commands).toBeHidden()
+  await draft.pressSequentially('lines')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: /count lines')).toBeVisible()
+
+  await draft.fill('/')
+  await expect(commands.getByRole('option')).toHaveCount(2)
+  await draft.press('Escape')
+  await expect(commands).toBeHidden()
+  await stopAgent(page)
+
+  // A new thread offers them before the agent runs, as it last offered them here.
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByLabel('first prompt').fill('/comp')
+  await commands.getByRole('option').filter({ hasText: '/compact' }).click()
+  await expect(form.getByLabel('first prompt')).toHaveValue('/compact ')
 })

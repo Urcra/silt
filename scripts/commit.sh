@@ -10,10 +10,18 @@ if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qv -e '\.md$' && ! pr
     echo "only Markdown changed; skipping the gate"
 else
     log=$(mktemp)
-    if ! ./scripts/gate.sh >"$log" 2>&1; then
-        grep -E '^(error|warning)|FAILED|panicked' -A6 "$log" | head -40
+    # A busy machine slows the budgets down, so a commit passes one up to
+    # half over its limit, and says so (ADR 0052).
+    if ! SILT_BENCH_TOLERANCE=50 ./scripts/gate.sh >"$log" 2>&1; then
+        grep -E '^(error|warning)|FAILED|panicked|^over budget' -A6 "$log" | head -40
         echo "gate failed; nothing committed (full log: $log)" >&2
         exit 1
+    fi
+    if grep -q '^slower than budget' "$log"; then
+        grep '^slower than budget' "$log" >&2
+        echo "warning: the gate passed, but the budgets above ran over their limits." >&2
+        echo "Double-check whether that increase in runtime is expected: rerun them with" >&2
+        echo "\`target/perf/silt-bench check --only <budget>\` on an idle machine, and fix a real slowdown." >&2
     fi
     rm -f "$log"
 fi

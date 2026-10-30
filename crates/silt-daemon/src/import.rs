@@ -216,7 +216,7 @@ impl Core {
         let cwd = candidate.cwd.clone().unwrap_or_default();
         let repo = candidate.cwd.as_deref().filter(|cwd| cwd.is_dir()).and_then(|cwd| Repo::discover(cwd).ok());
         let project = match &repo {
-            Some(repo) => repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default(),
+            Some(repo) => repo.project()?,
             None => String::new(),
         };
         let base = match &repo {

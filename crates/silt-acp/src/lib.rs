@@ -13,5 +13,5 @@ pub use host::{
     AgentHandle, Command, Event, HostError, Permission, Question, QuestionChoice, QuestionField, Start, StopReason, TaskNews,
     Update, start,
 };
-pub use modes::{Choice, Modes, Setting, built_in, plan_mode};
+pub use modes::{Choice, Modes, Setting, SlashCommand, built_in, plan_mode, presents_plans};
 pub use prompt::{Accepts, Attachment};

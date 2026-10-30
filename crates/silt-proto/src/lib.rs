@@ -1038,6 +1038,9 @@ pub struct QuestionFieldAsked {
     /// Its choices; none for a free answer.
     pub options: Vec<ChoiceAsked>,
     pub multi: bool,
+    /// The form can't be sent without it; the rest may be left empty.
+    #[serde(default)]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

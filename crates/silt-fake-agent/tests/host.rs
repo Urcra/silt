@@ -9,8 +9,35 @@ fn prompt(text: &str) -> Command {
     Command::Prompt { text: text.into(), attachments: Vec::new() }
 }
 
+/// The next event but the agent's commands, which
+/// `the_commands_an_agent_offers_come_as_its_session_opens` checks.
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
+    loop {
+        match next_of_all(events).await {
+            Event::Commands(_) => {}
+            event => return event,
+        }
+    }
+}
+
+async fn next_of_all(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
     tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("the agent answers").expect("events keep coming")
+}
+
+/// Over v1 they come in an update once the session is open, as Copilot
+/// sends them; over v2 with the session, as Claude's adapter does.
+#[tokio::test]
+async fn the_commands_an_agent_offers_come_as_its_session_opens() {
+    for env in [Vec::new(), vec![("FAKE_ACP_V2".to_owned(), "1".to_owned())]] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let _agent = start(options(dir.path(), env.clone()), sender);
+        assert!(matches!(next_of_all(&mut events).await, Event::Ready { .. }), "{env:?}");
+        let Event::Commands(commands) = next_of_all(&mut events).await else { panic!("the commands, {env:?}") };
+        let said: Vec<(&str, Option<&str>)> =
+            commands.iter().map(|command| (command.name.as_str(), command.hint.as_deref())).collect();
+        assert_eq!(said, [("count", Some("<what to count>")), ("compact", None)], "{env:?}");
+    }
 }
 
 #[tokio::test]

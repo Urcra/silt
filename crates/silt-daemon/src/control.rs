@@ -313,6 +313,7 @@ impl Core {
             settings: Vec::new(),
             takes_images: false,
             takes_files: false,
+            commands: Vec::new(),
         })
     }
 

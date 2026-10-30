@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO project_homes (repo, home) SELECT ?, home FROM project_homes WHERE repo = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d2a7b4b7b223133db8659c09fe4a63590185e9ddd477b1a30cf35383024aa60f"
+}

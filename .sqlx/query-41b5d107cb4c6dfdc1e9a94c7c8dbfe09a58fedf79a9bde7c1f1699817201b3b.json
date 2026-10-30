@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM clones WHERE repo = ? AND path = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "41b5d107cb4c6dfdc1e9a94c7c8dbfe09a58fedf79a9bde7c1f1699817201b3b"
+}

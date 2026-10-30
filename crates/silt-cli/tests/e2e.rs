@@ -481,15 +481,85 @@ fn the_web_ui_forks_offers_and_trashes_without_the_cli() {
 /// Starts `agent` of the scripted ones on `prompt`: `v1`, which speaks ACP
 /// v1 as Copilot does, or `v2`, which speaks v2 as Claude's adapter does.
 fn start_fake_acp(env: &Env, api: &Api, agent: &str, prompt: &str) -> String {
+    start_fake_acp_in(env, api, &serde_json::json!({"clone": env.repo, "agent": agent, "prompt": prompt}))
+}
+
+/// [`start_fake_acp`] with the start request given whole.
+fn start_fake_acp_in(env: &Env, api: &Api, start: &serde_json::Value) -> String {
     let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
     let agents = serde_json::json!([
         {"id": "v1", "name": "Fake v1", "command": fake},
         {"id": "v2", "name": "Fake v2", "command": fake, "env": {"FAKE_ACP_V2": "1"}}
     ]);
     fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
-    let started =
-        api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": agent, "prompt": prompt})));
+    let started = api.ok("POST", "/api/agents/start", Some(start.clone()));
     started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned())
+}
+
+/// A project started from nothing (ADR 0053): a folder made for it with an
+/// empty repository, named by its folder and kept on this machine, whose
+/// threads move to its remote's project once it has one.
+#[test]
+fn a_new_project_starts_in_a_folder_made_for_it_and_follows_it_to_a_remote() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let (_place, folder) = new_project(&api);
+    let folder_project = silt_git::normalize_remote(&folder.to_string_lossy());
+    assert!(folder.join(".git").is_dir(), "the folder has a repository");
+    let (made_again, answer) = api.call("POST", "/api/projects/new", Some(serde_json::json!({"path": folder})));
+    assert!(!made_again && answer["error"].as_str().is_some_and(|error| error.contains("already there")), "{answer}");
+    let projects = api.ok("GET", "/api/projects", None);
+    let listed = projects.as_array().expect("projects").iter().find(|listed| listed["repo"] == folder_project.as_str()).cloned();
+    let listed = listed.unwrap_or_else(|| panic!("the new project is listed: {projects}"));
+    assert_eq!((listed["name"].as_str(), listed["home"].as_str()), (Some("quest-viewer"), Some("local")));
+
+    let first = start_here(&env, &api, &folder, "hello");
+    assert_eq!(repo_of(&api, &first).as_deref(), Some(folder_project.as_str()));
+
+    git(&folder, &["remote", "add", "origin", "git@github.com:acme/quest-viewer.git"]);
+    let second = start_here(&env, &api, &folder, "again");
+    for thread in [&first, &second] {
+        assert_eq!(repo_of(&api, thread).as_deref(), Some("github.com/acme/quest-viewer"), "thread {thread}");
+    }
+}
+
+/// [`a_new_project_starts_in_a_folder_made_for_it_and_follows_it_to_a_remote`]
+/// with the remote added while the daemon was stopped.
+#[test]
+fn a_new_projects_threads_follow_a_remote_added_while_the_daemon_was_stopped() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let (_place, folder) = new_project(&api);
+    let thread = start_here(&env, &api, &folder, "hello");
+    env.silt(&["daemon", "stop"]);
+    git(&folder, &["remote", "add", "origin", "git@github.com:acme/quest-viewer.git"]);
+    let api = Api::open(&env);
+    assert_eq!(repo_of(&api, &thread).as_deref(), Some("github.com/acme/quest-viewer"));
+}
+
+/// Makes the project `quest-viewer` from the web UI, in a folder of its
+/// own, which goes when the first value is dropped.
+fn new_project(api: &Api) -> (tempfile::TempDir, PathBuf) {
+    let place = tempfile::tempdir().expect("temp dir");
+    let folder = silt_os::canonicalize(place.path()).expect("canonical").join("quest-viewer");
+    let project = api.ok("POST", "/api/projects/new", Some(serde_json::json!({"path": folder})));
+    assert_eq!(project, silt_git::normalize_remote(&folder.to_string_lossy()).as_str());
+    (place, folder)
+}
+
+/// Starts the scripted agent working in `clone` itself, as the web UI's
+/// Local does, on `prompt`, once it has replied.
+fn start_here(env: &Env, api: &Api, clone: &Path, prompt: &str) -> String {
+    let thread = start_fake_acp_in(env, api, &serde_json::json!({"clone": clone, "agent": "v2", "prompt": prompt, "here": true}));
+    settled_history(api, &thread, &format!("Done: {prompt}"));
+    thread
+}
+
+/// The project the thread listing names for `thread`.
+fn repo_of(api: &Api, thread: &str) -> Option<String> {
+    let threads = api.ok("GET", "/api/threads", None);
+    let listed = threads.as_array().expect("threads").iter().find(|listed| listed["id"] == thread).cloned();
+    listed.map(|listed| listed["repo"].as_str().unwrap_or_default().to_owned())
 }
 
 /// The thread's history as kind and text, once its agent is idle and the
@@ -594,6 +664,71 @@ fn a_long_reply_reaches_the_web_ui_whole() {
 /// The thread's history entries as the API gives them.
 fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
     api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
+}
+
+/// The commands an agent offers reach the web UI: over v1 once its session
+/// opens, as Copilot sends them, and over v2 with the session and as they
+/// change, as Claude's adapter does. New thread offers each agent's from its
+/// last run here.
+#[test]
+fn the_commands_an_agent_offers_reach_the_web_ui_and_are_kept_for_new_threads() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let names = |commands: &serde_json::Value| -> Vec<String> {
+        commands.as_array().into_iter().flatten().filter_map(|command| command["name"].as_str().map(str::to_owned)).collect()
+    };
+    let offered = |thread: &str| api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["commands"].clone();
+
+    let v1 = start_fake_acp(&env, &api, "v1", "hello");
+    assert!(eventually(|| names(&offered(&v1)) == ["count", "compact"]), "{}", offered(&v1));
+    let count = offered(&v1)[0].clone();
+    assert_eq!((count["description"].as_str(), count["hint"].as_str()), (Some("Count what you name"), Some("<what to count>")));
+    assert_eq!(offered(&v1)[1]["hint"], serde_json::Value::Null);
+
+    let v2 = start_fake_acp(&env, &api, "v2", "hello");
+    settled_history(&api, &v2, "Done: hello");
+    assert_eq!(names(&offered(&v2)), ["count"], "the agent dropped compact once prompted");
+
+    let choices = api.ok("GET", "/api/agents", None);
+    let kept = |agent: &str| {
+        let choice = choices["agents"].as_array().expect("agents").iter().find(|choice| choice["id"] == agent).cloned();
+        names(&choice.unwrap_or_default()["commands"])
+    };
+    assert_eq!((kept("v1"), kept("v2")), (vec!["count".to_owned(), "compact".to_owned()], vec!["count".to_owned()]), "{choices}");
+}
+
+/// An agent that puts its plan to the person itself, as Claude does with
+/// ExitPlanMode, is the one to say when there's a plan: a plan turn it ends,
+/// here with its plan sent back and a command left running, isn't one to
+/// approve. Silt remembers that the agent plans so.
+#[test]
+fn an_agent_that_presents_its_own_plans_is_never_taken_to_have_planned_by_its_turns_end() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp_in(
+        &env,
+        &api,
+        &serde_json::json!({"clone": env.repo, "agent": "v2", "prompt": "Present Background", "preset": "plan"}),
+    );
+    let (mut presented, mut asked_by_silt) = (false, false);
+    let went_on = eventually(|| {
+        let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+        for asked in live["agent"]["permissions"].as_array().into_iter().flatten() {
+            presented |= asked["plan"] == "1. Count the lines.";
+            let answer = serde_json::json!({"id": asked["id"], "option": "reject"});
+            api.call("POST", &format!("/api/threads/{thread}/agent/answer"), Some(answer));
+        }
+        let state = live["agent"]["state"].as_str().unwrap_or_default().to_owned();
+        asked_by_silt |= state == "awaiting_input";
+        let printed = history_entries(&api, &thread).iter().any(|entry| entry["text"] == "The background command printed BG.");
+        printed && state == "idle"
+    });
+    assert!(presented, "the agent put its plan to the person");
+    assert!(!asked_by_silt, "Silt asked to approve a plan of its own reading");
+    assert!(went_on, "the agent went on once the command ended, and stopped");
+    let seen: serde_json::Value =
+        serde_json::from_slice(&fs::read(env.silt_home.join("agents-seen.json")).expect("agents seen")).expect("json");
+    assert_eq!(seen["v2"]["presents_plans"], true, "{seen}");
 }
 
 /// Over v2 a subagent runs in a session of its own and a command left in

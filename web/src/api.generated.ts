@@ -73,7 +73,11 @@ takes_images: boolean | null,
 /**
  * Files other than text and images, likewise.
  */
-takes_files: boolean | null, };
+takes_files: boolean | null, 
+/**
+ * The commands it offered when it last ran here.
+ */
+commands: Array<AgentCommand>, };
 
 export type AgentChoiceItem = { id: string, name: string, description: string | null, };
 
@@ -90,6 +94,12 @@ export type AgentSetting = { id: string, name: string,
  * `model`, `thought_level`, … as the agent tags it.
  */
 category: string | null, current: string, choices: Array<AgentChoiceItem>, };
+
+export type AgentCommand = { name: string, description: string, 
+/**
+ * What to write after it, when it takes anything.
+ */
+hint: string | null, };
 
 export type AgentStart = { "kind": "resume", id: string, } | { "kind": "primed", id: string | null, prompt: string, };
 
@@ -125,7 +135,11 @@ takes_images: boolean,
 /**
  * Files other than text and images.
  */
-takes_files: boolean, };
+takes_files: boolean, 
+/**
+ * The commands it offers, which a prompt starting with `/` runs.
+ */
+commands: Array<AgentCommand>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
@@ -139,7 +153,11 @@ key: string, title: string, description: string | null,
 /**
  * Its choices; none for a free answer.
  */
-options: Array<ChoiceAsked>, multi: boolean, };
+options: Array<ChoiceAsked>, multi: boolean, 
+/**
+ * The form can't be sent without it; the rest may be left empty.
+ */
+required: boolean, };
 
 export type ChoiceAsked = { 
 /**

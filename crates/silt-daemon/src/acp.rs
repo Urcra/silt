@@ -65,11 +65,15 @@ pub(crate) struct AcpRun {
     within: Option<(String, String)>,
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
+    commands: Vec<silt_acp::SlashCommand>,
     /// Settings chosen before the agent was up, by id and value, set once it
     /// says which it offers.
     chosen_settings: Vec<(String, String)>,
     /// The turn running is a Plan first one.
     planning: bool,
+    /// The agent puts its plan to the person itself, so a turn it ends
+    /// while planning isn't one to approve.
+    presents_plans: bool,
     /// The mode Plan first switched away from, to go back to once the plan
     /// is approved.
     back_to: Option<String>,
@@ -180,6 +184,7 @@ pub(crate) fn question_asked(question: &Question) -> crate::protocol::QuestionAs
                     })
                     .collect(),
                 multi: field.multi,
+                required: field.required,
             })
             .collect(),
     }
@@ -193,16 +198,14 @@ fn question_call(id: u64) -> String {
 /// A question as Claude Code's `AskUserQuestion` records one, so it reads
 /// back alike whichever agent asked it.
 fn question_input(question: &Question) -> serde_json::Value {
-    let single = question.fields.len() == 1;
     let asked: Vec<serde_json::Value> = question
         .fields
         .iter()
+        .filter(|field| !optional_text(field))
         .map(|field| {
-            let text =
-                if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
             serde_json::json!({
                 "header": field.title,
-                "question": text,
+                "question": asked_text(question, field),
                 "multiSelect": field.multi,
                 "options": field
                     .options
@@ -219,14 +222,14 @@ fn question_input(question: &Question) -> serde_json::Value {
 /// each choice's label; refused when a field isn't asked or a value isn't
 /// offered.
 fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result<String, CoreError> {
-    let single = question.fields.len() == 1;
-    let mut said = Vec::new();
-    for (key, values) in answers {
-        let field = question
-            .fields
-            .iter()
-            .find(|field| field.key == *key)
-            .ok_or_else(|| CoreError::Invalid(format!("the agent didn't ask for {key}")))?;
+    if let Some((key, _)) = answers.iter().find(|(key, _)| !question.fields.iter().any(|field| field.key == *key)) {
+        return Err(CoreError::Invalid(format!("the agent didn't ask for {key}")));
+    }
+    let mut said: Vec<(String, Vec<String>)> = Vec::new();
+    for (index, field) in question.fields.iter().enumerate() {
+        let Some((_, values)) = answers.iter().find(|(key, _)| *key == field.key) else {
+            continue;
+        };
         if !field.multi && values.len() > 1 {
             return Err(CoreError::Invalid(format!("{} takes one answer", field.title)));
         }
@@ -238,11 +241,35 @@ fn answer_text(question: &Question, answers: &[(String, Vec<String>)]) -> Result
                 None => Err(CoreError::Invalid(format!("the agent didn't offer {value} for {}", field.title))),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let asked =
-            if single { question.message.clone() } else { field.description.clone().unwrap_or_else(|| field.title.clone()) };
-        said.push(format!("\"{asked}\"=\"{}\"", labels.join(", ")));
+        // A box of one's own answers the question before it.
+        let of = match index.checked_sub(1).map(|before| &question.fields[before]) {
+            Some(before) if optional_text(field) && !optional_text(before) => before,
+            _ => field,
+        };
+        let asked = asked_text(question, of);
+        match said.last_mut() {
+            Some((last, given)) if *last == asked => given.extend(labels),
+            _ => said.push((asked, labels)),
+        }
     }
+    let said: Vec<String> = said.iter().map(|(asked, given)| format!("\"{asked}\"=\"{}\"", given.join(", "))).collect();
     Ok(format!("User has answered your questions: {}. You can now continue with the user's answers in mind.", said.join(", ")))
+}
+
+/// What `field` asks: the form's message when it's the only question.
+fn asked_text(question: &Question, field: &silt_acp::QuestionField) -> String {
+    let questions = question.fields.iter().filter(|each| !optional_text(each)).count();
+    if questions == 1 && !optional_text(field) {
+        question.message.clone()
+    } else {
+        field.description.clone().unwrap_or_else(|| field.title.clone())
+    }
+}
+
+/// A box for an answer of one's own beside a question, as Claude's adapter
+/// follows each with, rather than a question itself.
+fn optional_text(field: &silt_acp::QuestionField) -> bool {
+    !field.required && field.options.is_empty()
 }
 
 /// An answer in the person's own words, as Claude Code words a result.
@@ -301,12 +328,14 @@ impl Core {
             agents: installed
                 .into_iter()
                 .map(|agent| {
-                    let Seen { modes, settings, takes, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
+                    let Seen { modes, settings, takes, commands, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
                         silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
                             modes: Some((&modes).into()),
                             settings: settings.iter().map(Into::into).collect(),
                             takes: None,
                             seen_ms: 0,
+                            presents_plans: false,
+                            commands: Vec::new(),
                         })
                     });
                     AgentChoice {
@@ -317,6 +346,7 @@ impl Core {
                         settings,
                         takes_images: takes.map(|takes| takes.images),
                         takes_files: takes.map(|takes| takes.files),
+                        commands,
                     }
                 })
                 .collect(),
@@ -334,13 +364,22 @@ impl Core {
             settings: settings.iter().map(Into::into).collect(),
             takes: Some(accepts.into()),
             seen_ms: now_ms(),
+            presents_plans: false,
+            commands: Vec::new(),
         };
         self.keep_seen(agent, seen);
         self.announce(crate::protocol::BusEvent::Agents);
     }
 
-    fn keep_seen(&self, agent: String, kept: Seen) {
+    fn keep_seen(&self, agent: String, mut kept: Seen) {
         let mut seen = read_seen(&self.data_dir);
+        // Asking what an agent offers shows neither how it plans nor its commands.
+        if let Some(old) = seen.get(&agent) {
+            kept.presents_plans |= old.presents_plans;
+            if kept.commands.is_empty() {
+                kept.commands.clone_from(&old.commands);
+            }
+        }
         seen.insert(agent, kept);
         let written = serde_json::to_vec_pretty(&seen)
             .map_err(std::io::Error::other)
@@ -361,6 +400,8 @@ impl Core {
             settings: run.settings.iter().map(Into::into).collect(),
             takes: Some(run.accepts.into()),
             seen_ms: now_ms(),
+            presents_plans: run.presents_plans,
+            commands: run.commands.iter().map(Into::into).collect(),
         };
         self.keep_seen(run.info.id.clone(), seen);
     }
@@ -450,6 +491,8 @@ impl Core {
             )),
             load: load.as_ref().map(|(_, native)| native.clone()),
         };
+        let presents_plans =
+            silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
         self.acp.insert(
             thread,
@@ -478,8 +521,10 @@ impl Core {
                 within: None,
                 modes: None,
                 settings: Vec::new(),
+                commands: Vec::new(),
                 chosen_settings: options.settings,
                 planning: false,
+                presents_plans,
                 back_to: None,
                 first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments }),
                 accepts: Accepts::default(),
@@ -769,6 +814,11 @@ impl Core {
     fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
         let preset = self.preset(thread);
         let run = self.acp.get_mut(&thread).expect("caller checked");
+        if !run.presents_plans && plan_put(run, &permission.tool_call_id).is_some() {
+            run.presents_plans = true;
+            self.remember_seen(thread);
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
         let kind = permission.tool_kind.clone().or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
         match crate::presets::decide(preset, kind.as_deref(), &permission.option_kinds) {
             Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
@@ -948,11 +998,7 @@ impl Core {
                     id: asked.id,
                     title: asked.title.clone(),
                     options: asked.options.clone(),
-                    plan: run
-                        .tool_said
-                        .get(&asked.tool_call_id)
-                        .and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
-                        .map(str::to_owned),
+                    plan: plan_put(run, &asked.tool_call_id).map(str::to_owned),
                     tool_call: Some(asked.tool_call_id.to_string()),
                 })
                 .collect(),
@@ -963,6 +1009,7 @@ impl Core {
             settings: run.settings.iter().map(Into::into).collect(),
             takes_images: run.accepts.image,
             takes_files: run.accepts.embedded,
+            commands: run.commands.iter().map(Into::into).collect(),
         })
     }
 
@@ -1066,6 +1113,10 @@ impl Core {
                 run.settings = settings;
                 self.remember_seen(thread);
             }
+            AcpEvent::Agent(silt_acp::Event::Commands(commands)) => {
+                run.commands = commands;
+                self.remember_seen(thread);
+            }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
             AcpEvent::Agent(silt_acp::Event::Working) => {
                 // Working on a prompt of Silt's, it is already; else it took
@@ -1091,7 +1142,9 @@ impl Core {
                 self.guide_written(thread, &reason).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.own_turn = false;
-                let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
+                // An agent that puts its plan to the person itself asks when it is
+                // one; its turn may end to wait on its subagents, or to ask.
+                let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn && !run.presents_plans;
                 run.state = if planned && run.still_planning() {
                     AgentState::AwaitingInput
                 } else {
@@ -1538,6 +1591,11 @@ struct Seen {
     /// When they were seen; an agent's offer older than `ASK_AGAIN_MS` is asked for again.
     #[serde(default)]
     seen_ms: i64,
+    /// It put a plan to the person itself, as Claude's ExitPlanMode does.
+    #[serde(default)]
+    presents_plans: bool,
+    #[serde(default)]
+    commands: Vec<crate::protocol::AgentCommand>,
 }
 
 /// What an agent takes attached to a prompt, as kept beside its modes.
@@ -1644,6 +1702,12 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
 
 /// Each agent's modes and settings as kept, by its registry id; none where
 /// the file is missing or unreadable, which only means none were seen.
+/// The plan the call `tool_call` puts to the person, as Claude's
+/// ExitPlanMode does in its input.
+fn plan_put<'run>(run: &'run AcpRun, tool_call: &str) -> Option<&'run str> {
+    run.tool_said.get(tool_call).and_then(|(_, input)| input.as_ref()?.get("plan")?.as_str())
+}
+
 fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
     std::fs::read(data_dir.join(SEEN)).ok().and_then(|json| serde_json::from_slice(&json).ok()).unwrap_or_default()
 }
@@ -1852,6 +1916,7 @@ mod tests {
                     },
                 ],
                 multi: false,
+                required: true,
             }],
         };
         let said = answer_text(&question, &[("count".into(), vec!["acked".into()])]).unwrap();
@@ -1864,6 +1929,49 @@ mod tests {
         let entry =
             silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: own_answer(&question, " Packets "), is_error: false };
         assert_eq!(silt_agents::tool::shown(entry).unwrap().outcome.unwrap().answers[0].answer, "Packets");
+    }
+
+    /// Claude's adapter follows each question with an optional box for an
+    /// answer of one's own: it reads back as part of that question's answer.
+    #[test]
+    fn a_box_of_ones_own_answers_the_question_before_it() {
+        let choice = |label: &str| silt_acp::QuestionChoice { value: label.into(), label: label.into(), description: None };
+        let field = |key: &str, description: &str, options: Vec<silt_acp::QuestionChoice>| silt_acp::QuestionField {
+            key: key.into(),
+            title: key.into(),
+            description: Some(description.into()),
+            options,
+            multi: false,
+            required: false,
+        };
+        let question = Question {
+            id: 1,
+            message: "Please answer the following questions.".into(),
+            fields: vec![
+                field("question_0", "What should it count?", vec![choice("Bytes"), choice("Chunks")]),
+                field("question_0_custom", "Type your own answer (optional).", vec![]),
+                field("question_1", "Where should it show?", vec![choice("Header"), choice("Footer")]),
+                field("question_1_custom", "Type your own answer (optional).", vec![]),
+            ],
+        };
+        let asked = question_input(&question);
+        let headers: Vec<&str> =
+            asked["questions"].as_array().unwrap().iter().map(|each| each["header"].as_str().unwrap()).collect();
+        assert_eq!(headers, ["question_0", "question_1"]);
+
+        let said = answer_text(
+            &question,
+            &[
+                ("question_1".into(), vec!["Footer".into()]),
+                ("question_0".into(), vec!["Chunks".into()]),
+                ("question_0_custom".into(), vec!["every 64 KiB".into()]),
+            ],
+        )
+        .unwrap();
+        let entry = silt_agents::Entry::ToolResult { tool_use_id: "q".into(), text: said, is_error: false };
+        let answers = silt_agents::tool::shown(entry).unwrap().outcome.unwrap().answers;
+        let answers: Vec<(&str, &str)> = answers.iter().map(|each| (each.question.as_str(), each.answer.as_str())).collect();
+        assert_eq!(answers, [("What should it count?", "Chunks, every 64 KiB"), ("Where should it show?", "Footer")]);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 
 use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
-use crate::modes::{Setting, modes_in, settings_v2};
+use crate::modes::{Setting, commands_v2, modes_in, settings_v2};
 use crate::prompt::{Accepts, blocks_v2};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
@@ -117,18 +117,18 @@ impl ConnectTo<Agent> for V2 {
                         // A session made on another machine can't be resumed
                         // here; the daemon primes a new one instead.
                         .ok()
-                        .map(|response| (SessionId::new(id), response.config_options)),
+                        .map(|response| (SessionId::new(id), response.config_options, response.available_commands)),
                     None => None,
                 };
                 let loaded = resumed.is_some();
-                let (session, options) = match resumed {
+                let (session, options, offered) = match resumed {
                     Some(resumed) => resumed,
                     None => {
                         let created = connection
                             .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
                             .block_task()
                             .await?;
-                        (created.session_id, created.config_options)
+                        (created.session_id, created.config_options, created.available_commands)
                     }
                 };
                 let settings = settings_v2(options);
@@ -142,6 +142,8 @@ impl ConnectTo<Agent> for V2 {
                     accepts,
                     reports_work: true,
                 });
+                // Later changes come as updates.
+                let _ = events.send(Event::Commands(commands_v2(offered)));
                 while let Some(command) = commands.recv().await {
                     match command {
                         Command::Prompt { text, attachments } => {
@@ -355,6 +357,7 @@ impl Reading {
             SessionUpdate::SubagentUpdate(update) => self.subagent(update),
             SessionUpdate::SessionMessage(message) => self.message(message),
             SessionUpdate::ConfigOptionUpdate(update) => self.settings(settings_v2(update.config_options)),
+            SessionUpdate::AvailableCommandsUpdate(update) => vec![Event::Commands(commands_v2(update.available_commands))],
             SessionUpdate::UsageUpdate(usage) => vec![Event::Context { used: usage.used, size: usage.size }],
             update => self.said(update),
         }
@@ -733,6 +736,25 @@ mod tests {
 
     fn read(reading: &mut Reading, session: &SessionId, json: Value) -> Vec<Event> {
         reading.read(session, update(json))
+    }
+
+    /// As Claude's adapter (0.99) tags its commands over v2: each a
+    /// `command`, its input `text`.
+    #[test]
+    fn the_commands_an_agent_offers_are_named_with_what_they_take() {
+        let (mut reading, s) = reading();
+        let said = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "available_commands_update", "availableCommands": [
+                {"type": "command", "name": "engineering:code-review", "description": "Review code changes", "input": {"type": "text", "hint": "<PR URL, diff, or file path>"}},
+                {"type": "command", "name": "goal", "description": "Set a goal"}
+            ]}),
+        );
+        let [Event::Commands(commands)] = &said[..] else { panic!("the commands: {said:?}") };
+        let said: Vec<(&str, Option<&str>)> =
+            commands.iter().map(|command| (command.name.as_str(), command.hint.as_deref())).collect();
+        assert_eq!(said, [("engineering:code-review", Some("<PR URL, diff, or file path>")), ("goal", None)]);
     }
 
     /// Claude's own words for a background command, then its going on by

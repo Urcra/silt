@@ -94,12 +94,9 @@ impl Core {
         }
         let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
-        let identity = repo.remote_url("origin")?.map(|url| silt_git::normalize_remote(&url)).unwrap_or_default();
+        let identity = repo.project()?;
         if identity != record.repo {
-            return Err(CoreError::Invalid(format!(
-                "this clone's origin is {identity:?} but the thread belongs to {:?}",
-                record.repo
-            )));
+            return Err(CoreError::Invalid(format!("this clone is of {identity:?} but the thread belongs to {:?}", record.repo)));
         }
         if here && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
             return Err(CoreError::Invalid("--here needs a clean working tree".into()));
