@@ -666,6 +666,34 @@ fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
     api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
 }
 
+/// A plan turn that ends while a command it left runs on isn't a plan yet:
+/// the agent goes on once the command ends, and its plan is the one to
+/// approve then, not before.
+#[test]
+fn a_plan_waits_for_what_runs_beside_the_agent_before_it_asks_for_approval() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp_in(
+        &env,
+        &api,
+        &serde_json::json!({"clone": env.repo, "agent": "v2", "prompt": "plan Background", "preset": "plan"}),
+    );
+    let mut asked_too_soon = false;
+    let planned = eventually(|| {
+        let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+        for asked in live["agent"]["permissions"].as_array().into_iter().flatten() {
+            let answer = serde_json::json!({"id": asked["id"], "option": "reject"});
+            api.call("POST", &format!("/api/threads/{thread}/agent/answer"), Some(answer));
+        }
+        let went_on = history_entries(&api, &thread).iter().any(|entry| entry["text"] == "The background command printed BG.");
+        let state = live["agent"]["state"].as_str().unwrap_or_default().to_owned();
+        asked_too_soon |= state == "awaiting_input" && !went_on;
+        went_on && state == "awaiting_input"
+    });
+    assert!(!asked_too_soon, "asked to approve a plan while the command still ran");
+    assert!(planned, "the plan waits for approval once the agent went on and stopped");
+}
+
 /// Over v2 a subagent runs in a session of its own and a command left in
 /// the background ends after the turn: both are tasks of the call that
 /// started them, the subagent's words are its own, and the turn the

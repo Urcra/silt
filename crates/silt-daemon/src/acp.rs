@@ -99,6 +99,9 @@ pub(crate) struct AcpRun {
     /// Commands left running in the background: the call that started
     /// each, by the agent's id for it.
     background: HashMap<String, String>,
+    /// The calls whose subagent or background command still runs beside
+    /// the agent.
+    tasks_running: HashSet<String>,
     /// The person stopped the agent and hasn't prompted it since: what it
     /// left running in the background doesn't get to start it again.
     stopped: bool,
@@ -514,6 +517,7 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
+                tasks_running: HashSet::new(),
                 stopped: false,
             },
         );
@@ -607,8 +611,12 @@ impl Core {
         }
         if plan {
             plan_first(run);
-        } else if let Some(mode) = run.back_to.take() {
-            send(run, Command::SetMode(mode));
+        } else {
+            // A plan turn left waiting on its tasks is the person's to move on from.
+            run.planning = false;
+            if let Some(mode) = run.back_to.take() {
+                send(run, Command::SetMode(mode));
+            }
         }
         let me = self.own_user(thread);
         self.send_prompt(thread, &me, text, attachments).await?;
@@ -1114,7 +1122,10 @@ impl Core {
                 self.guide_written(thread, &reason).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.own_turn = false;
-                let planned = std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
+                // A turn that ends to wait for its subagents or commands
+                // goes on by itself once they end, plan and all (ADR 0051).
+                let waiting = reason == silt_acp::StopReason::EndTurn && !run.tasks_running.is_empty();
+                let planned = !waiting && std::mem::take(&mut run.planning) && reason == silt_acp::StopReason::EndTurn;
                 run.state = if planned && run.still_planning() {
                     AgentState::AwaitingInput
                 } else {
@@ -1267,6 +1278,11 @@ impl Core {
                 }
                 if let Some(news) = task {
                     let run = self.acp.get_mut(&thread).expect("caller checked");
+                    if news.status == "running" {
+                        run.tasks_running.insert(id.clone());
+                    } else {
+                        run.tasks_running.remove(&id);
+                    }
                     if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
                         if news.status == "running" {
                             run.background.insert(task.clone(), id.clone());
