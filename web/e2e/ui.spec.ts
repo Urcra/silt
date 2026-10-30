@@ -68,7 +68,7 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await page.getByLabel('compare').selectOption({ label: 'This thread' })
   await changes.getByRole('button', { name: 'comment on src/main.rs line 2' }).click()
   await page.getByLabel('code comment').fill('needs a doc comment')
-  await page.getByRole('button', { name: 'Comment', exact: true }).click()
+  await page.getByRole('button', { name: 'Add single comment' }).click()
   await expect(changes.getByText(/: needs a doc comment/)).toBeVisible()
   // The inspector lists comments on code under Details.
   await page.getByRole('tab', { name: 'Details' }).click()

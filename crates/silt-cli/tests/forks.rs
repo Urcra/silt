@@ -271,6 +271,37 @@ fn comments_follow_their_lines_and_sync_between_users() {
 }
 
 #[test]
+fn deleted_lines_take_comments_and_a_review_marks_what_it_sent() {
+    let Team { alice, .. } = &team();
+    alice.silt(&["claude"]);
+    let thread = thread_of(alice);
+    let main = alice.repo.join("src/main.rs");
+    let kept: String = read(&main).lines().skip(1).map(|line| format!("{line}\n")).collect();
+    fs::write(&main, kept).expect("delete the first line");
+    alice.next_turn();
+
+    let at = |base: &str| alice.stdout(&["comments", &thread, "--base", base]);
+    let added = alice.stdout(&["comment", &thread, "--file", "src/main.rs", "--lines", "1", "--base", "start", "why drop main?"]);
+    assert!(added.contains("outdated"), "{added}");
+    let id = added.split_whitespace().nth(2).expect("comment id").to_owned();
+    assert!(eventually(|| at("start").contains("src/main.rs:1 (deleted: lines 1 at the base)")), "{}", at("start"));
+    let against_main = alice.run(&["comment", &thread, "--file", "src/main.rs", "--lines", "1", "--base", "main", "no"]);
+    assert!(!against_main.status.success());
+    assert!(String::from_utf8_lossy(&against_main.stderr).contains("isn't a version of the thread"));
+
+    let new = alice.stdout(&["comment", &thread, "--file", "src/main.rs", "--lines", "1", "name it better"]);
+    let other = new.split_whitespace().nth(2).expect("comment id").to_owned();
+    let sent = alice.web("POST", &format!("/api/threads/{thread}/comments/sent"), Some(serde_json::json!({ "comments": [id] })));
+    let sent_of = |comment: &str| {
+        sent.as_array().expect("the comments").iter().find(|found| found["id"] == comment).expect("listed")["sent"].clone()
+    };
+    assert_eq!(sent_of(&id), true);
+    assert_eq!(sent_of(&other), false);
+    let listed = alice.stdout(&["comments", &thread]);
+    assert!(listed.lines().any(|line| line.starts_with(&id) && line.contains("[sent to the agent]")), "{listed}");
+}
+
+#[test]
 fn a_private_fork_is_shared_only_through_its_merge_request() {
     let Team { alice, bob, .. } = &team();
     alice.silt(&["claude"]);

@@ -977,25 +977,44 @@ test('an image pasted for an agent known to take none is refused at once', async
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 })
 
-test("comments on the agent's last turn go back to it as a prompt", async ({ page }) => {
+test("a review of the agent's changes goes back to it as one prompt", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('add a function')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
 
   const changes = page.getByRole('region', { name: 'changes' })
   await page.getByLabel('compare').selectOption({ label: 'Last turn' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
+  // Comments on a deleted line and on an added one wait in the review.
+  await changes.getByRole('button', { name: /^comment on src\/main\.rs deleted line \d+$/ }).first().click()
+  await page.getByLabel('code comment').fill('keep this one')
+  await page.getByRole('button', { name: 'Start a review' }).click()
   await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
   await page.getByLabel('code comment').fill('give it a better name')
-  await page.getByRole('button', { name: 'Comment', exact: true }).click()
-  await expect(changes.getByText('alice: give it a better name')).toBeVisible()
+  await page.getByRole('button', { name: 'Add review comment' }).click()
+  await expect(changes.getByRole('group', { name: 'pending comment' })).toHaveCount(2)
 
-  await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()
-  await expect(page.getByText('Sent to the agent')).toBeVisible()
+  const review = changes.getByRole('region', { name: 'review' })
+  await expect(review).toContainText('2 pending')
+  await review.getByRole('button', { name: 'Finish review' }).click()
+  await review.getByLabel('review note').fill('Nearly there.')
+  await review.getByRole('button', { name: /^Send 2 comments to / }).click()
+  await expect(review).toBeHidden()
   await expect(
-    page.getByTestId('entry').filter({ hasText: /Done: Please address these review comments:\s*src\/main\.rs:\d+ \(alice\): give it a better name/ }),
+    page.getByTestId('entry').filter({
+      hasText: /Done: Nearly there\.\s*Please address these review comments:\s*src\/main\.rs:1, lines the change deleted: keep this one/,
+    }),
   ).toBeVisible()
+
+  // Both are comments now, sent; the deleted line's shows beside it against the thread's start.
+  await page.getByLabel('compare').selectOption({ label: 'This thread' })
+  await expect(changes.getByText('alice: keep this one')).toBeVisible()
+  await expect(changes.getByText('alice: give it a better name')).toBeVisible()
+  await expect(changes.getByText('Sent', { exact: true })).toHaveCount(2)
 
   await page.getByLabel('compare').selectOption({ label: 'Against main' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')

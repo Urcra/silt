@@ -590,6 +590,7 @@ pub(crate) async fn comments(
                 time_ms: comment.time_ms,
                 text: comment.text,
                 resolved: comment.resolved,
+                sent: comment.sent,
                 location: match comment.target {
                     CommentTarget::Message { delta } => {
                         history.iter().find(|(from, _)| *from == delta).map_or(CommentLocation::Unknown, |(_, entry)| {

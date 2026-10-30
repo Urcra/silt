@@ -28,6 +28,11 @@ export function CommentThread({
     >
       <p>
         {comment.by}: {comment.text} {comment.resolved && '(resolved)'}
+        {comment.sent && !comment.resolved && (
+          <span title="It went to the agent in a review; resolve it once it's addressed" className="ml-1.5 rounded-sm border border-line px-1 font-mono text-2xs text-fg-2">
+            Sent
+          </span>
+        )}
       </p>
       {comment.replies.map((reply) => (
         <p key={reply.id} className="mt-0.5 border-l-2 border-line pl-2 text-fg-2">

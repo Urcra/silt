@@ -1,13 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useRouterState } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { api, short, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
+import { api, short, type CommentView, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
 import { useTopic } from '../bus'
 import { parseFiles } from '../diffParse'
 import { WIDE, useMedia } from '../media'
 import { useNow } from '../now'
 import { keys, message } from '../query'
-import { linesOf, reviewPrompt } from '../review'
+import { itemOf, linesOf, reviewPrompt } from '../review'
 import { ago } from '../time'
 import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Skeleton, Tabs, Textarea, buttonClass, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
@@ -490,7 +490,8 @@ export function MergeRequest({ id }: { id: string }) {
   // A tick shows at once, before the daemon answers.
   const seenNow = (file: MrFile) => ticked[file.path] ?? file.seen
   const seenCount = files.filter(seenNow).length
-  const counts = new Map(parseFiles(diff).map((file) => [file.path, file]))
+  const parsed = parseFiles(diff)
+  const counts = new Map(parsed.map((file) => [file.path, file]))
   const total = [...counts.values()].reduce((sum, file) => ({ added: sum.added + file.added, removed: sum.removed + file.removed }), { added: 0, removed: 0 })
   const decision = {
     id,
@@ -507,11 +508,19 @@ export function MergeRequest({ id }: { id: string }) {
   }
   const reviewComments = (comments.data ?? []).filter((comment) => linesOf(comment) !== null)
   const reloadComments = () => queries.invalidateQueries({ queryKey: keys.comments(mr.fork) })
-  const toFork = (text: string) =>
-    api.prompt(mr.fork, text).then(
-      (how) => toast(how === 'queued' ? "Queued for the fork's agent" : "Sent to the fork's agent", 'ok'),
-      (failure: unknown) => toast(message(failure), 'danger'),
-    )
+  const toFork = (sent: CommentView[]) =>
+    api
+      .prompt(mr.fork, reviewPrompt(sent.flatMap((comment) => itemOf(comment, parsed) ?? [])))
+      .then(async (how) => {
+        await api.commentsSent(
+          mr.fork,
+          sent.map((comment) => comment.id),
+        )
+        await reloadComments()
+        toast(how === 'queued' ? "Queued for the fork's agent" : "Sent to the fork's agent", 'ok')
+      })
+      .catch((failure: unknown) => toast(message(failure), 'danger'))
+  const unsent = reviewComments.filter((comment) => !comment.resolved && !comment.sent)
   const markSeen = (path: string, seen: boolean) => {
     setTicked((before) => ({ ...before, [path]: seen }))
     void act(api.markSeen(id, path, seen))
@@ -646,7 +655,7 @@ export function MergeRequest({ id }: { id: string }) {
             onComment: async (at, text, send) => {
               const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
               await reloadComments()
-              if (send) await toFork(reviewPrompt([made]))
+              if (send) await toFork([made])
             },
           }}
           target={mr.target}
@@ -711,7 +720,7 @@ export function MergeRequest({ id }: { id: string }) {
                 onComment: async (at, text, send) => {
                   const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
                   await reloadComments()
-                  if (send) await toFork(reviewPrompt([made]))
+                  if (send) await toFork([made])
                 },
               }}
             />
@@ -739,8 +748,8 @@ export function MergeRequest({ id }: { id: string }) {
                 <CommentThread thread={mr.fork} comment={comment} onChanged={reloadComments} />
                 {!comment.resolved && (
                   <span className="flex gap-1.5">
-                    <Button size="sm" icon="handoff" onClick={() => void toFork(reviewPrompt([comment]))}>
-                      Send to the fork’s agent
+                    <Button size="sm" icon="handoff" onClick={() => void toFork([comment])}>
+                      {comment.sent ? 'Send again' : 'Send to the fork’s agent'}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => void api.resolveComment(mr.fork, comment.id).then(reloadComments)}>
                       Resolve
@@ -750,12 +759,12 @@ export function MergeRequest({ id }: { id: string }) {
               </div>
             )
           })}
-          {reviewComments.some((comment) => !comment.resolved) && (
+          {unsent.length > 0 && (
             <Button
               variant="primary"
               className="self-start"
               icon="handoff"
-              onClick={() => void toFork(reviewPrompt(reviewComments.filter((comment) => !comment.resolved)))}
+              onClick={() => void toFork(unsent)}
             >
               Send all to the fork’s agent
             </Button>

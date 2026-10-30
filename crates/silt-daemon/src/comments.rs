@@ -3,15 +3,16 @@
 
 use std::path::Path;
 
-use silt_crdt::{Anchor, Bias};
+use silt_crdt::{Anchor, Bias, TextDoc, VersionVector};
 use silt_git::Repo;
-use silt_log::{CommentOp, CommentTarget, Family, Op};
+use silt_log::{CommentOp, CommentTarget, Op};
 use silt_store::ThreadRecord;
 use silt_types::{FamilyId, ThreadId};
 
 use crate::core::{Core, CoreError, RepoBases};
 use crate::forks::short_mr;
-use crate::protocol::{CommentLocation, CommentOn, CommentView, ReplyView};
+use crate::protocol::{CommentLocation, CommentOn, CommentView, LineSpan, ReplyView};
+use crate::views::{diff_base, git_base};
 
 impl Core {
     /// Projects a family known only from the server, reading its git blobs
@@ -67,7 +68,9 @@ impl Core {
                     .ok_or_else(|| CoreError::Invalid(format!("the thread has {} history entries", entries.len())))?;
                 CommentTarget::Message { delta: *delta }
             }
-            CommentOn::Lines { path, start, end } => self.code_target(family_id, thread, &path, start, end)?,
+            CommentOn::Lines { path, start, end, base } => {
+                self.code_target(family_id, thread, &path, start, end, base.as_deref())?
+            }
         };
         let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
@@ -75,14 +78,14 @@ impl Core {
         };
         let head = self.families[&family_id].thread_head(thread);
         let delta = self.append_op(family_id, thread, head, Op::Comment(CommentOp::Added { target, text, by })).await?;
-        self.comments(selector)?
+        self.comments(selector, None)?
             .into_iter()
             .find(|comment| comment.id == short_mr(delta.span.first()))
             .ok_or_else(|| CoreError::Invalid("the comment was not recorded".into()))
     }
 
     /// Anchors for lines `start..=end` (1-based) of `path` as the thread
-    /// sees it now.
+    /// sees it now, or as it was at the diff base `base`.
     fn code_target(
         &mut self,
         family_id: FamilyId,
@@ -90,23 +93,54 @@ impl Core {
         path: &str,
         start: usize,
         end: usize,
+        base: Option<&str>,
     ) -> Result<CommentTarget, CoreError> {
         let repo = self.family_repo(family_id)?;
         let family = self.families.get_mut(&family_id).expect("projected above");
-        let inode = family
-            .thread_view(thread)
-            .paths()
-            .get(path.trim_start_matches("./"))
-            .copied()
-            .ok_or_else(|| CoreError::Invalid(format!("{path} is not a file of this thread")))?;
+        let path = path.trim_start_matches("./");
+        let (version, inode) = match base {
+            None => {
+                let version = family.graph().version_vector(&family.thread_head(thread));
+                (version, family.thread_view(thread).paths().get(path).copied())
+            }
+            Some(base) if git_base(base).is_some() => {
+                return Err(CoreError::Invalid(format!(
+                    "lines of {base} can't take comments, as it isn't a version of the thread; comment on the thread's own lines"
+                )));
+            }
+            Some(base) => {
+                let version = diff_base(family, thread, Some(base))?;
+                let inode = family.tree().at(|id| version.contains(id)).paths().get(path).copied();
+                (version, inode)
+            }
+        };
+        let inode = inode.ok_or_else(|| CoreError::Invalid(format!("{path} is not a file of this thread")))?;
         family.text_doc_or_base(inode, &mut RepoBases(&repo))?;
-        let head = family.thread_head(thread);
         let doc = family.text_doc(inode).expect("made a text document above");
-        let text = doc.text_at(family.graph(), &head);
+        let text = doc.text_at_vv(&version);
         let (from, to) = line_span(&text, start, end)
             .ok_or_else(|| CoreError::Invalid(format!("{path} has {} lines", text.lines().count())))?;
-        let anchor = |pos, bias| -> Result<Anchor, CoreError> { Ok(doc.anchor_at(family.graph(), &head, pos, bias)?) };
+        let anchor = |pos, bias| -> Result<Anchor, CoreError> { Ok(doc.anchor_at_vv(&version, pos, bias)?) };
         Ok(CommentTarget::Code { inode, start: anchor(from, Bias::Right)?, end: anchor(to, Bias::Left)? })
+    }
+
+    /// Records that `comments` went to the thread's agent (ADR 0055).
+    pub(crate) async fn comments_sent(
+        &mut self,
+        selector: &str,
+        comments: &[String],
+        cwd: &Path,
+    ) -> Result<Vec<CommentView>, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let family_id = self.threads[&thread].family;
+        self.ensure_projected(family_id, cwd).await?;
+        let ids = comments.iter().map(|comment| self.comment_id(family_id, thread, comment)).collect::<Result<Vec<_>, _>>()?;
+        if ids.is_empty() {
+            return Err(CoreError::Invalid("name the comments that were sent".into()));
+        }
+        let head = self.families[&family_id].thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Comment(CommentOp::Sent { comments: ids })).await?;
+        self.comments(selector, None)
     }
 
     pub(crate) async fn resolve_comment(&mut self, selector: &str, comment: &str, cwd: &Path) -> Result<CommentView, CoreError> {
@@ -156,21 +190,29 @@ impl Core {
     }
 
     fn comment_view(&mut self, selector: &str, id: silt_types::DeltaId) -> Result<CommentView, CoreError> {
-        self.comments(selector)?
+        self.comments(selector, None)?
             .into_iter()
             .find(|found| found.id == short_mr(id))
             .ok_or_else(|| CoreError::Invalid("the comment disappeared".into()))
     }
 
-    pub(crate) async fn list_comments(&mut self, selector: &str, cwd: &Path) -> Result<Vec<CommentView>, CoreError> {
+    /// The thread's comments, with where code comments are at the diff base
+    /// `base` too.
+    pub(crate) async fn list_comments(
+        &mut self,
+        selector: &str,
+        base: Option<&str>,
+        cwd: &Path,
+    ) -> Result<Vec<CommentView>, CoreError> {
         let thread = self.find_thread(selector)?;
         // Without a clone there's nothing to place code comments in yet.
         let _ = self.ensure_projected(self.threads[&thread].family, cwd).await;
-        self.comments(selector)
+        self.comments(selector, base)
     }
 
-    /// The thread's comments, placed in the thread as it is now.
-    pub(crate) fn comments(&mut self, selector: &str) -> Result<Vec<CommentView>, CoreError> {
+    /// The thread's comments, placed in the thread as it is now, and at the
+    /// diff base `base` where it names a version of the thread.
+    pub(crate) fn comments(&mut self, selector: &str, base: Option<&str>) -> Result<Vec<CommentView>, CoreError> {
         let thread = self.find_thread(selector)?;
         let family_id = self.threads[&thread].family;
         if !self.families.contains_key(&family_id) {
@@ -181,6 +223,9 @@ impl Core {
         let entries = self.history_entries(thread);
         let view = family.thread_view(thread);
         let paths = view.paths();
+        let head = family.graph().version_vector(&family.thread_head(thread));
+        let before = base.filter(|base| git_base(base).is_none()).and_then(|base| diff_base(family, thread, Some(base)).ok());
+        let base_paths = before.as_ref().map(|version| family.tree().at(|id| version.contains(id)).paths());
         Ok(family
             .comments(thread)
             .into_iter()
@@ -192,10 +237,20 @@ impl Core {
                         })
                     }
                     CommentTarget::Code { inode, start, end } => {
-                        let path = paths.iter().find(|(_, found)| **found == inode).map(|(path, _)| path.clone());
-                        match (path, place(family, thread, inode, &start, &end)) {
+                        let named = |paths: &std::collections::BTreeMap<String, silt_crdt::InodeId>| {
+                            paths.iter().find(|(_, found)| **found == inode).map(|(path, _)| path.clone())
+                        };
+                        let path = named(&paths).or_else(|| base_paths.as_ref().and_then(named));
+                        let doc = family.text_doc(inode);
+                        let now = doc.and_then(|doc| place(doc, &head, &start, &end));
+                        let then = doc
+                            .zip(before.as_ref())
+                            .and_then(|(doc, version)| place(doc, version, &start, &end))
+                            .filter(|(.., outdated)| !outdated)
+                            .map(|(start, end, _)| LineSpan { start, end });
+                        match (path, now) {
                             (Some(path), Some((start_line, end_line, outdated))) => {
-                                CommentLocation::Lines { path, start: start_line, end: end_line, outdated }
+                                CommentLocation::Lines { path, start: start_line, end: end_line, outdated, before: then }
                             }
                             _ => CommentLocation::Unknown,
                         }
@@ -207,6 +262,7 @@ impl Core {
                     time_ms: comment.time_ms,
                     text: comment.text,
                     resolved: comment.resolved,
+                    sent: comment.sent,
                     location,
                     replies: comment
                         .replies
@@ -235,20 +291,12 @@ impl Core {
     }
 }
 
-/// Where anchored lines are at the thread's head: first and last line
-/// (1-based) and whether the commented text is gone.
-fn place(
-    family: &Family,
-    thread: ThreadId,
-    inode: silt_crdt::InodeId,
-    start: &Anchor,
-    end: &Anchor,
-) -> Option<(usize, usize, bool)> {
-    let doc = family.text_doc(inode)?;
-    let head = family.thread_head(thread);
-    let text = doc.text_at(family.graph(), &head);
-    let start = doc.resolve_at(family.graph(), &head, start).ok()?;
-    let end = doc.resolve_at(family.graph(), &head, end).ok()?;
+/// Where anchored lines are at `version`: first and last line (1-based)
+/// and whether the commented text is gone.
+fn place(doc: &TextDoc, version: &VersionVector, start: &Anchor, end: &Anchor) -> Option<(usize, usize, bool)> {
+    let text = doc.text_at_vv(version);
+    let start = doc.resolve_at_vv(version, start).ok()?;
+    let end = doc.resolve_at_vv(version, end).ok()?;
     let line_of = |pos: usize| text.chars().take(pos).filter(|ch| *ch == '\n').count() + 1;
     let first = line_of(start.pos);
     let last = line_of(end.pos.max(start.pos)).max(first);
