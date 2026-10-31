@@ -23,6 +23,7 @@ import { Mock } from './Mock'
 import { Page } from './Page'
 import { CloneHere } from './Projects'
 import { ThreadMark } from './ThreadMark'
+import { addSending } from '../sending'
 
 interface Draft {
   text: string
@@ -534,6 +535,8 @@ export function NewThread() {
       )
       .then(
         (thread) => {
+          // The agent takes the first prompt once it's up, seconds later; the thread shows it as sent meanwhile.
+          if (!background && prompt.trim()) addSending(thread, prompt, attached.map((file) => file.name), 0)
           clear()
           void queries.invalidateQueries({ queryKey: keys.threads })
           if (!background) {
@@ -636,7 +639,7 @@ export function NewThread() {
             actions={
               <>
                 <span className="flex items-center">
-                  <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} title={chosenWhere === 'cloud' ? 'Start in the cloud (⏎)' : 'Start and open it (⏎)'} />
+                  <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} busy={starting} title={chosenWhere === 'cloud' ? 'Start in the cloud (⏎)' : 'Start and open it (⏎)'} />
                   <Menu
                     label="More ways to start"
                     trigger={<Icon name="chevronDown" className="h-3.5 w-3.5" />}

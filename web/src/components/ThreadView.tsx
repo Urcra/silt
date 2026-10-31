@@ -14,6 +14,7 @@ import { useMedia } from '../media'
 import { MainScroll } from '../scroll'
 import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
+import { type Sending, addSending, arrived, dropSending, useSending } from '../sending'
 import { formatKeys, useActions } from '../shortcuts'
 import { threadTone, threadWhere } from '../threadLook'
 import { taskNotification } from '../taskNotification'
@@ -240,6 +241,16 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
           <CommentBox onCancel={() => setCommenting(false)} onSave={(text) => onComment(entry.index, text).then(() => setCommenting(false))} />
         </div>
       )}
+    </div>
+  )
+}
+
+/** A prompt the person sent, shown as theirs until the history has it. */
+function SendingPrompt({ item }: { item: Sending }) {
+  return (
+    <div data-testid="sending" className="flex flex-col items-end gap-1" aria-busy="true">
+      <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap opacity-70">{item.text}</p>
+      {item.files.length > 0 && <span className="text-2xs text-fg-2">{item.files.join(', ')}</span>}
     </div>
   )
 }
@@ -1436,6 +1447,22 @@ function ThreadBody({
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
   const clearDraft = useCallback(() => setDraft(''), [])
   useClearSentDraft(lastPrompt, draft, clearDraft)
+  const sending = useSending(thread)
+  const landedPrompts = useMemo(() => arrived(sending, entries), [sending, entries])
+  const waitingPrompts = sending.filter((item) => !landedPrompts.includes(item.id))
+  useEffect(() => {
+    if (landedPrompts.length > 0) dropSending(thread, landedPrompts)
+  }, [thread, landedPrompts])
+  // An agent that fails before it takes a prompt gives the prompt back to the draft rather than leave it shown as sent.
+  const agentState = agent?.state
+  const stateBefore = useRef(agentState)
+  useEffect(() => {
+    const before = stateBefore.current
+    stateBefore.current = agentState
+    if (agentState !== 'error' || before === 'error' || waitingPrompts.length === 0) return
+    dropSending(thread, waitingPrompts.map((item) => item.id))
+    setDraft((current) => (current.trim() ? current : waitingPrompts.map((item) => item.text).join('\n\n')))
+  }, [agentState, thread, waitingPrompts])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
@@ -1669,6 +1696,9 @@ function ThreadBody({
           })}
         </div>
         <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
+          {waitingPrompts.map((item) => (
+            <SendingPrompt key={item.id} item={item} />
+          ))}
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
@@ -1693,6 +1723,7 @@ function ThreadBody({
               following.current = true
               toEnd()
             }}
+            onSending={(text, files) => addSending(thread, text, files, total)}
             people={people}
           />
         </div>
