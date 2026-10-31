@@ -20,7 +20,7 @@ import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
 import { type Piece, type Row, type ToolStep, duration, foldInherited, headline, kindOf, originOf, piecesOf, proposedPlan, rowsOf, runItems, shortCommand, tasked, thoughtTotal, tokens, toolOf, toolSummary } from '../transcript'
-import { SessionLive, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
+import { SessionLive, type Stoppable, StoppableTasks, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
 import {
   Avatar,
@@ -1458,6 +1458,12 @@ function ThreadBody({
   const now = useNow()
   const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
   const live = mayRun(Math.max(summary?.last_ms ?? 0, lastSaid), agent !== null && agent !== undefined && agent.state !== 'stopped' && agent.state !== 'error', now)
+  // The background commands Stop ends: only while the agent that started them runs here.
+  const stoppableCalls = agent?.stoppable
+  const stoppable = useMemo<Stoppable>(
+    () => ({ calls: new Set(stoppableCalls ?? []), stop: (call) => void api.stopTask(thread, call).catch((failure: unknown) => toast(message(failure), 'danger')) }),
+    [stoppableCalls, thread],
+  )
   // A running task's line names it as its card does.
   const calls = useMemo(() => new Map(entries.flatMap((entry) => (entry.kind === 'tool_call' && entry.tool ? [[entry.tool.id, entry] as const] : []))), [entries])
   const taskTitle = (task: TaskState) => {
@@ -1544,6 +1550,7 @@ function ThreadBody({
 
   return (
     <TasksContext.Provider value={tasks}>
+    <StoppableTasks.Provider value={stoppable}>
     <SessionLive.Provider value={live}>
     <TranscriptDetail.Provider value={detail}>
     <TranscriptGrouping.Provider value={grouping}>
@@ -1705,6 +1712,7 @@ function ThreadBody({
     </TranscriptGrouping.Provider>
     </TranscriptDetail.Provider>
     </SessionLive.Provider>
+    </StoppableTasks.Provider>
     </TasksContext.Provider>
   )
 }

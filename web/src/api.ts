@@ -195,6 +195,8 @@ export const api = {
   setSetting: (id: string, setting: string, value: string) =>
     request<string>('POST', `${thread(id)}/agent/setting`, { id: setting, value }),
   cancelTurn: (id: string) => request<string>('POST', `${thread(id)}/agent/cancel`),
+  /** Ends a command the agent left running in the background, by the call that started it. */
+  stopTask: (id: string, call: string) => request<string>('POST', `${thread(id)}/agent/tasks/${encodeURIComponent(call)}/stop`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
   /** Answers a question the agent waits on, each field by its chosen values; none declines it. */

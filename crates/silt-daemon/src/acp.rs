@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use silt_acp::registry::{self, AgentInfo};
 use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Question, Start, Update};
 use silt_agents::acp;
-use silt_log::{Author, ConvOp, Op};
+use silt_log::{Author, ConvOp, Op, SessionFile};
 use silt_proto::AgentState;
 use silt_store::CheckoutId;
 use silt_types::ThreadId;
@@ -100,12 +100,27 @@ pub(crate) struct AcpRun {
     /// which is likely what the agent goes on about when it goes on by
     /// itself.
     woke_by: Vec<String>,
-    /// Commands left running in the background: the call that started
-    /// each, by the agent's id for it.
-    background: HashMap<String, String>,
+    /// Commands left running in the background, by the agent's id for each.
+    background: HashMap<String, Background>,
+    /// Background commands the person stopped, by the call that started
+    /// each: the agent's later news of their end is no news.
+    stopped_tasks: HashSet<String>,
+    /// A command the person stopped has ended since the agent last went on,
+    /// by what it ran: the agent going on now goes on about that, which
+    /// they've seen to.
+    hush: Option<String>,
     /// The person stopped the agent and hasn't prompted it since: what it
     /// left running in the background doesn't get to start it again.
     stopped: bool,
+}
+
+/// A command the agent left running in the background.
+struct Background {
+    /// The call that started it.
+    call: String,
+    started: Instant,
+    /// What it runs, as the agent gave it.
+    command: String,
 }
 
 /// How long an agent that went on by itself, and won't say when it stops,
@@ -536,6 +551,8 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
+                stopped_tasks: HashSet::new(),
+                hush: None,
                 stopped: false,
             },
         );
@@ -727,6 +744,7 @@ impl Core {
         self.own_turn_ended(thread).await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.stopped = false;
+        run.hush = None;
         run.woke_by.clear();
         let attached = self.record_attachments(thread, &attachments).await?;
         let images: Vec<(String, String)> = attachments
@@ -974,13 +992,102 @@ impl Core {
     /// daemon's last process, so it stopped.
     pub(crate) async fn load_agent_runs(&mut self) -> Result<(), CoreError> {
         self.agent_runs = self.store.agent_runs().await?;
+        let mut gone = Vec::new();
         for (thread, run) in &mut self.agent_runs {
             if AgentState::parse(&run.state).is_some_and(AgentState::running) {
                 run.state = AgentState::Stopped.as_str().to_owned();
                 self.store.put_agent_run(*thread, run).await?;
+                gone.push(*thread);
+            }
+        }
+        // Its subagents and background commands went with it, whether the
+        // daemon stopped it or the machine went down.
+        for thread in gone {
+            if let Err(error) = self.stop_left_tasks(thread, None).await {
+                warn!(%error, %thread, "could not record that the agent's tasks stopped");
             }
         }
         Ok(())
+    }
+
+    /// Records that the work the thread's agent left running stopped, as its
+    /// agent did: in the session `only`, else in every session it ran here.
+    async fn stop_left_tasks(&mut self, thread: ThreadId, only: Option<&str>) -> Result<(), CoreError> {
+        let Some(family) = self.threads.get(&thread).map(|record| record.family) else {
+            return Ok(());
+        };
+        let mut sessions: Vec<(String, Vec<&str>)> = Vec::new();
+        for delta in self.local_log(family).iter().filter(|delta| delta.thread == thread) {
+            let Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line }) = &delta.op else {
+                continue;
+            };
+            if session.agent != acp::AGENT || only.is_some_and(|only| only != session.id) {
+                continue;
+            }
+            match sessions.iter_mut().find(|(id, _)| *id == session.id) {
+                Some((_, lines)) => lines.push(line),
+                None => sessions.push((session.id.clone(), vec![line.as_str()])),
+            }
+        }
+        let stops: Vec<(String, Vec<String>)> = sessions
+            .into_iter()
+            .map(|(id, lines)| (id, acp::left_running(lines)))
+            .filter(|(_, stops)| !stops.is_empty())
+            .collect();
+        for (session, lines) in stops {
+            for line in lines {
+                self.record_line(&session, "main", line, None).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Ends every agent running here, with what they left running, as the
+    /// daemon exits: nothing would be left to hear them end.
+    pub(crate) async fn end_agents(&mut self) {
+        let threads: Vec<ThreadId> = self.acp.iter().filter(|(_, run)| run.handle.is_some()).map(|(thread, _)| *thread).collect();
+        for thread in threads {
+            let run = &self.acp[&thread];
+            if let Some(handle) = run.handle.clone() {
+                let _ = tokio::task::spawn_blocking(move || handle.end_now()).await;
+            }
+            if let Some(session) = run.session.clone()
+                && let Err(error) = self.stop_left_tasks(thread, Some(&session)).await
+            {
+                warn!(%error, %thread, "could not record that the agent's tasks stopped");
+            }
+        }
+    }
+
+    /// Ends a command the thread's agent left running in the background,
+    /// started by the call `call`: ACP has no way to ask the agent to, so
+    /// Silt ends its processes, and the agent hears that it ended.
+    pub(crate) async fn stop_task(&mut self, selector: &str, call: &str) -> Result<&'static str, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let run = self.running(thread)?;
+        let not_running = || CoreError::Invalid("that command isn't running in the background".into());
+        let (task, kept) = run.background.iter().find(|(_, kept)| kept.call == call).ok_or_else(not_running)?;
+        let (task, command) = (task.clone(), kept.command.clone());
+        if command.trim().is_empty() {
+            return Err(CoreError::Invalid("the agent didn't say what the command runs, so Silt can't find it".into()));
+        }
+        // The same command left running twice is told apart by age.
+        let nth = run.background.values().filter(|other| other.started < kept.started && other.command == command).count();
+        let handle = run.handle.clone().ok_or_else(not_running)?;
+        let ended = tokio::task::spawn_blocking(move || handle.stop_command(&command, nth))
+            .await
+            .map_err(|error| CoreError::Invalid(format!("could not look for the command: {error}")))?
+            .map_err(|error| CoreError::Invalid(format!("could not read this machine's processes: {error}")))?;
+        if ended == 0 {
+            return Err(CoreError::Invalid("none of the agent's processes runs that command; it may have just ended".into()));
+        }
+        let run = self.acp.get_mut(&thread).expect("checked above");
+        run.background.remove(&task);
+        run.stopped_tasks.insert(call.to_owned());
+        self.flush_acp(thread).await?;
+        self.record_acp(thread, &acp::task(call, Some(&task), Some("background"), "stopped")).await?;
+        self.agent_changed(thread).await;
+        Ok("stopped")
     }
 
     pub(crate) fn agent_status(&self, thread: ThreadId) -> Option<AgentStatus> {
@@ -1010,6 +1117,7 @@ impl Core {
             takes_images: run.accepts.image,
             takes_files: run.accepts.embedded,
             commands: run.commands.iter().map(Into::into).collect(),
+            stoppable: run.background.values().map(|task| task.call.clone()).collect(),
         })
     }
 
@@ -1166,7 +1274,12 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 self.flush_acp(thread).await?;
                 self.own_turn_ended(thread).await?;
+                // What it left running went with it.
+                if let Some(session) = self.acp[&thread].session.clone() {
+                    self.stop_left_tasks(thread, Some(&session)).await?;
+                }
                 let run = self.acp.get_mut(&thread).expect("caller checked");
+                run.background.clear();
                 run.state = AgentState::Stopped;
                 run.handle = None;
                 run.asking.clear();
@@ -1236,8 +1349,8 @@ impl Core {
                 Update::ToolCall { input: Some(input), .. } => input.get("shellId").and_then(serde_json::Value::as_str),
                 _ => None,
             };
-            if let Some(call) = read.and_then(|shell| run.background.get(shell)) {
-                let label = run.labels.get(call).cloned();
+            if let Some(task) = read.and_then(|shell| run.background.get(shell)) {
+                let label = run.labels.get(&task.call).cloned();
                 run.woke_by.push(ended(Some("background"), label.as_deref(), "ended"));
             }
             self.agent_woke(thread).await?;
@@ -1297,9 +1410,24 @@ impl Core {
                 }
                 if let Some(news) = task {
                     let run = self.acp.get_mut(&thread).expect("caller checked");
+                    if run.stopped_tasks.contains(&id) {
+                        if news.status != "running" {
+                            run.hush = Some(run.labels.get(&id).cloned().unwrap_or_default());
+                        }
+                        return Ok(());
+                    }
                     if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
                         if news.status == "running" {
-                            run.background.insert(task.clone(), id.clone());
+                            let command = run
+                                .tool_said
+                                .get(&id)
+                                .and_then(|(_, input)| input.as_ref()?.get("command")?.as_str().map(str::to_owned))
+                                .unwrap_or_default();
+                            run.background.entry(task.clone()).or_insert_with(|| Background {
+                                call: id.clone(),
+                                started: Instant::now(),
+                                command,
+                            });
                         } else {
                             run.background.remove(task);
                         }
@@ -1328,14 +1456,25 @@ impl Core {
     async fn agent_woke(&mut self, thread: ThreadId) -> Result<(), CoreError> {
         self.flush_acp(thread).await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
-        let cause = (!run.woke_by.is_empty()).then(|| std::mem::take(&mut run.woke_by).join("; "));
+        let mut cause = (!run.woke_by.is_empty()).then(|| std::mem::take(&mut run.woke_by).join("; "));
+        // What ended since is what it goes on about; a command the person
+        // stopped is, when nothing else ended.
+        let hushed = run.hush.take().filter(|_| cause.is_none());
+        if let Some(label) = &hushed {
+            cause = Some(ended(Some("background"), Some(label).filter(|label| !label.is_empty()).map(String::as_str), "stopped"));
+        }
         // Once stopped, nothing the agent left running starts it again
         // before the person does: ACP can't stop a background command, but
         // what the agent would do about it is stopped. An agent on v1, as
         // Copilot, ignores a cancel with no prompt to cancel, so it is
         // stopped as Stop agent does; the next prompt starts it again.
-        let stopped = run.stopped;
-        if stopped {
+        let stopped = if run.stopped {
+            Some(acp::Stopped::Agent)
+        } else {
+            // Stopping an agent on v1 would stop it for good, not the turn.
+            hushed.filter(|_| run.reports_work).map(|_| acp::Stopped::Command)
+        };
+        if stopped.is_some() {
             send(run, if run.reports_work { Command::Cancel } else { Command::Stop });
         }
         self.record_acp(thread, &acp::wake(cause.as_deref(), stopped)).await

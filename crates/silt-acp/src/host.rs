@@ -334,6 +334,8 @@ pub enum Event {
 pub struct AgentHandle {
     commands: mpsc::UnboundedSender<Command>,
     stop: Arc<watch::Sender<bool>>,
+    /// The agent's process, once started.
+    pid: Arc<std::sync::OnceLock<u32>>,
 }
 
 impl AgentHandle {
@@ -346,19 +348,55 @@ impl AgentHandle {
         }
         self.commands.send(command).is_ok()
     }
+
+    /// Ends `command`, which the agent left running in the background, and
+    /// what it started: of the agent's processes running it, the `nth`
+    /// oldest. Answers how many processes it ended, none when nothing of the
+    /// agent's runs it. It reads the machine's processes, so it blocks.
+    pub fn stop_command(&self, command: &str, nth: usize) -> std::io::Result<usize> {
+        let Some(agent) = self.pid.get().copied() else {
+            return Ok(0);
+        };
+        let ended = crate::processes::running(&silt_os::processes()?, agent, command, nth);
+        for pid in &ended {
+            let _ = silt_os::kill(*pid);
+        }
+        Ok(ended.len())
+    }
+
+    /// Ends the agent and everything it started at once, for when nothing
+    /// will be left to hear it end, as the daemon exits. It blocks.
+    pub fn end_now(&self) {
+        if let Some(agent) = self.pid.get().copied() {
+            end_tree(agent);
+        }
+    }
+}
+
+/// Ends the agent `group` started with `own_group`, and what it left running
+/// in groups of its own, as a command in the background may be, which would
+/// outlive its group. It reads the machine's processes, so it blocks.
+fn end_tree(group: u32) {
+    let left = silt_os::processes().map(|processes| crate::processes::under(&processes, group)).unwrap_or_default();
+    silt_os::kill_tree(group);
+    for pid in left {
+        let _ = silt_os::kill(pid);
+    }
 }
 
 /// Starts the agent; events arrive on `events` until [`Event::Exited`].
 pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle {
     let (commands, receiver) = mpsc::unbounded_channel();
     let (stop, stopped) = watch::channel(false);
+    let pid = Arc::new(std::sync::OnceLock::new());
+    let started = pid.clone();
     tokio::spawn(async move {
-        if let Err(error) = run(start, events.clone(), receiver, stopped).await {
+        if let Err(error) = run(start, events.clone(), receiver, stopped, started).await {
             let _ = events.send(Event::Failed(Arc::new(error)));
         }
         let _ = events.send(Event::Exited);
     });
-    AgentHandle { commands, stop: Arc::new(stop) }
+    AgentHandle { commands, stop: Arc::new(stop), pid }
 }
 
 pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
@@ -395,6 +433,7 @@ async fn run(
     events: mpsc::UnboundedSender<Event>,
     commands: mpsc::UnboundedReceiver<Command>,
     mut stopped: watch::Receiver<bool>,
+    pid: Arc<std::sync::OnceLock<u32>>,
 ) -> Result<(), HostError> {
     let mut command = tokio::process::Command::new(program(&start));
     // Its own process group, so stopping it stops what it started too,
@@ -413,6 +452,9 @@ async fn run(
         .spawn()
         .map_err(|source| HostError::Spawn { program: start.program.clone(), source })?;
     let group = child.id();
+    if let Some(group) = group {
+        let _ = pid.set(group);
+    }
     let stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
     let mut transport: Option<ByteStreams<Outgoing, Incoming>> =
@@ -443,7 +485,7 @@ async fn run(
         _ = stopped.wait_for(|stopped| *stopped) => Ok(()),
     };
     if let Some(group) = group {
-        silt_os::kill_tree(group);
+        let _ = tokio::task::spawn_blocking(move || end_tree(group)).await;
     }
     let _ = child.kill().await;
     result

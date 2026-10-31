@@ -801,6 +801,23 @@ test("an agent's subagent and the command it left running show as cards, and the
   await expect(subagent).toContainText('2 lines')
 })
 
+test('a command the agent left running in the background is stopped from above the composer', async ({ page }) => {
+  await startInNewThread(page, 'Fake v2 agent')
+  await page.getByLabel('draft').fill('add acp Keep')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: add acp Keep')).toBeVisible()
+  const running = page.getByTestId('running-tasks')
+  await expect(running).toContainText('keep-running')
+  // Its card, out of the turn's fold while it runs, can stop it too.
+  await expect(page.getByTestId('task').filter({ hasText: 'keep-running' }).getByRole('button', { name: 'Stop' })).toBeVisible()
+  await running.getByRole('button', { name: /^Stop / }).click()
+  await expect(running).toBeHidden()
+  // Its end sets the agent going, in a turn of its own, which Silt stops before it says anything.
+  await expect(page.locator('[id^="turn-"]')).toHaveCount(2)
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake v2 agent is ready')
+  await expect(page.getByText('The kept command ended.')).toHaveCount(0)
+})
+
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')

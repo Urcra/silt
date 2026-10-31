@@ -506,6 +506,12 @@ pub enum Request {
     AcpCancel {
         thread: String,
     },
+    /// Ends a command the agent left running in the background, by the call
+    /// that started it.
+    AcpStopTask {
+        thread: String,
+        call: String,
+    },
     /// Answers a permission request with an option, or refuses it.
     AcpAnswer {
         thread: String,
@@ -879,6 +885,10 @@ pub struct AgentStatus {
     /// The commands it offers, which a prompt starting with `/` runs.
     #[serde(default)]
     pub commands: Vec<AgentCommand>,
+    /// The calls whose commands still run in the background, which Stop
+    /// ends.
+    #[serde(default)]
+    pub stoppable: Vec<String>,
 }
 
 /// A file sent with a prompt.

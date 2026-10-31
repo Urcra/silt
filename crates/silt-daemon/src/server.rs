@@ -127,6 +127,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
         match event {
             Event::Request(Request::Shutdown, reply) => {
+                core.end_agents().await;
                 core.tick().await;
                 if let Err(error) = core.store.checkpoint().await {
                     warn!(%error, "could not copy the WAL into the database");

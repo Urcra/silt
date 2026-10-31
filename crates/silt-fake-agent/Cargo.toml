@@ -15,7 +15,7 @@ agent-client-protocol = { version = "3.4", features = ["stdio", "unstable_end_tu
 base64 = "0.23.1"
 serde = "1.0.229"
 serde_json = "1.0.154"
-tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "time", "fs"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "time", "fs", "process"] }
 uuid = { version = "1.28.0", features = ["v4"] }
 
 [dev-dependencies]
