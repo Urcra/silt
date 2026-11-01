@@ -38,7 +38,7 @@ import {
   cx,
   toast,
 } from '../ui'
-import { AgentDock, AgentTail, PermissionCard, PlanCard } from './Agent'
+import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
 import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
@@ -1669,6 +1669,7 @@ function ThreadBody({
           })}
         </div>
         <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
+          {agent?.sign_in && <SignInCard thread={thread} asked={agent.sign_in} agent={agent.agent} />}
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}

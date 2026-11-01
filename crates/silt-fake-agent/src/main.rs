@@ -16,7 +16,12 @@
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
-//! does (see `v2`).
+//! does (see `v2`). With `FAKE_ACP_SIGN_IN` naming a file, it needs a sign-in
+//! until that file exists, refusing a new session over v1, as Copilot does,
+//! and a prompt over v2, as Claude's adapter does. Its one sign-in method
+//! runs it again with `--fake-login`, which prints a link, asks for the code
+//! from it, as Claude's sign-in does, and makes the file when given `good`;
+//! given anything else, it says so and waits, as Claude's does.
 
 mod v2;
 
@@ -79,8 +84,57 @@ fn notify(connection: &ConnectionTo<Client>, session: &SessionId, update: Sessio
     connection.send_notification(SessionNotification::new(session.clone(), update))
 }
 
+/// Whether it is signed in: it needs no sign-in unless told to.
+pub(crate) fn signed_in() -> bool {
+    std::env::var_os("FAKE_ACP_SIGN_IN").is_none_or(|marker| std::path::Path::new(&marker).exists())
+}
+
+/// The sign-in it lists, when it needs one, by its id as v1 or v2 names it.
+pub(crate) fn sign_in_methods(id: &str) -> serde_json::Value {
+    if std::env::var_os("FAKE_ACP_SIGN_IN").is_none() {
+        return serde_json::json!([]);
+    }
+    serde_json::json!([{id: "fake-login", "name": "Fake account", "description": "Sign in to the fake service",
+                        "type": "terminal", "args": ["--fake-login"]}])
+}
+
+/// Its sign-in, as Claude's prints: a link, then a wait for the code the
+/// link's page shows.
+fn fake_login() -> std::process::ExitCode {
+    use std::io::{BufRead, Write};
+    print!(
+        "Opening browser to sign in\u{2026}\r\nIf the browser didn't open, visit: https://example.invalid/oauth?state=fake\r\nPaste code here if prompted > "
+    );
+    let _ = std::io::stdout().flush();
+    let mut code = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut code);
+    let marker = std::env::var_os("FAKE_ACP_SIGN_IN").unwrap_or_default();
+    if code.trim() == "good" && std::fs::write(&marker, "signed in").is_ok() {
+        println!("\r\nLogin successful.");
+        return std::process::ExitCode::SUCCESS;
+    }
+    // As Claude's sign-in does, it says so and waits rather than exit.
+    println!("\r\nLogin failed: That code wasn't accepted.");
+    loop {
+        std::thread::park();
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    if std::env::args().any(|arg| arg == "--fake-login") {
+        return fake_login();
+    }
+    match agent() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn agent() -> Result<()> {
     if std::env::var_os("FAKE_ACP_HANG").is_some() {
         std::future::pending::<()>().await;
     }
@@ -105,13 +159,17 @@ async fn main() -> Result<()> {
                                 .load_session(true)
                                 .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
                         )
-                        .agent_info(Implementation::new("fake-agent", "1.0")),
+                        .agent_info(Implementation::new("fake-agent", "1.0"))
+                        .auth_methods(serde_json::from_value(sign_in_methods("id")).map_err(agent_client_protocol::Error::into_internal_error)?),
                 )
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: NewSessionRequest, responder, connection| {
+                if !signed_in() {
+                    return responder.respond_with_error(agent_client_protocol::Error::auth_required());
+                }
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd);

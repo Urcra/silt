@@ -785,6 +785,9 @@ impl Core {
             }
             Request::AcpReply { thread, id, answers } => to_response(self.acp_reply(&thread, id, answers).await),
             Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop).await),
+            Request::AcpSignIn { thread, method } => to_response(self.acp_sign_in(&thread, &method).await),
+            Request::AcpSignInCode { thread, code } => to_response(self.acp_sign_in_code(&thread, &code).await),
+            Request::AcpSignInCancel { thread } => to_response(self.acp_sign_in_cancel(&thread).await),
             Request::OpenPullRequest { thread } => to_response(self.open_pull_request(&thread).await),
             Request::PullRequestBlocker { thread } => to_response(self.pull_request_blocker(&thread).await),
             Request::Shutdown => Response::ok("shutting down"),

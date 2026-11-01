@@ -68,7 +68,8 @@ function shownWhole(command: string): boolean {
   return command.length <= 80 && !command.includes('\n')
 }
 
-function waitsFor(thread: ThreadSummary, asks: boolean, plan: boolean): string {
+function waitsFor(thread: ThreadSummary, asks: boolean, plan: boolean, signIn: boolean): string {
+  if (signIn) return 'sign in'
   if (thread.agent_state === 'awaiting_input' || plan) return 'plan to approve'
   if (thread.agent_state === 'awaiting_permission') return asks ? 'asks you' : 'asks to run'
   if (thread.agent_state === 'error') return 'stopped'
@@ -102,7 +103,7 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
   return (
     <li role="group" aria-label={`${title} needs you`}>
       <ul>
-        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0, Boolean(asked?.plan))}</span>} />
+        <ThreadItem thread={thread} current={false} aside={<span className="shrink-0 text-2xs text-accent-fg group-hover:invisible">{waitsFor(thread, (status?.questions?.length ?? 0) > 0, Boolean(asked?.plan), Boolean(status?.sign_in))}</span>} />
       </ul>
       {asked && (
         <div className="space-y-1 pr-2 pb-2 pl-6 text-xs">
@@ -120,6 +121,13 @@ export function NeedsYouItem({ thread }: { thread: ThreadSummary; project?: stri
               {asked.plan ? 'Read the plan' : 'Open'}
             </Link>
           </div>
+        </div>
+      )}
+      {status?.sign_in && (
+        <div className="pr-2 pb-2 pl-6">
+          <Link to="/t/$id" params={{ id: thread.id }} className={buttonClass('primary', 'sm')}>
+            Sign in
+          </Link>
         </div>
       )}
       {status?.state === 'awaiting_input' && (

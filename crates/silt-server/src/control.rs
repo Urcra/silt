@@ -200,6 +200,15 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
             command,
         });
     }
+    // A sign-in's code is kept no longer than it takes to deliver (ADR 0054).
+    for command in commands.iter().filter(|command| matches!(command.command, RemoteCommand::SignInCode { .. })) {
+        let blank = serde_json::to_string(&RemoteCommand::SignInCode { code: String::new() }).expect("a command");
+        sqlx::query("UPDATE control_commands SET command = ? WHERE id = ?")
+            .bind(blank)
+            .bind(command.id)
+            .execute(server.db())
+            .await?;
+    }
     commands.sort_by_key(|command| command.id);
     Ok(commands)
 }
@@ -501,6 +510,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sign_in_code_is_kept_no_longer_than_it_takes_to_deliver() {
+        let (_data, server, base) = start().await;
+        let laptop = Device::sign_in(&base, "alice").await;
+        let (alice, device) = device_of(&server, "alice").await;
+        let command = RemoteCommand::SignInCode { code: "the-code".into() };
+        let relay = Relay {
+            device,
+            thread: ThreadId(7),
+            sender: alice,
+            from: None,
+            capabilities: Capabilities::ALL,
+            command: command.clone(),
+            ttl: Duration::from_secs(60),
+        };
+        let id = super::relay(&server, relay).await.expect("relays");
+        let stored = || {
+            sqlx::query_scalar::<_, String>("SELECT command FROM control_commands WHERE id = ?").bind(id).fetch_one(server.db())
+        };
+        assert!(stored().await.expect("kept").contains("the-code"), "kept for its device to take");
+        let taken = laptop.poll(0).await;
+        assert_eq!(taken.iter().map(|taken| &taken.command).collect::<Vec<_>>(), [&command], "delivered whole");
+        assert!(!stored().await.expect("kept").contains("the-code"), "and gone once taken");
+    }
+
+    #[tokio::test]
     async fn a_device_takes_its_commands_once_and_answers_them() {
         let (_data, server, base) = start().await;
         let laptop = Device::sign_in(&base, "alice").await;
@@ -584,6 +618,7 @@ mod tests {
             questions: Vec::new(),
             queued: 2,
             preset: "full_access".into(),
+            sign_in: None,
         };
         // A thread Alice doesn't see isn't hers to report.
         let report = AgentsReport { agents: vec![agent(ThreadId(7)), agent(ThreadId(99))], startable: Vec::new() };
@@ -623,6 +658,7 @@ mod tests {
             questions: Vec::new(),
             queued,
             preset: String::new(),
+            sign_in: None,
         }
     }
 
