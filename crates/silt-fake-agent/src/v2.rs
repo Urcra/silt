@@ -74,7 +74,8 @@ pub async fn main() -> Result<()> {
                 responder.respond(parse(json!({
                     "protocolVersion": request.protocol_version,
                     "info": {"name": "fake-agent", "version": "2.0"},
-                    "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}}
+                    "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}},
+                    "authMethods": crate::sign_in_methods("methodId")
                 }))?)
             },
             agent_client_protocol::on_receive_request!(),
@@ -137,6 +138,12 @@ pub async fn main() -> Result<()> {
                     let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
                     say(&worker, &session, json!({"sessionUpdate": "available_commands_update", "availableCommands": commands(true)}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                    // As Claude's adapter ends a turn its expired sign-in failed.
+                    if !crate::signed_in() {
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "failed-1", "content": {"type": "text", "text": "Failed to authenticate."}}))?;
+                        let refused = json!({"code": -32000, "message": "Authentication required"});
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "error", "error": refused}));
+                    }
                     say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "run-1"}]}))?;

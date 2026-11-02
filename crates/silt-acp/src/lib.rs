@@ -6,6 +6,7 @@ mod host;
 mod modes;
 mod prompt;
 pub mod registry;
+mod sign_in;
 mod v1;
 mod v2;
 
@@ -15,3 +16,4 @@ pub use host::{
 };
 pub use modes::{Choice, Modes, Setting, SlashCommand, built_in, plan_mode, presents_plans};
 pub use prompt::{Accepts, Attachment};
+pub use sign_in::{SignInHow, SignInMethod};

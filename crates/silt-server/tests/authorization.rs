@@ -493,6 +493,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
             questions: Vec::new(),
             queued: 0,
             preset: "ask_for_everything".into(),
+            sign_in: None,
         }],
         startable: Vec::new(),
     };
@@ -563,6 +564,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
             questions: Vec::new(),
             queued: 0,
             preset: String::new(),
+            sign_in: None,
         }],
         startable: vec![Startable { id: "fake".into(), name: "Fake agent".into() }],
     };
@@ -639,6 +641,7 @@ async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_
             questions: Vec::new(),
             queued: 0,
             preset: String::new(),
+            sign_in: None,
         }],
         startable: Vec::new(),
     };
@@ -798,6 +801,7 @@ async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
             questions: Vec::new(),
             queued: 0,
             preset: String::new(),
+            sign_in: None,
         }],
         startable: Vec::new(),
     };
@@ -935,6 +939,7 @@ async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() 
             questions: Vec::new(),
             queued: 0,
             preset: String::new(),
+            sign_in: None,
         }],
         startable: Vec::new(),
     };
@@ -1022,6 +1027,19 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
     let reply = serde_json::json!({ "id": 1, "answers": { "count": ["acked"] } });
     let (status, _) = phone.post(&format!("/threads/{THREAD}/agent/reply"), reply).await;
     assert_eq!(status, StatusCode::CONFLICT, "so does answering a question");
+    // Signing the agent in picks the account its work goes to (ADR 0056).
+    for (path, body) in [
+        ("sign-in", serde_json::json!({ "method": "login" })),
+        ("sign-in/code", serde_json::json!({ "code": "abc" })),
+        ("sign-in/cancel", serde_json::json!({})),
+    ] {
+        let (status, refused) = phone.post(&format!("/threads/{THREAD}/agent/{path}"), body).await;
+        assert_eq!(
+            (status, refused["error"].as_str()),
+            (StatusCode::FORBIDDEN, Some("this device may not start and stop agents; change that on the Devices page")),
+            "{path}"
+        );
+    }
     assert_eq!(phone.post("/pair", serde_json::json!({})).await.0, StatusCode::FORBIDDEN);
 
     let devices = alice.get("/devices").await.1.as_array().expect("a list").clone();

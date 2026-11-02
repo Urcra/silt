@@ -132,6 +132,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/reply", post(agent_reply))
+        .route("/api/threads/{id}/agent/sign-in", post(agent_sign_in))
+        .route("/api/threads/{id}/agent/sign-in/code", post(agent_sign_in_code))
+        .route("/api/threads/{id}/agent/sign-in/cancel", post(agent_sign_in_cancel))
         .route("/api/threads/{id}/pull-request", post(pull_request).get(pull_request_blocker))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
@@ -732,6 +735,32 @@ struct AgentReply {
 async fn agent_reply(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentReply>) -> HttpResponse {
     let answers = body.answers.map(|answers| answers.into_iter().collect());
     ask(&web, Request::AcpReply { thread, id: body.id, answers }).await
+}
+
+#[derive(Deserialize)]
+struct AgentSignIn {
+    method: String,
+}
+
+async fn agent_sign_in(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentSignIn>) -> HttpResponse {
+    ask(&web, Request::AcpSignIn { thread, method: body.method }).await
+}
+
+#[derive(Deserialize)]
+struct AgentSignInCode {
+    code: String,
+}
+
+async fn agent_sign_in_code(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(body): Json<AgentSignInCode>,
+) -> HttpResponse {
+    ask(&web, Request::AcpSignInCode { thread, code: body.code }).await
+}
+
+async fn agent_sign_in_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::AcpSignInCancel { thread }).await
 }
 
 async fn pull_request(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

@@ -35,6 +35,9 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/agent/preset", post(preset))
         .route("/app/api/threads/{id}/agent/mode", post(mode))
         .route("/app/api/threads/{id}/agent/setting", post(setting))
+        .route("/app/api/threads/{id}/agent/sign-in", post(sign_in))
+        .route("/app/api/threads/{id}/agent/sign-in/code", post(sign_in_code))
+        .route("/app/api/threads/{id}/agent/sign-in/cancel", post(sign_in_cancel))
         .route("/app/api/threads/{id}/queue", post(enqueue))
         .route("/app/api/threads/{id}/continue", post(continue_on))
         .route("/app/api/mrs/{id}", get(mr_details))
@@ -303,6 +306,7 @@ async fn live(
             "thinking": "",
             "permissions": report.permissions,
             "questions": report.questions,
+            "sign_in": report.sign_in,
             "context": null,
             "error": null,
             "modes": null,
@@ -501,4 +505,41 @@ async fn setting(
     Json(body): Json<SettingBody>,
 ) -> Result<Json<Value>, Refused> {
     relayed(&server, browser, &id, RemoteCommand::Setting { id: body.id, value: body.value }, false).await
+}
+
+#[derive(Deserialize)]
+struct SignInBody {
+    method: String,
+}
+
+/// Signs the thread's agent in on its device (ADR 0056).
+async fn sign_in(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<SignInBody>,
+) -> Result<Json<Value>, Refused> {
+    relayed(&server, browser, &id, RemoteCommand::SignIn { method: body.method }, false).await
+}
+
+#[derive(Deserialize)]
+struct SignInCodeBody {
+    code: String,
+}
+
+async fn sign_in_code(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<SignInCodeBody>,
+) -> Result<Json<Value>, Refused> {
+    relayed(&server, browser, &id, RemoteCommand::SignInCode { code: body.code }, false).await
+}
+
+async fn sign_in_cancel(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Refused> {
+    relayed(&server, browser, &id, RemoteCommand::SignInCancel, false).await
 }

@@ -26,6 +26,8 @@ use crate::protocol::{
 };
 use crate::sessions::NewSession;
 
+mod sign_in;
+
 pub(crate) struct AcpRun {
     run: u64,
     info: AgentInfo,
@@ -106,6 +108,13 @@ pub(crate) struct AcpRun {
     /// The person stopped the agent and hasn't prompted it since: what it
     /// left running in the background doesn't get to start it again.
     stopped: bool,
+    /// The agent needs signing in before it goes on (ADR 0056).
+    sign_in: Option<sign_in::SignIn>,
+    /// The last prompt sent, as the agent was given it.
+    last_prompt: Option<(String, Vec<Attachment>)>,
+    /// A prompt the agent refused for want of a sign-in, to send once it is
+    /// up again.
+    resend: Option<(String, Vec<Attachment>)>,
 }
 
 /// How long an agent that went on by itself, and won't say when it stops,
@@ -133,6 +142,9 @@ impl AcpRun {
     /// The state shown for the run: a working agent with a request or a
     /// question open waits on the person (ADR 0022).
     fn shown(&self) -> AgentState {
+        if self.sign_in.is_some() {
+            return AgentState::AwaitingPermission;
+        }
         match self.state {
             // Awaiting input stays the plan's to approve.
             AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() => AgentState::AwaitingPermission,
@@ -159,6 +171,11 @@ impl AcpRun {
 pub enum AcpEvent {
     Started(Result<AgentHandle, String>),
     Agent(silt_acp::Event),
+    /// What the sign-in `token` reports (ADR 0056).
+    Login {
+        token: u64,
+        event: silt_agents::sign_in::LoginEvent,
+    },
 }
 
 /// A question as browsers and other devices are told it.
@@ -474,23 +491,7 @@ impl Core {
         self.next_token += 1;
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
-        let start = Start {
-            program: String::new(),
-            args: Vec::new(),
-            env: Vec::new(),
-            cwd: checkout.clone(),
-            mcp: Some((
-                silt_exe(),
-                vec![
-                    "mcp".into(),
-                    "--thread".into(),
-                    thread.to_string(),
-                    "--checkout".into(),
-                    checkout.to_string_lossy().into_owned(),
-                ],
-            )),
-            load: load.as_ref().map(|(_, native)| native.clone()),
-        };
+        let start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
@@ -537,10 +538,36 @@ impl Core {
                 woke_by: Vec::new(),
                 background: HashMap::new(),
                 stopped: false,
+                sign_in: None,
+                last_prompt: None,
+                resend: None,
             },
         );
         self.agent_changed(thread).await;
         Ok(thread.to_string())
+    }
+
+    /// How the thread's agent starts in `checkout`: with Silt's MCP server,
+    /// and loading its session `load` when there is one.
+    fn agent_start(&self, thread: ThreadId, checkout: &Path, load: Option<String>) -> Start {
+        Start {
+            program: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: checkout.to_path_buf(),
+            mcp: Some((
+                silt_exe(),
+                vec![
+                    "mcp".into(),
+                    "--thread".into(),
+                    thread.to_string(),
+                    "--checkout".into(),
+                    checkout.to_string_lossy().into_owned(),
+                ],
+            )),
+            load,
+            sign_in_first: None,
+        }
     }
 
     /// The branches a new thread of a clone this machine knows can start from.
@@ -610,7 +637,11 @@ impl Core {
         // agent awaiting input answers its plan instead.
         let answering = self.acp.get(&thread).is_some_and(|run| run.state == AgentState::AwaitingInput);
         let plan = plan || (self.preset(thread) == Preset::Plan && !answering);
-        let ready = self.acp.get(&thread).is_some_and(|run| matches!(run.state, AgentState::Idle | AgentState::AwaitingInput));
+        // One waiting to be signed in takes it once it is.
+        let ready = self
+            .acp
+            .get(&thread)
+            .is_some_and(|run| matches!(run.state, AgentState::Idle | AgentState::AwaitingInput) && run.sign_in.is_none());
         if !ready {
             if plan {
                 return Err(CoreError::Invalid("Plan first starts a turn of its own; send it once this one ends".into()));
@@ -738,6 +769,7 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
+        run.last_prompt = Some((prompt.clone(), attachments.clone()));
         send(run, Command::Prompt { text: prompt, attachments });
         self.agent_changed(thread).await;
         Ok(())
@@ -745,6 +777,17 @@ impl Core {
 
     pub(crate) async fn acp_command(&mut self, selector: &str, command: Command) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
+        // Stopping an agent waiting to be signed in drops the sign-in with it.
+        if command == Command::Stop
+            && let Some(run) = self.acp.get_mut(&thread).filter(|run| run.sign_in.is_some())
+        {
+            run.sign_in = None;
+            run.resend = None;
+            if !run.state.running() {
+                self.agent_changed(thread).await;
+                return Ok("ok");
+            }
+        }
         self.running(thread)?;
         let run = self.acp.get_mut(&thread).expect("checked above");
         if let Command::Answer { id, option } = &command {
@@ -1003,6 +1046,7 @@ impl Core {
                 })
                 .collect(),
             questions: run.questions.iter().map(question_asked).collect(),
+            sign_in: run.sign_in.as_ref().map(sign_in::SignIn::asked),
             context: run.context,
             error: run.error.clone(),
             modes: run.modes.as_ref().map(Into::into),
@@ -1020,6 +1064,9 @@ impl Core {
                 handle.send(Command::Stop);
             }
             return;
+        }
+        if let AcpEvent::Login { token, event } = event {
+            return self.login_event(thread, token, event).await;
         }
         if let Err(error) = self.handle_acp(thread, event).await {
             warn!(%error, "could not record the agent's work");
@@ -1043,6 +1090,7 @@ impl Core {
                 run.error = Some(error);
                 run.state = AgentState::Error;
             }
+            AcpEvent::Login { .. } => unreachable!("handled by acp_event"),
             AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, reports_work, .. }) => {
                 run.reports_work = reports_work;
                 let preset = self.preset(thread);
@@ -1078,9 +1126,16 @@ impl Core {
                         modes.current = mode;
                     }
                 }
+                // Signed in, by itself when asked to.
+                if run.sign_in.as_ref().is_some_and(sign_in::SignIn::by_agent) {
+                    run.sign_in = None;
+                }
                 let first = run.first.take();
                 self.remember_seen(thread);
                 self.acp_ready(thread, &session, loaded).await?;
+                if self.resend(thread) {
+                    return Ok(());
+                }
                 if let Some(first) = first {
                     self.send_first(thread, first).await?;
                 }
@@ -1129,6 +1184,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
+            AcpEvent::Agent(silt_acp::Event::SignIn(methods)) => self.sign_in_needed(thread, methods).await?,
             AcpEvent::Agent(silt_acp::Event::Context { used, size }) => run.context = Some(ContextUse { used, size }),
             AcpEvent::Agent(silt_acp::Event::TurnUsage { input, output }) => {
                 // What the turn cost comes after what it said.
@@ -1159,26 +1215,37 @@ impl Core {
                 run.tool_kinds.clear();
                 run.tool_said.clear();
                 run.calls_running.clear();
+                let signing_in = run.sign_in.is_some();
                 self.questions_dropped(thread).await?;
-                self.next_prompt(thread).await?;
+                // The queue waits for the sign-in, as the agent would refuse it too.
+                if !signing_in {
+                    self.next_prompt(thread).await?;
+                }
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
-                self.flush_acp(thread).await?;
-                self.own_turn_ended(thread).await?;
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.state = AgentState::Stopped;
                 run.handle = None;
-                run.asking.clear();
-                let session = run.session.clone();
-                self.questions_dropped(thread).await?;
-                if let Some(id) = session {
-                    self.close_open_tool(&id).await?;
-                    if let Some(session) = self.session_mut(&id) {
-                        session.live = false;
-                        session.in_turn = false;
-                    }
-                }
+                self.close_agent_session(thread).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Ends what the thread's agent left open, as its process is gone.
+    async fn close_agent_session(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        self.flush_acp(thread).await?;
+        self.own_turn_ended(thread).await?;
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.asking.clear();
+        let session = run.session.clone();
+        self.questions_dropped(thread).await?;
+        if let Some(id) = session {
+            self.close_open_tool(&id).await?;
+            if let Some(session) = self.session_mut(&id) {
+                session.live = false;
+                session.in_turn = false;
             }
         }
         Ok(())
@@ -1680,6 +1747,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
         cwd,
         mcp: None,
         load: None,
+        sign_in_first: None,
     };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let handle = silt_acp::start(start, sender);

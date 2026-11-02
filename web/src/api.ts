@@ -203,6 +203,11 @@ export const api = {
   /** Answers a question the agent waits on, each field by its chosen values; none declines it. */
   answerQuestion: (id: string, question: number, answers: Record<string, string[]> | null) =>
     request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),
+  /** Signs the thread's agent in by one of the ways it lists; the sign-in runs on the agent's machine (ADR 0056). */
+  signIn: (id: string, method: string) => request<string>('POST', `${thread(id)}/agent/sign-in`, { method }),
+  /** Passes a code from the sign-in's page on to the sign-in. */
+  signInCode: (id: string, code: string) => request<string>('POST', `${thread(id)}/agent/sign-in/code`, { code }),
+  cancelSignIn: (id: string) => request<string>('POST', `${thread(id)}/agent/sign-in/cancel`),
   /** Pushes the thread's branch; answers the forge's page for its new pull request. */
   openPullRequest: (id: string) => request<string>('POST', `${thread(id)}/pull-request`),
   /** Why the thread can't open a pull request now, or `null` when it can. */

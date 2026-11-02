@@ -117,6 +117,10 @@ streaming: string, thinking: string, permissions: Array<PermissionAsked>,
  */
 questions: Array<QuestionAsked>, 
 /**
+ * The sign-in it waits on, when its own expired (ADR 0056).
+ */
+sign_in: SignInAsked | null, 
+/**
  * How much of its context window the session uses, when it says.
  */
 context: ContextUse | null, error: string | null, 
@@ -142,6 +146,53 @@ takes_files: boolean,
 commands: Array<AgentCommand>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
+
+export type SignInAsked = { 
+/**
+ * The ways the agent lists, in its order.
+ */
+methods: Array<SignInChoice>, 
+/**
+ * The sign-in under way, when one is.
+ */
+running: SignInShown | null, 
+/**
+ * Why the last one didn't sign the agent in.
+ */
+failed: string | null, };
+
+export type SignInChoice = { id: string, name: string, description: string | null, 
+/**
+ * The agent signs in by itself, on its machine, with nothing to show
+ * here.
+ */
+by_agent: boolean, };
+
+export type SignInShown = { 
+/**
+ * The method running.
+ */
+method: string, 
+/**
+ * The page to open, in any browser.
+ */
+link: string | null, 
+/**
+ * The code to enter on that page.
+ */
+code: string | null, 
+/**
+ * It waits for a code from the page to be pasted back.
+ */
+asks_code: boolean, 
+/**
+ * A code was pasted back, and the sign-in hasn't ended since.
+ */
+code_sent: boolean, 
+/**
+ * Its last lines, without escapes.
+ */
+tail: string, };
 
 export type ContextUse = { used: number, size: number, };
 

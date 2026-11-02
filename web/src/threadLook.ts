@@ -39,10 +39,11 @@ export function threadWhere(thread: ThreadSummary): { label: string; tone: DotTo
 }
 
 /** What a thread waiting on the person waits for. */
-export type WaitKind = 'question' | 'plan' | 'permission' | 'review' | 'stopped'
+export type WaitKind = 'sign-in' | 'question' | 'plan' | 'permission' | 'review' | 'stopped'
 
 /** Its kind, from the agent's status where it is known and from the thread's own state else. */
 export function waitKind(thread: ThreadSummary, status: AgentStatus | null): WaitKind {
+  if (status?.sign_in) return 'sign-in'
   if ((status?.questions.length ?? 0) > 0) return 'question'
   if (thread.agent_state === 'awaiting_input' || status?.state === 'awaiting_input' || status?.permissions[0]?.plan) return 'plan'
   if (thread.agent_state === 'awaiting_permission') return 'permission'
@@ -52,6 +53,7 @@ export function waitKind(thread: ThreadSummary, status: AgentStatus | null): Wai
 
 /** Each kind's icon, its word in the sidebar and its heading in the queue, in the queue's order. */
 export const WAIT_KINDS: Record<WaitKind, { icon: IconName; word: string; heading: string }> = {
+  'sign-in': { icon: 'lock', word: 'sign in', heading: 'Sign-ins' },
   question: { icon: 'comment', word: 'asks you', heading: 'Questions' },
   plan: { icon: 'list', word: 'plan to approve', heading: 'Plans' },
   permission: { icon: 'lock', word: 'asks to run', heading: 'Permissions' },

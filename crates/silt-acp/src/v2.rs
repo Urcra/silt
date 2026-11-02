@@ -8,11 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v2::{
-    self, CancelSessionNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
-    ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    RequestPermissionSubject, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionMessage,
-    SessionUpdate, SetSessionConfigOptionRequest, StateUpdate, SubagentUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    self, AuthCapabilities, CancelSessionNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest,
+    CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest,
+    LoginAuthRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, RequestPermissionSubject, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionMessage, SessionUpdate, SetSessionConfigOptionRequest,
+    StateUpdate, SubagentUpdate, TerminalAuthCapabilities, ToolCallContent, ToolCallStatus, ToolCallUpdate,
     UpdateSessionNotification,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
@@ -91,13 +92,25 @@ impl ConnectTo<Agent> for V2 {
             )
             .connect_with(agent, async move |connection: V2ConnectionTo<Agent>| {
                 let capabilities = ClientCapabilities::new()
-                    .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
+                    .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()))
+                    .auth(AuthCapabilities::new().terminal(TerminalAuthCapabilities::new()));
                 let request = InitializeRequest::new(
                     ProtocolVersion::V2,
                     Implementation::new(crate::host::NAME, env!("CARGO_PKG_VERSION")),
                 )
                 .capabilities(capabilities);
                 let init = connection.send_request(request).block_task().await?;
+                let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
+                reading.lock().expect("lock").sign_in.clone_from(&methods);
+                if let Some(method) = start.sign_in_first.clone()
+                    && let Err(error) = connection.send_request(LoginAuthRequest::new(method)).block_task().await
+                {
+                    if crate::sign_in::needed(&error) {
+                        let _ = events.send(Event::SignIn(methods));
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
                 let Some(mut commands) = commands.lock().expect("lock").take() else {
                     return Ok(());
                 };
@@ -107,27 +120,41 @@ impl ConnectTo<Agent> for V2 {
                     embedded: takes.is_some_and(|takes| takes.embedded_context.is_some()),
                 };
                 let resumed = match start.load.clone() {
-                    Some(id) => connection
+                    Some(id) => match connection
                         .send_request(
                             ResumeSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
                                 .mcp_servers(mcp_servers.clone()),
                         )
                         .block_task()
                         .await
+                    {
+                        Err(error) if crate::sign_in::needed(&error) => {
+                            let _ = events.send(Event::SignIn(methods));
+                            return Ok(());
+                        }
                         // A session made on another machine can't be resumed
                         // here; the daemon primes a new one instead.
-                        .ok()
-                        .map(|response| (SessionId::new(id), response.config_options, response.available_commands)),
+                        resumed => resumed
+                            .ok()
+                            .map(|response| (SessionId::new(id), response.config_options, response.available_commands)),
+                    },
                     None => None,
                 };
                 let loaded = resumed.is_some();
                 let (session, options, offered) = match resumed {
                     Some(resumed) => resumed,
                     None => {
-                        let created = connection
+                        let created = match connection
                             .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
                             .block_task()
-                            .await?;
+                            .await
+                        {
+                            Err(error) if crate::sign_in::needed(&error) => {
+                                let _ = events.send(Event::SignIn(methods));
+                                return Ok(());
+                            }
+                            created => created?,
+                        };
                         (created.session_id, created.config_options, created.available_commands)
                     }
                 };
@@ -150,14 +177,22 @@ impl ConnectTo<Agent> for V2 {
                             let prompt = blocks_v2(&text, &attachments, accepts)
                                 .map_err(agent_client_protocol::Error::into_internal_error)?;
                             let failed = events.clone();
+                            let methods = methods.clone();
                             // Sent here rather than in the task, so a mode set
                             // just before reaches the agent first.
                             let sent = connection.send_request(PromptRequest::new(session.clone(), prompt));
                             connection.spawn(async move {
                                 // Taken in; the agent says when it is done.
-                                if let Err(error) = sent.block_task().await {
-                                    let _ = failed.send(Event::Failed(Arc::new(HostError::Protocol(error))));
-                                    let _ = failed.send(Event::TurnEnded { reason: StopReason::Error });
+                                match sent.block_task().await {
+                                    Err(error) if crate::sign_in::needed(&error) => {
+                                        let _ = failed.send(Event::SignIn(methods));
+                                        let _ = failed.send(Event::TurnEnded { reason: StopReason::Error });
+                                    }
+                                    Err(error) => {
+                                        let _ = failed.send(Event::Failed(Arc::new(HostError::Protocol(error))));
+                                        let _ = failed.send(Event::TurnEnded { reason: StopReason::Error });
+                                    }
+                                    Ok(_) => {}
                                 }
                                 Ok(())
                             })?;
@@ -281,6 +316,8 @@ fn permission(id: u64, request: RequestPermissionRequest) -> Permission {
 #[derive(Debug, Default)]
 pub(crate) struct Reading {
     session: Option<SessionId>,
+    /// How the agent says it can be signed in, for a turn that ends needing it.
+    sign_in: Vec<crate::SignInMethod>,
     /// Whether the agent said it works and hasn't said it stopped since.
     working: bool,
     /// Each message's and thought's text so far, by its id.
@@ -466,6 +503,11 @@ impl Reading {
                 let mut events = Vec::new();
                 if let Some(usage) = idle.usage {
                     events.push(Event::TurnUsage { input: usage.input_tokens, output: usage.output_tokens });
+                }
+                if let Some(v2::StopReason::Error(stopped)) = &idle.stop_reason
+                    && stopped.error.as_deref().is_some_and(crate::sign_in::needed)
+                {
+                    events.push(Event::SignIn(self.sign_in.clone()));
                 }
                 events.push(Event::TurnEnded { reason: idle.stop_reason.map_or(StopReason::EndTurn, stop_reason) });
                 events

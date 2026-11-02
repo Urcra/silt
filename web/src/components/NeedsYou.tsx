@@ -16,7 +16,7 @@ import { WAIT_KINDS, type WaitKind, waitKind } from '../threadLook'
 import { ago } from '../time'
 import { Button, Dot, type DotTone, EmptyState, Icon, Kbd, SectionLabel, Skeleton, buttonClass, cx, toast } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
-import { PermissionCard } from './Agent'
+import { PermissionCard, SignInCard } from './Agent'
 import { Markdown } from './Markdown'
 import { Page } from './Page'
 import { AnswerForm } from './ToolSteps'
@@ -177,14 +177,16 @@ interface Waiting {
   status: AgentStatus | null
 }
 
-const ORDER: WaitKind[] = ['question', 'plan', 'permission', 'review', 'stopped']
+const ORDER: WaitKind[] = ['sign-in', 'question', 'plan', 'permission', 'review', 'stopped']
 
 /** One waiting thread in the queue's list: its kind's icon, its title, what it asks in a line, and how long it has waited. */
 function QueueRow({ item, review, selected, onSelect, now }: { item: Waiting; review: MrSummary | undefined; selected: boolean; onSelect: () => void; now: number }) {
   const { thread, kind, status } = item
   const asked = status?.permissions[0]
   const what =
-    kind === 'question'
+    kind === 'sign-in'
+      ? 'Needs signing in'
+      : kind === 'question'
       ? status?.questions[0]?.message
       : kind === 'permission'
         ? asked?.title
@@ -265,6 +267,7 @@ function QueueDetail({ item, review, next, approve }: { item: Waiting; review: M
   const agent = status?.agent ?? thread.agent ?? 'The agent'
   const project = named.data?.find((each) => each.repo === thread.repo)?.name ?? projectName(thread.repo)
   const said = {
+    'sign-in': `${agent} needs signing in`,
     question: `${agent} asks`,
     plan: `${agent} wrote a plan`,
     permission: `${agent} asks to run`,
@@ -280,6 +283,7 @@ function QueueDetail({ item, review, next, approve }: { item: Waiting; review: M
         </span>
       </span>
       {kind === 'review' && review && <h2 className="text-lg font-medium">{review.title}</h2>}
+      {kind === 'sign-in' && status?.sign_in && <SignInCard thread={thread.id} asked={status.sign_in} agent={agent} />}
       {kind === 'question' && question && <AnswerForm key={question.id} thread={thread.id} asked={question} />}
       {(kind === 'permission' || kind === 'plan') && asked && <PermissionCard key={asked.id} thread={thread.id} asked={asked} agent={agent} first />}
       {kind === 'plan' && !asked && (

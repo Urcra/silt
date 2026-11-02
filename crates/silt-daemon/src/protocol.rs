@@ -7,7 +7,7 @@ pub use silt_proto::view::{
     MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
     TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
-pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked};
+pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
 /// One request per line on the daemon socket, answered by one response line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -532,6 +532,19 @@ pub enum Request {
     AcpStop {
         thread: String,
     },
+    /// Signs the agent in by one of the ways it lists (ADR 0056).
+    AcpSignIn {
+        thread: String,
+        method: String,
+    },
+    /// A code from the sign-in's page, for the sign-in to take.
+    AcpSignInCode {
+        thread: String,
+        code: String,
+    },
+    AcpSignInCancel {
+        thread: String,
+    },
     /// Pushes the thread's branch and answers the forge's page for a new
     /// pull request of it.
     OpenPullRequest {
@@ -874,6 +887,9 @@ pub struct AgentStatus {
     pub permissions: Vec<PermissionAsked>,
     /// Questions the agent asked and waits on.
     pub questions: Vec<QuestionAsked>,
+    /// The sign-in it waits on, when its own expired (ADR 0056).
+    #[serde(default)]
+    pub sign_in: Option<SignInAsked>,
     /// How much of its context window the session uses, when it says.
     pub context: Option<ContextUse>,
     pub error: Option<String>,
@@ -1209,6 +1225,9 @@ mod tests {
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
             QuestionAsked::decl(&config),
+            SignInAsked::decl(&config),
+            SignInChoice::decl(&config),
+            SignInShown::decl(&config),
             ContextUse::decl(&config),
             QuestionFieldAsked::decl(&config),
             ChoiceAsked::decl(&config),

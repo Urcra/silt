@@ -496,6 +496,65 @@ fn start_fake_acp_in(env: &Env, api: &Api, start: &serde_json::Value) -> String 
     started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned())
 }
 
+/// An agent whose own sign-in expired waits on a card, not an error
+/// (ADR 0056): its sign-in runs on its machine, the card shows the link and
+/// takes the code from its page, and the agent goes on with what it was
+/// asked, the prompt recorded once. Over v1 the agent refuses its session,
+/// as Copilot does; over v2 it refuses the prompt, as Claude's adapter does.
+#[test]
+fn an_agent_whose_sign_in_expired_is_signed_in_from_the_web_ui_and_goes_on() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let markers = tempfile::tempdir().expect("temp dir");
+    let (v1, v2) = (markers.path().join("v1"), markers.path().join("v2"));
+    let agents = serde_json::json!([
+        {"id": "v1", "name": "Fake v1", "command": fake, "env": {"FAKE_ACP_SIGN_IN": v1}},
+        {"id": "v2", "name": "Fake v2", "command": fake, "env": {"FAKE_ACP_SIGN_IN": v2, "FAKE_ACP_V2": "1"}}
+    ]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    for (agent, marker) in [("v1", &v1), ("v2", &v2)] {
+        let started =
+            api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": agent, "prompt": "hello"})));
+        let thread =
+            started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned());
+        let live = || api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"].clone();
+        let mut seen = serde_json::Value::Null;
+        let asked = eventually(|| {
+            seen = live();
+            seen["state"] == "awaiting_permission" && seen["sign_in"]["methods"][0]["id"] == "fake-login"
+        });
+        assert!(asked, "{agent}: the agent asks for a sign-in: {seen}");
+        assert_eq!(seen["error"], serde_json::Value::Null, "{agent}: needing a sign-in is no error");
+
+        let sign_in = |code: &str| {
+            api.ok("POST", &format!("/api/threads/{thread}/agent/sign-in"), Some(serde_json::json!({"method": "fake-login"})));
+            let mut seen = serde_json::Value::Null;
+            let shown = eventually(|| {
+                seen = live();
+                seen["sign_in"]["running"]["asks_code"] == true
+            });
+            assert!(shown, "{agent}: the sign-in asks for its code: {seen}");
+            assert_eq!(seen["sign_in"]["running"]["link"], "https://example.invalid/oauth?state=fake", "{agent}");
+            api.ok("POST", &format!("/api/threads/{thread}/agent/sign-in/code"), Some(serde_json::json!({"code": code})));
+        };
+        sign_in("bad");
+        let failed = eventually(|| {
+            seen = live();
+            seen["sign_in"]["failed"].as_str().is_some_and(|failed| failed.contains("wasn't accepted"))
+        });
+        assert!(failed, "{agent}: a wrong code fails, and the card stays: {seen}");
+        assert!(!marker.exists());
+
+        sign_in("good");
+        let entries = settled_history(&api, &thread, "Done: hello");
+        assert!(marker.exists(), "{agent}: the sign-in ran with the agent's own environment");
+        assert_eq!(live()["sign_in"], serde_json::Value::Null, "{agent}");
+        let prompts = entries.iter().filter(|(kind, text)| kind == "user" && text == "hello").count();
+        assert_eq!(prompts, 1, "{agent}: the prompt is recorded once: {entries:?}");
+    }
+}
+
 /// A project started from nothing (ADR 0053): a folder made for it with an
 /// empty repository, named by its folder and kept on this machine, whose
 /// threads move to its remote's project once it has one.

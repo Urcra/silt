@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type ReactNode, type SetStateAction, useState } from 'react'
-import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset } from '../api'
+import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type SignInAsked } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, Icon, Kbd, Spinner } from '../ui'
+import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { type Takes, useAttachments } from '../attachments'
 import { AttachButton, AttachedFiles } from './Attachments'
@@ -47,6 +47,7 @@ function working(status: AgentStatus | null): boolean {
 
 
 function statePhrase(status: AgentStatus): string {
+  if (status.sign_in) return `${status.agent} needs you to sign in`
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
   return `${status.agent} ${asking ? 'is asking you a question' : STATE_PHRASE[status.state]}`
 }
@@ -100,6 +101,123 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
           </Button>
         </span>
       )}
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/** The agent's own sign-in expired: signed in from here, the sign-in running on the agent's machine, and the agent going on
+ * once it's done (ADR 0056). Only a link the sign-in prints, on https, is offered to open. */
+export function SignInCard({ thread, asked, agent }: { thread: string; asked: SignInAsked; agent: string }) {
+  const [error, setError] = useState<string>()
+  const [code, setCode] = useState('')
+  const act = (action: Promise<unknown>) => {
+    setError(undefined)
+    action.catch((failure: unknown) => setError(message(failure)))
+  }
+  const running = asked.running
+  const byAgent = running && asked.methods.find((method) => method.id === running.method)?.by_agent
+  const link = running?.link?.startsWith('https://') ? running.link : null
+  const send = () => {
+    if (!code.trim()) return
+    act(api.signInCode(thread, code.trim()).then(() => setCode('')))
+  }
+  return (
+    <div role="group" aria-label="sign in" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+      <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
+        {agent} needs you to sign in
+      </span>
+      {!running ? (
+        <>
+          <p className="text-sm text-fg-1">
+            {asked.methods.length > 0
+              ? `Its own sign-in has expired, or was never made. Signing in runs where ${agent} runs, and then it goes on with what you asked.`
+              : `It lists no way to sign in that Silt can follow; sign it in on the machine it runs on, then start it again.`}
+          </p>
+          <span className="flex flex-wrap gap-1.5">
+            {asked.methods.map((method, index) => (
+              <Button key={method.id} variant={index === 0 ? 'primary' : 'secondary'} title={method.description ?? undefined} onClick={() => act(api.signIn(thread, method.id))}>
+                {method.name}
+              </Button>
+            ))}
+          </span>
+        </>
+      ) : byAgent ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-fg-1">
+          <Spinner /> {agent} is signing in on its machine
+        </p>
+      ) : (
+        <>
+          {link ? (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm text-fg-1">{running.code ? 'Open this page and enter the code:' : 'Open this page and sign in:'}</span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                <a href={link} target="_blank" rel="noopener noreferrer" className={buttonClass(running.code || running.asks_code ? 'primary' : 'secondary')}>
+                  Open {new URL(link).host}
+                </a>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(link).catch(() => undefined)
+                    toast('Link copied', 'ok')
+                  }}
+                >
+                  Copy link
+                </Button>
+              </span>
+              {running.code && (
+                <code data-testid="sign-in-code" className="self-start rounded-sm border border-line bg-bg px-2.5 py-1 font-mono text-lg tracking-widest text-fg-1 select-all">
+                  {running.code}
+                </code>
+              )}
+            </div>
+          ) : (
+            <p role="status" className="flex items-center gap-2 text-sm text-fg-1">
+              <Spinner /> Starting the sign-in
+            </p>
+          )}
+          {running.asks_code && (
+            <form
+              className="flex flex-wrap items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                send()
+              }}
+            >
+              <Input
+                aria-label="code from the sign-in page"
+                placeholder="Paste the code the page shows"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                className="min-w-0 flex-1 font-mono"
+              />
+              <Button type="submit" variant="primary" disabled={!code.trim()}>
+                Sign in
+              </Button>
+            </form>
+          )}
+          {link && !running.asks_code && (
+            <p role="status" className="flex items-center gap-2 text-xs text-fg-2">
+              <Spinner /> {running.code_sent ? 'Checking the code' : 'Waiting for the sign-in to finish'}
+            </p>
+          )}
+          <span className="flex flex-wrap items-center gap-1.5">
+            {running.tail && (
+              <details className="min-w-0 flex-1 text-xs text-fg-2">
+                <summary className="cursor-pointer">What the sign-in shows</summary>
+                <pre className="mt-1.5 max-h-48 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{running.tail}</pre>
+              </details>
+            )}
+            <Button variant="ghost" className="ml-auto" onClick={() => act(api.cancelSignIn(thread))}>
+              Cancel
+            </Button>
+          </span>
+        </>
+      )}
+      {asked.failed && !running && <span className="text-xs text-danger">{asked.failed}</span>}
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   )
@@ -570,7 +688,9 @@ export function AgentDock({
               : 'Draft the next prompt; everyone here sees it'
             : status.state === 'awaiting_input'
               ? 'Or say what to change in the plan'
-              : (status.questions?.length ?? 0) > 0
+              : status.sign_in
+                ? 'Sign in above; a prompt waits for it'
+                : (status.questions?.length ?? 0) > 0
                 ? 'Answer above, or steer it'
                 : turning
                   ? narrow

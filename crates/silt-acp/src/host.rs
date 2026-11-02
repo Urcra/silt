@@ -33,6 +33,9 @@ pub struct Start {
     pub mcp: Option<(PathBuf, Vec<String>)>,
     /// A session to load instead of starting a new one, when the agent can.
     pub load: Option<String>,
+    /// A sign-in method of the agent's own to ask it to follow before the
+    /// session opens (ADR 0056).
+    pub sign_in_first: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +315,10 @@ pub enum Event {
     Refused(String),
     Permission(Permission),
     Question(Question),
+    /// The agent needs a sign-in, in one of the ways it lists, before it
+    /// opens its session or takes the prompt it refused (ADR 0056). The
+    /// session ended if it hadn't opened.
+    SignIn(Vec<crate::SignInMethod>),
     /// What the turn that just ended took, in tokens, when the agent says.
     TurnUsage {
         input: u64,
