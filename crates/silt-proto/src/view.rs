@@ -481,8 +481,20 @@ pub enum CommentLocation {
         start: usize,
         end: usize,
         outdated: bool,
+        /// Where they are in the base the comments were asked against, when
+        /// they're there: a diff shows a comment on deleted lines beside them.
+        #[serde(default)]
+        before: Option<LineSpan>,
     },
     Unknown,
+}
+
+/// Lines `start..=end`, 1-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LineSpan {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,6 +505,9 @@ pub struct CommentView {
     pub time_ms: i64,
     pub text: String,
     pub resolved: bool,
+    /// It went to the thread's agent, in a review (ADR 0055).
+    #[serde(default)]
+    pub sent: bool,
     pub location: CommentLocation,
     /// The conversation under it, oldest first (ADR 0025).
     #[serde(default)]
@@ -583,8 +598,16 @@ pub struct Project {
 pub enum CommentOn {
     /// A history entry, by its index.
     Entry { index: usize },
-    /// Lines `start..=end` (1-based) of a file as the thread has it now.
-    Lines { path: String, start: usize, end: usize },
+    /// Lines `start..=end` (1-based) of a file as the thread has it now,
+    /// or as it was at `base`, a diff base such as `last-turn`: lines the
+    /// thread deleted are commented there (ADR 0055).
+    Lines {
+        path: String,
+        start: usize,
+        end: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
 }
 
 /// One of the person's signed-in devices (ADR 0026).

@@ -259,7 +259,7 @@ function Running({ since }: { since: number }) {
 }
 
 /** A question the agent waits on, answered in place: a digit picks a choice, Esc skips it. */
-function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked }) {
+export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionAsked }) {
   const [chosen, setChosen] = useState<Record<string, string[]>>({})
   const [error, setError] = useState<string>()
   const [sending, setSending] = useState(false)

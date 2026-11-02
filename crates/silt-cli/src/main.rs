@@ -225,6 +225,11 @@ enum Command {
         /// A history entry, numbered as `silt history` shows them
         #[arg(long)]
         entry: Option<usize>,
+        /// Number --lines as the file was at this diff base (start, last-turn,
+        /// last-commit, merge-base, commit:<sha>), to comment on lines the
+        /// thread deleted
+        #[arg(long, requires = "lines")]
+        base: Option<String>,
         /// Answer this comment, by its id as `silt comments` shows it
         #[arg(long, conflicts_with_all = ["file", "entry"])]
         reply: Option<String>,
@@ -236,6 +241,9 @@ enum Command {
         thread: String,
         #[arg(long)]
         resolve: Option<String>,
+        /// Also say where comments on code are at this diff base
+        #[arg(long, conflicts_with = "resolve")]
+        base: Option<String>,
     },
     /// Other threads changing a file or directory of this repository
     InFlight {
@@ -759,15 +767,15 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Blame { file, notes } => commands::blame(&file, notes),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment { thread, file, lines, entry, reply: Some(comment), text }
+        Command::Comment { thread, file, lines, entry, base: _, reply: Some(comment), text }
             if file.is_none() && lines.is_none() && entry.is_none() =>
         {
             commands::reply(&thread, &comment, &text.join(" "))
         }
-        Command::Comment { thread, file, lines, entry, reply: _, text } => {
-            commands::comment(&thread, file, lines, entry, &text.join(" "))
+        Command::Comment { thread, file, lines, entry, base, reply: _, text } => {
+            commands::comment(&thread, file, lines, entry, base, &text.join(" "))
         }
-        Command::Comments { thread, resolve } => commands::comments(&thread, resolve.as_deref()),
+        Command::Comments { thread, resolve, base } => commands::comments(&thread, resolve.as_deref(), base),
         Command::Server { command } => match command {
             ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {
                 admin::server_init(admin::InitOptions {

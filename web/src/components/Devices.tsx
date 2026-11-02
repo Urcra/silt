@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useContext, useState } from 'react'
 import { STATE_TAG } from '../agentState'
 import { api, type Capabilities, type DeviceChange, type DeviceView, type PhonePairing } from '../api'
 import { useNow } from '../now'
 import { keys, message } from '../query'
+import { mockRows } from '../mocks'
+import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
 import { Button, Dot, EmptyState, Icon, Input, KeyValue, Skeleton, Tag, buttonClass, cx, toast } from '../ui'
 import { Mock } from './Mock'
@@ -48,8 +50,8 @@ function Device({ device }: { device: DeviceView }) {
             : `${device.agents.length} ${device.agents.length === 1 ? 'agent' : 'agents'}`,
         ],
         ...(!device.online ? ([['Last seen', <span key="seen" data-volatile>{ago(Number(device.last_used_ms), now)}</span>]] as [ReactNode, ReactNode][]) : []),
-        ['Checkouts', <Mock key="checkouts" id="devices.checkouts">3</Mock>],
-        ['Daemon', <Mock key="daemon" id="devices.version">0.0.1 · synced</Mock>],
+        ...mockRows<[ReactNode, ReactNode]>('devices.checkouts', [['Checkouts', <Mock key="checkouts" id="devices.checkouts">3</Mock>]]),
+        ...mockRows<[ReactNode, ReactNode]>('devices.version', [['Daemon', <Mock key="daemon" id="devices.version">0.0.1 · synced</Mock>]]),
       ]
   return (
     <section aria-label={device.name} className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-3 border-b border-line-subtle px-4 py-3.5 last:border-b-0">
@@ -186,9 +188,9 @@ function PairPhone() {
           </Button>
         </div>
       )}
-      <fieldset className="flex flex-col gap-1.5 text-xs">
-        <legend className="mb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">The phone may</legend>
-        <Mock id="devices.pair-capabilities">
+      <Mock id="devices.pair-capabilities">
+        <fieldset className="flex flex-col gap-1.5 text-xs">
+          <legend className="mb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">The phone may</legend>
           {[
             ['Answer agents’ permission requests', true],
             ['Approve and decline merge requests', true],
@@ -199,9 +201,9 @@ function PairPhone() {
               {label as string}
             </label>
           ))}
-        </Mock>
-        <p className="text-2xs text-fg-2">Give it more from its card once it’s paired.</p>
-      </fieldset>
+        </fieldset>
+      </Mock>
+      <p className="text-2xs text-fg-2">Give it more from its card once it’s paired.</p>
       <Link to="/needs-you" className={cx(buttonClass('secondary'), 'self-start')}>
         See the phone view
       </Link>
@@ -210,13 +212,15 @@ function PairPhone() {
 }
 
 /** The person's devices: which are online, what runs on each, what each may do (ADR 0026, the Devices board). */
-export function Devices() {
+export function Devices({ children }: { children?: ReactNode }) {
   const devices = useQuery({ queryKey: keys.devices, queryFn: api.devices })
+  // In Settings the column is Settings' own, so the page keeps its edge and stacks.
+  const embedded = useContext(InSettings)
   return (
     <Page flush label="devices">
-      <div className="flex flex-col gap-6 px-4 py-6 md:px-8 lg:flex-row lg:items-start">
+      <div className={cx('flex flex-col gap-6', !embedded && 'px-4 py-6 md:px-8 lg:flex-row lg:items-start')}>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <h2 id="your-devices" className="text-sm font-medium">
+          <h2 id="your-devices" className={SETTINGS_HEADING}>
             Your devices
           </h2>
           <p className="text-sm text-fg-2">Threads move between these. A device with a checkout can run agents; a phone can answer and review.</p>
@@ -232,8 +236,9 @@ export function Devices() {
                 ))}
             </div>
           )}
+          {children}
         </div>
-        <div className="lg:w-[380px] lg:shrink-0">
+        <div className={cx(!embedded && 'lg:w-[380px] lg:shrink-0')}>
           <PairPhone />
         </div>
       </div>

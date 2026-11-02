@@ -192,6 +192,8 @@ pub struct Comment {
     pub by: String,
     pub time_ms: i64,
     pub resolved: bool,
+    /// It went to the thread's agent (ADR 0055).
+    pub sent: bool,
     /// Oldest first, by causal order.
     pub replies: Vec<Reply>,
 }
@@ -507,6 +509,13 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
             _ => None,
         })
         .collect();
+    let sent: HashSet<DeltaId> = ops()
+        .flat_map(|(_, op)| match op {
+            CommentOp::Sent { comments } => comments.as_slice(),
+            _ => &[],
+        })
+        .copied()
+        .collect();
     // A reply naming another reply, as an older or careless peer may
     // send, still lands under the first comment.
     let parent_of: HashMap<DeltaId, DeltaId> = ops()
@@ -544,6 +553,7 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
                     by: by.clone(),
                     time_ms: delta.time_ms,
                     resolved: resolved.contains(&id),
+                    sent: sent.contains(&id),
                     replies,
                 })
             }

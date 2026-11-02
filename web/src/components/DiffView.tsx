@@ -1,16 +1,16 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { CommentView } from '../api'
 import { type CodeLine, type DiffFile, type Hunk, LARGE_DIFF, diffSize, parseFiles, splitRows } from '../diffParse'
 import { type Token, languageOf, useHighlighted } from '../highlight'
 import { appHref, filePath } from '../permalink'
 import { message } from '../query'
-import { type Lines, linesOf } from '../review'
-import { Button, Counts, DiffBlock, Textarea, cx } from '../ui'
+import { type Draft, type Lines, type ReviewState, type Side, linesOf, quoteOf, sideOf } from '../review'
+import { Button, Counts, DiffBlock, Icon, Textarea, cx } from '../ui'
 import { CommentThread } from './CommentThread'
 
 export type DiffLayout = 'unified' | 'split'
 
-/** Taking comments on a diff's new lines, and showing those already made. */
+/** Taking comments on a diff's lines, and showing those already made. */
 export interface Commenting {
   thread: string
   comments: CommentView[]
@@ -18,6 +18,10 @@ export interface Commenting {
   onChanged: () => Promise<unknown>
   /** Who "send" asks, as the button names them. */
   agent?: string
+  /** Lines the change deleted take comments too, numbered as the diff's base has them. */
+  deleted?: boolean
+  /** A review in progress, where comments wait until it's sent (ADR 0055). */
+  review?: ReviewState
 }
 
 const ROW = {
@@ -38,48 +42,56 @@ function Tokens({ tokens, text }: { tokens: Token[] | undefined; text: string })
 
 const SHEET_BUTTON = 'justify-center max-md:text-sm'
 
+/** What saving a line comment does: keep it, send it to the agent now, or add it to the review. */
+type Save = 'comment' | 'send' | 'review'
+
 function LineComment({
   at,
   agent,
+  review,
   onSave,
   onCancel,
 }: {
   at: Lines
   agent?: string
-  onSave: (text: string, send: boolean) => Promise<void>
+  /** How many comments the review in progress holds, when there's one to add to. */
+  review?: number
+  onSave: (text: string, how: Save) => Promise<void>
   onCancel: () => void
 }) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string>()
-  const save = (send: boolean) => {
+  const save = (how: Save) => {
     setError(undefined)
-    onSave(text, send).catch((failure: unknown) => setError(message(failure)))
+    onSave(text, how).catch((failure: unknown) => setError(message(failure)))
   }
+  const span = `${at.start}${at.end !== at.start ? `–${at.end}` : ''}`
+  const reviewing = review !== undefined
   return (
     <form
       aria-label={`comment on lines ${at.start}–${at.end}`}
       className="flex flex-col gap-2 border-y border-line-subtle bg-accent-tint px-3 py-2 font-sans max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-30 max-md:border-t max-md:border-line max-md:bg-elevated max-md:px-4 max-md:pt-3 max-md:pb-[calc(env(safe-area-inset-bottom)+12px)] max-md:shadow-overlay"
       onSubmit={(event) => {
         event.preventDefault()
-        save(false)
+        save(reviewing ? 'review' : 'comment')
       }}
     >
       <span className="font-mono text-2xs text-fg-2 md:hidden">
-        {at.path.split('/').pop()}:{at.start}
-        {at.end !== at.start ? `–${at.end}` : ''}
+        {at.path.split('/').pop()}:{span}
+        {sideOf(at) === 'old' && ' (deleted)'}
       </span>
       <Textarea
         aria-label="code comment"
         autoFocus
         rows={2}
         className="text-xs"
-        placeholder={`Comment on ${at.path}:${at.start}${at.end !== at.start ? `-${at.end}` : ''}`}
+        placeholder={`Comment on ${sideOf(at) === 'old' ? 'deleted ' : ''}${at.path}:${at.start}${at.end !== at.start ? `-${at.end}` : ''}`}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
             event.preventDefault()
-            if (text.trim()) save(false)
+            if (text.trim()) save(reviewing ? 'review' : 'comment')
           }
         }}
       />
@@ -87,13 +99,32 @@ function LineComment({
         <Button variant="ghost" onClick={onCancel} className={SHEET_BUTTON}>
           Cancel
         </Button>
-        <Button type="submit" variant={agent ? 'secondary' : 'primary'} disabled={!text.trim()} title="Keeps it as a comment on the lines" className={SHEET_BUTTON}>
-          Comment
-        </Button>
-        {agent && (
-          <Button variant="primary" disabled={!text.trim()} onClick={() => save(true)} className={cx(SHEET_BUTTON, 'col-span-2')}>
-            Send to {agent}
-          </Button>
+        {reviewing ? (
+          <>
+            <Button disabled={!text.trim()} onClick={() => save('comment')} title="Keeps it as a comment now, outside the review" className={SHEET_BUTTON}>
+              Add single comment
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!text.trim()}
+              title="Holds it with the review's other comments until you send them to the agent together"
+              className={cx(SHEET_BUTTON, 'col-span-2')}
+            >
+              {review > 0 ? 'Add review comment' : 'Start a review'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button type="submit" variant={agent ? 'secondary' : 'primary'} disabled={!text.trim()} title="Keeps it as a comment on the lines" className={SHEET_BUTTON}>
+              Comment
+            </Button>
+            {agent && (
+              <Button variant="primary" disabled={!text.trim()} onClick={() => save('send')} className={cx(SHEET_BUTTON, 'col-span-2')}>
+                Send to {agent}
+              </Button>
+            )}
+          </>
         )}
       </div>
       {error && <span className="text-xs text-danger">{error}</span>}
@@ -101,8 +132,58 @@ function LineComment({
   )
 }
 
+/** A comment waiting in the review, which only this browser has until the review is sent. */
+function PendingComment({ draft, review }: { draft: Draft; review: ReviewState }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(draft.text)
+  return (
+    <div role="group" aria-label="pending comment" className="border-y border-line-subtle bg-accent-tint px-3 py-2 font-sans">
+      <div className="flex flex-col gap-1 rounded-sm bg-accent-tint px-2 py-1 text-xs text-fg-1">
+        <span className="flex items-center gap-2">
+          <span className="rounded-sm border border-accent px-1 font-mono text-2xs text-accent-fg">Pending</span>
+          {!editing && <span className="min-w-0 flex-1 whitespace-pre-wrap">{draft.text}</span>}
+        </span>
+        {editing ? (
+          <form
+            className="flex flex-col gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              review.edit(draft.id, text.trim())
+              setEditing(false)
+            }}
+          >
+            <Textarea aria-label="edit pending comment" autoFocus rows={2} className="text-xs" value={text} onChange={(event) => setText(event.target.value)} />
+            <span className="flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={!text.trim()}>
+                Update
+              </Button>
+            </span>
+          </form>
+        ) : (
+          <span className="flex gap-3">
+            <button type="button" className="text-accent-fg" onClick={() => setEditing(true)}>
+              edit
+            </button>
+            <button type="button" className="text-danger" onClick={() => review.remove(draft.id)}>
+              delete
+            </button>
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function Gutter({ line, kind = 'context', children }: { line: number | null; kind?: CodeLine['kind']; children?: ReactNode }) {
   return <span className={cx('px-1.5 text-right text-[10px] leading-5 select-none', GUTTER[kind])}>{children ?? line ?? ''}</span>
+}
+
+/** A line's number on `side`, where it has one. */
+function numberOn(line: CodeLine, side: Side): number | null {
+  return side === 'old' ? (line.kind === 'add' ? null : line.oldLine) : line.newLine
 }
 
 function HunkView({
@@ -125,54 +206,114 @@ function HunkView({
   const highlighted = useHighlighted(code, languageOf(file.path))
   const tokens = new Map(hunk.lines.map((line, index) => [line, highlighted?.[index]]))
   const [picking, setPicking] = useState<Lines | null>(null)
-  const ending = (line: CodeLine) =>
-    (commenting?.comments ?? []).filter((comment) => {
-      const at = linesOf(comment)
-      return at !== null && !comment.resolved && at.path === file.path && at.end === line.newLine
-    })
-  const picked = (line: CodeLine) =>
-    picking !== null && line.newLine !== null && line.newLine >= picking.start && line.newLine <= picking.end
-  const numberOf = (line: CodeLine) =>
-    commenting && line.newLine !== null ? (
+  // Where a drag from a line's "+" started, while the button is held; the box opens once it's let go, so the lines stay put.
+  const dragFrom = useRef<{ side: Side; line: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  useEffect(() => {
+    const stop = () => {
+      dragFrom.current = null
+      setDragging(false)
+    }
+    window.addEventListener('mouseup', stop)
+    return () => window.removeEventListener('mouseup', stop)
+  }, [])
+  const review = commenting?.review
+  // A line takes comments on the thread's side, or on the base's when the change deleted it.
+  const sideFor = (line: CodeLine): Side | null =>
+    !commenting ? null : line.newLine !== null ? 'new' : commenting.deleted && line.kind === 'del' ? 'old' : null
+  const pick = (side: Side, here: number, extend: boolean) =>
+    setPicking((before) =>
+      extend && before !== null && sideOf(before) === side
+        ? { path: file.path, start: Math.min(before.start, here), end: Math.max(before.end, here), side }
+        : { path: file.path, start: here, end: here, side },
+    )
+  const dragOver = (line: CodeLine) => {
+    const from = dragFrom.current
+    const here = from && numberOn(line, from.side)
+    if (!from || here === null || (from.side === 'old' && line.kind !== 'del')) return
+    setPicking({ path: file.path, start: Math.min(from.line, here), end: Math.max(from.line, here), side: from.side })
+  }
+  const picked = (line: CodeLine, side: Side | null) => {
+    const number = side && numberOn(line, side)
+    return picking !== null && side === sideOf(picking) && number !== null && number >= picking.start && number <= picking.end
+  }
+  const numberOf = (line: CodeLine, side: Side) => {
+    const number = numberOn(line, side)
+    if (!commenting || number === null || sideFor(line) !== side) return number
+    return (
       <button
         type="button"
-        aria-label={`comment on ${file.path} line ${line.newLine}`}
+        aria-label={`comment on ${file.path} ${side === 'old' ? 'deleted line' : 'line'} ${number}`}
         className={cx('hover:text-accent-fg', bare ? 'h-full w-full text-right' : 'pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5')}
-        onClick={(event) => {
-          const here = line.newLine!
-          const extend = event.shiftKey && picking !== null
-          setPicking(extend ? { path: file.path, start: Math.min(picking.start, here), end: Math.max(picking.end, here) } : { path: file.path, start: here, end: here })
+        onClick={(event) => pick(side, number, event.shiftKey)}
+      >
+        {number}
+      </button>
+    )
+  }
+  // The "+" a line shows on hover, as a forge's review does; a drag from it takes the lines it crosses.
+  const plus = (line: CodeLine) => {
+    const side = sideFor(line)
+    const number = side && numberOn(line, side)
+    if (bare || !side || number === null) return null
+    return (
+      <button
+        type="button"
+        aria-hidden="true"
+        tabIndex={-1}
+        title="Comment on this line; drag for more"
+        className="absolute top-0.5 -left-2 z-10 hidden h-4 w-4 items-center justify-center rounded-sm bg-accent text-on-accent shadow-sm group-hover:flex pointer-coarse:!hidden"
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          event.preventDefault()
+          dragFrom.current = { side, line: number }
+          setDragging(true)
+          pick(side, number, event.shiftKey)
         }}
       >
-        {line.newLine}
+        <Icon name="plus" className="h-3 w-3" />
       </button>
-    ) : (
-      line.newLine
     )
-  const after = (line: CodeLine) => (
-    <>
-      {ending(line).map((comment) => (
-        <div key={comment.id} className="border-y border-line-subtle bg-accent-tint px-3 py-2 font-sans">
-          <CommentThread thread={commenting!.thread} comment={comment} onChanged={commenting!.onChanged} />
-        </div>
-      ))}
-      {picking && line.newLine === picking.end && (
-        <LineComment
-          at={picking}
-          agent={commenting?.agent}
-          onCancel={() => setPicking(null)}
-          onSave={async (text, send) => {
-            await commenting!.onComment(picking, text, send)
-            setPicking(null)
-          }}
-        />
-      )}
-    </>
-  )
-  const codeCell = (line: CodeLine | null) =>
+  }
+  const ending = (side: Side, number: number) =>
+    (commenting?.comments ?? []).filter((comment) => {
+      const at = linesOf(comment)
+      return at !== null && !comment.resolved && at.path === file.path && sideOf(at) === side && at.end === number
+    })
+  const after = (line: CodeLine) => {
+    const side = sideFor(line)
+    const number = side && numberOn(line, side)
+    if (!commenting || !side || number === null) return null
+    const pending = (review?.review.drafts ?? []).filter((draft) => draft.at.path === file.path && sideOf(draft.at) === side && draft.at.end === number)
+    return (
+      <>
+        {ending(side, number).map((comment) => (
+          <div key={comment.id} className="border-y border-line-subtle bg-accent-tint px-3 py-2 font-sans">
+            <CommentThread thread={commenting.thread} comment={comment} onChanged={commenting.onChanged} />
+          </div>
+        ))}
+        {review && pending.map((draft) => <PendingComment key={draft.id} draft={draft} review={review} />)}
+        {picking && !dragging && sideOf(picking) === side && picking.end === number && (
+          <LineComment
+            at={picking}
+            agent={commenting.agent}
+            review={review?.review.drafts.length}
+            onCancel={() => setPicking(null)}
+            onSave={async (text, how) => {
+              if (how === 'review' && review) review.add(picking, text.trim(), quoteOf([file], picking))
+              else await commenting.onComment(picking, text, how === 'send')
+              setPicking(null)
+            }}
+          />
+        )}
+      </>
+    )
+  }
+  const codeCell = (line: CodeLine | null, withPlus = true) =>
     line ? (
       // Long lines wrap rather than run past the panel's edge, where they were cut off.
-      <span className="min-w-0 pr-3 whitespace-pre-wrap [overflow-wrap:anywhere]">
+      <span className="relative min-w-0 pr-3 whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {withPlus && plus(line)}
         <span className={cx('select-none', line.kind === 'add' ? 'text-ok' : line.kind === 'del' ? 'text-danger' : 'text-fg-3')}>
           {SIGN[line.kind]}
         </span>
@@ -181,6 +322,7 @@ function HunkView({
     ) : (
       <span className="bg-surface-1" />
     )
+  const ring = 'ring-1 ring-accent ring-inset'
   return (
     <>
       {!bare && <div className="bg-info-tint/50 px-3 font-mono text-2xs leading-6 text-info">{hunk.header}</div>}
@@ -188,9 +330,9 @@ function HunkView({
       {bare
         ? hunk.lines.map((line, index) => (
             <div key={index}>
-              <div className={cx('grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7', ROW[line.kind], picked(line) && 'ring-1 ring-accent ring-inset')}>
+              <div className={cx('grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7', ROW[line.kind], picked(line, sideFor(line)) && ring)}>
                 <Gutter line={line.newLine ?? line.oldLine} kind={line.kind}>
-                  {line.newLine !== null ? numberOf(line) : undefined}
+                  {sideFor(line) && numberOf(line, sideFor(line)!)}
                 </Gutter>
                 {codeCell(line)}
               </div>
@@ -200,33 +342,51 @@ function HunkView({
         : layout === 'unified'
         ? hunk.lines.map((line, index) => (
             <div key={index}>
-              <div className={cx('grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line) && 'ring-1 ring-accent ring-inset')}>
-                <Gutter line={line.oldLine} kind={line.kind} />
+              <div
+                className={cx('group grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line, sideFor(line)) && ring)}
+                onMouseEnter={() => dragOver(line)}
+              >
+                <Gutter line={line.oldLine} kind={line.kind}>
+                  {line.kind === 'del' ? numberOf(line, 'old') : undefined}
+                </Gutter>
                 <Gutter line={line.newLine} kind={line.kind}>
-                  {numberOf(line)}
+                  {numberOf(line, 'new')}
                 </Gutter>
                 {codeCell(line)}
               </div>
               {after(line)}
             </div>
           ))
-        : splitRows(hunk).map((row, index) => (
-            <div key={index}>
-              <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
-                <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'} />
-                <span className={cx('flex min-w-0 border-r border-line-subtle', row.left && row.left.kind !== 'context' && ROW.del)}>
-                  {codeCell(row.left && row.left.kind !== 'add' ? row.left : null)}
-                </span>
-                <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
-                  {row.right && numberOf(row.right)}
-                </Gutter>
-                <span className={cx('flex min-w-0', row.right && row.right.kind === 'add' && ROW.add, row.right && picked(row.right) && 'ring-1 ring-accent ring-inset')}>
-                  {codeCell(row.right && row.right.kind !== 'del' ? row.right : null)}
-                </span>
+        : splitRows(hunk).map((row, index) => {
+            const left = row.left && row.left.kind !== 'add' ? row.left : null
+            const right = row.right && row.right.kind !== 'del' ? row.right : null
+            return (
+              <div key={index}>
+                <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
+                  <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'}>
+                    {left?.kind === 'del' ? numberOf(left, 'old') : undefined}
+                  </Gutter>
+                  <span
+                    className={cx('group flex min-w-0 border-r border-line-subtle', left && left.kind !== 'context' && ROW.del, left?.kind === 'del' && picked(left, 'old') && ring)}
+                    onMouseEnter={() => left && dragOver(left)}
+                  >
+                    {codeCell(left, left?.kind === 'del')}
+                  </span>
+                  <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
+                    {right && numberOf(right, 'new')}
+                  </Gutter>
+                  <span
+                    className={cx('group flex min-w-0', right && right.kind === 'add' && ROW.add, right && picked(right, 'new') && ring)}
+                    onMouseEnter={() => right && dragOver(right)}
+                  >
+                    {codeCell(right)}
+                  </span>
+                </div>
+                {left?.kind === 'del' && after(left)}
+                {right && after(right)}
               </div>
-              {row.right && after(row.right)}
-            </div>
-          ))}
+            )
+          })}
     </>
   )
 }

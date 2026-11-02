@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api, type OrgChange, type OrgInfo } from '../api'
 import { keys, message } from '../query'
 import { Button, EmptyState, Input, Select, Skeleton, Tag, toast } from '../ui'
+import { SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 
 /** Sends an org change and refreshes what depends on it. */
@@ -45,7 +46,7 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
   const teams = ['private', 'org', ...org.teams.map((team) => `team:${team.name}`)]
   const targets = others.filter((other) => other.name !== org.name && other.may_change)
   return (
-    <section aria-label={org.name} className="space-y-3 rounded-md border border-line p-3 text-sm">
+    <section aria-label={org.name} className="space-y-3 rounded-md border border-line bg-elevated p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-base font-medium">{org.name}</h3>
         <Tag tone={owns ? 'accent' : 'neutral'}>{org.role}</Tag>
@@ -204,8 +205,8 @@ export function Orgs() {
   const orgs = useQuery({ queryKey: keys.orgs, queryFn: () => api.orgs() })
   const change = useOrgChange()
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h2 className="text-lg font-semibold">Orgs</h2>
+    <div className="flex flex-col gap-4">
+      <h2 className={SETTINGS_HEADING}>Orgs</h2>
       {orgs.isPending && <Skeleton className="h-24 w-full" />}
       {orgs.error && <p className="text-sm text-danger">{message(orgs.error)}</p>}
       {orgs.isSuccess && orgs.data.length === 0 && <EmptyState title="You're in no org yet" />}

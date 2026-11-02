@@ -17,7 +17,7 @@ import urllib.request
 from typing import Any
 
 # The server's `PROTOCOL`: update it with the server.
-SILT_PROTOCOL = 7
+SILT_PROTOCOL = 8
 
 
 class SiltSessionStore:

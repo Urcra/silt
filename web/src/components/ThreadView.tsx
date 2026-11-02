@@ -15,7 +15,7 @@ import { MainScroll } from '../scroll'
 import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
 import { formatKeys, useActions } from '../shortcuts'
-import { threadTone, threadWhere } from '../threadLook'
+import { threadTone } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
@@ -28,6 +28,7 @@ import {
   Counts,
   Dot,
   Icon,
+  type IconName,
   Input,
   KeyValue,
   Popover,
@@ -595,7 +596,16 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
             {open ? 'Hide what this turn changed' : 'What this turn changed'}
           </button>
         )}
-        <span className="ml-auto flex flex-wrap gap-0.5">
+        {/* A toolbar of the turn's, in sight while the pointer or focus is in the turn (or on a touch screen), so a long
+            thread doesn't repeat it under every turn. */}
+        <span
+          role="toolbar"
+          aria-label={`turn ${turn.number}`}
+          className={cx(
+            'ml-auto flex flex-wrap gap-0.5 rounded-md border border-line bg-elevated p-0.5 shadow-raised transition-opacity duration-150',
+            !reverting && 'md:opacity-0 md:group-hover/turn:opacity-100 md:focus-within:opacity-100 pointer-coarse:opacity-100',
+          )}
+        >
           {!hosted() &&
             !rewound &&
             (reverting ? (
@@ -611,13 +621,13 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
             ) : (
               <button type="button" aria-label={`revert to turn ${turn.number}`} className={ghost} onClick={() => setReverting(true)} title="Take this thread's code and conversation back to this turn">
                 <Icon name="revert" className="h-3.5 w-3.5" />
-                Revert to here
+                Revert
               </button>
             ))}
           {!hosted() && (
             <button type="button" aria-label={`fork from turn ${turn.number}`} className={ghost} onClick={() => void forkHere()} title="A fork with the code and conversation as this turn left them">
               <Icon name="fork" className="h-3.5 w-3.5" />
-              Fork from here
+              Fork
             </button>
           )}
           <CopyLink path={`/t/${thread}#turn-${turn.number}`} thread={thread} label="Copy link" name={`link to turn ${turn.number}`} className={ghost} />
@@ -686,18 +696,21 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   if (row.kind === 'origin') return <OriginDivider origin={row.origin} thread={row.thread} folded={row.folded} onUnfold={onUnfold} />
   if (row.kind === 'compaction') {
     return (
+      // A point in time rather than a message, so a line with its label in it.
       <div className="py-2">
-        <div role="separator" data-testid={row.marker ? 'compaction' : undefined} className="flex flex-wrap items-center gap-2.5 rounded-md border border-dashed border-line-strong bg-surface-1 px-3 py-2">
-          <span className="text-xs">
-            {row.marker ? 'Context compacted here. Everything above stays in the history, for you and for the agent, and in search.' : 'The agent summarized its context here.'}
+        <div role="separator" data-testid={row.marker ? 'compaction' : undefined} className="flex items-center gap-2.5 text-xs text-fg-2">
+          <span className="h-px flex-1 bg-line" />
+          <span className="min-w-0 text-center">
+            {row.marker ? 'Context compacted · earlier messages stay in the history, for you, the agent and search' : 'The agent summarized its context here'}
           </span>
           {row.summary && (
-            <Button variant="ghost" size="sm" className="ml-auto" aria-expanded={summary} onClick={() => setSummary(!summary)}>
+            <button type="button" className="shrink-0 text-accent-fg hover:text-fg-1 max-md:min-h-11" aria-expanded={summary} onClick={() => setSummary(!summary)}>
               {summary ? 'Hide summary' : 'Show summary'}
-            </Button>
+            </button>
           )}
-          {summary && row.summary && <p className="w-full text-xs whitespace-pre-wrap text-fg-2">Compaction summary: {row.summary.text}</p>}
+          <span className="h-px flex-1 bg-line" />
         </div>
+        {summary && row.summary && <p className="mt-2 rounded-md bg-surface-1 px-3 py-2 text-xs whitespace-pre-wrap text-fg-2">Compaction summary: {row.summary.text}</p>}
       </div>
     )
   }
@@ -735,7 +748,7 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
             </Entry>
           )
   return (
-    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="py-3">
+    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="group/turn py-3">
       <div className="flex min-w-0 flex-col gap-3.5">
         {row.prompt?.kind === 'user' && (
           <Entry entry={row.prompt} turn={row.turn?.number} {...props}>
@@ -855,7 +868,7 @@ function ChangesBar({
     )
   }
   return (
-    <div role="group" aria-label="what the thread changed" className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
+    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-lg border-b border-line bg-bg px-3 py-1.5 text-xs">
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
         {files} {files === 1 ? 'file' : 'files'} changed
@@ -1084,11 +1097,10 @@ function ThreadHeader({
   /** Opens the details, beside the conversation or as a sheet on a phone. */
   onDetails: () => void
 }) {
-  const where = summary ? threadWhere(summary) : null
   const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
   const branch = commits.data?.findLast((commit) => commit.branch)?.branch
-  // Where it is and what records it; who started it and the rest are in Details.
-  const meta = summary ? [projectName(summary.repo || 'no remote'), where?.label.toLowerCase(), summary.agent].filter(Boolean) : []
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
+  const where = summary ? whereSaid(summary, status.data?.servers?.[0]?.name ?? null) : null
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const source = summary?.forked_from ? threads.data?.find((candidate) => candidate.id === summary.forked_from) : undefined
   return (
@@ -1100,11 +1112,13 @@ function ThreadHeader({
           <h1 className="min-w-0 truncate text-[15px] leading-tight font-medium" title={summary?.title ?? undefined}>
             {summary?.title ?? 'Thread'}
           </h1>
-          {waiting && (
+          {waiting ? (
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
               <Dot tone="warn" />
               Waiting on you
             </span>
+          ) : (
+            summary && <StatePill summary={summary} />
           )}
           {summary?.local_only && (
             <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
@@ -1112,48 +1126,85 @@ function ThreadHeader({
             </span>
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-2 overflow-hidden font-mono text-2xs leading-tight whitespace-nowrap text-fg-2">
-          <span className="min-w-0 truncate" data-volatile>
-            {short(thread)}
-            {meta.map((part) => ` · ${part}`)}
-          </span>
+        {/* What people know it by first: its project, branch, where it runs and its agent; the id last. */}
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight whitespace-nowrap text-fg-2">
+          {summary && <span className="shrink-0 font-mono">{projectName(summary.repo || 'no remote')}</span>}
           {branch && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1" title="The branch its latest commit went on">
-              <Icon name="branch" className="h-3 w-3 shrink-0" />
-              <span className="truncate">{branch}</span>
+            <span className="inline-flex min-w-0 shrink items-center gap-1" title={`The branch its latest commit went on: ${branch}`}>
+              · <Icon name="branch" className="h-3 w-3 shrink-0" />
+              <span className="max-w-[16ch] truncate font-mono">{branch}</span>
             </span>
           )}
+          {where && (
+            <span className="inline-flex shrink-0 items-center gap-1">
+              · <Icon name={where.icon} className="h-3 w-3 shrink-0" />
+              <span className="truncate">{where.label}</span>
+            </span>
+          )}
+          {summary?.agent && <span className="shrink-0">· {summary.agent}</span>}
           {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1 font-sans">
-              fork of
+            <span className="inline-flex min-w-0 shrink items-center gap-1">
+              · fork of
               <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} title={summary.forked_from} data-volatile>
                 {source?.title ?? short(summary.forked_from)}
               </Link>
             </span>
           )}
+          <span className="shrink-0 font-mono text-2xs text-fg-3" data-volatile>
+            · {short(thread)}
+          </span>
         </div>
       </div>
       <Here people={people} />
       <span className="flex shrink-0 items-center gap-1">
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
+        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
+        {/* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */}
         <Button
+          variant="ghost"
           aria-label="Changes"
           aria-pressed={panelOpen}
           onClick={onChanges}
           title="What the thread changed, beside the conversation (D)"
-          // Amber is for what waits on someone; an open panel is only on.
-          className="aria-pressed:border-line-strong aria-pressed:bg-surface-2 aria-pressed:text-fg-1"
+          className="aria-pressed:text-accent-fg"
         >
-          <Icon name="file" className="h-3.5 w-3.5 @xl/head:hidden" />
-          <span className="@max-xl/head:sr-only">Changes</span>
+          <Icon name="panel" className="h-4 w-4" />
           {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
-        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
       </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
   )
+}
+
+/** Where the thread's work is, for its header: this machine by name, the server, or another device. */
+function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
+  if (summary.location === 'moved') return { label: 'moved to another device', icon: 'handoff' }
+  if (summary.location === 'remote') return { label: 'on the server', icon: 'cloud' }
+  return { label: device ?? 'this machine', icon: 'monitor' }
+}
+
+/** The thread's state beside its title, in words, when its agent is doing something; waiting on the person has its own pill. */
+function StatePill({ summary }: { summary: ThreadSummary }) {
+  const state = summary.agent_state
+  if (state === 'working' || state === 'starting') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ok-tint px-2 py-0.5 text-2xs whitespace-nowrap text-ok max-md:hidden">
+        <Dot tone="ok" />
+        {state === 'starting' ? 'Starting' : 'Working'}
+      </span>
+    )
+  }
+  if (state === 'error') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-danger-tint px-2 py-0.5 text-2xs whitespace-nowrap text-danger max-md:hidden">
+        <Dot tone="danger" />
+        Stopped with an error
+      </span>
+    )
+  }
+  return null
 }
 
 /** The thread's lineage: what it was forked from, and its forks. */
@@ -1523,6 +1574,8 @@ function ThreadBody({
     },
   }
 
+  // Where the changes panel puts what it compares and how, so the inspector keeps one row of tabs.
+  const [diffControls, setDiffControls] = useState<HTMLElement | null>(null)
   const showChanges = () => {
     const phone = window.matchMedia('(max-width: 1023px)').matches
     if (phone) {
@@ -1567,7 +1620,7 @@ function ThreadBody({
       inspector={
         (panel || sheet) && (
         <div className="flex flex-col">
-          <div className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b border-line-subtle bg-bg px-4">
+          <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
             <Tabs
               label="inspector"
               tabs={[
@@ -1585,6 +1638,7 @@ function ThreadBody({
               value={tab}
               onChange={setTab}
             />
+            {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
           </div>
           {tab === 'lineage' ? (
             <div className="flex flex-col gap-6 px-5 py-5">
@@ -1615,7 +1669,7 @@ function ThreadBody({
           ) : (
             <div className="px-4 py-4">
               <Unwritten thread={thread} />
-              <DiffPanel thread={thread} comments={comments.data ?? NO_COMMENTS} onCommented={reloadComments} agent={agent?.agent} wide />
+              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} wide controlsIn={diffControls} />
             </div>
           )}
         </div>
@@ -1676,9 +1730,6 @@ function ThreadBody({
           {agent && <AgentTail status={agent} thoughtShown={thoughtCarded} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
         </div>
         <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
-          {files && files.length > 0 && totals && !busy && (
-            <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
-          )}
           <div className="mb-2 empty:hidden">
             <RunningStrip titles={taskTitle} />
           </div>
@@ -1694,6 +1745,13 @@ function ThreadBody({
               toEnd()
             }}
             people={people}
+            // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
+            top={
+              files &&
+              files.length > 0 &&
+              totals &&
+              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
+            }
           />
         </div>
       </div>
@@ -1711,8 +1769,6 @@ function ThreadBody({
 
 /** Entries in a thread's first page of history, which shows on its own while
  * the rest loads. */
-const NO_COMMENTS: CommentView[] = []
-
 const FIRST_PAGE = 50
 /** Entries in each page after the first. */
 const PAGE = 500

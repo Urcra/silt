@@ -98,6 +98,11 @@ pub enum CommentOp {
         text: String,
         by: String,
     },
+    /// The comments went to the thread's agent as one prompt, so they aren't
+    /// sent again; they stay open until resolved (ADR 0055).
+    Sent {
+        comments: Vec<DeltaId>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

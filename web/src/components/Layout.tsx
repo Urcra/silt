@@ -46,11 +46,12 @@ function useGlobalActions() {
     { id: 'settings', label: 'Settings', run: () => void navigate({ to: '/settings' }) },
     { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/settings/projects' }) },
     { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/settings/orgs' }) },
-    { id: 'devices', label: 'Devices', run: () => void navigate({ to: '/settings/devices' }) },
+    { id: 'devices', label: 'Devices and sync', run: () => void navigate({ to: '/settings/devices' }) },
     { id: 'graph', label: 'Graph', keys: 'g', run: () => void navigate({ to: '/graph' }) },
     { id: 'search', label: 'Search everything', keys: 'mod+shift+f', run: () => void navigate({ to: '/search' }) },
     { id: 'mrs', label: 'Merge requests', keys: 'm', run: () => void navigate({ to: '/mrs' }) },
     { id: 'inbox', label: 'Inbox', keys: 'i', run: () => void navigate({ to: '/inbox' }) },
+    { id: 'needs-you', label: 'What needs you', keys: 'q', run: () => void navigate({ to: '/needs-you' }) },
   ])
 }
 

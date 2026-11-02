@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { type Dispatch, type SetStateAction, useState } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction, useState } from 'react'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
@@ -310,6 +310,7 @@ export function AgentDock({
   onDraft,
   onSent,
   people,
+  top,
 }: {
   thread: string
   status: AgentStatus | null
@@ -321,6 +322,8 @@ export function AgentDock({
   onSent?: () => void
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
+  /** On the composer's top edge. */
+  top?: ReactNode
 }) {
   const [chosenAgent, setAgent] = useState<string>()
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
@@ -575,6 +578,7 @@ export function AgentDock({
                     : 'Steer it now, or queue a prompt for when this turn ends'
                 : `Ask ${status.agent}, or attach files for context`
         }
+        top={top}
         above={above}
         below={below}
         tools={tools}
