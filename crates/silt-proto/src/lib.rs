@@ -1008,12 +1008,12 @@ pub struct AgentReport {
     /// names it.
     #[serde(default)]
     pub preset: String,
-    /// The sign-in it waits on, when its own expired (ADR 0054).
+    /// The sign-in it waits on, when its own expired (ADR 0056).
     #[serde(default)]
     pub sign_in: Option<SignInAsked>,
 }
 
-/// An agent that needs signing in, as its card shows it (ADR 0054). What
+/// An agent that needs signing in, as its card shows it (ADR 0056). What
 /// it shows is never recorded.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -1179,7 +1179,7 @@ pub enum RemoteCommand {
         path: String,
         at: Option<String>,
     },
-    /// Signs the thread's agent in, one of the ways it lists (ADR 0054).
+    /// Signs the thread's agent in, one of the ways it lists (ADR 0056).
     SignIn {
         method: String,
     },
@@ -1220,7 +1220,7 @@ impl Capabilities {
             | RemoteCommand::Preset { .. }
             | RemoteCommand::Mode { .. }
             | RemoteCommand::Setting { .. }
-            // Which account the agent's work goes to (ADR 0054).
+            // Which account the agent's work goes to (ADR 0056).
             | RemoteCommand::SignIn { .. }
             | RemoteCommand::SignInCode { .. }
             | RemoteCommand::SignInCancel => (self.run_agents, "start and stop agents"),

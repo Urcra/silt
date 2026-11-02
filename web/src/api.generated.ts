@@ -117,7 +117,7 @@ streaming: string, thinking: string, permissions: Array<PermissionAsked>,
  */
 questions: Array<QuestionAsked>, 
 /**
- * The sign-in it waits on, when its own expired (ADR 0054).
+ * The sign-in it waits on, when its own expired (ADR 0056).
  */
 sign_in: SignInAsked | null, 
 /**

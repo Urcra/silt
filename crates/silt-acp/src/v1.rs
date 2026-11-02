@@ -33,7 +33,7 @@ pub(crate) fn initialize() -> Result<InitializeRequest, serde_json::Error> {
     let elicitation = ElicitationCapabilities::new().form(ElicitationFormCapabilities::new());
     // Every v2 client takes boolean settings; Silt leaves out any but choices.
     let session: ClientSessionCapabilities = serde_json::from_value(serde_json::json!({"configOptions": {"boolean": {}}}))?;
-    // Silt runs an agent's terminal sign-in in a terminal of its own, shown on a card (ADR 0054).
+    // Silt runs an agent's terminal sign-in in a terminal of its own, shown on a card (ADR 0056).
     let capabilities =
         ClientCapabilities::new().elicitation(elicitation).session(session).auth(AuthCapabilities::new().terminal(true));
     Ok(InitializeRequest::new(ProtocolVersion::V1)

@@ -1,7 +1,7 @@
 //! An agent CLI's own sign-in, run in a pseudo-terminal on the agent's
 //! machine, and what its screen shows the person: the page to open, the
 //! code to enter there, and whether it waits for a code pasted back
-//! (ADR 0054).
+//! (ADR 0056).
 
 use std::io::{Read, Write};
 use std::path::Path;

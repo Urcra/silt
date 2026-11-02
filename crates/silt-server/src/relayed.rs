@@ -512,7 +512,7 @@ struct SignInBody {
     method: String,
 }
 
-/// Signs the thread's agent in on its device (ADR 0054).
+/// Signs the thread's agent in on its device (ADR 0056).
 async fn sign_in(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,

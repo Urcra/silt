@@ -523,7 +523,7 @@ pub enum Request {
     AcpStop {
         thread: String,
     },
-    /// Signs the agent in by one of the ways it lists (ADR 0054).
+    /// Signs the agent in by one of the ways it lists (ADR 0056).
     AcpSignIn {
         thread: String,
         method: String,
@@ -878,7 +878,7 @@ pub struct AgentStatus {
     pub permissions: Vec<PermissionAsked>,
     /// Questions the agent asked and waits on.
     pub questions: Vec<QuestionAsked>,
-    /// The sign-in it waits on, when its own expired (ADR 0054).
+    /// The sign-in it waits on, when its own expired (ADR 0056).
     #[serde(default)]
     pub sign_in: Option<SignInAsked>,
     /// How much of its context window the session uses, when it says.

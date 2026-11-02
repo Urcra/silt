@@ -1027,7 +1027,7 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
     let reply = serde_json::json!({ "id": 1, "answers": { "count": ["acked"] } });
     let (status, _) = phone.post(&format!("/threads/{THREAD}/agent/reply"), reply).await;
     assert_eq!(status, StatusCode::CONFLICT, "so does answering a question");
-    // Signing the agent in picks the account its work goes to (ADR 0054).
+    // Signing the agent in picks the account its work goes to (ADR 0056).
     for (path, body) in [
         ("sign-in", serde_json::json!({ "method": "login" })),
         ("sign-in/code", serde_json::json!({ "code": "abc" })),

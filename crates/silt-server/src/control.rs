@@ -200,7 +200,7 @@ async fn take(server: &Server, device: DeviceId) -> Result<Vec<ControlCommand>, 
             command,
         });
     }
-    // A sign-in's code is kept no longer than it takes to deliver (ADR 0054).
+    // A sign-in's code is kept no longer than it takes to deliver (ADR 0056).
     for command in commands.iter().filter(|command| matches!(command.command, RemoteCommand::SignInCode { .. })) {
         let blank = serde_json::to_string(&RemoteCommand::SignInCode { code: String::new() }).expect("a command");
         sqlx::query("UPDATE control_commands SET command = ? WHERE id = ?")

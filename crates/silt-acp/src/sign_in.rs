@@ -1,5 +1,5 @@
 //! The ways an agent says it can be signed in, and its saying it needs one
-//! (ADR 0054).
+//! (ADR 0056).
 
 use serde_json::Value;
 

@@ -107,7 +107,7 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
 }
 
 /** The agent's own sign-in expired: signed in from here, the sign-in running on the agent's machine, and the agent going on
- * once it's done (ADR 0054). Only a link the sign-in prints, on https, is offered to open. */
+ * once it's done (ADR 0056). Only a link the sign-in prints, on https, is offered to open. */
 export function SignInCard({ thread, asked, agent }: { thread: string; asked: SignInAsked; agent: string }) {
   const [error, setError] = useState<string>()
   const [code, setCode] = useState('')

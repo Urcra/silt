@@ -1,4 +1,4 @@
-//! Signing a thread's agent in when its own sign-in expired (ADR 0054): the
+//! Signing a thread's agent in when its own sign-in expired (ADR 0056): the
 //! card's state, the sign-in program, and starting the agent again once it
 //! signed in.
 

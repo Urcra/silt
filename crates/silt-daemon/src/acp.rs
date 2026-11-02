@@ -108,7 +108,7 @@ pub(crate) struct AcpRun {
     /// The person stopped the agent and hasn't prompted it since: what it
     /// left running in the background doesn't get to start it again.
     stopped: bool,
-    /// The agent needs signing in before it goes on (ADR 0054).
+    /// The agent needs signing in before it goes on (ADR 0056).
     sign_in: Option<sign_in::SignIn>,
     /// The last prompt sent, as the agent was given it.
     last_prompt: Option<(String, Vec<Attachment>)>,
@@ -171,7 +171,7 @@ impl AcpRun {
 pub enum AcpEvent {
     Started(Result<AgentHandle, String>),
     Agent(silt_acp::Event),
-    /// What the sign-in `token` reports (ADR 0054).
+    /// What the sign-in `token` reports (ADR 0056).
     Login {
         token: u64,
         event: silt_agents::sign_in::LoginEvent,

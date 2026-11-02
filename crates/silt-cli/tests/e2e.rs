@@ -497,7 +497,7 @@ fn start_fake_acp_in(env: &Env, api: &Api, start: &serde_json::Value) -> String 
 }
 
 /// An agent whose own sign-in expired waits on a card, not an error
-/// (ADR 0054): its sign-in runs on its machine, the card shows the link and
+/// (ADR 0056): its sign-in runs on its machine, the card shows the link and
 /// takes the code from its page, and the agent goes on with what it was
 /// asked, the prompt recorded once. Over v1 the agent refuses its session,
 /// as Copilot does; over v2 it refuses the prompt, as Claude's adapter does.
