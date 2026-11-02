@@ -142,8 +142,24 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
 
+  // A prompt the daemon refuses comes back to the draft rather than stay shown as sent.
+  await alice.route('**/agent/prompt', (route) => route.fulfill({ status: 400, json: { error: 'not now' } }))
   await alice.getByLabel('draft').fill('add acp')
   await alice.getByRole('button', { name: 'Send' }).click()
+  await expect(alice.getByText('not now')).toBeVisible()
+  await expect(alice.getByLabel('draft')).toHaveValue('add acp')
+  await expect(alice.getByTestId('sending')).toHaveCount(0)
+  // The prompt shows as sent at once, while the daemon takes its time.
+  await alice.unroute('**/agent/prompt')
+  await alice.route('**/agent/prompt', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    await route.fallback()
+  })
+  await alice.getByRole('button', { name: 'Send' }).click()
+  await expect(alice.getByTestId('sending')).toHaveText('add acp', { timeout: 1000 })
+  await expect(alice.getByLabel('draft')).toHaveValue('')
+  await expect(alice.getByText('not now')).toHaveCount(0)
+  await alice.unroute('**/agent/prompt')
   const asked = alice.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')

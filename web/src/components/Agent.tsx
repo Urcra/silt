@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type ReactNode, type SetStateAction, useState } from 'react'
-import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type SignInAsked } from '../api'
+import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment, type SignInAsked } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
@@ -15,6 +15,7 @@ import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
+import { dropSending } from '../sending'
 
 export function AgentPicker({ value, onChange, className }: { value: string; onChange: (agent: string) => void; className?: string }) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
@@ -427,6 +428,7 @@ export function AgentDock({
   draft,
   onDraft,
   onSent,
+  onSending,
   people,
   top,
 }: {
@@ -438,6 +440,8 @@ export function AgentDock({
   onDraft: Dispatch<SetStateAction<string>>
   /** The agent took a prompt, so the page goes to where its turn will show. */
   onSent?: () => void
+  /** A prompt goes straight to the agent: the page shows it at once, until the history has it. */
+  onSending?: (text: string, files: string[]) => number
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
   /** On the composer's top edge. */
@@ -467,7 +471,7 @@ export function AgentDock({
   const takes: Takes = live
     ? { agent: status.agent, images: status.takes_images, files: status.takes_files }
     : { agent: seen?.name ?? 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
-  const { attached, add, remove, clear } = useAttachments(takes)
+  const { attached, add, remove, clear, restore } = useAttachments(takes)
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenMode(undefined)
@@ -490,15 +494,28 @@ export function AgentDock({
     onDraft((current) => (current === text ? '' : current))
     if (text.trim()) onSent?.()
   }
+  // The prompt shows as sent at once, and the box empties; if the agent doesn't take it, both come back.
+  const optimistic = (action: (text: string, files: PromptAttachment[]) => Promise<unknown>) => {
+    const text = draft
+    const files = attached
+    const sending = text.trim() ? onSending?.(text, files.map((file) => file.name)) : undefined
+    setError(undefined)
+    onDraft('')
+    clear()
+    if (text.trim()) onSent?.()
+    action(text, files).catch((failure: unknown) => {
+      if (sending !== undefined) dropSending(thread, [sending])
+      onDraft((current) => (current.trim() ? current : text))
+      restore(files)
+      setError(message(failure))
+    })
+  }
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
     if (!startable) return
     const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
-    const options = { preset, mode: startModes ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null, attachments: attached }
-    act(api.startAgent(agent, { thread }, options), () => {
-      clear()
-      sent(draft)()
-    })
+    const mode = startModes ? (chosenMode ?? null) : null
+    optimistic((text, files) => api.startAgent(agent, { thread }, { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files }))
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
@@ -506,10 +523,13 @@ export function AgentDock({
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
     if (!live || !sendable) return
-    act(api.prompt(thread, draft, false, attached), () => {
-      clear()
-      sent(draft)()
-    })
+    // A queued prompt shows in the queue once the daemon has it, not in the history.
+    if (!ready(status))
+      return act(api.prompt(thread, draft, false, attached), () => {
+        clear()
+        sent(draft)()
+      })
+    optimistic((text, files) => api.prompt(thread, text, false, files))
   }
 
   // While a turn runs, the line above the composer says so, with its clock.

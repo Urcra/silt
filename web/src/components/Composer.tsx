@@ -2,7 +2,7 @@ import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
 import { matching, typedCommand } from '../slashCommands'
-import { Icon, type IconName, cx } from '../ui'
+import { Icon, type IconName, Spinner, cx } from '../ui'
 import { ComposerFolded } from './composerFolded'
 
 /**
@@ -232,6 +232,7 @@ export function RoundButton({
   disabled,
   type = 'button',
   quiet = false,
+  busy = false,
   title,
 }: {
   label: string
@@ -241,6 +242,8 @@ export function RoundButton({
   type?: 'button' | 'submit'
   /** Stop: drawn on the surface rather than in amber. */
   quiet?: boolean
+  /** What it did is under way: a spinner in place of its icon. */
+  busy?: boolean
   title?: string
 }) {
   return (
@@ -257,7 +260,7 @@ export function RoundButton({
           : 'bg-accent text-on-accent hover:bg-accent-hover disabled:bg-surface-2 disabled:text-fg-3',
       )}
     >
-      <Icon name={icon} className="h-4 w-4" />
+      {busy ? <Spinner className="h-4 w-4" /> : <Icon name={icon} className="h-4 w-4" />}
     </button>
   )
 }

@@ -44,5 +44,6 @@ export function useAttachments(takes: Takes) {
     setAttached((before) => [...before, ...read])
   }
   const remove = (index: number) => setAttached((before) => before.filter((_, kept) => kept !== index))
-  return { attached, add, remove, clear: () => setAttached([]) }
+  const restore = (files: PromptAttachment[]) => setAttached((before) => [...files, ...before])
+  return { attached, add, remove, restore, clear: () => setAttached([]) }
 }
