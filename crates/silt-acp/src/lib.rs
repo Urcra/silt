@@ -4,6 +4,7 @@
 
 mod host;
 mod modes;
+mod processes;
 mod prompt;
 pub mod registry;
 mod sign_in;

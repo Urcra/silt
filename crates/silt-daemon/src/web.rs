@@ -130,6 +130,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
+        .route("/api/threads/{id}/agent/tasks/{call}/stop", post(agent_stop_task))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/reply", post(agent_reply))
         .route("/api/threads/{id}/agent/sign-in", post(agent_sign_in))
@@ -710,6 +711,10 @@ async fn agent_prompt(State(web): State<Web>, Path(thread): Path<String>, Json(b
 
 async fn agent_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::AcpCancel { thread }).await
+}
+
+async fn agent_stop_task(State(web): State<Web>, Path((thread, call)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::AcpStopTask { thread, call }).await
 }
 
 #[derive(Deserialize)]

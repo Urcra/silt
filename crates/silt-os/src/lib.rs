@@ -124,6 +124,37 @@ pub fn kill_tree(pid: u32) {
     imp::kill_tree(pid);
 }
 
+/// A process running on this machine, as [`processes`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Process {
+    pub pid: u32,
+    pub parent: Option<u32>,
+    /// Its program and arguments, where the system lets this user read them.
+    pub command: Vec<String>,
+    /// When it started, in seconds since the epoch.
+    pub started: u64,
+}
+
+/// The processes running on this machine.
+pub fn processes() -> io::Result<Vec<Process>> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new().map_err(io::Error::other)?;
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let listed = system
+        .processes()
+        .values()
+        // Linux lists each thread of a process too.
+        .filter(|process| process.thread_kind().is_none())
+        .map(|process| Process {
+            pid: process.pid().as_u32(),
+            parent: process.parent().map(sysinfo::Pid::as_u32),
+            command: process.cmd().iter().map(|part| part.to_string_lossy().into_owned()).collect(),
+            started: process.start_time(),
+        })
+        .collect();
+    Ok(listed)
+}
+
 /// Where `program` is, given directly or found on `path`, as the system
 /// would run it: on Windows that tries `PATHEXT`'s extensions too.
 pub fn find_program(program: &str, path: &OsStr) -> Option<PathBuf> {
@@ -216,6 +247,16 @@ pub fn needs_polling(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn processes_name_their_parent_and_command() {
+        let listed = processes().expect("lists processes");
+        let me = listed.iter().find(|process| process.pid == std::process::id()).expect("this process is listed");
+        assert!(me.parent.is_some());
+        #[cfg(unix)]
+        assert_eq!(me.parent, Some(std::os::unix::process::parent_id()));
+        assert!(me.command.first().is_some_and(|program| program.contains("silt_os")), "{:?}", me.command);
+    }
 
     #[test]
     fn programs_are_found_on_the_path_given_and_directly() {

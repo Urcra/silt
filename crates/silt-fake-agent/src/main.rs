@@ -136,6 +136,10 @@ fn main() -> std::process::ExitCode {
 
 #[tokio::main]
 async fn agent() -> Result<()> {
+    // What `Keep` leaves running in the background, until it's ended.
+    if std::env::args().nth(1).as_deref() == Some("keep-running") {
+        std::future::pending::<()>().await;
+    }
     if std::env::var_os("FAKE_ACP_HANG").is_some() {
         std::future::pending::<()>().await;
     }

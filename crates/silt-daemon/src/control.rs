@@ -319,6 +319,7 @@ impl Core {
             takes_images: false,
             takes_files: false,
             commands: Vec::new(),
+            stoppable: Vec::new(),
         })
     }
 
@@ -344,6 +345,10 @@ impl Core {
                 (thread, RemoteCommand::Prompt { text: text.clone(), plan: *plan })
             }
             Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
+            Request::AcpStopTask { thread, .. } => {
+                let thread = self.find_thread(thread).ok()?;
+                return self.elsewhere_of(thread).map(|_| Elsewhere::Refuse("stop it from the machine running the agent"));
+            }
             Request::AcpCancel { thread } => (thread, RemoteCommand::Cancel),
             Request::AcpAnswer { thread, id, option } => (thread, RemoteCommand::Answer { id: *id, option: option.clone() }),
             Request::AcpReply { thread, id, answers } => (thread, RemoteCommand::Reply { id: *id, answers: answers.clone() }),

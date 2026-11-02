@@ -143,7 +143,12 @@ takes_files: boolean,
 /**
  * The commands it offers, which a prompt starting with `/` runs.
  */
-commands: Array<AgentCommand>, };
+commands: Array<AgentCommand>, 
+/**
+ * The calls whose commands still run in the background, which Stop
+ * ends.
+ */
+stoppable: Array<string>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 

@@ -868,6 +868,99 @@ fn once_stopped_an_agent_isn_t_set_going_by_what_it_left_running() {
     );
 }
 
+/// The processes the fake agent's `Keep` left running for this test's repository.
+fn kept(env: &Env) -> Vec<u32> {
+    let repo = env.repo.file_name().expect("named").to_string_lossy().into_owned();
+    silt_os::processes()
+        .expect("lists processes")
+        .into_iter()
+        .filter(|process| process.command.iter().any(|part| part == "keep-running") && process.command.join(" ").contains(&repo))
+        .map(|process| process.pid)
+        .collect()
+}
+
+/// What the history says of the task the call `call` started, in order.
+fn task_news(api: &Api, thread: &str, call: &str) -> Vec<String> {
+    history_entries(api, thread)
+        .iter()
+        .filter(|entry| entry["task"]["call"] == call)
+        .filter_map(|entry| entry["task"]["status"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A command the agent left running in the background is ended from the web
+/// UI: its process with it, its card says it stopped, and its end doesn't
+/// set the agent going.
+#[test]
+fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Keep");
+    settled_history(&api, &thread, "Done: add acp Keep");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!(["keep-1"]), "{live}");
+    let (refused, said) = api.call("POST", &format!("/api/threads/{thread}/agent/tasks/run-1/stop"), None);
+    assert!(!refused && said["error"].as_str().is_some_and(|error| error.contains("isn't running")), "{said}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/tasks/keep-1/stop"), None);
+    assert!(eventually(|| kept(&env).is_empty()), "its process ended");
+    let woke = eventually(|| {
+        let idle = api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "idle";
+        idle && history_entries(&api, &thread).iter().any(|entry| entry["kind"] == "wake")
+    });
+    assert!(woke, "its end set the agent going");
+    assert_eq!(task_news(&api, &thread, "keep-1"), ["running", "stopped"], "its end is no news");
+    let entries = history_entries(&api, &thread);
+    let wake = entries.iter().find(|entry| entry["kind"] == "wake").expect("the turn");
+    assert!(
+        wake["text"].as_str().is_some_and(|text| text.ends_with("Silt stopped it, as you had stopped the command.")),
+        "{wake}"
+    );
+    assert!(!entries.iter().any(|entry| entry["text"] == "The kept command ended."), "it was stopped before it went on");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+}
+
+/// What the agent left running goes with it, whether the person stops the
+/// agent or the daemon stops, and the history says so, also after the
+/// daemon starts again.
+#[test]
+fn what_an_agent_left_running_stops_with_it() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let stopped = start_fake_acp(&env, &api, "v2", "add acp Keep");
+    settled_history(&api, &stopped, "Done: add acp Keep");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    api.ok("POST", &format!("/api/threads/{stopped}/agent/stop"), None);
+    assert!(eventually(|| task_news(&api, &stopped, "keep-1") == ["running", "stopped"]), "it stopped with the agent");
+    assert!(eventually(|| kept(&env).is_empty()), "its process ended");
+
+    let left = start_fake_acp(&env, &api, "v2", "add acp Keep");
+    settled_history(&api, &left, "Done: add acp Keep");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    env.silt(&["daemon", "stop"]);
+    assert!(eventually(|| kept(&env).is_empty()), "its process ended with the daemon");
+    let api = Api::open(&env);
+    assert_eq!(task_news(&api, &left, "keep-1"), ["running", "stopped"]);
+    assert!(api.ok("GET", &format!("/api/threads/{left}/live"), None)["agent"].is_null(), "no agent runs it");
+
+    // The machine goes down: the daemon, its agent and the command end at once.
+    let downed = start_fake_acp(&env, &api, "v2", "add acp Keep");
+    settled_history(&api, &downed, "Done: add acp Keep");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    let processes = silt_os::processes().expect("lists processes");
+    let parent = |pid: u32| processes.iter().find(|process| process.pid == pid).and_then(|process| process.parent);
+    let command = kept(&env)[0];
+    let agent = parent(command).expect("the agent");
+    let daemon = parent(agent).expect("the daemon");
+    for pid in [daemon, agent, command] {
+        silt_os::kill(pid).expect("ends");
+    }
+    let api = Api::open(&env);
+    assert_eq!(task_news(&api, &downed, "keep-1"), ["running", "stopped"], "the daemon starting again says so");
+}
+
 /// Copilot over v1 tags its subagent's calls with the subagent's own id and
 /// leaves its words untagged while it waits on it: all of it is the
 /// subagent's, inside the call that started it.

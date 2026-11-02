@@ -781,6 +781,7 @@ impl Core {
                 Err(error) => Response::error(error),
             },
             Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel).await),
+            Request::AcpStopTask { thread, call } => to_response(self.stop_task(&thread, &call).await),
             Request::AcpAnswer { thread, id, option } => {
                 to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }).await)
             }
