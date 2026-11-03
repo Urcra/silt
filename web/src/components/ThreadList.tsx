@@ -8,7 +8,7 @@ import { projectName, projects } from '../projects'
 import { keys, message } from '../query'
 import { needsYou } from '../sections'
 import { hosted } from '../served'
-import { threadWhere } from '../threadLook'
+import { inBackground, inProgress, threadWhere } from '../threadLook'
 import { ago } from '../time'
 import { Avatar, EmptyState, Icon, Input, Skeleton, Tabs, Tag, type Tone, buttonClass, cx } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
@@ -19,7 +19,7 @@ type Filter = 'all' | 'needs_you' | 'working' | 'mine' | 'shared' | 'elsewhere'
 
 type Sort = 'title' | 'last'
 
-const working = (thread: ThreadSummary) => thread.agent_state === 'working' || thread.agent_state === 'starting'
+const working = inProgress
 
 /** A thread's state as a pill, in words; amber only for what waits on the person. */
 function threadState(thread: ThreadSummary, fromIt: MrSummary | undefined, recovered: boolean): { label: string; tone: Tone } | null {
@@ -35,6 +35,7 @@ function threadState(thread: ThreadSummary, fromIt: MrSummary | undefined, recov
     case 'starting':
       return { label: 'Working', tone: 'ok' }
   }
+  if (inBackground(thread)) return { label: 'In the background', tone: 'ok' }
   if (thread.review) return { label: 'Review requested', tone: 'accent' }
   if (fromIt) return { label: 'MR open', tone: 'info' }
   if (thread.merged) return { label: 'Merged', tone: 'neutral' }

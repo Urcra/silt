@@ -104,6 +104,8 @@ pub(crate) struct AcpRun {
     woke_by: Vec<String>,
     /// Commands left running in the background, by the agent's id for each.
     background: HashMap<String, Background>,
+    /// How many of them the thread list was last told of.
+    background_listed: usize,
     /// Background commands the person stopped, by the call that started
     /// each: the agent's later news of their end is no news.
     stopped_tasks: HashSet<String>,
@@ -552,6 +554,7 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
+                background_listed: 0,
                 stopped_tasks: HashSet::new(),
                 hush: None,
                 stopped: false,
@@ -842,13 +845,26 @@ impl Core {
         }
     }
 
+    /// How many commands the thread's agent here left running in the
+    /// background.
+    pub(crate) fn background_here(&self, thread: ThreadId) -> u32 {
+        self.acp.get(&thread).map_or(0, |run| u32::try_from(run.background.len()).unwrap_or(u32::MAX))
+    }
+
     /// Tells browsers how the thread's agent stands, and stores it when its
     /// state or error changed.
     pub(crate) async fn agent_changed(&mut self, thread: ThreadId) {
         self.announce_agent(thread);
-        let Some(run) = self.acp.get(&thread) else {
+        let Some(run) = self.acp.get_mut(&thread) else {
             return;
         };
+        // The thread list shows what still runs in the background, which
+        // doesn't change the agent's state.
+        if run.background_listed != run.background.len() {
+            run.background_listed = run.background.len();
+            self.announce(crate::protocol::BusEvent::Threads);
+        }
+        let run = &self.acp[&thread];
         let stored = self.agent_runs.get(&thread);
         let record = silt_store::AgentRunRecord {
             agent: run.info.name.clone(),

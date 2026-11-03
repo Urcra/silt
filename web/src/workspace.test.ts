@@ -20,6 +20,7 @@ function thread(id: string, server: string | null, repo: string, local_only = fa
     collaborators: [],
     writable: true,
     agent_state: null,
+    background: 0,
     last_ms: 0,
     merged: false,
     review: false,

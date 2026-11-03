@@ -900,6 +900,7 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert!(eventually(|| kept(&env).len() == 1), "the command runs");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!(["keep-1"]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 1, "the thread list says something still runs");
     let (refused, said) = api.call("POST", &format!("/api/threads/{thread}/agent/tasks/run-1/stop"), None);
     assert!(!refused && said["error"].as_str().is_some_and(|error| error.contains("isn't running")), "{said}");
 
@@ -920,6 +921,14 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert!(!entries.iter().any(|entry| entry["text"] == "The kept command ended."), "it was stopped before it went on");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
+/// How many commands the thread list says the thread's agent left running.
+fn listed_background(api: &Api, thread: &str) -> u64 {
+    let threads = api.ok("GET", "/api/threads", None);
+    let listed = threads.as_array().expect("a list").iter().find(|listed| listed["id"] == thread).expect("listed");
+    listed["background"].as_u64().expect("a count")
 }
 
 /// What the agent left running goes with it, whether the person stops the
