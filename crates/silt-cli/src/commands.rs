@@ -267,8 +267,28 @@ fn find_agent(name: &str) -> Result<&'static dyn Agent, Exn<CliError>> {
 /// Runs an agent CLI in a new thread, with Silt recording its session and
 /// every file edit.
 pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
-    let agent = find_agent(name)?;
     let cwd = current_dir()?;
+    if silt_git::Repo::discover(&cwd).is_err() {
+        eprintln!(
+            "silt: {} isn't in a git repository, so nothing can continue this thread elsewhere; `silt chat` starts one in a folder of its own",
+            cwd.display()
+        );
+    }
+    run_agent_in(name, cwd, isolated, args)
+}
+
+/// Starts a chat (ADR 0059): `name`'s agent in a new folder of its own,
+/// named after what it's `about`, recorded as `silt <agent>` records.
+pub fn chat(name: &str, about: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
+    find_agent(name)?;
+    let folder = silt_daemon::chats::new_folder(&paths::data_dir(), about.unwrap_or_default())
+        .or_raise(|| CliError("could not make the chat's folder".into()))?;
+    eprintln!("silt: chatting in {}", folder.display());
+    run_agent_in(name, folder, false, args)
+}
+
+fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
+    let agent = find_agent(name)?;
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
     let (started, mut recording) = if daemonless_capture() {
         Recording::here(agent, &cwd, session_id.as_deref(), isolated, false)?

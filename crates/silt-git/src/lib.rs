@@ -197,6 +197,9 @@ impl Repo {
     /// clone of it names it by its origin. A managed checkout's is its
     /// source's.
     pub fn project(&self) -> Result<String, GitError> {
+        if self.is_chat() {
+            return Ok(silt_types::CHATS.to_owned());
+        }
         if let Some(origin) = self.remote_url("origin")? {
             return Ok(normalize_remote(&origin));
         }
@@ -207,6 +210,31 @@ impl Repo {
             None => self.root.clone(),
         };
         Ok(normalize_remote(&folder.to_string_lossy()))
+    }
+
+    /// Whether this is a chat's own repository (ADR 0059): its local config
+    /// names [`silt_types::CHATS`] as its project.
+    pub fn is_chat(&self) -> bool {
+        self.repo.config_snapshot().string(CHAT_KEY).is_some_and(|project| project.as_slice() == silt_types::CHATS.as_bytes())
+    }
+
+    /// Makes `path` a chat's repository (ADR 0059): marked as one, with
+    /// [`chat_root`]'s commit on `main`, the same commit on every machine,
+    /// so a chat resumes anywhere without fetching it.
+    pub fn init_chat(path: &Path) -> Result<Self, GitError> {
+        std::fs::create_dir_all(path)?;
+        run_git(path, &["init", "--quiet", "--initial-branch=main"], None)?;
+        run_git(path, &["config", CHAT_KEY, silt_types::CHATS], None)?;
+        let commit = chat_root(path)?;
+        run_git(path, &["update-ref", "refs/heads/main", &commit.to_string()], None)?;
+        Self::discover(path)
+    }
+
+    /// Makes a chat's repository an ordinary one, a project named by its
+    /// folder (ADR 0053).
+    pub fn leave_chats(&self) -> Result<(), GitError> {
+        run_git(&self.root, &["config", "--unset", CHAT_KEY], None)?;
+        Ok(())
     }
 
     /// Makes `path` and an empty repository in it, for a new project.
@@ -401,6 +429,35 @@ impl Repo {
         }
         run_git_with(&self.root, args, None, &envs)
     }
+}
+
+const CHAT_KEY: &str = "silt.project";
+
+/// Writes every chat's first commit in the repository at `dir`: the empty
+/// tree, with a fixed author, committer, date, message and encoding, so its
+/// id is the same everywhere.
+fn chat_root(dir: &Path) -> Result<GitOid, GitError> {
+    let tree = run_git(dir, &["mktree"], Some(b""))?;
+    let tree = String::from_utf8_lossy(&tree).trim().to_owned();
+    let envs: Vec<(String, String)> = [
+        ("GIT_AUTHOR_NAME", "Silt"),
+        ("GIT_AUTHOR_EMAIL", "chats@silt.invalid"),
+        ("GIT_AUTHOR_DATE", "@0 +0000"),
+        ("GIT_COMMITTER_NAME", "Silt"),
+        ("GIT_COMMITTER_EMAIL", "chats@silt.invalid"),
+        ("GIT_COMMITTER_DATE", "@0 +0000"),
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", "i18n.commitEncoding"),
+        ("GIT_CONFIG_VALUE_0", "UTF-8"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .collect();
+    let commit = run_git_with(dir, &["commit-tree", "--no-gpg-sign", "-m", "Silt chat", &tree], None, &envs)?;
+    String::from_utf8_lossy(&commit)
+        .trim()
+        .parse()
+        .map_err(|_| GitError::Command { args: "commit-tree".into(), stderr: "it named no commit".into() })
 }
 
 pub(crate) fn run_git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>, GitError> {

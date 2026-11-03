@@ -48,6 +48,16 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
+    /// This machine's settings for chats (ADR 0059).
+    ChatSettings,
+    SetChatSettings {
+        settings: ChatSettings,
+    },
+    /// Makes a chat's folder a project of its own, with the chat's threads
+    /// in it (ADR 0059). Answers with the project's name.
+    MakeProject {
+        thread: String,
+    },
     /// Take over recording the running agent in `thread` from the wrapper
     /// that recorded it on its own until the daemon answered (ADR 0018).
     Adopt {
@@ -951,6 +961,33 @@ pub struct StartOptions {
     pub plan: bool,
     /// Files sent with the first prompt.
     pub attachments: Vec<PromptAttachment>,
+    /// A new thread is a chat, in a folder of its own rather than a clone
+    /// (ADR 0059).
+    pub chat: bool,
+    /// A chat the new thread continues in a project: the agent starts from
+    /// its conversation.
+    pub continues: Option<String>,
+    /// Where in the new thread's checkout the chat's files are copied, a
+    /// relative path; nowhere when unset.
+    pub copy_to: Option<String>,
+}
+
+/// This machine's settings for chats.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(default)]
+pub struct ChatSettings {
+    /// Where chats' folders go; `$SILT_HOME/chats` when unset.
+    pub dir: Option<PathBuf>,
+    /// The permissions a new chat starts with: full access, as a chat's
+    /// folder holds only what its agent wrote there.
+    pub preset: Preset,
+}
+
+impl Default for ChatSettings {
+    fn default() -> Self {
+        Self { dir: None, preset: Preset::FullAccess }
+    }
 }
 
 /// A mode, or one value of a setting.
@@ -1300,6 +1337,7 @@ mod tests {
             ShowLine::decl(&config),
             silt_proto::Snooze::decl(&config),
             StartOptions::decl(&config),
+            ChatSettings::decl(&config),
             StateChange::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),

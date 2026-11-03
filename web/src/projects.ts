@@ -1,4 +1,5 @@
 import type { ThreadSummary } from './api'
+import { isChat } from './chats'
 
 /** Threads by project: the repositories they were recorded in, for now (ADR 0020). */
 export function projects(threads: ThreadSummary[]): [string, ThreadSummary[]][] {
@@ -34,5 +35,6 @@ export function shortPath(path: string): string {
 
 /** The last part of a repository's identity, its name. */
 export function projectName(repo: string): string {
+  if (isChat(repo)) return 'Chats'
   return repo.split('/').filter(Boolean).pop() ?? repo
 }

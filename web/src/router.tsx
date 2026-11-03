@@ -47,6 +47,15 @@ export const router = createRouter({
         if (!phone() || hosted()) throw redirect({ to: '/', search, replace: true })
       },
     }),
+    createRoute({
+      getParentRoute: () => root,
+      path: '/chat',
+      component: lazyRouteComponent(() => import('./components/NewChat'), 'NewChat'),
+      // A server starts no agents.
+      beforeLoad: () => {
+        if (hosted()) throw redirect({ to: '/', replace: true })
+      },
+    }),
     createRoute({ getParentRoute: () => root, path: '/threads', component: routes.ThreadsRoute }),
     createRoute({
       getParentRoute: () => root,

@@ -3,6 +3,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
+import { isChat } from '../chats'
 import { useTopic } from '../bus'
 import { switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
@@ -179,6 +180,45 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
   )
 }
 
+/** The chats, newest first, with what's settled behind a count, as a project's threads are (ADR 0059). */
+function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
+  const [showRest, setShowRest] = useState(false)
+  const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
+  const shown = newest.filter((thread) => ['needs_you', 'working', 'active'].includes(section(thread, now)))
+  const rest = newest.filter((thread) => ['snoozed', 'settled'].includes(section(thread, now)))
+  return (
+    <section aria-label="chats" className="mt-2">
+      <SectionLabel
+        className="px-2"
+        aside={
+          !hosted() && (
+            <Link to="/chat" aria-label="New chat" className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2">
+              <Icon name="plus" className="h-3.5 w-3.5" />
+            </Link>
+          )
+        }
+      >
+        Chats
+      </SectionLabel>
+      <ul>
+        {(showRest ? [...shown, ...rest] : shown).map((thread) => (
+          <ThreadItem key={thread.id} thread={thread} />
+        ))}
+      </ul>
+      {rest.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={showRest}
+          onClick={() => setShowRest(!showRest)}
+          className="block py-1 pr-2 pl-2 text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
+        >
+          {showRest ? 'Show fewer' : `Show ${rest.length} more`}
+        </button>
+      )}
+    </section>
+  )
+}
+
 function NavItem({
   to,
   icon,
@@ -280,6 +320,9 @@ export function Sidebar() {
   const grouped = sections(mine, now)
   // A thread that needs the person stays in its project too, where it lives.
   const listed = mine.filter((thread) => [...LISTED, 'needs_you'].includes(section(thread, now)))
+  // Chats have a section of their own above the projects (ADR 0059).
+  const chats = listed.filter((thread) => isChat(thread.repo))
+  const inProjects = listed.filter((thread) => !isChat(thread.repo))
   const path = useRouterState({ select: (state) => state.location.pathname })
   const reviews = mine.filter((thread) => thread.review).length
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
@@ -306,6 +349,13 @@ export function Sidebar() {
           <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
           <span className="flex-1">New thread</span>
           <Kbd>{formatKeys('n')}</Kbd>
+        </Link>
+      )}
+      {!hosted() && (
+        <Link to="/chat" className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
+          <Icon name="comment" className="h-[15px] w-[15px] shrink-0" />
+          <span className="flex-1">New chat</span>
+          <Kbd>{formatKeys('c')}</Kbd>
         </Link>
       )}
       <NavItem to="/threads" icon="list">
@@ -352,6 +402,7 @@ export function Sidebar() {
           </ul>
         </section>
       )}
+      {chats.length > 0 && <ChatGroup threads={chats} now={now} />}
       <SectionLabel
         className="mt-2 px-2"
         aside={
@@ -369,8 +420,8 @@ export function Sidebar() {
       >
         Projects
       </SectionLabel>
-      {threads.isSuccess && listed.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
-      {projects(listed).map(([repo, inRepo]) => (
+      {threads.isSuccess && inProjects.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
+      {projects(inProjects).map(([repo, inRepo]) => (
         <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
       ))}
     </nav>

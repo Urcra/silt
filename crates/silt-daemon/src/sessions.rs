@@ -330,7 +330,10 @@ impl Core {
     ) -> Result<CreatedThread, CoreError> {
         let cwd = CanonicalCwd::new(cwd)?;
         let repo = Repo::discover(&cwd)?;
-        self.remember_clone(&cwd).await;
+        // A chat's folder is no clone of a project (ADR 0059).
+        if !repo.is_chat() {
+            self.remember_clone(&cwd).await;
+        }
         let relative = cwd.strip_prefix(repo.root()).unwrap_or(Path::new("")).to_owned();
         let (head, branch) = match base {
             Some(base) => {

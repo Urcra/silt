@@ -36,6 +36,7 @@ export const keys = {
   links: (thread: string) => ['links', thread] as const,
   notificationSettings: ['notification-settings'] as const,
   status: ['status'] as const,
+  chatSettings: ['chat-settings'] as const,
 }
 
 export function message(error: unknown): string {

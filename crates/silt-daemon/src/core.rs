@@ -582,6 +582,11 @@ impl Core {
                 Err(error) => Response::error(error),
             },
             Request::CloneOf { thread } => to_response(self.find_thread(&thread).and_then(|thread| self.clone_of(thread))),
+            Request::ChatSettings => to_response(Ok::<_, CoreError>(crate::chats::settings(&self.data_dir))),
+            Request::SetChatSettings { settings } => {
+                to_response(crate::chats::save_settings(&self.data_dir, &settings).map(|()| "chat settings saved"))
+            }
+            Request::MakeProject { thread } => to_response(self.make_project(&thread).await),
             Request::Adopt { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.adopt(thread).await),
                 Err(error) => Response::error(error),
@@ -1940,6 +1945,10 @@ impl Core {
     /// This machine's clone of the thread's repository: the one it was
     /// recorded in, or one known for its repository.
     pub(crate) fn clone_of(&self, thread: ThreadId) -> Result<PathBuf, CoreError> {
+        if self.is_chat(thread) {
+            // Resume and fork pick the chat's folder themselves.
+            return Ok(self.chat_folder_here(thread).unwrap_or_else(|| crate::chats::chats_dir(&self.data_dir)));
+        }
         let record = &self.threads[&thread];
         if !record.repo_root.as_os_str().is_empty() && record.repo_root.join(".git").exists() {
             return Ok(record.repo_root.clone());
@@ -1977,7 +1986,9 @@ impl Core {
         let mut ran_in: Vec<(i64, String, PathBuf)> = self
             .threads
             .values()
-            .filter(|thread| !thread.repo.is_empty() && !self.clones.contains_key(&thread.repo))
+            .filter(|thread| {
+                !thread.repo.is_empty() && !silt_types::is_chat(&thread.repo) && !self.clones.contains_key(&thread.repo)
+            })
             .filter(|thread| thread.repo_root.join(".git").is_dir())
             .map(|thread| (thread.created_ms, thread.repo.clone(), thread.repo_root.clone()))
             .collect();

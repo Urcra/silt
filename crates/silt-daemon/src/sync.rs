@@ -460,6 +460,18 @@ impl Core {
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {
+                // A chat another machine made a project of (ADR 0059).
+                if silt_types::is_chat(&known.repo) && !silt_types::is_chat(&info.repo) && !info.repo.is_empty() {
+                    let moved = vec![info.id];
+                    let root = known.repo_root.clone();
+                    if let Err(error) = self.store.move_threads(&moved, silt_types::CHATS, &info.repo, &root).await {
+                        warn!(%error, "could not move a chat into its project");
+                    } else {
+                        self.threads.get_mut(&info.id).expect("known").repo = info.repo.clone();
+                        self.announce(crate::protocol::BusEvent::Threads);
+                    }
+                }
+                let known = &self.threads[&info.id];
                 if known.owner != info.owner && !info.owner.is_empty() {
                     let updated = ThreadRecord { owner: info.owner.clone(), ..known.clone() };
                     if let Err(error) = self.store.create_thread(&updated).await {

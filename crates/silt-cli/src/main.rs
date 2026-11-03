@@ -29,6 +29,18 @@ enum Command {
         #[command(flatten)]
         run: AgentRun,
     },
+    /// Start a chat: an agent CLI in a new folder of its own rather than a project, recorded as a private thread
+    Chat {
+        /// The agent CLI to run (claude, codex, gemini, opencode, copilot)
+        #[arg(default_value = "claude")]
+        agent: String,
+        /// What the chat is about, naming its folder
+        #[arg(long)]
+        about: Option<String>,
+        /// Arguments passed on to the agent, after `--`
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Run Claude Code with Silt recording the session and every file edit
     Claude(AgentRun),
     /// Run Codex with Silt recording the session and every file edit
@@ -668,6 +680,7 @@ fn run() -> Result<(), Exn<CliError>> {
     }
     match cli.command {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
+        Command::Chat { agent, about, args } => commands::chat(&agent, about.as_deref(), &args),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),

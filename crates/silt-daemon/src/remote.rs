@@ -411,6 +411,14 @@ impl Remote {
         Ok(())
     }
 
+    /// Moves a chat into the project its folder became (ADR 0059).
+    pub async fn move_chat(&self, thread: ThreadId, body: &silt_proto::MoveChat) -> Result<(), RemoteError> {
+        let path = format!("/v1/threads/{thread}/project");
+        let response = self.request(reqwest::Method::POST, &path).json(body).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn search(&self, query: &SearchQuery) -> Result<SearchReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/search").query(query).send().await?;
         Ok(checked(response).await?.json().await?)

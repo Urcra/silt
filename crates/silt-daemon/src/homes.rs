@@ -124,7 +124,9 @@ impl Core {
     /// only for a repository without a remote, which no other machine can
     /// clone from, unless its project was given a home (ADR 0053).
     pub(crate) fn new_home_in(&self, clone: &silt_git::Repo, project: &str) -> Result<Option<Home>, CoreError> {
-        if !self.project_homes.contains_key(project) && clone.remote_url("origin")?.is_none() {
+        // A chat follows its person to their default server, as every
+        // machine can make its folder (ADR 0059).
+        if !silt_types::is_chat(project) && !self.project_homes.contains_key(project) && clone.remote_url("origin")?.is_none() {
             return Ok(Some(Home::Local));
         }
         Ok(self.new_home(project))

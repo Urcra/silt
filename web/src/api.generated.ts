@@ -812,7 +812,33 @@ plan: boolean,
 /**
  * Files sent with the first prompt.
  */
-attachments: Array<PromptAttachment>, };
+attachments: Array<PromptAttachment>, 
+/**
+ * A new thread is a chat, in a folder of its own rather than a clone
+ * (ADR 0059).
+ */
+chat: boolean, 
+/**
+ * A chat the new thread continues in a project: the agent starts from
+ * its conversation.
+ */
+continues: string | null, 
+/**
+ * Where in the new thread's checkout the chat's files are copied, a
+ * relative path; nowhere when unset.
+ */
+copy_to: string | null, };
+
+export type ChatSettings = { 
+/**
+ * Where chats' folders go; `$SILT_HOME/chats` when unset.
+ */
+dir: string | null, 
+/**
+ * The permissions a new chat starts with: full access, as a chat's
+ * folder holds only what its agent wrote there.
+ */
+preset: Preset, };
 
 export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
 
