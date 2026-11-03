@@ -57,7 +57,8 @@ fn cached(path: &Path, make: impl FnOnce(&Path) -> io::Result<()>) -> io::Result
 
 /// A clone of `repo` at `to`, for a run to change as it likes.
 pub fn clone_repo(repo: &Path, to: &Path) -> io::Result<()> {
-    git(Path::new("/"), &["clone", "-q", "--local", &repo.to_string_lossy(), &to.to_string_lossy()])
+    // Copied, not linked: the scratch dir is in /tmp, often another filesystem.
+    git(Path::new("/"), &["clone", "-q", "--local", "--no-hardlinks", &repo.to_string_lossy(), &to.to_string_lossy()])
 }
 
 /// A repository of `files` small files, a hundred to a directory.
