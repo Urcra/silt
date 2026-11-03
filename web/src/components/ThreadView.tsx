@@ -52,6 +52,7 @@ import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
+import { unrecorded } from '../unrecorded'
 import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
@@ -1493,7 +1494,13 @@ function ThreadBody({
   useEffect(() => {
     if (id !== thread) void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
   }, [id, thread, hash, navigate])
-  const { agent, tool, preset, setPreset } = useLive(thread)
+  const { agent: status, tool, preset, setPreset, said } = useLive(thread)
+  // What the agent said stays where it was until the history has it, rather than blink out and come back above.
+  const pending = useMemo(() => unrecorded(said, entries), [said, entries])
+  const agent = useMemo(
+    () => status && { ...status, streaming: status.streaming || pending.text, thinking: status.thinking || pending.thought },
+    [status, pending],
+  )
   const people = usePresence(thread, null, null, draft, undefined, !hosted())
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
   const clearDraft = useCallback(() => setDraft(''), [])
@@ -1623,7 +1630,7 @@ function ThreadBody({
   }
   const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
   // A plan waiting for approval is still that turn's to finish.
-  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input'
+  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input' || pending.text !== ''
   // The running turn's card shows the thought under way where it will be recorded, so the tail doesn't show it too.
   const lastRow = rows[rows.length - 1]
   const thoughtCarded = agent?.state === 'working' && grouping === 'turn' && lastRow?.kind === 'turn' && sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0

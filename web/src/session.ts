@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type AgentStatus, type Presence, type Preset } from './api'
 import { useBusEvents, useTopic } from './bus'
+import { NOTHING_SAID, type Said } from './unrecorded'
 
 const HEARTBEAT_MS = 2000
 
@@ -15,9 +16,14 @@ export interface Live {
   preset: Preset
   /** What the running tool printed so far. */
   tool: { id: string | null; text: string }
+  /** What the agent last streamed, kept once its status drops it, until the history has it. */
+  said: Said
 }
 
 const NO_TOOL = { id: null, text: '' }
+
+/** How long what the agent said is kept for a history that never brings it, as one that words it otherwise. */
+const SAID_MS = 5000
 
 /** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
 export function useLive(thread: string): Live & { setPreset: (preset: Preset) => void } {
@@ -27,6 +33,7 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
     agent: null,
     preset: 'ask_before_commands',
     tool: NO_TOOL,
+    said: NOTHING_SAID,
   })
   const [round, setRound] = useState(0)
   useEffect(() => {
@@ -40,6 +47,7 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
           deltas: state.deltas,
           agent: state.agent,
           preset: state.preset,
+          said: NOTHING_SAID,
         })),
       () => undefined,
     )
@@ -47,6 +55,11 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
       current = false
     }
   }, [thread, round])
+  useEffect(() => {
+    if (live.said === NOTHING_SAID) return
+    const forget = setTimeout(() => setLive((previous) => (previous.said === live.said ? { ...previous, said: NOTHING_SAID } : previous)), SAID_MS)
+    return () => clearTimeout(forget)
+  }, [live.said])
   useTopic(`thread:${thread}`)
   useBusEvents((event) => {
     if (event.event === 'lagged') {
@@ -60,7 +73,15 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
       )
     } else if (event.event === 'agent') {
       const working = event.status?.state === 'working' || event.status?.state === 'awaiting_permission'
-      setLive((previous) => ({ ...previous, agent: event.status, tool: working ? previous.tool : NO_TOOL }))
+      setLive((previous) => {
+        const before = previous.agent
+        const now = event.status
+        const text = now?.streaming ? '' : before?.streaming || previous.said.text
+        const thought = now?.thinking ? '' : before?.thinking || previous.said.thought
+        const kept = text === previous.said.text && thought === previous.said.thought
+        const said = kept ? previous.said : text || thought ? { text, thought } : NOTHING_SAID
+        return { ...previous, agent: now, tool: working ? previous.tool : NO_TOOL, said }
+      })
     } else if (event.event === 'agent_text' && event.kind === 'tool') {
       setLive((previous) => {
         const same = !event.restart && previous.tool.id === event.tool_use_id
