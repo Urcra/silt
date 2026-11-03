@@ -1,7 +1,7 @@
 import type { AgentStatus, ThreadSummary } from './api'
 import type { DotTone, IconName } from './ui'
 
-/** A command its agent left running in the background goes on, though the agent's turn ended. */
+/** A command or subagent its agent left running goes on, though the agent's turn ended. */
 export function inBackground(thread: ThreadSummary): boolean {
   return thread.background > 0 && thread.agent_state === 'idle'
 }

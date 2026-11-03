@@ -34,8 +34,8 @@ pub struct ThreadSummary {
     /// How the agent the web UI last ran in it here stands (ADR 0022).
     #[serde(default)]
     pub agent_state: Option<AgentState>,
-    /// Commands its agent left running in the background, which go on
-    /// after its turn ends.
+    /// Commands and subagents its agent left running, which go on after
+    /// its turn ends.
     #[serde(default)]
     pub background: u32,
     /// When something last happened in it.

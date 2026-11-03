@@ -132,7 +132,7 @@ impl Core {
                     .collect(),
                 questions: status.questions,
                 sign_in: status.sign_in,
-                background: u32::try_from(status.stoppable.len()).unwrap_or(u32::MAX),
+                background: self.background_here(thread),
                 queued,
                 preset: serde_json::to_value(self.preset(thread))
                     .ok()
@@ -328,8 +328,8 @@ impl Core {
         self.elsewhere_of(thread).map(|running| running.agent.state).or_else(|| self.agent_state(thread))
     }
 
-    /// How many commands the thread's agent left running in the
-    /// background, here or on the device running it.
+    /// How many commands and subagents the thread's agent left running,
+    /// here or on the device running it.
     pub(crate) fn shown_background(&self, thread: ThreadId) -> u32 {
         match self.elsewhere_of(thread) {
             Some(running) => running.agent.background,

@@ -841,8 +841,8 @@ writable: boolean,
  */
 agent_state: AgentState | null, 
 /**
- * Commands its agent left running in the background, which go on
- * after its turn ends.
+ * Commands and subagents its agent left running, which go on after
+ * its turn ends.
  */
 background: number, 
 /**

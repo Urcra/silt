@@ -1013,7 +1013,7 @@ pub struct AgentReport {
     /// The sign-in it waits on, when its own expired (ADR 0056).
     #[serde(default)]
     pub sign_in: Option<SignInAsked>,
-    /// Commands it left running in the background.
+    /// Commands and subagents it left running, which go on after its turn.
     #[serde(default)]
     pub background: u32,
 }

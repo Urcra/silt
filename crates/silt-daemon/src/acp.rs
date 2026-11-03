@@ -104,7 +104,10 @@ pub(crate) struct AcpRun {
     woke_by: Vec<String>,
     /// Commands left running in the background, by the agent's id for each.
     background: HashMap<String, Background>,
-    /// How many of them the thread list was last told of.
+    /// Subagents running, by the call that started each, which may go on
+    /// after the turn.
+    subagents: HashSet<String>,
+    /// How many commands and subagents the thread list was last told of.
     background_listed: usize,
     /// Background commands the person stopped, by the call that started
     /// each: the agent's later news of their end is no news.
@@ -167,6 +170,11 @@ impl AcpRun {
             AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() => AgentState::AwaitingPermission,
             other => other,
         }
+    }
+
+    /// How many commands and subagents it left running.
+    fn in_background(&self) -> usize {
+        self.background.len() + self.subagents.len()
     }
 
     fn plan_mode(&self) -> Option<&str> {
@@ -554,6 +562,7 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
+                subagents: HashSet::new(),
                 background_listed: 0,
                 stopped_tasks: HashSet::new(),
                 hush: None,
@@ -845,10 +854,10 @@ impl Core {
         }
     }
 
-    /// How many commands the thread's agent here left running in the
-    /// background.
+    /// How many commands and subagents the thread's agent here left
+    /// running.
     pub(crate) fn background_here(&self, thread: ThreadId) -> u32 {
-        self.acp.get(&thread).map_or(0, |run| u32::try_from(run.background.len()).unwrap_or(u32::MAX))
+        self.acp.get(&thread).map_or(0, |run| u32::try_from(run.in_background()).unwrap_or(u32::MAX))
     }
 
     /// Tells browsers how the thread's agent stands, and stores it when its
@@ -860,8 +869,8 @@ impl Core {
         };
         // The thread list shows what still runs in the background, which
         // doesn't change the agent's state.
-        if run.background_listed != run.background.len() {
-            run.background_listed = run.background.len();
+        if run.background_listed != run.in_background() {
+            run.background_listed = run.in_background();
             self.announce(crate::protocol::BusEvent::Threads);
         }
         let run = &self.acp[&thread];
@@ -1350,6 +1359,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.background.clear();
+                run.subagents.clear();
                 run.state = AgentState::Stopped;
                 run.handle = None;
                 self.close_agent_session(thread).await?;
@@ -1513,6 +1523,13 @@ impl Core {
                             });
                         } else {
                             run.background.remove(task);
+                        }
+                    }
+                    if news.kind.as_deref() == Some("subagent") {
+                        if news.status == "running" {
+                            run.subagents.insert(id.clone());
+                        } else {
+                            run.subagents.remove(&id);
                         }
                     }
                     // Between turns, what ended is what the agent will likely go on about.

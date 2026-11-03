@@ -924,7 +924,22 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
-/// How many commands the thread list says the thread's agent left running.
+/// A subagent the agent left running past its turn keeps the thread in
+/// progress until it ends, as the person stopping the agent ends it.
+#[test]
+fn a_subagent_left_running_keeps_its_thread_in_progress_until_it_ends() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Aside");
+    settled_history(&api, &thread, "Done: add acp Aside");
+    assert_eq!(listed_background(&api, &thread), 1, "the subagent still runs, though the turn ended");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/cancel"), None);
+    assert!(eventually(|| listed_background(&api, &thread) == 0), "the subagent stopped with the agent");
+    assert_eq!(task_news(&api, &thread, "aside-1"), ["running", "stopped"]);
+}
+
+/// How many commands and subagents the thread list says the thread's agent
+/// left running.
 fn listed_background(api: &Api, thread: &str) -> u64 {
     let threads = api.ok("GET", "/api/threads", None);
     let listed = threads.as_array().expect("a list").iter().find(|listed| listed["id"] == thread).expect("listed");
