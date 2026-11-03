@@ -12,11 +12,11 @@ import { useMedia } from '../media'
 import { formatKeys } from '../shortcuts'
 import { store, stored } from '../stored'
 import { ago } from '../time'
-import { Button, Icon, type IconName, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
+import { Button, Icon, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { type Takes, useAttachments } from '../attachments'
 import { AttachButton, AttachedFiles } from './Attachments'
-import { ChipSelect, GHOST_CHIP } from './ChipSelect'
+import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
 import { ComposerBox, RoundButton } from './Composer'
@@ -41,10 +41,10 @@ const MODE_KEY = 'silt-mode:'
 /** Where a new thread's agent works (ADR 0044): the clone itself, a checkout of its own, or a cloud session. */
 type Where = 'local' | 'worktree' | 'cloud'
 
-const WHERE: { id: Where; label: string; says: string; icon: IconName }[] = [
-  { id: 'local', label: 'Local', says: 'In your clone, on this machine', icon: 'monitor' },
-  { id: 'worktree', label: 'Worktree', says: 'A checkout of its own; your clone stays as it is', icon: 'branch' },
-  { id: 'cloud', label: 'Cloud', says: 'A Claude Code cloud session, picked up from anywhere', icon: 'cloud' },
+const WHERE: { id: Where; label: string; says: string }[] = [
+  { id: 'local', label: 'Local', says: 'In your clone, on this machine' },
+  { id: 'worktree', label: 'Worktree', says: 'A checkout of its own; your clone stays as it is' },
+  { id: 'cloud', label: 'Cloud', says: 'A Claude Code cloud session, picked up from anywhere' },
 ]
 
 function whereSays(where: Where, clone: string, base: string, device: string | null): string {
@@ -214,14 +214,12 @@ function ProjectPicker({
       label="Pick a project"
       triggerLabel={`project: ${chosen ? projectName(chosen.repo || chosen.path) : 'pick one'}`}
       openOnMount={opening !== undefined}
-      // A chip in the composer's row, with the run's other settings.
-      triggerClassName={cx(GHOST_CHIP, 'aria-expanded:bg-accent-tint')}
+      triggerClassName="inline-flex items-center gap-1.5 rounded-sm border border-line px-2.5 py-0.5 font-mono text-[22px] font-medium text-fg-1 hover:bg-surface-2 aria-expanded:border-accent aria-expanded:bg-accent-tint"
       panelClassName="w-[440px] max-w-[calc(100vw-20px)] p-2"
       trigger={
         <>
-          <Icon name="folder" className="h-3.5 w-3.5 text-fg-2" />
-          <span className="font-mono font-medium">{chosen ? projectName(chosen.repo || chosen.path) : 'pick a project'}</span>
-          <Icon name="chevronDown" className="h-3 w-3 text-fg-2" />
+          {chosen ? projectName(chosen.repo || chosen.path) : 'a project'}
+          <Icon name="chevronDown" className="h-4 w-4 text-fg-2" />
         </>
       }
     >
@@ -577,7 +575,15 @@ export function NewThread() {
   return (
     <Page title="New thread" flush label="new thread">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
-        <h2 className="text-center text-[26px] font-medium tracking-[-0.015em] max-md:text-xl">What should we work on?</h2>
+        <h2 className="flex flex-wrap items-center justify-center gap-2.5 text-center text-[26px] font-medium tracking-[-0.015em] max-md:text-xl">
+          What should we work on in
+          {choices.isPending ? (
+            <Skeleton className="h-8 w-24" />
+          ) : (
+            <ProjectPicker clones={clones} projects={projectsQuery.data ?? []} value={project} onPick={pick} opening={search.pick} />
+          )}
+          <span className="-ml-1.5">?</span>
+        </h2>
         <form
           aria-label="new thread"
           className="flex flex-col"
@@ -601,39 +607,8 @@ export function NewThread() {
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
             commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
-            bottom={
-              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-                <Icon name={WHERE.find((choice) => choice.id === chosenWhere)!.icon} className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1">{whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}</span>
-                {chosenWhere === 'worktree' && (
-                  <ChipSelect
-                    label="base branch"
-                    prefix="from"
-                    mono={base !== ''}
-                    value={base}
-                    onChange={setBase}
-                    options={[{ id: '', name: 'current checkout' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
-                  />
-                )}
-              </div>
-            }
             tools={
-              <>
-                {/* What the run is, in the order it's decided: the project, where in it, then the agent and how it may act. */}
-                {choices.isPending ? (
-                  <Skeleton className="h-6 w-20" />
-                ) : (
-                  <ProjectPicker clones={clones} projects={projectsQuery.data ?? []} value={project} onPick={pick} opening={search.pick} />
-                )}
-                <ChipSelect
-                  ghost
-                  label="works in"
-                  icon={WHERE.find((choice) => choice.id === chosenWhere)!.icon}
-                  value={chosenWhere}
-                  onChange={(chosen) => chooseWhere(chosen as Where)}
-                  options={WHERE.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
-                />
-                {chosenWhere !== 'cloud' && (
+              chosenWhere !== 'cloud' && (
                 <>
                   <AttachButton takes={takes} onFiles={attach} />
                   {agents.length > 0 ? (
@@ -671,8 +646,7 @@ export function NewThread() {
                     />
                   )}
                 </>
-                )}
-              </>
+              )
             }
             actions={
               <>
@@ -690,6 +664,39 @@ export function NewThread() {
               </>
             }
           />
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 px-0.5">
+            <div role="radiogroup" aria-label="works in" className="inline-flex overflow-hidden rounded-sm border border-line">
+              {WHERE.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={chosenWhere === choice.id}
+                  title={choice.says}
+                  onClick={() => chooseWhere(choice.id)}
+                  className={cx(
+                    'inline-flex h-7 items-center gap-1.5 px-3 text-xs max-md:min-h-11',
+                    chosenWhere === choice.id ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+                  )}
+                >
+                  {choice.id === 'cloud' && <Icon name="cloud" className="h-3.5 w-3.5" />}
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+            {chosenWhere === 'worktree' && (
+              <ChipSelect
+                label="base branch"
+                prefix="from"
+                icon="branch"
+                mono={base !== ''}
+                value={base}
+                onChange={setBase}
+                options={[{ id: '', name: 'current checkout' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
+              />
+            )}
+          </div>
+          <p className="mt-2 px-0.5 text-xs text-fg-2">{whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}</p>
           {choices.isSuccess && agents.length === 0 && chosenWhere !== 'cloud' && (
             <p className="mt-1 px-0.5 text-xs text-warn">
               No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}

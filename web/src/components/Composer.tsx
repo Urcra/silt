@@ -91,7 +91,6 @@ export function ComposerBox({
   below,
   tools,
   actions,
-  bottom,
   waiting = false,
   onCycle,
   onFiles,
@@ -115,8 +114,6 @@ export function ComposerBox({
   below?: ReactNode
   tools?: ReactNode
   actions?: ReactNode
-  /** Under the tools, set off from them: where the work will run, in words. */
-  bottom?: ReactNode
   /** The agent waits on the person, so the box says so. */
   waiting?: boolean
   /** Shift+Tab: the agent's next mode, as in its own terminal. */
@@ -219,7 +216,6 @@ export function ComposerBox({
         </span>
         <span className="flex shrink-0 items-center gap-2">{actions}</span>
       </div>
-      {bottom && <div className="rounded-b-lg border-t border-line-subtle bg-bg px-4 py-2 text-xs text-fg-2">{bottom}</div>}
     </div>
   )
 }

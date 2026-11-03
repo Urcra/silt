@@ -248,7 +248,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
 async function startInNewThread(page: Page, agent: string) {
   await page.goto(live.alice)
   // A checkout of its own, so the tests' agents leave the clone as it is.
-  await page.getByLabel('works in').selectOption('worktree')
+  await page.getByRole('radio', { name: 'Worktree' }).click()
   await page.getByLabel('agent to start').selectOption({ label: agent })
   await page.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
@@ -372,7 +372,7 @@ test("another of Alice's machines directs the agent running on the first, throug
 
 test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByLabel('works in').selectOption('cloud')
+  await page.getByRole('radio', { name: 'Cloud' }).click()
   await expect(page.getByLabel('agent to start')).toBeHidden()
   await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
   await page.getByRole('button', { name: 'Start', exact: true }).click()
@@ -869,7 +869,7 @@ test('a thread started in the background from a branch plans its first prompt an
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
   await form.getByLabel('first prompt').fill('write the docs')
-  await form.getByLabel('works in').selectOption('worktree')
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('base branch').selectOption('origin/main')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('plan')
@@ -974,7 +974,7 @@ async function sendFiles(page: Page, label: string, event: 'paste' | 'drop', fil
 
 test('an image pasted on New thread, and a file attached there, go with the first prompt', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByLabel('works in').selectOption('worktree')
+  await page.getByRole('radio', { name: 'Worktree' }).click()
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await page.getByLabel('first prompt').fill('look at this')
   await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
@@ -1059,7 +1059,7 @@ async function startInBackground(page: Page, project: RegExp, prompt: string) {
   const form = page.getByRole('form', { name: 'new thread' })
   await pickProject(page, project)
   await form.getByLabel('first prompt').fill(prompt)
-  await form.getByLabel('works in').selectOption('worktree')
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('ask_for_everything')
   await startInTheBackground(page)
@@ -1345,7 +1345,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
   await pickProject(page, /tools/)
-  await form.getByLabel('works in').selectOption('worktree')
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -1373,7 +1373,7 @@ test('a new project made from New thread starts its first thread in a folder mad
   await expect(page.getByRole('button', { name: 'project: scratch-app' })).toBeVisible()
 
   const form = page.getByRole('form', { name: 'new thread' })
-  await expect(form.getByLabel('works in')).toHaveValue('local')
+  await expect(form.getByRole('radio', { name: 'Local' })).toHaveAttribute('aria-checked', 'true')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')

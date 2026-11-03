@@ -282,7 +282,7 @@ async function startFake(page: Page, prompt: string, preset?: string) {
   const form = page.getByRole('form', { name: 'new thread' })
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
-  await form.getByLabel('works in').selectOption('worktree')
+  await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await page.waitForURL(/\/t\/[0-9a-f]+$/)
