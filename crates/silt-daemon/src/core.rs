@@ -684,7 +684,8 @@ impl Core {
             Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, cwd } => to_response(self.list_comments(&thread, &cwd).await),
+            Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
+            Request::CommentsSent { thread, comments, cwd } => to_response(self.comments_sent(&thread, &comments, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
             Request::Reply { thread, comment, text, cwd } => to_response(self.reply(&thread, &comment, text, &cwd).await),
             Request::SetVisibility { cwd, thread, visibility } => {
@@ -780,11 +781,15 @@ impl Core {
                 Err(error) => Response::error(error),
             },
             Request::AcpCancel { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Cancel).await),
+            Request::AcpStopTask { thread, call } => to_response(self.stop_task(&thread, &call).await),
             Request::AcpAnswer { thread, id, option } => {
                 to_response(self.acp_command(&thread, silt_acp::Command::Answer { id, option }).await)
             }
             Request::AcpReply { thread, id, answers } => to_response(self.acp_reply(&thread, id, answers).await),
             Request::AcpStop { thread } => to_response(self.acp_command(&thread, silt_acp::Command::Stop).await),
+            Request::AcpSignIn { thread, method } => to_response(self.acp_sign_in(&thread, &method).await),
+            Request::AcpSignInCode { thread, code } => to_response(self.acp_sign_in_code(&thread, &code).await),
+            Request::AcpSignInCancel { thread } => to_response(self.acp_sign_in_cancel(&thread).await),
             Request::OpenPullRequest { thread } => to_response(self.open_pull_request(&thread).await),
             Request::PullRequestBlocker { thread } => to_response(self.pull_request_blocker(&thread).await),
             Request::Shutdown => Response::ok("shutting down"),

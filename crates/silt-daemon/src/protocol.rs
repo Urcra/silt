@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
     AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
-    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, Mine, MrDetails, MrFile, MrGuide, MrSummary, NewLink,
-    PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange, TaskView, ThreadLink,
-    ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
+    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile, MrGuide,
+    MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
+    TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
-pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked};
+pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
 /// One request per line on the daemon socket, answered by one response line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +259,15 @@ pub enum Request {
     },
     Comments {
         thread: String,
+        /// A diff base to place code comments in too, such as `last-turn`.
+        #[serde(default)]
+        base: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Marks comments as sent to the thread's agent (ADR 0055).
+    CommentsSent {
+        thread: String,
+        comments: Vec<String>,
         cwd: PathBuf,
     },
     ResolveComment {
@@ -506,6 +515,12 @@ pub enum Request {
     AcpCancel {
         thread: String,
     },
+    /// Ends a command the agent left running in the background, by the call
+    /// that started it.
+    AcpStopTask {
+        thread: String,
+        call: String,
+    },
     /// Answers a permission request with an option, or refuses it.
     AcpAnswer {
         thread: String,
@@ -521,6 +536,19 @@ pub enum Request {
         answers: Option<Vec<(String, Vec<String>)>>,
     },
     AcpStop {
+        thread: String,
+    },
+    /// Signs the agent in by one of the ways it lists (ADR 0056).
+    AcpSignIn {
+        thread: String,
+        method: String,
+    },
+    /// A code from the sign-in's page, for the sign-in to take.
+    AcpSignInCode {
+        thread: String,
+        code: String,
+    },
+    AcpSignInCancel {
         thread: String,
     },
     /// Pushes the thread's branch and answers the forge's page for a new
@@ -865,6 +893,9 @@ pub struct AgentStatus {
     pub permissions: Vec<PermissionAsked>,
     /// Questions the agent asked and waits on.
     pub questions: Vec<QuestionAsked>,
+    /// The sign-in it waits on, when its own expired (ADR 0056).
+    #[serde(default)]
+    pub sign_in: Option<SignInAsked>,
     /// How much of its context window the session uses, when it says.
     pub context: Option<ContextUse>,
     pub error: Option<String>,
@@ -879,6 +910,10 @@ pub struct AgentStatus {
     /// The commands it offers, which a prompt starting with `/` runs.
     #[serde(default)]
     pub commands: Vec<AgentCommand>,
+    /// The calls whose commands still run in the background, which Stop
+    /// ends.
+    #[serde(default)]
+    pub stoppable: Vec<String>,
 }
 
 /// A file sent with a prompt.
@@ -1200,6 +1235,9 @@ mod tests {
             AgentStart::decl(&config),
             AgentStatus::decl(&config),
             QuestionAsked::decl(&config),
+            SignInAsked::decl(&config),
+            SignInChoice::decl(&config),
+            SignInShown::decl(&config),
             ContextUse::decl(&config),
             QuestionFieldAsked::decl(&config),
             ChoiceAsked::decl(&config),
@@ -1208,6 +1246,7 @@ mod tests {
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),
             CommentLocation::decl(&config),
+            LineSpan::decl(&config),
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),

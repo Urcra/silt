@@ -7,6 +7,8 @@
 //! `Subagent` makes it run a subagent in a session of its own, as Claude's
 //! Agent tool does; `Background` makes it leave a command running, which
 //! ends after the turn and sets the agent going again, unless cancelled.
+//! `Keep` makes it leave a real process running in the background, `silt-fake-agent
+//! keep-running <cwd>`, whose end it reports, as Claude does, and goes on about.
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
@@ -74,7 +76,8 @@ pub async fn main() -> Result<()> {
                 responder.respond(parse(json!({
                     "protocolVersion": request.protocol_version,
                     "info": {"name": "fake-agent", "version": "2.0"},
-                    "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}}
+                    "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}},
+                    "authMethods": crate::sign_in_methods("methodId")
                 }))?)
             },
             agent_client_protocol::on_receive_request!(),
@@ -137,6 +140,12 @@ pub async fn main() -> Result<()> {
                     let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
                     say(&worker, &session, json!({"sessionUpdate": "available_commands_update", "availableCommands": commands(true)}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                    // As Claude's adapter ends a turn its expired sign-in failed.
+                    if !crate::signed_in() {
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "failed-1", "content": {"type": "text", "text": "Failed to authenticate."}}))?;
+                        let refused = json!({"code": -32000, "message": "Authentication required"});
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "error", "error": refused}));
+                    }
                     say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "run-1"}]}))?;
@@ -155,12 +164,7 @@ pub async fn main() -> Result<()> {
                     let answer = serde_json::to_value(worker.send_request(asked).block_task().await?)?;
                     let allowed = answer["outcome"]["optionId"] == "allow";
                     if allowed {
-                        let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
-                        let path = cwd.join("src/main.rs");
-                        let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                        content.push_str(&line);
-                        content.push('\n');
-                        tokio::fs::write(&path, content).await.ok();
+                        crate::edit_main(&cwd, &prompt).await;
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     }
                     let status = if allowed { "completed" } else { "failed" };
@@ -191,6 +195,35 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "name": "Bash", "rawInput": {"command": "sleep 1 && echo BG", "run_in_background": true}, "status": "pending", "title": "sleep 1 && echo BG", "kind": "execute", "content": [{"type": "terminal", "terminalId": "bg-1"}]}))?;
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "bg-1", "output": {"data": answer}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "status": "completed"}))?;
+                    }
+                    if prompt.contains("Keep") {
+                        let command = format!("keep-running {}", cwd.display());
+                        let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgkeep1.");
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "keep-1", "name": "Bash", "rawInput": {"command": command, "run_in_background": true}, "status": "pending", "title": command, "kind": "execute", "content": [{"type": "terminal", "terminalId": "keep-1"}]}))?;
+                        let program = std::env::current_exe().map_err(agent_client_protocol::Error::into_internal_error)?;
+                        let mut kept = tokio::process::Command::new(program)
+                            .arg("keep-running")
+                            .arg(&cwd)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .spawn()
+                            .map_err(agent_client_protocol::Error::into_internal_error)?;
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "keep-1", "output": {"data": answer}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "keep-1", "status": "completed"}))?;
+                        let (ended, session, cancelled) = (worker.clone(), session.clone(), cancelled.clone());
+                        worker.spawn(async move {
+                            let _ = kept.wait().await;
+                            cancelled.store(false, Ordering::SeqCst);
+                            say(&ended, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "keep-1", "exitStatus": {}}))?;
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            say(&ended, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            if cancelled.load(Ordering::SeqCst) {
+                                return say(&ended, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                            }
+                            say(&ended, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-keep", "content": {"type": "text", "text": "The kept command ended."}}))?;
+                            say(&ended, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}))
+                        })?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": reply}}))?;

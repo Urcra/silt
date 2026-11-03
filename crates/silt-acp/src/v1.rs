@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientCapabilities, ClientSessionCapabilities, ContentBlock, CreateElicitationRequest,
-    CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest,
-    LoadSessionRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId, SessionConfigValueId,
-    SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    ToolCallContent,
+    AuthCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities, ClientSessionCapabilities, ContentBlock,
+    CreateElicitationRequest, CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, Implementation,
+    InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId,
+    SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, ToolCallContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
 use serde_json::Value;
@@ -33,7 +33,9 @@ pub(crate) fn initialize() -> Result<InitializeRequest, serde_json::Error> {
     let elicitation = ElicitationCapabilities::new().form(ElicitationFormCapabilities::new());
     // Every v2 client takes boolean settings; Silt leaves out any but choices.
     let session: ClientSessionCapabilities = serde_json::from_value(serde_json::json!({"configOptions": {"boolean": {}}}))?;
-    let capabilities = ClientCapabilities::new().elicitation(elicitation).session(session);
+    // Silt runs an agent's terminal sign-in in a terminal of its own, shown on a card (ADR 0056).
+    let capabilities =
+        ClientCapabilities::new().elicitation(elicitation).session(session).auth(AuthCapabilities::new().terminal(true));
     Ok(InitializeRequest::new(ProtocolVersion::V1)
         .client_info(Implementation::new(crate::host::NAME, env!("CARGO_PKG_VERSION")))
         .client_capabilities(capabilities))
@@ -62,6 +64,10 @@ impl ConnectTo<Agent> for V1 {
         let asked = events.clone();
         let parked = waiting.clone();
         let following: Arc<Mutex<Following>> = Arc::default();
+        // An update can come before the session's answer is read, as Copilot
+        // sends its commands once the session is open; it waits for Ready.
+        let early: Arc<Mutex<Option<Vec<Event>>>> = Arc::new(Mutex::new(Some(Vec::new())));
+        let held_back = early.clone();
         Client
             .builder()
             .name(crate::host::NAME)
@@ -71,8 +77,13 @@ impl ConnectTo<Agent> for V1 {
                         && let Some((agent, event)) = event_of(notification.update)
                     {
                         let followed = following.lock().expect("lock").follow(agent, event);
-                        for event in followed {
-                            let _ = updates.send(event);
+                        match held_back.lock().expect("lock").as_mut() {
+                            Some(waiting) => waiting.extend(followed),
+                            None => {
+                                for event in followed {
+                                    let _ = updates.send(event);
+                                }
+                            }
                         }
                     }
                     Ok(())
@@ -119,6 +130,16 @@ impl ConnectTo<Agent> for V1 {
                     return Ok(());
                 };
                 let agent = init.agent_info.as_ref().map_or_else(|| start.program.clone(), |info| info.name.clone());
+                let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
+                if let Some(method) = start.sign_in_first.clone()
+                    && let Err(error) = connection.send_request(AuthenticateRequest::new(method)).block_task().await
+                {
+                    if crate::sign_in::needed(&error) {
+                        let _ = events.send(Event::SignIn(methods));
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
                 let takes = &init.agent_capabilities.prompt_capabilities;
                 let accepts = Accepts { image: takes.image, embedded: takes.embedded_context };
                 let loaded = match start.load.clone().filter(|_| init.agent_capabilities.load_session) {
@@ -132,9 +153,15 @@ impl ConnectTo<Agent> for V1 {
                             .block_task()
                             .await;
                         replaying.store(false, Ordering::SeqCst);
-                        // A session made on another machine can't be loaded
-                        // here; the daemon primes a new one instead.
-                        loaded.ok().map(|response| (id, response.modes, response.config_options))
+                        match loaded {
+                            Err(error) if crate::sign_in::needed(&error) => {
+                                let _ = events.send(Event::SignIn(methods));
+                                return Ok(());
+                            }
+                            // A session made on another machine can't be loaded
+                            // here; the daemon primes a new one instead.
+                            loaded => loaded.ok().map(|response| (id, response.modes, response.config_options)),
+                        }
                     }
                     None => None,
                 };
@@ -152,10 +179,17 @@ impl ConnectTo<Agent> for V1 {
                         SessionId::new(id)
                     }
                     None => {
-                        let created = connection
+                        let created = match connection
                             .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
                             .block_task()
-                            .await?;
+                            .await
+                        {
+                            Err(error) if crate::sign_in::needed(&error) => {
+                                let _ = events.send(Event::SignIn(methods));
+                                return Ok(());
+                            }
+                            created => created?,
+                        };
                         let _ = events.send(Event::Ready {
                             session: created.session_id.to_string(),
                             loaded: false,
@@ -168,11 +202,15 @@ impl ConnectTo<Agent> for V1 {
                         created.session_id
                     }
                 };
+                for event in early.lock().expect("lock").take().unwrap_or_default() {
+                    let _ = events.send(event);
+                }
                 while let Some(command) = commands.recv().await {
                     match command {
                         Command::Prompt { text, attachments } => {
                             let request = PromptRequest::new(session.clone(), blocks(&text, &attachments, accepts));
                             let ended = events.clone();
+                            let methods = methods.clone();
                             // Sent here rather than in the task, so a mode set
                             // just before reaches the agent first.
                             let sent = connection.send_request(request);
@@ -186,6 +224,10 @@ impl ConnectTo<Agent> for V1 {
                                             });
                                         }
                                         let _ = ended.send(Event::TurnEnded { reason: stop_reason(response.stop_reason) });
+                                    }
+                                    Err(error) if crate::sign_in::needed(&error) => {
+                                        let _ = ended.send(Event::SignIn(methods));
+                                        let _ = ended.send(Event::TurnEnded { reason: StopReason::Error });
                                     }
                                     Err(error) => {
                                         let _ = ended.send(Event::Failed(Arc::new(HostError::Protocol(error))));

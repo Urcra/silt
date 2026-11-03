@@ -117,6 +117,10 @@ streaming: string, thinking: string, permissions: Array<PermissionAsked>,
  */
 questions: Array<QuestionAsked>, 
 /**
+ * The sign-in it waits on, when its own expired (ADR 0056).
+ */
+sign_in: SignInAsked | null, 
+/**
  * How much of its context window the session uses, when it says.
  */
 context: ContextUse | null, error: string | null, 
@@ -139,9 +143,61 @@ takes_files: boolean,
 /**
  * The commands it offers, which a prompt starting with `/` runs.
  */
-commands: Array<AgentCommand>, };
+commands: Array<AgentCommand>, 
+/**
+ * The calls whose commands still run in the background, which Stop
+ * ends.
+ */
+stoppable: Array<string>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
+
+export type SignInAsked = { 
+/**
+ * The ways the agent lists, in its order.
+ */
+methods: Array<SignInChoice>, 
+/**
+ * The sign-in under way, when one is.
+ */
+running: SignInShown | null, 
+/**
+ * Why the last one didn't sign the agent in.
+ */
+failed: string | null, };
+
+export type SignInChoice = { id: string, name: string, description: string | null, 
+/**
+ * The agent signs in by itself, on its machine, with nothing to show
+ * here.
+ */
+by_agent: boolean, };
+
+export type SignInShown = { 
+/**
+ * The method running.
+ */
+method: string, 
+/**
+ * The page to open, in any browser.
+ */
+link: string | null, 
+/**
+ * The code to enter on that page.
+ */
+code: string | null, 
+/**
+ * It waits for a code from the page to be pasted back.
+ */
+asks_code: boolean, 
+/**
+ * A code was pasted back, and the sign-in hasn't ended since.
+ */
+code_sent: boolean, 
+/**
+ * Its last lines, without escapes.
+ */
+tail: string, };
 
 export type ContextUse = { used: number, size: number, };
 
@@ -185,11 +241,22 @@ warnings: Array<string>,
  */
 thread: string | null, };
 
-export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, } | { "at": "unknown" };
+export type CommentLocation = { "at": "entry", index: number, excerpt: string, } | { "at": "lines", path: string, start: number, end: number, outdated: boolean, 
+/**
+ * Where they are in the base the comments were asked against, when
+ * they're there: a diff shows a comment on deleted lines beside them.
+ */
+before: LineSpan | null, } | { "at": "unknown" };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, };
+export type LineSpan = { start: number, end: number, };
 
-export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, location: CommentLocation, 
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, };
+
+export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
+/**
+ * It went to the thread's agent, in a review (ADR 0055).
+ */
+sent: boolean, location: CommentLocation, 
 /**
  * The conversation under it, oldest first (ADR 0025).
  */

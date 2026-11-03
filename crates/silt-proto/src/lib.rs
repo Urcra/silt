@@ -9,7 +9,9 @@ pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
 /// rewound turns (ADR 0029). 6: a thread names its cloud session (ADR 0040).
-pub const PROTOCOL: u32 = 7;
+/// 8: comments sent to the agent in a review (ADR 0055). 9: an agent's
+/// sign-in, asked and answered from the web UI (ADR 0056).
+pub const PROTOCOL: u32 = 9;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1008,6 +1010,51 @@ pub struct AgentReport {
     /// names it.
     #[serde(default)]
     pub preset: String,
+    /// The sign-in it waits on, when its own expired (ADR 0056).
+    #[serde(default)]
+    pub sign_in: Option<SignInAsked>,
+}
+
+/// An agent that needs signing in, as its card shows it (ADR 0056). What
+/// it shows is never recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SignInAsked {
+    /// The ways the agent lists, in its order.
+    pub methods: Vec<SignInChoice>,
+    /// The sign-in under way, when one is.
+    pub running: Option<SignInShown>,
+    /// Why the last one didn't sign the agent in.
+    pub failed: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SignInChoice {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// The agent signs in by itself, on its machine, with nothing to show
+    /// here.
+    pub by_agent: bool,
+}
+
+/// What the sign-in's terminal shows that the person needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SignInShown {
+    /// The method running.
+    pub method: String,
+    /// The page to open, in any browser.
+    pub link: Option<String>,
+    /// The code to enter on that page.
+    pub code: Option<String>,
+    /// It waits for a code from the page to be pasted back.
+    pub asks_code: bool,
+    /// A code was pasted back, and the sign-in hasn't ended since.
+    pub code_sent: bool,
+    /// Its last lines, without escapes.
+    pub tail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1134,6 +1181,15 @@ pub enum RemoteCommand {
         path: String,
         at: Option<String>,
     },
+    /// Signs the thread's agent in, one of the ways it lists (ADR 0056).
+    SignIn {
+        method: String,
+    },
+    /// A code from the sign-in's page, for the sign-in to take.
+    SignInCode {
+        code: String,
+    },
+    SignInCancel,
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1165,7 +1221,11 @@ impl Capabilities {
             | RemoteCommand::Stop
             | RemoteCommand::Preset { .. }
             | RemoteCommand::Mode { .. }
-            | RemoteCommand::Setting { .. } => (self.run_agents, "start and stop agents"),
+            | RemoteCommand::Setting { .. }
+            // Which account the agent's work goes to (ADR 0056).
+            | RemoteCommand::SignIn { .. }
+            | RemoteCommand::SignInCode { .. }
+            | RemoteCommand::SignInCancel => (self.run_agents, "start and stop agents"),
             RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } | RemoteCommand::FileAt { .. } => {
                 (self.review, "review merge requests")
             }

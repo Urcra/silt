@@ -2,7 +2,7 @@ import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
 import { matching, typedCommand } from '../slashCommands'
-import { Icon, type IconName, cx } from '../ui'
+import { Icon, type IconName, Spinner, cx } from '../ui'
 import { ComposerFolded } from './composerFolded'
 
 /**
@@ -86,10 +86,12 @@ export function ComposerBox({
   onSend,
   placeholder,
   rows = 3,
+  top,
   above,
   below,
   tools,
   actions,
+  bottom,
   waiting = false,
   onCycle,
   onFiles,
@@ -105,12 +107,16 @@ export function ComposerBox({
   onSend: (now: boolean) => void
   placeholder: string
   rows?: number
+  /** Docked on the box's top edge, set off from the rest: what the thread changed. */
+  top?: ReactNode
   /** Over the text: what's queued, what others are writing. */
   above?: ReactNode
   /** Between the text and the tools: attached files. */
   below?: ReactNode
   tools?: ReactNode
   actions?: ReactNode
+  /** Under the tools, set off from them: where the work will run, in words. */
+  bottom?: ReactNode
   /** The agent waits on the person, so the box says so. */
   waiting?: boolean
   /** Shift+Tab: the agent's next mode, as in its own terminal. */
@@ -184,6 +190,7 @@ export function ComposerBox({
       className={cx('relative flex flex-col rounded-lg border bg-elevated', dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong', className)}
     >
       {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
+      {top}
       {above}
       <label htmlFor={id} className="sr-only">
         {label}
@@ -212,6 +219,7 @@ export function ComposerBox({
         </span>
         <span className="flex shrink-0 items-center gap-2">{actions}</span>
       </div>
+      {bottom && <div className="rounded-b-lg border-t border-line-subtle bg-bg px-4 py-2 text-xs text-fg-2">{bottom}</div>}
     </div>
   )
 }
@@ -224,6 +232,7 @@ export function RoundButton({
   disabled,
   type = 'button',
   quiet = false,
+  busy = false,
   title,
 }: {
   label: string
@@ -233,6 +242,8 @@ export function RoundButton({
   type?: 'button' | 'submit'
   /** Stop: drawn on the surface rather than in amber. */
   quiet?: boolean
+  /** What it did is under way: a spinner in place of its icon. */
+  busy?: boolean
   title?: string
 }) {
   return (
@@ -249,7 +260,7 @@ export function RoundButton({
           : 'bg-accent text-on-accent hover:bg-accent-hover disabled:bg-surface-2 disabled:text-fg-3',
       )}
     >
-      <Icon name={icon} className="h-4 w-4" />
+      {busy ? <Spinner className="h-4 w-4" /> : <Icon name={icon} className="h-4 w-4" />}
     </button>
   )
 }

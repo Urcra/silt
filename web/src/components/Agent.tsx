@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { type Dispatch, type SetStateAction, useState } from 'react'
-import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset } from '../api'
+import { type Dispatch, type ReactNode, type SetStateAction, useState } from 'react'
+import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment, type SignInAsked } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
-import { Button, Dot, Icon, Kbd, Spinner } from '../ui'
+import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { type Takes, useAttachments } from '../attachments'
 import { AttachButton, AttachedFiles } from './Attachments'
@@ -15,6 +15,7 @@ import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
+import { dropSending } from '../sending'
 
 export function AgentPicker({ value, onChange, className }: { value: string; onChange: (agent: string) => void; className?: string }) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
@@ -47,6 +48,7 @@ function working(status: AgentStatus | null): boolean {
 
 
 function statePhrase(status: AgentStatus): string {
+  if (status.sign_in) return `${status.agent} needs you to sign in`
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
   return `${status.agent} ${asking ? 'is asking you a question' : STATE_PHRASE[status.state]}`
 }
@@ -100,6 +102,123 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
           </Button>
         </span>
       )}
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/** The agent's own sign-in expired: signed in from here, the sign-in running on the agent's machine, and the agent going on
+ * once it's done (ADR 0056). Only a link the sign-in prints, on https, is offered to open. */
+export function SignInCard({ thread, asked, agent }: { thread: string; asked: SignInAsked; agent: string }) {
+  const [error, setError] = useState<string>()
+  const [code, setCode] = useState('')
+  const act = (action: Promise<unknown>) => {
+    setError(undefined)
+    action.catch((failure: unknown) => setError(message(failure)))
+  }
+  const running = asked.running
+  const byAgent = running && asked.methods.find((method) => method.id === running.method)?.by_agent
+  const link = running?.link?.startsWith('https://') ? running.link : null
+  const send = () => {
+    if (!code.trim()) return
+    act(api.signInCode(thread, code.trim()).then(() => setCode('')))
+  }
+  return (
+    <div role="group" aria-label="sign in" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+      <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
+        {agent} needs you to sign in
+      </span>
+      {!running ? (
+        <>
+          <p className="text-sm text-fg-1">
+            {asked.methods.length > 0
+              ? `Its own sign-in has expired, or was never made. Signing in runs where ${agent} runs, and then it goes on with what you asked.`
+              : `It lists no way to sign in that Silt can follow; sign it in on the machine it runs on, then start it again.`}
+          </p>
+          <span className="flex flex-wrap gap-1.5">
+            {asked.methods.map((method, index) => (
+              <Button key={method.id} variant={index === 0 ? 'primary' : 'secondary'} title={method.description ?? undefined} onClick={() => act(api.signIn(thread, method.id))}>
+                {method.name}
+              </Button>
+            ))}
+          </span>
+        </>
+      ) : byAgent ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-fg-1">
+          <Spinner /> {agent} is signing in on its machine
+        </p>
+      ) : (
+        <>
+          {link ? (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm text-fg-1">{running.code ? 'Open this page and enter the code:' : 'Open this page and sign in:'}</span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                <a href={link} target="_blank" rel="noopener noreferrer" className={buttonClass(running.code || running.asks_code ? 'primary' : 'secondary')}>
+                  Open {new URL(link).host}
+                </a>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(link).catch(() => undefined)
+                    toast('Link copied', 'ok')
+                  }}
+                >
+                  Copy link
+                </Button>
+              </span>
+              {running.code && (
+                <code data-testid="sign-in-code" className="self-start rounded-sm border border-line bg-bg px-2.5 py-1 font-mono text-lg tracking-widest text-fg-1 select-all">
+                  {running.code}
+                </code>
+              )}
+            </div>
+          ) : (
+            <p role="status" className="flex items-center gap-2 text-sm text-fg-1">
+              <Spinner /> Starting the sign-in
+            </p>
+          )}
+          {running.asks_code && (
+            <form
+              className="flex flex-wrap items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                send()
+              }}
+            >
+              <Input
+                aria-label="code from the sign-in page"
+                placeholder="Paste the code the page shows"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                className="min-w-0 flex-1 font-mono"
+              />
+              <Button type="submit" variant="primary" disabled={!code.trim()}>
+                Sign in
+              </Button>
+            </form>
+          )}
+          {link && !running.asks_code && (
+            <p role="status" className="flex items-center gap-2 text-xs text-fg-2">
+              <Spinner /> {running.code_sent ? 'Checking the code' : 'Waiting for the sign-in to finish'}
+            </p>
+          )}
+          <span className="flex flex-wrap items-center gap-1.5">
+            {running.tail && (
+              <details className="min-w-0 flex-1 text-xs text-fg-2">
+                <summary className="cursor-pointer">What the sign-in shows</summary>
+                <pre className="mt-1.5 max-h-48 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{running.tail}</pre>
+              </details>
+            )}
+            <Button variant="ghost" className="ml-auto" onClick={() => act(api.cancelSignIn(thread))}>
+              Cancel
+            </Button>
+          </span>
+        </>
+      )}
+      {asked.failed && !running && <span className="text-xs text-danger">{asked.failed}</span>}
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   )
@@ -309,7 +428,9 @@ export function AgentDock({
   draft,
   onDraft,
   onSent,
+  onSending,
   people,
+  top,
 }: {
   thread: string
   status: AgentStatus | null
@@ -319,8 +440,12 @@ export function AgentDock({
   onDraft: Dispatch<SetStateAction<string>>
   /** The agent took a prompt, so the page goes to where its turn will show. */
   onSent?: () => void
+  /** A prompt goes straight to the agent: the page shows it at once, until the history has it. */
+  onSending?: (text: string, files: string[]) => number
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
+  /** On the composer's top edge. */
+  top?: ReactNode
 }) {
   const [chosenAgent, setAgent] = useState<string>()
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
@@ -346,7 +471,7 @@ export function AgentDock({
   const takes: Takes = live
     ? { agent: status.agent, images: status.takes_images, files: status.takes_files }
     : { agent: seen?.name ?? 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
-  const { attached, add, remove, clear } = useAttachments(takes)
+  const { attached, add, remove, clear, restore } = useAttachments(takes)
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenMode(undefined)
@@ -369,15 +494,28 @@ export function AgentDock({
     onDraft((current) => (current === text ? '' : current))
     if (text.trim()) onSent?.()
   }
+  // The prompt shows as sent at once, and the box empties; if the agent doesn't take it, both come back.
+  const optimistic = (action: (text: string, files: PromptAttachment[]) => Promise<unknown>) => {
+    const text = draft
+    const files = attached
+    const sending = text.trim() ? onSending?.(text, files.map((file) => file.name)) : undefined
+    setError(undefined)
+    onDraft('')
+    clear()
+    if (text.trim()) onSent?.()
+    action(text, files).catch((failure: unknown) => {
+      if (sending !== undefined) dropSending(thread, [sending])
+      onDraft((current) => (current.trim() ? current : text))
+      restore(files)
+      setError(message(failure))
+    })
+  }
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
     if (!startable) return
     const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
-    const options = { preset, mode: startModes ? (chosenMode ?? null) : null, settings, prompt: draft.trim() ? draft : null, attachments: attached }
-    act(api.startAgent(agent, { thread }, options), () => {
-      clear()
-      sent(draft)()
-    })
+    const mode = startModes ? (chosenMode ?? null) : null
+    optimistic((text, files) => api.startAgent(agent, { thread }, { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files }))
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
@@ -385,10 +523,13 @@ export function AgentDock({
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
     if (!live || !sendable) return
-    act(api.prompt(thread, draft, false, attached), () => {
-      clear()
-      sent(draft)()
-    })
+    // A queued prompt shows in the queue once the daemon has it, not in the history.
+    if (!ready(status))
+      return act(api.prompt(thread, draft, false, attached), () => {
+        clear()
+        sent(draft)()
+      })
+    optimistic((text, files) => api.prompt(thread, text, false, files))
   }
 
   // While a turn runs, the line above the composer says so, with its clock.
@@ -567,7 +708,9 @@ export function AgentDock({
               : 'Draft the next prompt; everyone here sees it'
             : status.state === 'awaiting_input'
               ? 'Or say what to change in the plan'
-              : (status.questions?.length ?? 0) > 0
+              : status.sign_in
+                ? 'Sign in above; a prompt waits for it'
+                : (status.questions?.length ?? 0) > 0
                 ? 'Answer above, or steer it'
                 : turning
                   ? narrow
@@ -575,6 +718,7 @@ export function AgentDock({
                     : 'Steer it now, or queue a prompt for when this turn ends'
                 : `Ask ${status.agent}, or attach files for context`
         }
+        top={top}
         above={above}
         below={below}
         tools={tools}

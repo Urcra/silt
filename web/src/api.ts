@@ -136,7 +136,10 @@ export const api = {
     }
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
-  comments: (id: string) => request<CommentView[]>('GET', `${thread(id)}/comments`),
+  /** With `base`, a diff base, code comments say where they are there too. */
+  comments: (id: string, base?: string) =>
+    request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
   reply: (id: string, comment: string, text: string) =>
@@ -195,11 +198,18 @@ export const api = {
   setSetting: (id: string, setting: string, value: string) =>
     request<string>('POST', `${thread(id)}/agent/setting`, { id: setting, value }),
   cancelTurn: (id: string) => request<string>('POST', `${thread(id)}/agent/cancel`),
+  /** Ends a command the agent left running in the background, by the call that started it. */
+  stopTask: (id: string, call: string) => request<string>('POST', `${thread(id)}/agent/tasks/${encodeURIComponent(call)}/stop`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
   /** Answers a question the agent waits on, each field by its chosen values; none declines it. */
   answerQuestion: (id: string, question: number, answers: Record<string, string[]> | null) =>
     request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),
+  /** Signs the thread's agent in by one of the ways it lists; the sign-in runs on the agent's machine (ADR 0056). */
+  signIn: (id: string, method: string) => request<string>('POST', `${thread(id)}/agent/sign-in`, { method }),
+  /** Passes a code from the sign-in's page on to the sign-in. */
+  signInCode: (id: string, code: string) => request<string>('POST', `${thread(id)}/agent/sign-in/code`, { code }),
+  cancelSignIn: (id: string) => request<string>('POST', `${thread(id)}/agent/sign-in/cancel`),
   /** Pushes the thread's branch; answers the forge's page for its new pull request. */
   openPullRequest: (id: string) => request<string>('POST', `${thread(id)}/pull-request`),
   /** Why the thread can't open a pull request now, or `null` when it can. */

@@ -1,6 +1,7 @@
 //! A scripted ACP agent for tests. Each prompt makes it think, ask
 //! permission to edit `src/main.rs`, append `FAKE_ACP_LINE` (default
-//! `fn acp() {}`) when allowed, and answer. It can load the sessions it
+//! `fn acp() {}`) when allowed, dropping its first line first when the
+//! prompt says `Rewrite`, or write `FAKE_ACP_CONTENT` over it, and answer. It can load the sessions it
 //! made in the same process, replaying what was said, and refuses others.
 //! It has a `code` and a `plan` mode, where it only answers with a plan,
 //! and a model setting, and takes images and files, which its answer
@@ -16,7 +17,12 @@
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
-//! does (see `v2`).
+//! does (see `v2`). With `FAKE_ACP_SIGN_IN` naming a file, it needs a sign-in
+//! until that file exists, refusing a new session over v1, as Copilot does,
+//! and a prompt over v2, as Claude's adapter does. Its one sign-in method
+//! runs it again with `--fake-login`, which prints a link, asks for the code
+//! from it, as Claude's sign-in does, and makes the file when given `good`;
+//! given anything else, it says so and waits, as Claude's does.
 
 mod v2;
 
@@ -79,8 +85,61 @@ fn notify(connection: &ConnectionTo<Client>, session: &SessionId, update: Sessio
     connection.send_notification(SessionNotification::new(session.clone(), update))
 }
 
+/// Whether it is signed in: it needs no sign-in unless told to.
+pub(crate) fn signed_in() -> bool {
+    std::env::var_os("FAKE_ACP_SIGN_IN").is_none_or(|marker| std::path::Path::new(&marker).exists())
+}
+
+/// The sign-in it lists, when it needs one, by its id as v1 or v2 names it.
+pub(crate) fn sign_in_methods(id: &str) -> serde_json::Value {
+    if std::env::var_os("FAKE_ACP_SIGN_IN").is_none() {
+        return serde_json::json!([]);
+    }
+    serde_json::json!([{id: "fake-login", "name": "Fake account", "description": "Sign in to the fake service",
+                        "type": "terminal", "args": ["--fake-login"]}])
+}
+
+/// Its sign-in, as Claude's prints: a link, then a wait for the code the
+/// link's page shows.
+fn fake_login() -> std::process::ExitCode {
+    use std::io::{BufRead, Write};
+    print!(
+        "Opening browser to sign in\u{2026}\r\nIf the browser didn't open, visit: https://example.invalid/oauth?state=fake\r\nPaste code here if prompted > "
+    );
+    let _ = std::io::stdout().flush();
+    let mut code = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut code);
+    let marker = std::env::var_os("FAKE_ACP_SIGN_IN").unwrap_or_default();
+    if code.trim() == "good" && std::fs::write(&marker, "signed in").is_ok() {
+        println!("\r\nLogin successful.");
+        return std::process::ExitCode::SUCCESS;
+    }
+    // As Claude's sign-in does, it says so and waits rather than exit.
+    println!("\r\nLogin failed: That code wasn't accepted.");
+    loop {
+        std::thread::park();
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    if std::env::args().any(|arg| arg == "--fake-login") {
+        return fake_login();
+    }
+    match agent() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn agent() -> Result<()> {
+    // What `Keep` leaves running in the background, until it's ended.
+    if std::env::args().nth(1).as_deref() == Some("keep-running") {
+        std::future::pending::<()>().await;
+    }
     if std::env::var_os("FAKE_ACP_HANG").is_some() {
         std::future::pending::<()>().await;
     }
@@ -105,13 +164,17 @@ async fn main() -> Result<()> {
                                 .load_session(true)
                                 .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
                         )
-                        .agent_info(Implementation::new("fake-agent", "1.0")),
+                        .agent_info(Implementation::new("fake-agent", "1.0"))
+                        .auth_methods(serde_json::from_value(sign_in_methods("id")).map_err(agent_client_protocol::Error::into_internal_error)?),
                 )
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: NewSessionRequest, responder, connection| {
+                if !signed_in() {
+                    return responder.respond_with_error(agent_client_protocol::Error::auth_required());
+                }
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd);
@@ -301,12 +364,7 @@ async fn main() -> Result<()> {
                     let answer = worker.send_request(asked).block_task().await?;
                     let allowed = matches!(&answer.outcome, RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() == "allow");
                     if allowed {
-                        let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
-                        let path = cwd.join("src/main.rs");
-                        let mut content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                        content.push_str(&line);
-                        content.push('\n');
-                        tokio::fs::write(&path, content).await.ok();
+                        edit_main(&cwd, &prompt).await;
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     }
                     let status = if allowed { ToolCallStatus::Completed } else { ToolCallStatus::Failed };
@@ -390,4 +448,21 @@ async fn main() -> Result<()> {
         )
         .connect_to(Stdio::new())
         .await
+}
+
+/// The edit a prompt makes: `FAKE_ACP_CONTENT` replaces `src/main.rs`, else
+/// `FAKE_ACP_LINE` is appended to it, after its first line is dropped when
+/// the prompt says `Rewrite`.
+pub(crate) async fn edit_main(cwd: &std::path::Path, prompt: &str) {
+    let path = cwd.join("src/main.rs");
+    let content = match std::env::var("FAKE_ACP_CONTENT") {
+        Ok(content) => content,
+        Err(_) => {
+            let line = std::env::var("FAKE_ACP_LINE").unwrap_or_else(|_| "fn acp() {}".into());
+            let before = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+            let kept = if prompt.contains("Rewrite") { before.split_once('\n').map_or("", |(_, rest)| rest) } else { &before };
+            format!("{kept}{line}\n")
+        }
+    };
+    tokio::fs::write(&path, content).await.ok();
 }

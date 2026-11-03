@@ -142,8 +142,24 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
 
+  // A prompt the daemon refuses comes back to the draft rather than stay shown as sent.
+  await alice.route('**/agent/prompt', (route) => route.fulfill({ status: 400, json: { error: 'not now' } }))
   await alice.getByLabel('draft').fill('add acp')
   await alice.getByRole('button', { name: 'Send' }).click()
+  await expect(alice.getByText('not now')).toBeVisible()
+  await expect(alice.getByLabel('draft')).toHaveValue('add acp')
+  await expect(alice.getByTestId('sending')).toHaveCount(0)
+  // The prompt shows as sent at once, while the daemon takes its time.
+  await alice.unroute('**/agent/prompt')
+  await alice.route('**/agent/prompt', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    await route.fallback()
+  })
+  await alice.getByRole('button', { name: 'Send' }).click()
+  await expect(alice.getByTestId('sending')).toHaveText('add acp', { timeout: 1000 })
+  await expect(alice.getByLabel('draft')).toHaveValue('')
+  await expect(alice.getByText('not now')).toHaveCount(0)
+  await alice.unroute('**/agent/prompt')
   const asked = alice.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
@@ -232,7 +248,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
 async function startInNewThread(page: Page, agent: string) {
   await page.goto(live.alice)
   // A checkout of its own, so the tests' agents leave the clone as it is.
-  await page.getByRole('radio', { name: 'Worktree' }).click()
+  await page.getByLabel('works in').selectOption('worktree')
   await page.getByLabel('agent to start').selectOption({ label: agent })
   await page.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
@@ -257,7 +273,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
     await hosted.reload()
     await expect(waiting).toBeVisible({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
-  await expect(waiting.getByText(/asks to run/).first()).toBeVisible()
+  await expect(waiting).toContainText('asks to run')
 
   // The browser has no daemon: what it asks goes through the server to the machine.
   await waiting.getByRole('link').first().click()
@@ -356,7 +372,7 @@ test("another of Alice's machines directs the agent running on the first, throug
 
 test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('radio', { name: 'Cloud' }).click()
+  await page.getByLabel('works in').selectOption('cloud')
   await expect(page.getByLabel('agent to start')).toBeHidden()
   await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
   await page.getByRole('button', { name: 'Start', exact: true }).click()
@@ -733,7 +749,7 @@ test('a comment written in the server-hosted app reaches the machines', async ({
 
 test('the Devices page shows which device this is, that it is online, and what it may do', async ({ page }) => {
   await page.goto(live.alice)
-  await settings(page, 'Devices')
+  await settings(page, 'Devices and sync')
   const here = page.getByRole('region').filter({ has: page.getByText('this device', { exact: true }) })
   await expect(here.getByText('online', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'alice-laptop' }).getByText('online', { exact: true })).toBeVisible()
@@ -801,6 +817,23 @@ test("an agent's subagent and the command it left running show as cards, and the
   await expect(subagent).toContainText('2 lines')
 })
 
+test('a command the agent left running in the background is stopped from above the composer', async ({ page }) => {
+  await startInNewThread(page, 'Fake v2 agent')
+  await page.getByLabel('draft').fill('add acp Keep')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: add acp Keep')).toBeVisible()
+  const running = page.getByTestId('running-tasks')
+  await expect(running).toContainText('keep-running')
+  // Its card, out of the turn's fold while it runs, can stop it too.
+  await expect(page.getByTestId('task').filter({ hasText: 'keep-running' }).getByRole('button', { name: 'Stop' })).toBeVisible()
+  await running.getByRole('button', { name: /^Stop / }).click()
+  await expect(running).toBeHidden()
+  // Its end sets the agent going, in a turn of its own, which Silt stops before it says anything.
+  await expect(page.locator('[id^="turn-"]')).toHaveCount(2)
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake v2 agent is ready')
+  await expect(page.getByText('The kept command ended.')).toHaveCount(0)
+})
+
 test('prompts queue while the agent works, and a steer interrupts its turn', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')
@@ -836,7 +869,7 @@ test('a thread started in the background from a branch plans its first prompt an
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
   await form.getByLabel('first prompt').fill('write the docs')
-  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('works in').selectOption('worktree')
   await form.getByLabel('base branch').selectOption('origin/main')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('plan')
@@ -941,7 +974,7 @@ async function sendFiles(page: Page, label: string, event: 'paste' | 'drop', fil
 
 test('an image pasted on New thread, and a file attached there, go with the first prompt', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByRole('radio', { name: 'Worktree' }).click()
+  await page.getByLabel('works in').selectOption('worktree')
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await page.getByLabel('first prompt').fill('look at this')
   await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
@@ -977,27 +1010,46 @@ test('an image pasted for an agent known to take none is refused at once', async
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 })
 
-test("comments on the agent's last turn go back to it as a prompt", async ({ page }) => {
+test("a review of the agent's changes goes back to it as one prompt", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('add a function')
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
 
   const changes = page.getByRole('region', { name: 'changes' })
-  await page.getByRole('tab', { name: 'Last turn' }).click()
+  await page.getByLabel('compare').selectOption({ label: 'Last turn' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
+  // Comments on a deleted line and on an added one wait in the review.
+  await changes.getByRole('button', { name: /^comment on src\/main\.rs deleted line \d+$/ }).first().click()
+  await page.getByLabel('code comment').fill('keep this one')
+  await page.getByRole('button', { name: 'Start a review' }).click()
   await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
   await page.getByLabel('code comment').fill('give it a better name')
-  await page.getByRole('button', { name: 'Comment', exact: true }).click()
-  await expect(changes.getByText('alice: give it a better name')).toBeVisible()
+  await page.getByRole('button', { name: 'Add review comment' }).click()
+  await expect(changes.getByRole('group', { name: 'pending comment' })).toHaveCount(2)
 
-  await page.getByRole('button', { name: 'Send 1 comment to the agent' }).click()
-  await expect(page.getByText('Sent to the agent')).toBeVisible()
+  const review = changes.getByRole('region', { name: 'review' })
+  await expect(review).toContainText('2 pending')
+  await review.getByRole('button', { name: 'Finish review' }).click()
+  await review.getByLabel('review note').fill('Nearly there.')
+  await review.getByRole('button', { name: /^Send 2 comments to / }).click()
+  await expect(review).toBeHidden()
   await expect(
-    page.getByTestId('entry').filter({ hasText: /Done: Please address these review comments:\s*src\/main\.rs:\d+ \(alice\): give it a better name/ }),
+    page.getByTestId('entry').filter({
+      hasText: /Done: Nearly there\.\s*Please address these review comments:\s*src\/main\.rs:1, lines the change deleted: keep this one/,
+    }),
   ).toBeVisible()
 
-  await page.getByRole('tab', { name: 'Against main' }).click()
+  // Both are comments now, sent; the deleted line's shows beside it against the thread's start.
+  await page.getByLabel('compare').selectOption({ label: 'This thread' })
+  await expect(changes.getByText('alice: keep this one')).toBeVisible()
+  await expect(changes.getByText('alice: give it a better name')).toBeVisible()
+  await expect(changes.getByText('Sent', { exact: true })).toHaveCount(2)
+
+  await page.getByLabel('compare').selectOption({ label: 'Against main' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
 })
 
@@ -1007,14 +1059,14 @@ async function startInBackground(page: Page, project: RegExp, prompt: string) {
   const form = page.getByRole('form', { name: 'new thread' })
   await pickProject(page, project)
   await form.getByLabel('first prompt').fill(prompt)
-  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('works in').selectOption('worktree')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByLabel('permissions').selectOption('ask_for_everything')
   await startInTheBackground(page)
   await expect(form.getByLabel('first prompt')).toHaveValue('')
 }
 
-test('two agents in two projects queue prompts, are answered from the sidebar, and a fork is offered back', async ({ page }) => {
+test('two agents in two projects queue prompts, are answered from the Needs you queue, and a fork is offered back', async ({ page }) => {
   await page.goto(live.alice)
   await startInBackground(page, /origin/, 'work in origin')
   await startInBackground(page, /tools/, 'work in tools')
@@ -1022,21 +1074,28 @@ test('two agents in two projects queue prompts, are answered from the sidebar, a
   const sidebar = page.getByRole('navigation', { name: 'projects' })
   const origin = sidebar.getByRole('group', { name: 'work in origin needs you' })
   const tools = sidebar.getByRole('group', { name: 'work in tools needs you' })
-  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
-  await expect(tools).toContainText('Asks to run: Edit src/main.rs')
+  await expect(origin).toContainText('asks to run')
+  await expect(tools).toContainText('asks to run')
 
-  await origin.getByRole('link', { name: 'work in origin' }).click()
+  await origin.getByRole('link', { name: /^work in origin/ }).click()
   await page.getByLabel('draft').fill('then document it')
   await page.getByRole('button', { name: 'Queue', exact: true }).click()
   await expect(page.getByRole('region', { name: 'queued prompts' })).toContainText('then document it')
 
-  await tools.getByRole('button', { name: 'Allow' }).click()
+  // Each is answered from the queue, which lists both and shows the one chosen.
+  await sidebar.getByRole('link', { name: /Open the queue/ }).click()
+  const queue = page.getByRole('region', { name: 'waiting on you' })
+  await queue.getByRole('button', { name: /^work in tools/ }).click()
+  await queue.getByRole('group', { name: 'work in tools needs you' }).getByRole('button', { name: 'Allow' }).click()
   await expect(tools).toBeHidden()
-  await origin.getByRole('button', { name: 'Allow' }).click()
+  // What was answered leaves the queue, and the one left is shown in its place.
+  const there = queue.getByRole('group', { name: 'work in origin needs you' })
+  await expect(there).toContainText('Edit src/main.rs')
+  await there.getByRole('button', { name: 'Allow' }).click()
+  await sidebar.getByRole('link', { name: /^work in origin/ }).first().click()
   await expect(page.getByText('Done: work in origin')).toBeVisible()
   // The queued prompt went next, and asks in turn.
-  await expect(origin).toContainText('Asks to run: Edit src/main.rs')
-  await origin.getByRole('button', { name: 'Allow' }).click()
+  await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await expect(page.getByText('Done: then document it')).toBeVisible()
   await expect(origin).toBeHidden()
 
@@ -1077,11 +1136,14 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   await page.goto(live.alice)
   await settings(page, 'Projects')
   const list = page.getByTestId('projects')
-  await expect(list.getByRole('listitem', { name: 'tools' })).toContainText(`Here at ${live.work}/alice/tools`)
+  // A clone's path is cut to its last folders, whole in its title.
+  await expect(list.getByRole('listitem', { name: 'tools' })).toContainText('Cloned here at …/alice/tools')
+  await expect(list.getByRole('listitem', { name: 'tools' }).getByTitle(`${live.work}/alice/tools`, { exact: true })).toBeVisible()
   const origin = list.getByRole('listitem', { name: 'origin' })
   await expect(origin).toContainText(/\d+ threads?/)
-  await expect(origin).toContainText(`Here at ${live.work}/alice/repo`)
-  await expect(origin).toContainText('New threads start with Plain agent')
+  await expect(origin.getByTitle(`${live.work}/alice/repo`, { exact: true })).toBeVisible()
+  // The first project opens to its defaults.
+  await expect(origin.getByRole('group', { name: 'defaults for origin' }).getByLabel('Default agent')).toHaveValue('plain')
 
   await page.getByRole('main').getByRole('link', { name: 'Add a project' }).click()
   const add = page.getByRole('region', { name: 'add a project' })
@@ -1094,7 +1156,7 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   await add.getByRole('button', { name: 'Clone', exact: true }).click()
   await expect(add).toContainText(`${live.work}/alice/docs`)
   await page.getByRole('link', { name: 'Done' }).click()
-  await expect(list.getByRole('listitem', { name: 'docs' })).toContainText(`Here at ${live.work}/alice/docs`)
+  await expect(list.getByRole('listitem', { name: 'docs' }).getByTitle(`${live.work}/alice/docs`, { exact: true })).toBeVisible()
   expect(readFileSync(join(live.work, 'alice', 'docs', 'src', 'main.rs'), 'utf8')).toBe('fn tool() {}\n')
 })
 
@@ -1283,7 +1345,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
   await pickProject(page, /tools/)
-  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('works in').selectOption('worktree')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
@@ -1311,7 +1373,7 @@ test('a new project made from New thread starts its first thread in a folder mad
   await expect(page.getByRole('button', { name: 'project: scratch-app' })).toBeVisible()
 
   const form = page.getByRole('form', { name: 'new thread' })
-  await expect(form.getByRole('radio', { name: 'Local' })).toBeChecked()
+  await expect(form.getByLabel('works in')).toHaveValue('local')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await form.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')

@@ -32,8 +32,13 @@ async fn the_commands_an_agent_offers_come_as_its_session_opens() {
         let dir = tempfile::tempdir().expect("temp dir");
         let (sender, mut events) = mpsc::unbounded_channel();
         let _agent = start(options(dir.path(), env.clone()), sender);
-        assert!(matches!(next_of_all(&mut events).await, Event::Ready { .. }), "{env:?}");
-        let Event::Commands(commands) = next_of_all(&mut events).await else { panic!("the commands, {env:?}") };
+        // Over v1 the update may be relayed before the session's answer is.
+        let (first, second) = (next_of_all(&mut events).await, next_of_all(&mut events).await);
+        let (ready, commands) = match (first, second) {
+            (Event::Commands(commands), ready) | (ready, Event::Commands(commands)) => (ready, commands),
+            other => panic!("the session and its commands, {env:?}: {other:?}"),
+        };
+        assert!(matches!(ready, Event::Ready { .. }), "{env:?}");
         let said: Vec<(&str, Option<&str>)> =
             commands.iter().map(|command| (command.name.as_str(), command.hint.as_deref())).collect();
         assert_eq!(said, [("count", Some("<what to count>")), ("compact", None)], "{env:?}");
@@ -52,6 +57,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
         cwd: dir.path().to_owned(),
         mcp: None,
         load: None,
+        sign_in_first: None,
     };
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options.clone(), sender);
@@ -113,6 +119,7 @@ fn options(dir: &std::path::Path, env: Vec<(String, String)>) -> Start {
         cwd: dir.to_owned(),
         mcp: None,
         load: None,
+        sign_in_first: None,
     }
 }
 

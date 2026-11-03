@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useId, useState } from 'react'
 import { DEFAULT_PRESETS, PRESETS } from '../agentState'
 import { api, type GitNotes, type Project } from '../api'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
-import { Button, EmptyState, Input, Select, Skeleton, Tag, buttonClass, toast } from '../ui'
+import { Button, EmptyState, Icon, Input, Select, Skeleton, Tag, buttonClass, cx, toast } from '../ui'
 import { useWorkspace } from '../workspace'
 import { ImportOffer } from './ImportOffer'
 import { Mock } from './Mock'
@@ -19,6 +19,17 @@ function suggestedPath(project: Project, projects: Project[]): string {
   const parent = other.replace(/\/+$/, '').replace(/\/[^/]*$/, '')
   return `${parent}/${project.name}`
 }
+
+/** A path cut to the part that tells clones apart, its last two folders; the whole path is its title. */
+function shortPath(path: string): string {
+  const parts = path.replace(/\/+$/, '').split('/')
+  return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : path
+}
+
+/** Whether this machine may set `project`'s defaults: it has a clone, and the project is on a server. */
+const configurable = (project: Project) => Boolean(project.clone && project.server)
+
+const CHANGING = "Changing a project's defaults takes an owner of its org or the server's admin."
 
 /** Where the project's new threads go from this machine (ADR 0032). */
 function ProjectHome({ project }: { project: Project }) {
@@ -97,14 +108,28 @@ function Section({ title, children }: { title: ReactNode; children: ReactNode })
 
 const ROW = 'flex flex-wrap items-center gap-3 rounded-md border border-line bg-elevated px-3 py-2.5'
 
+/** One setting on one row: what it is, its control, and what it does. On a phone they stack. */
+function SettingRow({ id, label, help, children }: { id?: string; label: string; help: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid gap-1 border-t border-line-subtle py-2.5 md:grid-cols-[168px_minmax(0,300px)_minmax(0,1fr)] md:items-center md:gap-4">
+      {id ? (
+        <label htmlFor={id} className="text-fg-2">
+          {label}
+        </label>
+      ) : (
+        <span className="text-fg-2">{label}</span>
+      )}
+      {children}
+      <span className="text-2xs text-fg-2">{help}</span>
+    </div>
+  )
+}
+
 /** A project's defaults for its new threads: agent and permissions, and who sees them (ADR 0023). */
-function Defaults({ projects }: { projects: Project[] }) {
+function ProjectDefaults({ project }: { project: Project }) {
   const queries = useQueryClient()
   const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const owned = projects.filter((project) => project.clone && project.server)
-  const [repo, setRepo] = useState('')
-  const project = owned.find((candidate) => candidate.repo === repo) ?? owned[0]
-  if (!project) return null
+  const id = useId()
   const save = (change: { default_agent?: string | null; default_preset?: string | null; git_notes?: GitNotes; forge_comments?: boolean }) =>
     api
       .orgChange({
@@ -124,40 +149,16 @@ function Defaults({ projects }: { projects: Project[] }) {
         (failure: unknown) => toast(message(failure), 'danger'),
       )
   return (
-    <Section
-      title={
-        <>
-          Defaults for <span className="normal-case">{project.name}</span>
-        </>
-      }
-    >
-      <div className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-md border border-line bg-elevated p-3 text-xs">
-        {owned.length > 1 && (
-          <>
-            <label htmlFor="defaults-project" className="text-fg-2">
-              Project
-            </label>
-            <Select id="defaults-project" value={project.repo} onChange={(event) => setRepo(event.target.value)} className="text-xs">
-              {owned.map((candidate) => (
-                <option key={candidate.repo} value={candidate.repo}>
-                  {candidate.name}
-                </option>
-              ))}
-            </Select>
-          </>
-        )}
-        <label htmlFor="defaults-visibility" className="text-fg-2">
-          Visible to
-        </label>
-        <Mock id="add.visibility">
-          <Select id="defaults-visibility" disabled className="text-xs" defaultValue="org">
+    <div role="group" aria-label={`defaults for ${project.name}`} className="flex flex-col text-xs [&>div:first-child]:border-t-0 [&>span:first-child>div]:border-t-0">
+      <Mock id="add.visibility">
+        <SettingRow id={`${id}-visibility`} label="Visible to" help="Set by the org; an owner can change it.">
+          <Select id={`${id}-visibility`} disabled className="w-full text-xs" defaultValue="org">
             <option value="org">Everyone in {project.org ?? 'the org'} (org default)</option>
           </Select>
-        </Mock>
-        <label htmlFor="defaults-agent" className="text-fg-2">
-          Default agent
-        </label>
-        <Select id="defaults-agent" value={project.default_agent ?? ''} onChange={(event) => void save({ default_agent: event.target.value || null })} className="text-xs">
+        </SettingRow>
+      </Mock>
+      <SettingRow id={`${id}-agent`} label="Default agent" help="New threads start with it; another can be picked each time.">
+        <Select id={`${id}-agent`} className="w-full text-xs" value={project.default_agent ?? ''} onChange={(event) => void save({ default_agent: event.target.value || null })}>
           <option value="">None; pick each time</option>
           {(agents.data?.agents ?? []).map((agent) => (
             <option key={agent.id} value={agent.id}>
@@ -165,10 +166,9 @@ function Defaults({ projects }: { projects: Project[] }) {
             </option>
           ))}
         </Select>
-        <label htmlFor="defaults-preset" className="text-fg-2">
-          Permissions
-        </label>
-        <Select id="defaults-preset" value={project.default_preset ?? ''} onChange={(event) => void save({ default_preset: event.target.value || null })} className="text-xs">
+      </SettingRow>
+      <SettingRow id={`${id}-preset`} label="Permissions" help="What new threads' agents may do without asking.">
+        <Select id={`${id}-preset`} className="w-full text-xs" value={project.default_preset ?? ''} onChange={(event) => void save({ default_preset: event.target.value || null })}>
           <option value="">Ask before commands (Silt's default)</option>
           {DEFAULT_PRESETS.map((preset) => (
             <option key={preset.id} value={preset.id}>
@@ -176,29 +176,61 @@ function Defaults({ projects }: { projects: Project[] }) {
             </option>
           ))}
         </Select>
-        <label htmlFor="defaults-notes" className="text-fg-2">
-          Git notes
-        </label>
-        <Select id="defaults-notes" value={project.git_notes} onChange={(event) => void save({ git_notes: event.target.value as GitNotes })} className="text-xs">
+      </SettingRow>
+      <SettingRow id={`${id}-notes`} label="Git notes" help="A note on each commit naming the thread that made it.">
+        <Select id={`${id}-notes`} className="w-full text-xs" value={project.git_notes} onChange={(event) => void save({ git_notes: event.target.value as GitNotes })}>
           <option value="off">Off</option>
           <option value="local">On each commit, kept in the clone</option>
           <option value="push">On each commit, pushed to origin</option>
         </Select>
-        <label htmlFor="defaults-forge" className="text-fg-2">
-          Pull requests
-        </label>
-        <Select id="defaults-forge" value={project.forge_comments ? 'on' : 'off'} onChange={(event) => void save({ forge_comments: event.target.value === 'on' })} className="text-xs">
+      </SettingRow>
+      <SettingRow id={`${id}-forge`} label="Pull requests" help="Whether Silt comments on a pull request with its thread.">
+        <Select id={`${id}-forge`} className="w-full text-xs" value={project.forge_comments ? 'on' : 'off'} onChange={(event) => void save({ forge_comments: event.target.value === 'on' })}>
           <option value="off">No comment from Silt</option>
           <option value="on">One comment naming the thread</option>
         </Select>
-        <span className="text-fg-2">New checkouts</span>
-        <Mock id="add.prepare">
+      </SettingRow>
+      <Mock id="add.prepare">
+        <SettingRow label="New checkouts" help="Found in the repository.">
           <span>
-            run <code className="font-mono">.agents/prepare</code>, found in the repository
+            Run <code className="font-mono">.agents/prepare</code>
           </span>
-        </Mock>
+        </SettingRow>
+      </Mock>
+    </div>
+  )
+}
+
+/** The defaults of one of this machine's projects, picked when there are several. */
+function Defaults({ projects }: { projects: Project[] }) {
+  const owned = projects.filter(configurable)
+  const [repo, setRepo] = useState('')
+  const project = owned.find((candidate) => candidate.repo === repo) ?? owned[0]
+  if (!project) return null
+  return (
+    <Section
+      title={
+        <>
+          Defaults for <span className="normal-case">{project.name}</span>
+        </>
+      }
+    >
+      {owned.length > 1 && (
+        <label className="flex items-center gap-2 text-xs text-fg-2">
+          Project
+          <Select value={project.repo} onChange={(event) => setRepo(event.target.value)} className="text-xs">
+            {owned.map((candidate) => (
+              <option key={candidate.repo} value={candidate.repo}>
+                {candidate.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
+      <div className="rounded-md border border-line bg-elevated px-3 py-0.5">
+        <ProjectDefaults project={project} />
       </div>
-      <p className="text-2xs text-fg-2">Changing them takes an owner of its org or the server's admin.</p>
+      <p className="text-2xs text-fg-2">{CHANGING}</p>
     </Section>
   )
 }
@@ -321,13 +353,17 @@ export function AddProjectPage() {
   )
 }
 
-/** The projects the person works in, with this machine's clone of each (ADR 0023). */
+/** The projects the person works in, with this machine's clone of each and its defaults (ADR 0023). */
 export function Projects() {
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
   const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const several = (status.data?.servers?.length ?? 0) > 1
   const all = projects.data ?? []
+  const settable = (project: Project) => !hosted() && configurable(project)
+  // The first project whose defaults this machine sets opens to them; the rest stay folded until asked.
+  const first = all.find(settable)
+  const [opened, setOpened] = useState<Record<string, boolean>>({})
   return (
     <Page
       title="Projects"
@@ -336,6 +372,7 @@ export function Projects() {
       actions={
         !hosted() && (
           <Link to="/settings/$section" params={{ section: 'add' }} className={buttonClass('secondary')}>
+            <Icon name="plus" />
             Add a project
           </Link>
         )
@@ -351,39 +388,72 @@ export function Projects() {
           From <Link to="/" search={{ pick: 'folder' }} className="text-accent-fg">New thread</Link>, or run <code>silt open</code> in one.
         </EmptyState>
       )}
-      <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated">
-        {all.map((project) => (
-          <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="flex flex-col gap-1.5 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono font-medium">{project.name}</span>
-              <span className="font-mono text-2xs text-fg-2">{project.repo}</span>
-              {project.org && <Tag>{project.org}</Tag>}
-              {several && project.server && <Tag>{serverName(project.server)}</Tag>}
-              <span className="ml-auto text-xs text-fg-2">
-                {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
-                {project.open_mrs > 0 && `, ${project.open_mrs} open merge ${project.open_mrs === 1 ? 'request' : 'requests'}`}
-              </span>
-            </div>
-            {project.clone ? (
-              <p className="font-mono text-2xs text-fg-2">Here at {project.clone}</p>
-            ) : (
-              !hosted() && <CloneHere project={project} projects={all} />
-            )}
-            {!hosted() && project.clone && <ProjectHome project={project} />}
-            {(project.default_agent || project.default_preset) && (
-              <p className="text-xs text-fg-2">
-                New threads start with{' '}
-                {[
-                  project.default_agent && (agents.data?.agents.find((agent) => agent.id === project.default_agent)?.name ?? project.default_agent),
-                  project.default_preset && (PRESETS.find((preset) => preset.id === project.default_preset)?.label.toLowerCase() ?? project.default_preset),
-                ]
-                  .filter(Boolean)
-                  .join(', ')}
-              </p>
-            )}
-          </li>
-        ))}
+      <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated empty:hidden">
+        {all.map((project) => {
+          const own = settable(project)
+          const open = own && (opened[project.repo] ?? project === first)
+          return (
+            <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="flex flex-col gap-1.5 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0">
+              <div className="flex flex-wrap items-center gap-2">
+                {own ? (
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    title={`${open ? 'Hide' : 'Show'} its defaults`}
+                    onClick={() => setOpened((was) => ({ ...was, [project.repo]: !open }))}
+                    className="-ml-1 inline-flex items-center gap-1.5 rounded-sm px-1 hover:bg-surface-2 max-md:min-h-11"
+                  >
+                    <Icon name="chevronRight" className={cx('h-3 w-3 text-fg-2 transition-transform', open && 'rotate-90')} />
+                    <span className="font-mono font-medium">{project.name}</span>
+                  </button>
+                ) : (
+                  <span className="font-mono font-medium">{project.name}</span>
+                )}
+                <span className="min-w-0 truncate font-mono text-2xs text-fg-2" title={project.repo}>
+                  {shortPath(project.repo)}
+                </span>
+                {project.org && <Tag>{project.org}</Tag>}
+                {several && project.server && <Tag>{serverName(project.server)}</Tag>}
+                <span className="ml-auto text-xs text-fg-2">
+                  {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
+                  {project.open_mrs > 0 && ` · ${project.open_mrs} open merge ${project.open_mrs === 1 ? 'request' : 'requests'}`}
+                </span>
+              </div>
+              <div className={cx('flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-fg-2', own && 'md:pl-5')}>
+                {project.clone ? (
+                  <span>
+                    Cloned here at{' '}
+                    <span className="font-mono" title={project.clone}>
+                      {shortPath(project.clone)}
+                    </span>
+                  </span>
+                ) : (
+                  !hosted() && <CloneHere project={project} projects={all} />
+                )}
+                {!hosted() && project.clone && <ProjectHome project={project} />}
+              </div>
+              {open ? (
+                <div className="mt-1 md:pl-5">
+                  <ProjectDefaults project={project} />
+                </div>
+              ) : (
+                (project.default_agent || project.default_preset) && (
+                  <p className={cx('text-xs text-fg-2', own && 'md:pl-5')}>
+                    New threads start with{' '}
+                    {[
+                      project.default_agent && (agents.data?.agents.find((agent) => agent.id === project.default_agent)?.name ?? project.default_agent),
+                      project.default_preset && (PRESETS.find((preset) => preset.id === project.default_preset)?.label.toLowerCase() ?? project.default_preset),
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                  </p>
+                )
+              )}
+            </li>
+          )
+        })}
       </ul>
+      {all.some(settable) && <p className="mt-2 text-2xs text-fg-2">{CHANGING}</p>}
     </Page>
   )
 }

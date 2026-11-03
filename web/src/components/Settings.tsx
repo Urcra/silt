@@ -9,18 +9,29 @@ import { Dot, EmptyState, cx } from '../ui'
 import { Devices } from './Devices'
 import { NotificationBanner, NotificationSettings } from './Inbox'
 import { Orgs } from './Orgs'
-import { InSettings } from '../settingsContext'
+import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 import { AddProjectPage, Projects } from './Projects'
 
-const SECTIONS = [
-  { id: 'projects', label: 'Projects' },
-  { id: 'devices', label: 'Devices' },
-  { id: 'sync', label: 'Sync' },
-  { id: 'orgs', label: 'Orgs' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'appearance', label: 'Appearance' },
-] as const
+const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
+  {
+    label: 'Workspace',
+    sections: [
+      { id: 'projects', label: 'Projects' },
+      { id: 'orgs', label: 'Orgs' },
+    ],
+  },
+  {
+    label: 'You',
+    sections: [
+      { id: 'devices', label: 'Devices and sync' },
+      { id: 'notifications', label: 'Notifications' },
+      { id: 'appearance', label: 'Appearance' },
+    ],
+  },
+]
+
+const SECTIONS = GROUPS.flatMap((group) => group.sections)
 
 /** The servers this machine syncs with, and how to add one (ADR 0032). */
 function Sync() {
@@ -28,7 +39,7 @@ function Sync() {
   const servers = status.data?.servers ?? []
   return (
     <section aria-label="Sync" className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Sync</h2>
+      <h2 className={SETTINGS_HEADING}>Sync</h2>
       {servers.length === 0 && (
         <EmptyState title="Threads stay on this machine">
           Sign in to a server to hand threads off and share them: <code className="font-mono">silt auth login --server &lt;url&gt;</code>
@@ -60,7 +71,7 @@ function Appearance() {
   const [theme, setTheme] = useState<Theme>(storedTheme)
   return (
     <section aria-label="Appearance" className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Appearance</h2>
+      <h2 className={SETTINGS_HEADING}>Appearance</h2>
       <div role="radiogroup" aria-label="theme" className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs">
         {THEMES.map((choice) => (
           <button
@@ -85,9 +96,9 @@ function Appearance() {
 function Notifications() {
   return (
     <section aria-label="Notifications" className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Notifications</h2>
+      <h2 className={SETTINGS_HEADING}>Notifications</h2>
       <NotificationBanner />
-      <NotificationSettings open />
+      <NotificationSettings />
     </section>
   )
 }
@@ -95,37 +106,42 @@ function Notifications() {
 /** One page for what was Projects, Devices and Orgs, and the rest of the settings (ADR 0044). */
 export function Settings() {
   const { section } = useParams({ strict: false }) as { section?: string }
-  const chosen = section === 'add' ? 'projects' : (SECTIONS.find((candidate) => candidate.id === section)?.id ?? 'projects')
+  // Sync is part of Devices and sync; its old address still lands there.
+  const chosen = section === 'add' ? 'projects' : section === 'sync' ? 'devices' : (SECTIONS.find((candidate) => candidate.id === section)?.id ?? 'projects')
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const signIn = status.data?.servers?.[0]
   const bodies: Record<string, ReactNode> = {
     projects: section === 'add' ? <AddProjectPage /> : <Projects />,
-    devices: <Devices />,
-    sync: <Sync />,
+    devices: <Devices>{!hosted() && <Sync />}</Devices>,
     orgs: <Orgs />,
     notifications: <Notifications />,
     appearance: <Appearance />,
   }
   return (
-    <Page title="Settings" meta={signIn ? `${signIn.name} · signed in to ${serverName(signIn.url)} as ${signIn.user}` : hosted() ? undefined : 'this machine'} label="settings">
-      <div className="flex flex-wrap gap-6">
-        <nav aria-label="settings" className="flex flex-[1_1_180px] flex-col gap-px md:max-w-[200px]">
-          {SECTIONS.map((candidate) => (
-            <Link
-              key={candidate.id}
-              to="/settings/$section"
-              params={{ section: candidate.id }}
-              aria-current={candidate.id === chosen ? 'page' : undefined}
-              className={cx(
-                'rounded-sm px-2.5 py-1.5 max-md:min-h-11',
-                candidate.id === chosen ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
-              )}
-            >
-              {candidate.label}
-            </Link>
+    <Page title="Settings" meta={signIn ? `${signIn.user} on ${serverName(signIn.url)}` : hosted() ? undefined : 'this machine'} label="settings">
+      <div className="flex flex-col gap-6 md:flex-row md:gap-10">
+        <nav aria-label="settings" className="flex flex-col gap-px md:w-[184px] md:shrink-0">
+          {GROUPS.map((group) => (
+            <div key={group.label} className="flex flex-col gap-px">
+              <p className="px-2.5 pt-2.5 pb-1.5 font-mono text-2xs tracking-[0.14em] text-fg-2 uppercase">{group.label}</p>
+              {group.sections.map((candidate) => (
+                <Link
+                  key={candidate.id}
+                  to="/settings/$section"
+                  params={{ section: candidate.id }}
+                  aria-current={candidate.id === chosen ? 'page' : undefined}
+                  className={cx(
+                    'rounded-md px-2.5 py-1.5 max-md:min-h-11',
+                    candidate.id === chosen ? 'bg-accent-tint font-medium text-fg-1 shadow-[inset_2px_0_0_var(--accent)]' : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
+                  )}
+                >
+                  {candidate.label}
+                </Link>
+              ))}
+            </div>
           ))}
         </nav>
-        <div className="min-w-0 flex-[999_1_480px] md:max-w-[880px]">
+        <div className="min-w-0 flex-1 md:max-w-[760px]">
           <InSettings.Provider value>{bodies[chosen]}</InSettings.Provider>
         </div>
       </div>

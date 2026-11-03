@@ -63,26 +63,39 @@ pub const WOKE: &str = "The agent went on by itself, without a prompt.";
 /// The agent went on by itself, as Claude does once a background task it
 /// started ends: a turn opens as with a prompt, but nobody said anything.
 /// `cause` says what ended just before; `stopped`, that Silt stopped the
-/// turn at once, as the person had stopped the agent.
-pub fn wake(cause: Option<&str>, stopped: bool) -> String {
+/// turn at once, as the person had stopped what it would go on about.
+pub fn wake(cause: Option<&str>, stopped: Option<Stopped>) -> String {
     let mut record = json!({"t": "wake"});
     if let Some(cause) = cause {
         record["cause"] = json!(cause);
     }
-    if stopped {
-        record["stopped"] = json!(true);
+    match stopped {
+        Some(Stopped::Agent) => record["stopped"] = json!(true),
+        Some(Stopped::Command) => record["stopped"] = json!("command"),
+        None => {}
     }
     record.to_string()
 }
 
+/// What the person had stopped, so that Silt stopped a turn the agent
+/// opened by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    Agent,
+    /// The command whose end set it going.
+    Command,
+}
+
 /// How a turn the agent opened itself reads.
-fn woke(cause: Option<&str>, stopped: bool) -> String {
+fn woke(cause: Option<&str>, stopped: Option<Stopped>) -> String {
     let mut text = match cause {
         Some(cause) => format!("{cause}, and the agent went on by itself."),
         None => WOKE.to_owned(),
     };
-    if stopped {
-        text.push_str(" Silt stopped it, as you had stopped the agent.");
+    match stopped {
+        Some(Stopped::Agent) => text.push_str(" Silt stopped it, as you had stopped the agent."),
+        Some(Stopped::Command) => text.push_str(" Silt stopped it, as you had stopped the command."),
+        None => {}
     }
     text
 }
@@ -189,6 +202,46 @@ pub fn task(call: &str, id: Option<&str>, kind: Option<&str>, status: &str) -> S
     json!({"t": "task", "call": call, "id": id, "kind": kind, "status": status}).to_string()
 }
 
+/// Records that end the work `lines` left running, for once the agent that
+/// ran it is gone and took it along: each as its news was recorded, within
+/// the subagent that started it where one did.
+pub fn left_running<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut order: Vec<(Option<String>, String)> = Vec::new();
+    let mut tasks: std::collections::HashMap<(Option<String>, String), (Value, Value, bool)> = std::collections::HashMap::new();
+    for line in lines {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if record["t"] != "task" {
+            continue;
+        }
+        let Some(call) = record["call"].as_str() else {
+            continue;
+        };
+        let key = (record["parent"].as_str().map(str::to_owned), call.to_owned());
+        let running = TaskStatus::parse(record["status"].as_str().unwrap_or_default()) == TaskStatus::Running;
+        match tasks.get_mut(&key) {
+            // News that it runs never undoes its end.
+            Some((_, _, still)) => *still &= running,
+            None => {
+                order.push(key.clone());
+                tasks.insert(key, (record["id"].clone(), record["kind"].clone(), running));
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|key| {
+            let (id, kind, running) = &tasks[&key];
+            let (parent, call) = &key;
+            running.then(|| {
+                let record = task(call, id.as_str(), kind.as_str(), TaskStatus::Stopped.as_str());
+                parent.as_deref().map_or_else(|| record.clone(), |parent| within(&record, parent))
+            })
+        })
+        .collect()
+}
+
 pub fn stop(reason: &str) -> String {
     json!({"t": "stop", "reason": reason}).to_string()
 }
@@ -211,7 +264,16 @@ pub fn read_line(line: &str) -> Read {
         }
         "wake" => {
             read.marks.push(Mark::PromptSubmitted);
-            read.entries.push(Entry::Woke { text: woke(record["cause"].as_str(), record["stopped"] == true) });
+            read.entries.push(Entry::Woke {
+                text: woke(
+                    record["cause"].as_str(),
+                    match &record["stopped"] {
+                        Value::Bool(true) => Some(Stopped::Agent),
+                        Value::String(_) => Some(Stopped::Command),
+                        _ => None,
+                    },
+                ),
+            });
         }
         "message" => read.entries.push(Entry::Assistant { text: field("text") }),
         "thought" => read.entries.push(Entry::Thinking { text: field("text") }),
@@ -333,6 +395,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn work_left_running_is_stopped_where_its_news_was_recorded() {
+        let lines = [
+            task("b1", Some("bash-1"), Some("background"), "running"),
+            task("b2", Some("bash-2"), Some("background"), "running"),
+            task("b2", Some("bash-2"), Some("background"), "completed"),
+            task("a1", None, Some("subagent"), "running"),
+            within(&task("b3", Some("bash-3"), Some("background"), "running"), "a1"),
+            task("b4", Some("bash-4"), Some("background"), "failed"),
+            task("b4", Some("bash-4"), Some("background"), "running"),
+            message("not news"),
+        ];
+        let stopped = left_running(lines.iter().map(String::as_str));
+        assert_eq!(
+            stopped,
+            [
+                task("b1", Some("bash-1"), Some("background"), "stopped"),
+                task("a1", None, Some("subagent"), "stopped"),
+                within(&task("b3", Some("bash-3"), Some("background"), "stopped"), "a1"),
+            ]
+        );
+        assert!(left_running(lines.iter().chain(&stopped).map(String::as_str)).is_empty());
+    }
+
+    #[test]
     fn records_read_back_as_a_conversation() {
         let lines = [
             session("fake", "Fake agent", "s1"),
@@ -385,14 +471,21 @@ mod tests {
 
     #[test]
     fn a_turn_the_agent_opened_itself_is_a_turn_without_a_prompt() {
-        let named = read_line(&wake(Some("`sleep 8` finished in the background"), false));
+        let named = read_line(&wake(Some("`sleep 8` finished in the background"), None));
         assert_eq!(
             named.entries,
             [Entry::Woke { text: "`sleep 8` finished in the background, and the agent went on by itself.".into() }]
         );
-        let stopped = read_line(&wake(None, true));
+        let stopped = read_line(&wake(None, Some(Stopped::Agent)));
         assert_eq!(stopped.entries, [Entry::Woke { text: format!("{WOKE} Silt stopped it, as you had stopped the agent.") }]);
-        let read = read_line(&wake(None, false));
+        let hushed = read_line(&wake(Some("`npm run dev` was stopped in the background"), Some(Stopped::Command)));
+        assert_eq!(
+            hushed.entries,
+            [Entry::Woke {
+                text: "`npm run dev` was stopped in the background, and the agent went on by itself. Silt stopped it, as you had stopped the command.".into()
+            }]
+        );
+        let read = read_line(&wake(None, None));
         assert_eq!(read.marks, [Mark::PromptSubmitted]);
         assert_eq!(read.entries, [Entry::Woke { text: WOKE.into() }]);
         assert_eq!(read.entries[0].kind(), "wake");

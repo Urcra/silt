@@ -131,6 +131,7 @@ impl Core {
                     .map(|asked| AskedPermission { id: asked.id, title: asked.title, options: asked.options })
                     .collect(),
                 questions: status.questions,
+                sign_in: status.sign_in,
                 queued,
                 preset: serde_json::to_value(self.preset(thread))
                     .ok()
@@ -235,6 +236,9 @@ impl Core {
             RemoteCommand::MrShow { mr } => Request::MrShow { mr },
             RemoteCommand::MrSeen { mr, path, seen } => Request::MrSeen { mr, path, seen },
             RemoteCommand::FileAt { path, at } => Request::FileAt { thread, query: silt_proto::view::FileQuery { path, at } },
+            RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },
+            RemoteCommand::SignInCode { code } => Request::AcpSignInCode { thread, code },
+            RemoteCommand::SignInCancel => Request::AcpSignInCancel { thread },
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),
                 clone: None,
@@ -307,6 +311,7 @@ impl Core {
                 })
                 .collect(),
             questions: running.agent.questions.clone(),
+            sign_in: running.agent.sign_in.clone(),
             context: None,
             error: None,
             modes: None,
@@ -314,6 +319,7 @@ impl Core {
             takes_images: false,
             takes_files: false,
             commands: Vec::new(),
+            stoppable: Vec::new(),
         })
     }
 
@@ -339,10 +345,17 @@ impl Core {
                 (thread, RemoteCommand::Prompt { text: text.clone(), plan: *plan })
             }
             Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
+            Request::AcpStopTask { thread, .. } => {
+                let thread = self.find_thread(thread).ok()?;
+                return self.elsewhere_of(thread).map(|_| Elsewhere::Refuse("stop it from the machine running the agent"));
+            }
             Request::AcpCancel { thread } => (thread, RemoteCommand::Cancel),
             Request::AcpAnswer { thread, id, option } => (thread, RemoteCommand::Answer { id: *id, option: option.clone() }),
             Request::AcpReply { thread, id, answers } => (thread, RemoteCommand::Reply { id: *id, answers: answers.clone() }),
             Request::AcpStop { thread } => (thread, RemoteCommand::Stop),
+            Request::AcpSignIn { thread, method } => (thread, RemoteCommand::SignIn { method: method.clone() }),
+            Request::AcpSignInCode { thread, code } => (thread, RemoteCommand::SignInCode { code: code.clone() }),
+            Request::AcpSignInCancel { thread } => (thread, RemoteCommand::SignInCancel),
             Request::AcpMode { thread, mode } => (thread, RemoteCommand::Mode { mode: mode.clone() }),
             Request::AcpSetting { thread, id, value } => {
                 (thread, RemoteCommand::Setting { id: id.clone(), value: value.clone() })

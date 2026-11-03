@@ -97,3 +97,11 @@ export const TasksContext = createContext<Tasks>(NO_TASKS)
 
 /** Whether the thread's session may still be running its tasks: it did something lately, or its agent runs here. */
 export const SessionLive = createContext<boolean>(false)
+
+/** The background commands the thread's agent runs here, by their calls, and how to end one. */
+export interface Stoppable {
+  calls: ReadonlySet<string>
+  stop: (call: string) => void
+}
+
+export const StoppableTasks = createContext<Stoppable>({ calls: new Set(), stop: () => undefined })

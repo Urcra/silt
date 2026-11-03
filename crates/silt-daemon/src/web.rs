@@ -99,6 +99,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
+        .route("/api/threads/{id}/comments/sent", post(comments_sent))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/api/search", get(search))
@@ -129,8 +130,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
+        .route("/api/threads/{id}/agent/tasks/{call}/stop", post(agent_stop_task))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/reply", post(agent_reply))
+        .route("/api/threads/{id}/agent/sign-in", post(agent_sign_in))
+        .route("/api/threads/{id}/agent/sign-in/code", post(agent_sign_in_code))
+        .route("/api/threads/{id}/agent/sign-in/cancel", post(agent_sign_in_cancel))
         .route("/api/threads/{id}/pull-request", post(pull_request).get(pull_request_blocker))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
@@ -392,8 +397,23 @@ fn no_clone() -> std::path::PathBuf {
     std::path::PathBuf::from("/")
 }
 
-async fn comments(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    ask(&web, Request::Comments { thread, cwd: no_clone() }).await
+#[derive(Deserialize)]
+struct CommentsQuery {
+    base: Option<String>,
+}
+
+async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::Comments { thread, base, cwd: no_clone() }).await
+}
+
+#[derive(Deserialize)]
+struct SentComments {
+    comments: Vec<String>,
+}
+
+async fn comments_sent(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<SentComments>) -> HttpResponse {
+    ask(&web, Request::CommentsSent { thread, comments: body.comments, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]
@@ -693,6 +713,10 @@ async fn agent_cancel(State(web): State<Web>, Path(thread): Path<String>) -> Htt
     ask(&web, Request::AcpCancel { thread }).await
 }
 
+async fn agent_stop_task(State(web): State<Web>, Path((thread, call)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::AcpStopTask { thread, call }).await
+}
+
 #[derive(Deserialize)]
 struct AgentAnswer {
     id: u64,
@@ -716,6 +740,32 @@ struct AgentReply {
 async fn agent_reply(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentReply>) -> HttpResponse {
     let answers = body.answers.map(|answers| answers.into_iter().collect());
     ask(&web, Request::AcpReply { thread, id: body.id, answers }).await
+}
+
+#[derive(Deserialize)]
+struct AgentSignIn {
+    method: String,
+}
+
+async fn agent_sign_in(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentSignIn>) -> HttpResponse {
+    ask(&web, Request::AcpSignIn { thread, method: body.method }).await
+}
+
+#[derive(Deserialize)]
+struct AgentSignInCode {
+    code: String,
+}
+
+async fn agent_sign_in_code(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(body): Json<AgentSignInCode>,
+) -> HttpResponse {
+    ask(&web, Request::AcpSignInCode { thread, code: body.code }).await
+}
+
+async fn agent_sign_in_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::AcpSignInCancel { thread }).await
 }
 
 async fn pull_request(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

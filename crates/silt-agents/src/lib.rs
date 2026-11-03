@@ -17,6 +17,7 @@ pub mod history;
 pub mod opencode;
 mod render;
 mod rewrite;
+pub mod sign_in;
 mod tail;
 pub mod time;
 pub mod tool;
