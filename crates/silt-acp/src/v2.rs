@@ -562,14 +562,16 @@ impl Reading {
                 }
                 // A command left in the background ends with its terminal,
                 // which Claude Code gives no exit code; it ran its course.
-                match (terminal.exit_status, self.background.remove(&call)) {
-                    (MaybeUndefined::Value(exit), Some(task)) => {
-                        let code = serde_json::to_value(&exit).ok().and_then(|exit| exit.get("exitCode")?.as_i64());
-                        let status = if code.is_none_or(|code| code == 0) { "completed" } else { "failed" };
-                        vec![news(&call, &task, "background", status)]
-                    }
-                    _ => Vec::new(),
-                }
+                // Other updates, such as the one offering to cancel it, leave it running.
+                let MaybeUndefined::Value(exit) = terminal.exit_status else {
+                    return Vec::new();
+                };
+                let Some(task) = self.background.remove(&call) else {
+                    return Vec::new();
+                };
+                let code = serde_json::to_value(&exit).ok().and_then(|exit| exit.get("exitCode")?.as_i64());
+                let status = if code.is_none_or(|code| code == 0) { "completed" } else { "failed" };
+                vec![news(&call, &task, "background", status)]
             }
             SessionUpdate::TerminalOutputChunk(chunk) => {
                 let Some(call) = self.terminal_call(&chunk.terminal_id.to_string()) else {
@@ -1023,6 +1025,49 @@ mod tests {
             serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed"}),
         );
         assert!(foreground.iter().all(|event| task_of(event).is_none()), "a command that ran to its end left nothing running");
+    }
+
+    /// Claude's adapter (0.100) offers to cancel a command once it's in the
+    /// background, then ends its terminal, as recorded.
+    #[test]
+    fn a_background_command_offered_for_cancelling_still_ends_with_its_terminal() {
+        let (mut reading, s) = reading();
+        let call = "toolu_01LxgWy5fqDauekeM8sQe2Gs";
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": call, "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": call}]}),
+        );
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": call, "rawInput": {"command": "sleep 60 && echo BG_DONE", "run_in_background": true}}),
+        );
+        let answer = base64::engine::general_purpose::STANDARD
+            .encode("Command running in background with ID: bdc2fjmnu. Output is being written to: /tmp/x.output");
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": call, "output": {"data": answer}}),
+        );
+        let left = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"}),
+        );
+        assert_eq!(task_of(&left[0]), Some((call, Some("bdc2fjmnu"), Some("background"), "running")));
+        let offered = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": call, "command": "sleep 60 && echo BG_DONE", "capabilities": {"cancel": {}}}),
+        );
+        assert!(offered.is_empty());
+        let ended = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": call, "exitStatus": {}, "capabilities": null}),
+        );
+        assert_eq!(task_of(&ended[0]), Some((call, Some("bdc2fjmnu"), Some("background"), "completed")));
     }
 
     #[test]
