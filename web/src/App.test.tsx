@@ -1,11 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from './App'
 import type { ThreadSummary } from './api'
 import { legacyPath } from './legacy'
 import { projectName, projects } from './projects'
+import { queryClient } from './query'
 
 afterEach(() => {
+  cleanup()
+  queryClient.clear()
   vi.unstubAllGlobals()
 })
 
@@ -27,7 +30,7 @@ test('lists threads from the daemon', async () => {
               forked_from: null,
               owner: '',
               collaborators: [],
-              last_ms: 1,
+              last_ms: Date.now(),
               merged: false,
               review: false,
               mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
@@ -45,6 +48,54 @@ test('lists threads from the daemon', async () => {
   await waitFor(() => expect(screen.getAllByText('Fix the lexer')).toHaveLength(1))
   const project = screen.getByRole('region', { name: 'github.com/u/r' })
   expect(project).toHaveTextContent('rFix the lexer')
+})
+
+test('a project with nothing from the last two weeks folds into one row, and opens a line at a time', async () => {
+  const summary = (id: string, repo: string, title: string, last_ms: number) => ({
+    id,
+    repo,
+    title,
+    agent: 'claude',
+    created_ms: last_ms,
+    messages: 2,
+    edits: 3,
+    location: 'here',
+    forked_from: null,
+    owner: '',
+    collaborators: [],
+    last_ms,
+    merged: false,
+    review: false,
+    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
+  })
+  const weeksAgo = (weeks: number) => Date.now() - weeks * 7 * 86_400_000
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/threads')
+        ? [
+            summary('a'.repeat(32), 'github.com/u/recent', 'Fresh work', Date.now()),
+            summary('b'.repeat(32), 'github.com/u/recent', 'Stale work', weeksAgo(3)),
+            summary('c'.repeat(32), 'github.com/u/dusty', 'Long gone', weeksAgo(5)),
+          ]
+        : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  render(<App />)
+  await waitFor(() => expect(screen.getByText('Fresh work')).toBeInTheDocument())
+  expect(screen.queryByText('Stale work')).toBeNull()
+  expect(screen.queryByRole('region', { name: 'github.com/u/dusty' })).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show 1 older' }))
+  expect(screen.getByText('Stale work')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: /^Older projects/ }))
+  const dusty = screen.getByRole('region', { name: 'github.com/u/dusty' })
+  expect(within(dusty).queryByText('Long gone')).toBeNull()
+  fireEvent.click(within(dusty).getByRole('button', { name: /dusty/ }))
+  expect(within(dusty).getByText('Long gone')).toBeInTheDocument()
+  expect(within(dusty).queryByRole('button', { name: /^Show/ })).toBeNull()
 })
 
 test('threads are grouped by project, newest first', () => {

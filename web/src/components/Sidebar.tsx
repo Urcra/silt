@@ -9,7 +9,7 @@ import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, section, sections, unread } from '../sections'
+import { type Section, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, threadDoing, waitKind } from '../threadLook'
@@ -121,15 +121,33 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
   )
 }
 
-/** One project's threads, newest first, folded away by its name, with what's settled behind a count. */
-function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name: string; clone?: string; threads: ThreadSummary[]; now: number }) {
-  const [open, setOpen] = useState(true)
+/**
+ * One project's threads, newest first, folded away by its name, with what's old, settled or
+ * snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
+ */
+function ProjectGroup({
+  repo,
+  name,
+  clone,
+  threads,
+  now,
+  older = false,
+}: {
+  repo: string
+  name: string
+  clone?: string
+  threads: ThreadSummary[]
+  now: number
+  older?: boolean
+}) {
+  const [open, setOpen] = useState(!older)
   const [showRest, setShowRest] = useState(false)
   const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
-  const shown = newest.filter((thread) => ['needs_you', 'working', 'active'].includes(section(thread, now)))
-  const rest = newest.filter((thread) => ['snoozed', 'settled'].includes(section(thread, now)))
-  const restKinds = new Set(rest.map((thread) => section(thread, now)))
-  const restSaid = restKinds.size > 1 ? 'settled or snoozed' : [...restKinds][0]
+  const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
+  const shown = newest.filter((thread) => !held(thread))
+  const rest = newest.filter(held)
+  const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
+  const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
   const working = threads.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
   return (
     <section aria-label={repo} className="mb-0.5">
@@ -159,11 +177,11 @@ function ProjectGroup({ repo, name, clone, threads, now }: { repo: string; name:
       {open && (
         <>
           <ul>
-            {(showRest ? [...shown, ...rest] : shown).map((thread) => (
+            {(showRest || older ? [...shown, ...rest] : shown).map((thread) => (
               <ThreadItem key={thread.id} thread={thread} nested />
             ))}
           </ul>
-          {rest.length > 0 && (
+          {rest.length > 0 && !older && (
             <button
               type="button"
               aria-expanded={showRest}
@@ -280,6 +298,11 @@ export function Sidebar() {
   const grouped = sections(mine, now)
   // A thread that needs the person stays in its project too, where it lives.
   const listed = mine.filter((thread) => [...LISTED, 'needs_you'].includes(section(thread, now)))
+  const [showOlder, setShowOlder] = useState(false)
+  const byProject = projects(listed)
+  const isOlder = ([, inRepo]: [string, ThreadSummary[]]) => inRepo.every((thread) => old(thread, now))
+  const recentProjects = byProject.filter((project) => !isOlder(project))
+  const olderProjects = byProject.filter(isOlder)
   const path = useRouterState({ select: (state) => state.location.pathname })
   const reviews = mine.filter((thread) => thread.review).length
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
@@ -370,9 +393,26 @@ export function Sidebar() {
         Projects
       </SectionLabel>
       {threads.isSuccess && listed.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
-      {projects(listed).map(([repo, inRepo]) => (
+      {recentProjects.map(([repo, inRepo]) => (
         <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
       ))}
+      {olderProjects.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={showOlder}
+          onClick={() => setShowOlder(!showOlder)}
+          title="Projects with no thread touched in the last two weeks"
+          className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-left text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
+        >
+          <Icon name={showOlder ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0" />
+          <span className="truncate">Older projects</span>
+          <span className="ml-auto shrink-0 font-mono text-2xs text-fg-3">{olderProjects.length}</span>
+        </button>
+      )}
+      {showOlder &&
+        olderProjects.map(([repo, inRepo]) => (
+          <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} older />
+        ))}
     </nav>
     {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
     <div className="shrink-0 px-2 pb-2">

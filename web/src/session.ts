@@ -18,6 +18,8 @@ export interface Live {
   tool: { id: string | null; text: string }
   /** What the agent last streamed, kept once its status drops it, until the history has it. */
   said: Said
+  /** How many entries the history had when the agent last began to say something. */
+  began: number
 }
 
 const NO_TOOL = { id: null, text: '' }
@@ -26,7 +28,11 @@ const NO_TOOL = { id: null, text: '' }
 const SAID_MS = 5000
 
 /** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
-export function useLive(thread: string): Live & { setPreset: (preset: Preset) => void } {
+export function useLive(thread: string, total = 0): Live & { setPreset: (preset: Preset) => void } {
+  const entries = useRef(total)
+  useEffect(() => {
+    entries.current = total
+  }, [total])
   const [live, setLive] = useState<Live>({
     changes: 0,
     deltas: null,
@@ -34,6 +40,7 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
     preset: 'ask_before_commands',
     tool: NO_TOOL,
     said: NOTHING_SAID,
+    began: 0,
   })
   const [round, setRound] = useState(0)
   useEffect(() => {
@@ -48,6 +55,7 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
           agent: state.agent,
           preset: state.preset,
           said: NOTHING_SAID,
+          began: entries.current,
         })),
       () => undefined,
     )
@@ -79,8 +87,12 @@ export function useLive(thread: string): Live & { setPreset: (preset: Preset) =>
         const text = now?.streaming ? '' : before?.streaming || previous.said.text
         const thought = now?.thinking ? '' : before?.thinking || previous.said.thought
         const kept = text === previous.said.text && thought === previous.said.thought
-        const said = kept ? previous.said : text || thought ? { text, thought } : NOTHING_SAID
-        return { ...previous, agent: now, tool: working ? previous.tool : NO_TOOL, said }
+        const began = !before?.streaming && !before?.thinking && (now?.streaming || now?.thinking) ? entries.current : previous.began
+        // Words kept across a change to the others keep where they began, or a later turn's thought would lose their entry.
+        const textAfter = text === previous.said.text ? previous.said.textAfter : began
+        const thoughtAfter = thought === previous.said.thought ? previous.said.thoughtAfter : began
+        const said = kept ? previous.said : text || thought ? { text, thought, textAfter, thoughtAfter } : NOTHING_SAID
+        return { ...previous, agent: now, tool: working ? previous.tool : NO_TOOL, said, began }
       })
     } else if (event.event === 'agent_text' && event.kind === 'tool') {
       setLive((previous) => {

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ThreadSummary } from './api'
-import { section, sections, unread } from './sections'
+import { old, section, sections, unread } from './sections'
 
 function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partial<ThreadSummary['mine']> = {}): ThreadSummary {
   return {
@@ -54,4 +54,17 @@ test('a thread is unread only after the person once looked and something happene
   expect(unread(thread('c', { last_ms: 100 }, { seen_ms: 100 }))).toBe(false)
   const ordered = sections([thread('old', { last_ms: 1 }), thread('new', { last_ms: 9 })], 0).active.map((one) => one.id)
   expect(ordered).toEqual(['new', 'old'])
+})
+
+test('a thread is old after two weeks untouched, unless something runs or waits in it or it is pinned', () => {
+  const day = 86_400_000
+  const now = 100 * day
+  const last_ms = now - 15 * day
+  expect(old(thread('a', { last_ms }), now)).toBe(true)
+  expect(old(thread('b', { last_ms }, { settled: true }), now)).toBe(true)
+  expect(old(thread('c', { last_ms: now - 13 * day }), now)).toBe(false)
+  expect(old(thread('d', { last_ms, agent_state: 'working' }), now)).toBe(false)
+  expect(old(thread('e', { last_ms, agent_state: 'awaiting_input' }), now)).toBe(false)
+  expect(old(thread('f', { last_ms, review: true }), now)).toBe(false)
+  expect(old(thread('g', { last_ms }, { pinned: true }), now)).toBe(false)
 })

@@ -36,6 +36,13 @@ export function section(thread: ThreadSummary, now: number): Section {
   return 'active'
 }
 
+const OLD_AFTER_MS = 14 * 24 * 60 * 60 * 1000
+
+/** Untouched for two weeks, with nothing running or waiting in it. A pin keeps a thread in view however long it rests. */
+export function old(thread: ThreadSummary, now: number): boolean {
+  return now - thread.last_ms > OLD_AFTER_MS && ['active', 'snoozed', 'settled'].includes(section(thread, now))
+}
+
 /** The threads of each section, newest activity first. */
 export function sections(threads: ThreadSummary[], now: number): Record<Section, ThreadSummary[]> {
   const out: Record<Section, ThreadSummary[]> = { needs_you: [], pinned: [], working: [], active: [], snoozed: [], settled: [] }
