@@ -701,6 +701,7 @@ export function AgentDock({
         onCycle={cycle}
         onFiles={attachable ? attach : undefined}
         commands={(live ? status.commands : undefined) ?? seen?.commands}
+        voice={!hosted()}
         placeholder={
           !live
             ? startable

@@ -901,3 +901,21 @@ added: boolean,
 sessions: Array<FoundSessions>, last_ms: number | null, };
 
 export type FoundSessions = { agent: string, count: number, };
+
+export type VoiceDownload = { done: number, total: number, };
+
+export type VoiceEvent = { "kind": "partial", text: string, } | { "kind": "segment", text: string, } | { "kind": "paused" } | { "kind": "done" } | { "kind": "failed", message: string, };
+
+export type VoiceStatus = { 
+/**
+ * Whether `silt-voice` is installed.
+ */
+helper: boolean, 
+/**
+ * Whether the speech model has been downloaded.
+ */
+model: boolean, download: VoiceDownload | null, 
+/**
+ * Why the last download failed.
+ */
+failed: string | null, };

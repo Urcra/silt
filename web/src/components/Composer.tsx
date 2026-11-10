@@ -2,8 +2,10 @@ import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
 import { matching, typedCommand } from '../slashCommands'
-import { Icon, type IconName, Spinner, cx } from '../ui'
+import { cx } from '../ui'
+import { insertWords, useDictation } from '../voice'
 import { ComposerFolded } from './composerFolded'
+import { VoiceButton, VoiceLine } from './VoiceButton'
 
 /**
  * Folds the row whose tools `content` holds when they're wider than `room`, and unfolds it once they'd fit
@@ -95,6 +97,7 @@ export function ComposerBox({
   onCycle,
   onFiles,
   commands = [],
+  voice = false,
   className,
 }: {
   id: string
@@ -122,8 +125,36 @@ export function ComposerBox({
   onFiles?: (files: File[], pasted: boolean) => void
   /** The agent's commands, offered as `/` starts the text. */
   commands?: AgentCommand[]
+  /** Offers dictation, where this machine can do it. */
+  voice?: boolean
   className?: string
 }) {
+  const box = useRef<HTMLTextAreaElement>(null)
+  // The draft that dictation will send, and where the caret goes, once it's in the box.
+  const dictatedToSend = useRef<string | null>(null)
+  const dictatedCaret = useRef<number | null>(null)
+  const dictation = useDictation({
+    enabled: voice,
+    composer: id,
+    onText: (words, send) => {
+      const next = insertWords(value, box.current?.selectionStart ?? value.length, box.current?.selectionEnd ?? value.length, words)
+      dictatedCaret.current = next.caret
+      dictatedToSend.current = send ? next.value : null
+      edit(next.value)
+    },
+  })
+  useLayoutEffect(() => {
+    if (dictatedCaret.current === null) return
+    box.current?.focus()
+    box.current?.setSelectionRange(dictatedCaret.current, dictatedCaret.current)
+    dictatedCaret.current = null
+  }, [value])
+  useEffect(() => {
+    if (dictatedToSend.current !== null && dictatedToSend.current === value) {
+      dictatedToSend.current = null
+      onSend(false)
+    }
+  })
   const { room, content, folded } = useFolded()
   const [dragging, setDragging] = useState(false)
   const typed = typedCommand(value)
@@ -193,11 +224,15 @@ export function ComposerBox({
         {label}
       </label>
       <textarea
+        ref={box}
         id={id}
         aria-label={label}
         rows={rows}
         value={value}
-        onChange={(event) => edit(event.target.value)}
+        onChange={(event) => {
+          dictatedToSend.current = null
+          edit(event.target.value)
+        }}
         onKeyDown={keyDown}
         aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
         aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
@@ -205,6 +240,7 @@ export function ComposerBox({
         placeholder={placeholder}
         className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
       />
+      {dictation.available && <VoiceLine dictation={dictation} />}
       {below}
       {/* One row however many tools: the agent's settings fold into one chip where they don't fit, and what still
           doesn't scrolls sideways rather than starting a second row. */}
@@ -214,49 +250,13 @@ export function ComposerBox({
             <ComposerFolded.Provider value={folded}>{tools}</ComposerFolded.Provider>
           </span>
         </span>
-        <span className="flex shrink-0 items-center gap-2">{actions}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {dictation.available && <VoiceButton dictation={dictation} />}
+          {actions}
+        </span>
       </div>
     </div>
   )
 }
 
-/** The composer's round button: send, start or stop. */
-export function RoundButton({
-  label,
-  icon,
-  onClick,
-  disabled,
-  type = 'button',
-  quiet = false,
-  busy = false,
-  title,
-}: {
-  label: string
-  icon: IconName
-  onClick?: () => void
-  disabled?: boolean
-  type?: 'button' | 'submit'
-  /** Stop: drawn on the surface rather than in amber. */
-  quiet?: boolean
-  /** What it did is under way: a spinner in place of its icon. */
-  busy?: boolean
-  title?: string
-}) {
-  return (
-    <button
-      type={type}
-      aria-label={label}
-      title={title ?? label}
-      onClick={onClick}
-      disabled={disabled}
-      className={cx(
-        'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full max-md:h-11 max-md:w-11',
-        quiet
-          ? 'border border-line-strong bg-surface-2 text-fg-1 hover:bg-surface-3'
-          : 'bg-accent text-on-accent hover:bg-accent-hover disabled:bg-surface-2 disabled:text-fg-3',
-      )}
-    >
-      {busy ? <Spinner className="h-4 w-4" /> : <Icon name={icon} className="h-4 w-4" />}
-    </button>
-  )
-}
+export { RoundButton } from './RoundButton'

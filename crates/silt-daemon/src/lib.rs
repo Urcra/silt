@@ -38,6 +38,7 @@ mod sync;
 mod sync_once;
 mod transcripts;
 mod views;
+mod voice;
 mod watch;
 mod web;
 

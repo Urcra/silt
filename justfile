@@ -15,8 +15,8 @@ default:
 # Build the CLI and the desktop app
 build: build-cli build-desktop
 
-# Install the CLI and the desktop app
-install: install-cli install-desktop
+# Install the CLI, the desktop app and the speech helper
+install: install-cli install-desktop install-voice
 
 # Build the web UI, which the CLI embeds
 build-web:
@@ -53,6 +53,10 @@ install-desktop: check-webkit
         > "{{data_dir}}/applications/silt.desktop"
     -update-desktop-database "{{data_dir}}/applications" 2>/dev/null
 
+# Install `silt-voice` beside `silt`, for dictation in the web UI (ADR 0059)
+install-voice:
+    cargo install --locked --path crates/silt-voice
+
 # From WSL: install the CLI here, and the CLI and the desktop app on Windows
 install-wsl: install-cli install-windows
 
@@ -64,6 +68,7 @@ install-windows: build-web
 uninstall:
     -cargo uninstall silt-cli
     -cargo uninstall silt-desktop
+    -cargo uninstall silt-voice
     rm -f "{{data_dir}}/applications/silt.desktop" "{{data_dir}}/icons/hicolor/128x128/apps/silt.png"
 
 [private]

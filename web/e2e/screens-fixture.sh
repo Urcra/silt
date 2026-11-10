@@ -14,6 +14,7 @@ work=$(printf '%s' "$line" | sed 's/.*"work":"\([^"]*\)".*/\1/')
 thread=$(printf '%s' "$line" | sed 's/.*"thread":"\([^"]*\)".*/\1/')
 
 export SILT_HOME="$work/alice/silt"
+export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/alice/claude"
 # Agent sessions on the machine running the tests would show in the import
 # offer, so each machine here has a home of its own.

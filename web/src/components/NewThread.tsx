@@ -19,6 +19,7 @@ import { AttachButton, AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
+import { hosted } from '../served'
 import { ComposerBox, RoundButton } from './Composer'
 import { Page } from './Page'
 import { CloneHere } from './Projects'
@@ -606,6 +607,7 @@ export function NewThread() {
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
             commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
+            voice={!hosted()}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
             tools={
               chosenWhere !== 'cloud' && (
