@@ -2,10 +2,10 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { type ReactNode, type RefObject, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import { AGENTS, api, short, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
-import { parseFiles } from '../diffParse'
+import { readWhole } from '../diffParse'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -45,6 +45,7 @@ import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
+import { FilesByStats } from './StatDiff'
 import { Markdown } from './Markdown'
 import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
@@ -555,12 +556,20 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
+  // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
+  const stats = useQuery({
+    queryKey: keys.diffStats(thread, { turn: turn.number }),
+    queryFn: () => api.diffStats(thread, { turn: turn.number }),
+    staleTime: Infinity,
+  })
+  const files = stats.data ?? null
+  const whole = files !== null && readWhole(files)
   const diff = useQuery({
     queryKey: keys.diff(thread, { turn: turn.number }),
     queryFn: () => api.diff(thread, { turn: turn.number }),
     staleTime: Infinity,
+    enabled: open && whole,
   })
-  const files = diff.data === undefined ? null : parseFiles(diff.data)
   const tools = row.entries.filter((entry) => entry.kind === 'tool_call').length
   const last = row.entries[row.entries.length - 1]
   const took = row.prompt && last ? duration(row.prompt.time_ms, last.time_ms) : null
@@ -645,7 +654,8 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
           <CopyLink path={`/t/${thread}#turn-${turn.number}`} thread={thread} label="Copy link" name={`link to turn ${turn.number}`} className={ghost} />
         </span>
       </div>
-      {open && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
+      {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
+      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={{ turn: turn.number }} />}
     </div>
   )
 }
@@ -1312,11 +1322,14 @@ function ThreadCommits({ thread }: { thread: string }) {
 }
 
 /** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
+/** How many of the thread's files Details lists before More. */
+const LISTED_FILES = 200
+
 function Details({
   thread,
   summary,
   total,
-  diff,
+  files,
   codeComments,
   anchor,
   onChanged,
@@ -1325,7 +1338,7 @@ function Details({
   thread: string
   summary: ThreadSummary | undefined
   total: number
-  diff: string | undefined
+  files: DiffStat[] | null
   codeComments: CommentView[]
   anchor: Anchor
   onChanged: () => Promise<unknown>
@@ -1334,7 +1347,7 @@ function Details({
   const now = useNow()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
-  const files = diff === undefined ? null : parseFiles(diff)
+  const [listed, setListed] = useState(LISTED_FILES)
   const liveOn =
     summary?.location === 'moved' ? 'another device' : summary?.location === 'remote' ? 'the server only' : hosted() ? 'its machine' : device
   return (
@@ -1369,7 +1382,7 @@ function Details({
         {files === null && <Skeleton className="h-10" />}
         {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
         <ul className="flex flex-col gap-0.5 font-mono text-2xs">
-          {files?.map((file) => (
+          {files?.slice(0, listed).map((file) => (
             <li key={file.path} className="flex items-center gap-2 py-0.5">
               <a
                 href={appHref(filePath(thread, file.path))}
@@ -1382,6 +1395,11 @@ function Details({
             </li>
           ))}
         </ul>
+        {files && files.length > listed && (
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => setListed(listed + LISTED_FILES)}>
+            {(files.length - listed).toLocaleString()} more files
+          </Button>
+        )}
       </InspectorSection>
       <ThreadCommits thread={thread} />
       <InspectorSection title="Comments on code">
@@ -1463,7 +1481,8 @@ function ThreadBody({
   const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const diff = useQuery({ queryKey: keys.diff(thread, { base: '' }), queryFn: () => api.diff(thread, { base: '' }) })
+  // The thread's files and counts, without their lines: a thread that took in thousands of files must still open.
+  const stats = useQuery({ queryKey: keys.diffStats(thread, { base: '' }), queryFn: () => api.diffStats(thread, { base: '' }) })
   const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
@@ -1601,7 +1620,7 @@ function ThreadBody({
     else toEnd()
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
-  const files = useMemo(() => (diff.data === undefined ? null : parseFiles(diff.data)), [diff.data])
+  const files = stats.data ?? null
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
   const entryProps: EntryProps = {
     thread,
@@ -1701,7 +1720,7 @@ function ThreadBody({
               thread={thread}
               summary={summary}
               total={total}
-              diff={diff.data}
+              files={files}
               codeComments={codeComments}
               anchor={anchor}
               onChanged={reloadComments}

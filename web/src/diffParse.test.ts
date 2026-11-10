@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { LARGE_DIFF, diffSize, parseDiff, parseFiles, splitRows } from './diffParse'
+import { LARGE_DIFF, LARGE_TOTAL, MANY_FILES, bytes, diffSize, parseDiff, parseFiles, readWhole, splitRows } from './diffParse'
 
 test('a binary file says so, with no lines to count', () => {
   const diff = ['diff --git a/x.pyc b/x.pyc', 'Binary files /dev/null and b/x.pyc differ', 'diff --git a/a.rs b/a.rs', '@@ -1 +1 @@', '-a', '+b'].join('\n')
@@ -76,4 +76,12 @@ test("a file's size is the characters of its lines, so one minified line counts 
     ['a.rs', 5, false],
     ['data.json', LARGE_DIFF + 1, true],
   ])
+})
+
+test('a diff of too many files, or too many bytes in all, is read a file at a time', () => {
+  const stat = (size: number) => ({ path: 'a', old_path: null, added: 1, removed: 0, binary: false, size })
+  expect(readWhole([stat(100), stat(200)])).toBe(true)
+  expect(readWhole(Array.from({ length: MANY_FILES + 1 }, () => stat(10)))).toBe(false)
+  expect(readWhole([stat(LARGE_TOTAL / 2), stat(LARGE_TOTAL / 2 + 1)])).toBe(false)
+  expect([bytes(512), bytes(12_345), bytes(448 * 1024 * 1024)]).toEqual(['512 B', '12 KB', '448 MB'])
 })

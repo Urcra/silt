@@ -264,6 +264,20 @@ replies: Array<ReplyView>, };
 
 export type CommitView = { commit: string, subject: string | null, branch: string | null, turn: number | null, time_ms: number, };
 
+export type DiffStat = { 
+/**
+ * Its new path, or its old one when deleted.
+ */
+path: string, 
+/**
+ * Where it was before it moved.
+ */
+old_path: string | null, added: number, removed: number, binary: boolean, 
+/**
+ * How long its part of the diff is, in bytes.
+ */
+size: number, };
+
 export type FileAt = { path: string, 
 /**
  * The version shown, for a link that keeps showing it.

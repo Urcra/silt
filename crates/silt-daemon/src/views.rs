@@ -8,7 +8,7 @@ use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
-use silt_proto::view::FileAt;
+use silt_proto::view::{DiffStat, FileAt};
 
 use crate::homes::Home;
 
@@ -259,8 +259,29 @@ impl Core {
         thread: ThreadId,
         turn: Option<usize>,
         base: Option<&str>,
-        files: Option<FilePage>,
+        only: Only<'_>,
     ) -> Result<String, CoreError> {
+        Ok(render_diff(&self.diff_changes(thread, turn, base, only)?))
+    }
+
+    /// [`Self::diff`]'s files, each with its counts and how long its part of
+    /// the diff is, so a page can ask for one file at a time.
+    pub(crate) fn diff_stats(
+        &self,
+        thread: ThreadId,
+        turn: Option<usize>,
+        base: Option<&str>,
+    ) -> Result<Vec<DiffStat>, CoreError> {
+        Ok(self.diff_changes(thread, turn, base, Only::default())?.iter().map(diff_stat).collect())
+    }
+
+    fn diff_changes(
+        &self,
+        thread: ThreadId,
+        turn: Option<usize>,
+        base: Option<&str>,
+        only: Only<'_>,
+    ) -> Result<Vec<FileChange>, CoreError> {
         let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
@@ -271,7 +292,7 @@ impl Core {
         if turn.is_none()
             && let Some(rev) = base.and_then(git_base)
         {
-            return self.diff_against_git(family_id, &graph.version_vector(&head), rev, files);
+            return self.diff_against_git(family_id, &graph.version_vector(&head), rev, only);
         }
         let (from, to) = match (turn, base) {
             (Some(turn), _) => {
@@ -286,7 +307,7 @@ impl Core {
             }
             (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
         };
-        Ok(render_diff(&self.changes_in(family_id, &from, &to, files)))
+        Ok(self.changes_in(family_id, &from, &to, only))
     }
 
     /// How the files at `head` differ from a commit's tree in this machine's
@@ -296,8 +317,8 @@ impl Core {
         family_id: FamilyId,
         head: &VersionVector,
         rev: GitBase,
-        files: Option<FilePage>,
-    ) -> Result<String, CoreError> {
+        only: Only<'_>,
+    ) -> Result<Vec<FileChange>, CoreError> {
         let family = &self.families()[&family_id];
         let repos = self.family_repos(family_id);
         let names: &[&str] = match rev {
@@ -321,7 +342,7 @@ impl Core {
         let ours: BTreeMap<String, InodeId> =
             tree.paths().into_iter().filter(|(_, inode)| tree.kind(*inode) == Some(InodeKind::File)).collect();
         let text = |oid: GitOid| repos.iter().find_map(|repo| RepoBases(repo).text(oid));
-        let paths: BTreeSet<&String> = in_git.keys().chain(ours.keys()).collect();
+        let paths: BTreeSet<&String> = in_git.keys().chain(ours.keys()).filter(|path| only.has(path)).collect();
         let mut changes = Vec::new();
         for path in paths {
             let theirs = in_git.get(path).copied();
@@ -352,7 +373,7 @@ impl Core {
                 binary,
             });
         }
-        Ok(render_diff(&page_of(changes, files)))
+        Ok(page_of(changes, only.files))
     }
 
     /// A file of the thread as a permalink shows it: at the version the link
@@ -382,17 +403,11 @@ impl Core {
 
     /// How the family's files differ between two versions.
     pub(crate) fn changes(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Vec<FileChange> {
-        self.changes_in(family_id, before, after, None)
+        self.changes_in(family_id, before, after, Only::default())
     }
 
-    /// [`Self::changes`], in path order, only those in `files` when given.
-    fn changes_in(
-        &self,
-        family_id: FamilyId,
-        before: &VersionVector,
-        after: &VersionVector,
-        files: Option<FilePage>,
-    ) -> Vec<FileChange> {
+    /// [`Self::changes`], in path order, only those `only` names.
+    fn changes_in(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector, only: Only<'_>) -> Vec<FileChange> {
         let Some(family) = self.families().get(&family_id) else {
             return Vec::new();
         };
@@ -427,6 +442,10 @@ impl Core {
             if old == new && old_path == new_path {
                 continue;
             }
+            if !(old_path.as_deref().is_some_and(|path| only.has(path)) || new_path.as_deref().is_some_and(|path| only.has(path)))
+            {
+                continue;
+            }
             changed.push((inode, old_path, new_path, old, new));
         }
         changed.sort_by(|(_, old_a, new_a, ..), (_, old_b, new_b, ..)| {
@@ -434,7 +453,7 @@ impl Core {
         });
         // Texts are read only for the page asked for: a change touching
         // thousands of files shows them a page at a time.
-        page_of(changed, files)
+        page_of(changed, only.files)
             .into_iter()
             .map(|(inode, old_path, new_path, old, new)| FileChange {
                 inode: Some(inode),
@@ -723,6 +742,45 @@ pub(crate) struct FileChange {
 impl FileChange {
     pub(crate) fn path(&self) -> &str {
         self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or_default()
+    }
+}
+
+/// Which of a diff's files to read: a page of them, the one at a path, or
+/// all of them.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Only<'a> {
+    pub(crate) files: Option<FilePage>,
+    pub(crate) path: Option<&'a str>,
+}
+
+impl Only<'_> {
+    fn has(&self, path: &str) -> bool {
+        self.path.is_none_or(|only| only == path)
+    }
+}
+
+/// A file's counts and size, as its part of the diff has them.
+fn diff_stat(change: &FileChange) -> DiffStat {
+    let rendered = render_diff(std::slice::from_ref(change));
+    let (mut added, mut removed) = (0, 0);
+    // Past the headers, a line's first character says what it is.
+    let mut in_hunk = false;
+    for line in rendered.lines() {
+        if line.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk && line.starts_with('+') {
+            added += 1;
+        } else if in_hunk && line.starts_with('-') {
+            removed += 1;
+        }
+    }
+    DiffStat {
+        path: change.path().to_owned(),
+        old_path: change.new_path.as_ref().and(change.old_path.clone()).filter(|old| Some(old) != change.new_path.as_ref()),
+        added,
+        removed,
+        binary: change.binary,
+        size: rendered.len() as u64,
     }
 }
 

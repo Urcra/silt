@@ -62,6 +62,13 @@ pub struct Ingested {
     pub actions: Vec<DiskAction>,
 }
 
+/// What [`Bridge::forget`] took out of the thread.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Forgotten {
+    pub deltas: Vec<Delta>,
+    pub paths: Vec<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
     #[error(transparent)]
@@ -254,6 +261,36 @@ impl Bridge {
         self.entries
             .insert(to.to_owned(), DiskEntry { inode, hash: disk.hash, size: disk.size, mtime_ns: disk.mtime_ns, ..entry });
         Ok(Some(Ingested { deltas: writer.deltas, actions: Vec::new() }))
+    }
+
+    /// Takes those of `paths` this checkout brought into the thread back out
+    /// of it, leaving the disk as it is, as when git came to ignore them
+    /// (ADR 0059). Files others brought in stay: what this machine's own
+    /// excludes leave out is no reason to take them from everyone. Returns
+    /// the deltas and the paths taken out.
+    pub fn forget(
+        &mut self,
+        family: &mut Family,
+        bases: &mut dyn BaseText,
+        paths: &[String],
+        author: &Author,
+        time_ms: i64,
+    ) -> Result<Forgotten, BridgeError> {
+        let view = family.thread_view(self.thread);
+        let thread_paths = view.paths();
+        let ours: Vec<(String, InodeId)> = paths
+            .iter()
+            .filter_map(|path| Some((path.clone(), *thread_paths.get(path)?)))
+            .filter(|(_, inode)| inode.0.actor == self.actor && view.tree().kind(*inode) == Some(InodeKind::File))
+            .collect();
+        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
+        let mut forgotten = Vec::with_capacity(ours.len());
+        for (path, inode) in ours {
+            writer.tree_op(self.actor, Op::Delete { inode })?;
+            self.entries.remove(&path);
+            forgotten.push(path);
+        }
+        Ok(Forgotten { deltas: writer.deltas, paths: forgotten })
     }
 
     pub fn record_written(&mut self, path: &str, entry: DiskEntry) {

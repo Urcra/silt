@@ -2,13 +2,14 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, type CommentView } from '../api'
-import { parseFiles } from '../diffParse'
+import { parseFiles, readWhole } from '../diffParse'
 import { keys, message } from '../query'
 import { type ReviewItem, type ReviewState, itemOf, linesOf, reviewPrompt, sideOf, spanOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
 import { Button, Input, Select, Skeleton, Tabs, Textarea, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
-import { type DiffLayout, DiffView } from './DiffView'
+import { type Commenting, type DiffLayout, DiffView } from './DiffView'
+import { FilesByStats } from './StatDiff'
 
 type View = 'last-turn' | 'thread' | 'main' | 'other'
 
@@ -63,11 +64,15 @@ export const DiffPanel = memo(function DiffPanel({
     view === 'thread' ? '' : view === 'other' ? (other === 'commit' ? (commit ? `commit:${commit}` : '') : other) : view
   // Lines the change deleted are a version of the thread's, which a commit of main isn't.
   const commentBase = base === '' ? 'start' : base === 'main' ? undefined : base
+  // Its files first: one too large to read whole is read a file at a time.
+  const stats = useQuery({ queryKey: keys.diffStats(thread, { base }), queryFn: () => api.diffStats(thread, { base }) })
+  const whole = stats.data === undefined ? undefined : readWhole(stats.data)
   const diff = useInfiniteQuery({
     queryKey: keys.diffPages(thread, base),
     queryFn: ({ pageParam }) => api.diff(thread, { base, offset: pageParam, limit: FILES_PAGE }),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => (filesIn(last) < FILES_PAGE ? undefined : pages.length * FILES_PAGE),
+    enabled: whole === true,
   })
   const comments = useQuery({ queryKey: [...keys.comments(thread), commentBase ?? ''], queryFn: () => api.comments(thread, commentBase) })
   const changed = () => Promise.all([queries.invalidateQueries({ queryKey: keys.comments(thread) }), onCommented()])
@@ -80,6 +85,19 @@ export const DiffPanel = memo(function DiffPanel({
   }
   const text = diff.data?.pages.join('')
   const files = useMemo(() => (text === undefined ? [] : parseFiles(text)), [text])
+  const commenting: Commenting = {
+    thread,
+    comments: comments.data ?? [],
+    agent,
+    deleted: commentBase !== undefined,
+    review: here,
+    onChanged: changed,
+    onComment: async (at, comment) => {
+      const base = sideOf(at) === 'old' ? commentBase : undefined
+      await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base }, comment)
+      await changed()
+    },
+  }
   const unsent = (comments.data ?? []).filter((comment) => !comment.resolved && !comment.sent && linesOf(comment) !== null)
   useActions([
     { id: 'last-turn', label: 'Changes in the last turn', run: () => setView('last-turn') },
@@ -111,29 +129,11 @@ export const DiffPanel = memo(function DiffPanel({
       {(review.review.drafts.length > 0 || unsent.length > 0) && (
         <ReviewBar thread={thread} review={review} unsent={unsent} items={(comment) => itemOf(comment, files)} agent={agent} onSent={changed} />
       )}
-      {diff.error && <p className="text-sm text-danger">{message(diff.error)}</p>}
-      {diff.isPending && <Skeleton className="h-32" />}
-      {text !== undefined && (
-        <DiffView
-          text={text}
-          layout={layout}
-          viewFiles={thread}
-          commenting={{
-            thread,
-            comments: comments.data ?? [],
-            agent,
-            deleted: commentBase !== undefined,
-            review: here,
-            onChanged: changed,
-            onComment: async (at, comment) => {
-              const base = sideOf(at) === 'old' ? commentBase : undefined
-              await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base }, comment)
-              await changed()
-            },
-          }}
-        />
-      )}
-      {diff.hasNextPage && (
+      {(stats.error ?? diff.error) && <p className="text-sm text-danger">{message(stats.error ?? diff.error)}</p>}
+      {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
+      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={{ base }} commenting={commenting} />}
+      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} />}
+      {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
           More files
         </Button>

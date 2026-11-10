@@ -12,6 +12,7 @@ import type {
   CommentView,
   CommitView,
   DaemonStatus,
+  DiffStat,
   FileAt,
   FoundFolder,
   DeviceChange,
@@ -104,6 +105,12 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
+const diffParams = (options: { turn?: number; base?: string }) => {
+  const params = new URLSearchParams()
+  if (options.turn !== undefined) params.set('turn', String(options.turn))
+  if (options.base) params.set('base', options.base)
+  return params
+}
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
 
@@ -125,17 +132,19 @@ export const api = {
     }
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
-  /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order. */
-  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number } = {}) => {
-    const params = new URLSearchParams()
-    if (options.turn !== undefined) params.set('turn', String(options.turn))
-    if (options.base) params.set('base', options.base)
+  /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order; with `path`, only that file. */
+  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number; path?: string } = {}) => {
+    const params = diffParams(options)
     if (options.limit !== undefined) {
       params.set('offset', String(options.offset ?? 0))
       params.set('limit', String(options.limit))
     }
+    if (options.path) params.set('path', options.path)
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
+  /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
+  diffStats: (id: string, options: { turn?: number; base?: string } = {}) =>
+    request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
   comments: (id: string, base?: string) =>
     request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
