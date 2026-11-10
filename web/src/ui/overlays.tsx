@@ -88,18 +88,21 @@ function useDismiss(open: boolean, close: () => void, box: React.RefObject<HTMLE
   }, [open, close, box, trigger])
 }
 
-const PANEL = 'absolute z-20 mt-1 rounded-md border border-line bg-elevated shadow-overlay'
+const PANEL = 'absolute z-20 rounded-md border border-line bg-elevated shadow-overlay'
 
 /** A button opening a list of actions; arrow keys move between them. */
 export function Menu({
   label,
   trigger,
   items,
+  above = false,
 }: {
   /** What the menu is for, for a screen reader. */
   label: string
   trigger: ReactNode
   items: { label: string; onSelect: () => void; disabled?: boolean }[]
+  /** Opens upwards, for a trigger near the bottom of the page, such as a docked composer's. */
+  above?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
@@ -131,7 +134,7 @@ export function Menu({
         {trigger}
       </button>
       {open && (
-        <ul ref={list} role="menu" aria-label={label} onKeyDown={move} className={cx(PANEL, 'right-0 min-w-40 p-1')}>
+        <ul ref={list} role="menu" aria-label={label} onKeyDown={move} className={cx(PANEL, above ? 'bottom-full mb-1' : 'mt-1', 'right-0 min-w-40 p-1')}>
           {items.map((item) => (
             <li key={item.label} role="none">
               <button
@@ -143,7 +146,7 @@ export function Menu({
                   button.current?.focus()
                   item.onSelect()
                 }}
-                className="block w-full rounded-sm px-2.5 py-1 text-left text-sm text-fg-1 hover:bg-surface-2 focus:bg-surface-2 disabled:opacity-40"
+                className="block w-full rounded-sm px-2.5 py-1 text-left text-sm whitespace-nowrap text-fg-1 hover:bg-surface-2 focus:bg-surface-2 disabled:opacity-40"
               >
                 {item.label}
               </button>

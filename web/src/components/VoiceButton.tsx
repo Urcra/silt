@@ -19,6 +19,7 @@ export function VoiceButton({ dictation }: { dictation: Dictation }) {
         onClick={() => void press()}
       />
       <Menu
+        above
         label="Dictation options"
         trigger={<Icon name="chevronDown" className="h-3.5 w-3.5" />}
         items={[{ label: `${autoSend ? '✓ ' : ''}Send when I stop talking`, onSelect: () => setAutoSend(!autoSend) }]}

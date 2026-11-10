@@ -86,6 +86,8 @@ test('with the option on, stopping talking sends the draft', async ({ page }) =>
   await openThread(page, start({ FAKE_VOICE_PAUSE: '1' }))
   await fetchModel(page)
   await page.getByRole('button', { name: 'Dictation options' }).click()
+  // The composer is docked at the bottom of a thread's page, so the menu opens upwards to stay in view.
+  await expect(page.getByRole('menuitem', { name: 'Send when I stop talking' })).toBeInViewport({ ratio: 1 })
   await page.getByRole('menuitem', { name: 'Send when I stop talking' }).click()
   await dictate(page).click()
   await expect(page.getByText('Hello there.').first()).toBeVisible()
