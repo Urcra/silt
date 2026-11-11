@@ -69,6 +69,17 @@ pub enum Request {
         /// Only these of the changed files, in path order: a page of them.
         #[serde(default)]
         files: Option<FilePage>,
+        /// Only the file at this path, new or old.
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// [`Request::Diff`]'s files, each with its counts and size but not its
+    /// lines.
+    DiffStats {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -1250,6 +1261,7 @@ mod tests {
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
+            silt_proto::view::DiffStat::decl(&config),
             silt_proto::view::FileAt::decl(&config),
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),

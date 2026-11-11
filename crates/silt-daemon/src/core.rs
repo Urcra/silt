@@ -22,6 +22,7 @@ use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
 use crate::remote::{self, Remote};
 use crate::sessions::{self, PendingSession, Session};
+use crate::views::Only;
 use crate::watch::{Watched, Watchers};
 
 pub enum Event {
@@ -588,8 +589,12 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, base, files } => {
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), files)))
+            Request::Diff { thread, turn, base, files, path } => {
+                let only = Only { files, path: path.as_deref() };
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), only)))
+            }
+            Request::DiffStats { thread, turn, base } => {
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref())))
             }
             Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
             Request::Reload => {
@@ -973,7 +978,14 @@ impl Core {
         };
         let thread_paths = family_paths.keys().map(String::as_str);
         let Candidates { paths, listed } = candidates(probes, entries.keys(), thread_paths, is_dir, maybe_changed);
-        let mut worklist = self.trackable(checkout_id, paths, &listed)?;
+        let Sorted { paths: mut worklist, mut ignored } = self.sorted(checkout_id, paths, &listed)?;
+        // Most ignored paths, such as a build's output, were never the thread's.
+        let entries = self.checkout(checkout_id)?.bridge.entries();
+        ignored.retain(|path| entries.contains_key(path) || family_paths.contains_key(path));
+        self.forget_ignored(checkout_id, ignored).await?;
+        // What a changed `.gitignore` now ignores may be anywhere, and only a
+        // rescan of the whole checkout asks about each recorded file.
+        let ignores_changed = !whole && worklist.iter().any(|path| path.rsplit('/').next() == Some(".gitignore"));
         if worklist.iter().any(|path| path.rsplit('/').next() == Some(".gitattributes")) {
             self.checkout(checkout_id)?.repo.attributes_changed();
         }
@@ -993,6 +1005,9 @@ impl Core {
                 }
             }
             worklist = self.trackable(checkout_id, retry, &HashSet::new())?;
+        }
+        if ignores_changed {
+            Box::pin(self.rescan(checkout_id)).await?;
         }
         Ok(())
     }
@@ -1365,26 +1380,37 @@ impl Core {
     /// `paths` without Silt's and git's own data and ignored files. Those
     /// `listed` git just listed as not ignored, and it isn't asked again:
     /// asking about every file of a large checkout takes it seconds.
-    fn trackable(
-        &self,
-        checkout_id: CheckoutId,
-        mut paths: Vec<String>,
-        listed: &HashSet<String>,
-    ) -> Result<Vec<String>, CoreError> {
+    fn trackable(&self, checkout_id: CheckoutId, paths: Vec<String>, listed: &HashSet<String>) -> Result<Vec<String>, CoreError> {
+        Ok(self.sorted(checkout_id, paths, listed)?.paths)
+    }
+
+    /// [`Self::trackable`], and which of `paths` git ignores.
+    fn sorted(&self, checkout_id: CheckoutId, mut paths: Vec<String>, listed: &HashSet<String>) -> Result<Sorted, CoreError> {
         paths.retain(|path| !disk::is_internal(path));
         let unlisted: Vec<String> = paths.iter().filter(|path| !listed.contains(*path)).cloned().collect();
         if unlisted.is_empty() {
-            return Ok(paths);
+            return Ok(Sorted { paths, ignored: Vec::new() });
         }
         let repo = &self.checkout(checkout_id)?.repo;
+        let mut ignored = Vec::new();
         match repo.ignored(&unlisted) {
-            Ok(ignored) => paths.retain(|path| !ignored.contains(path)),
+            Ok(found) => paths.retain(|path| {
+                let kept = !found.contains(path);
+                if !kept {
+                    ignored.push(path.clone());
+                }
+                kept
+            }),
             // git refuses some paths, such as those inside a submodule;
             // asking one at a time leaves out only those.
             Err(_) => paths.retain(|path| {
                 listed.contains(path)
                     || match repo.ignored(std::slice::from_ref(path)) {
-                        Ok(ignored) => ignored.is_empty(),
+                        Ok(found) if found.is_empty() => true,
+                        Ok(_) => {
+                            ignored.push(path.clone());
+                            false
+                        }
                         Err(error) => {
                             warn!(%error, path, "leaving out a path git won't check");
                             false
@@ -1392,7 +1418,31 @@ impl Core {
                     }
             }),
         }
-        Ok(paths)
+        Ok(Sorted { paths, ignored })
+    }
+
+    /// Takes the files of `paths` that this checkout brought into its thread
+    /// out of it again, as git ignores them now and doesn't track them; the
+    /// files stay on disk (ADR 0060). A dependency directory recorded before
+    /// `.gitignore` named it otherwise stays in the thread for good.
+    async fn forget_ignored(&mut self, checkout_id: CheckoutId, ignored: Vec<String>) -> Result<(), CoreError> {
+        if ignored.is_empty() {
+            return Ok(());
+        }
+        let family_id = self.checkout(checkout_id)?.family;
+        let author = self.author_for(checkout_id);
+        let checkout = self.checkouts.get_mut(&checkout_id).expect("checked above");
+        let Some(family) = self.families.get_mut(&family_id) else {
+            return Ok(());
+        };
+        let forgotten = checkout.bridge.forget(family, &mut RepoBases(&checkout.repo), &ignored, &author, now_ms())?;
+        if forgotten.paths.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(files = forgotten.paths.len(), "taking files git now ignores out of the thread");
+        self.persist(family_id, &forgotten.deltas).await?;
+        self.store.remove_disk_files(checkout_id, &forgotten.paths).await?;
+        self.propagate(checkout_id, &forgotten.deltas).await
     }
 
     async fn persist_entry(&self, checkout: CheckoutId, path: &str) -> Result<(), CoreError> {
@@ -2148,6 +2198,12 @@ fn candidates<'a>(
     paths.sort();
     paths.dedup();
     Candidates { paths, listed }
+}
+
+/// Paths to look at, and those git ignores.
+struct Sorted {
+    paths: Vec<String>,
+    ignored: Vec<String>,
 }
 
 struct Candidates {

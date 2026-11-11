@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short, type GraphQuery, type GraphRow, type ThreadSummary } from '../api'
-import { parseFiles } from '../diffParse'
 import { useTopic } from '../bus'
 import { byFamily, layout } from '../lanes'
 import { useMedia } from '../media'
@@ -95,18 +94,21 @@ function KindTag({ row }: { row: GraphRow }) {
   return null
 }
 
+/** How many of a turn's files the panel lists. */
+const LISTED_FILES = 200
+
 /** The chosen row, in full, with what can be done from it (the Graph board's panel). */
 function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSummary | undefined; described: string }) {
   const now = useNow()
   const navigate = useNavigate()
   const queries = useQueryClient()
-  const turnDiff = useQuery({
-    queryKey: keys.diff(row.thread, { turn: row.turn ?? 0 }),
-    queryFn: () => api.diff(row.thread, { turn: row.turn! }),
+  const turnStats = useQuery({
+    queryKey: keys.diffStats(row.thread, { turn: row.turn ?? 0 }),
+    queryFn: () => api.diffStats(row.thread, { turn: row.turn! }),
     enabled: row.turn !== null && !hosted(),
     staleTime: Infinity,
   })
-  const files = turnDiff.data === undefined ? null : parseFiles(turnDiff.data)
+  const files = turnStats.data ?? null
   const failed = (failure: unknown) => toast(message(failure), 'danger')
   return (
     <aside aria-label="details" className="flex flex-col gap-4 px-5 py-5">
@@ -144,13 +146,14 @@ function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSumm
           {files === null && !hosted() && <Skeleton className="h-8" />}
           {files?.length === 0 && <p className="text-xs text-fg-2">No files changed.</p>}
           <ul className="flex flex-col gap-0.5 font-mono text-2xs">
-            {files?.map((file) => (
+            {files?.slice(0, LISTED_FILES).map((file) => (
               <li key={file.path} className="flex gap-2">
                 <span className="min-w-0 flex-1 truncate">{file.path}</span>
                 <Counts added={file.added} removed={file.removed} binary={file.binary} />
               </li>
             ))}
           </ul>
+          {files && files.length > LISTED_FILES && <p className="text-xs text-fg-2">and {(files.length - LISTED_FILES).toLocaleString()} more</p>}
         </section>
       )}
       <div className="flex flex-wrap gap-1.5">

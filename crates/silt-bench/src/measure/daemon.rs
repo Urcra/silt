@@ -190,7 +190,7 @@ async fn fork_family(home: &Home, root: &Path) -> Result<(), Exn<BenchError>> {
 async fn changed(home: &Home, thread: &str, file: &str) -> Result<(), Exn<BenchError>> {
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
-        let diff = home.request(&Request::Diff { thread: thread.to_owned(), turn: None, base: None, files: None })?;
+        let diff = home.request(&Request::Diff { thread: thread.to_owned(), turn: None, base: None, files: None, path: None })?;
         if diff.as_str().is_some_and(|diff| diff.contains(file)) {
             return Ok(());
         }

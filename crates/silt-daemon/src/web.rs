@@ -98,6 +98,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/commits", get(commits))
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
+        .route("/api/threads/{id}/diff/stats", get(diff_stats))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/sent", post(comments_sent))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
@@ -384,12 +385,19 @@ struct DiffQuery {
     /// A page of the changed files, as the changes panel shows them.
     offset: Option<usize>,
     limit: Option<usize>,
+    /// One file, as a diff too large to read whole is read.
+    path: Option<String>,
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let request = Request::Diff { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()), files };
+    let base = query.base.filter(|base| !base.is_empty());
+    let request = Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()) };
     ask(&web, request).await
+}
+
+async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.

@@ -182,6 +182,29 @@ fn new_files_create_directories_and_deletes_propagate() {
 }
 
 #[test]
+fn forgetting_takes_only_a_checkouts_own_files_out_of_the_thread_and_leaves_the_disk() {
+    let mut family = imported_family();
+    let mut a = Checkout::new(1, &family);
+    let mut b = Checkout::new(2, &family);
+    let mut made = a.edit(&mut family, ".venv/lib/site.py", Some("import os\n"));
+    made.extend(b.edit(&mut family, ".venv/lib/theirs.py", Some("import sys\n")));
+    a.sync(&family, &made);
+    b.sync(&family, &made);
+
+    let paths = [".venv/lib/site.py", ".venv/lib/theirs.py", "README.md", "not/there.py"].map(str::to_owned);
+    let forgotten = a.bridge.forget(&mut family, &mut bases(), &paths, &Author::User, 0).expect("forgets");
+    assert_eq!(forgotten.paths, [".venv/lib/site.py"], "only a's own file, not b's nor the imported one");
+    assert!(!a.bridge.entries().contains_key(".venv/lib/site.py"));
+    assert_eq!(a.disk[".venv/lib/site.py"], "import os\n", "the file stays on a's disk");
+    let thread_paths = family.thread_view(THREAD).paths();
+    assert!(!thread_paths.contains_key(".venv/lib/site.py"));
+    assert!(thread_paths.contains_key(".venv/lib/theirs.py") && thread_paths.contains_key("README.md"));
+
+    b.sync(&family, &forgotten.deltas);
+    assert!(!b.disk.contains_key(".venv/lib/site.py"), "other checkouts of the thread lose it, as with any delete");
+}
+
+#[test]
 fn rewriting_what_was_written_creates_no_deltas() {
     let mut family = imported_family();
     let mut a = Checkout::new(1, &family);

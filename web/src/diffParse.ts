@@ -1,3 +1,5 @@
+import type { DiffStat } from './api'
+
 /** A line of code in a hunk, without its `+`, `-` or space. */
 export interface CodeLine {
   kind: 'context' | 'add' | 'del'
@@ -27,6 +29,24 @@ export interface DiffFile {
  * minified file can be megabytes on one line, and laying that out stalls the
  * page for minutes. */
 export const LARGE_DIFF = 200_000
+
+/** Past either, a diff is read a file at a time rather than whole: tens of
+ * thousands of files or hundreds of megabytes, as a dependency directory
+ * recorded before `.gitignore` named it, would stall the page for good. */
+export const LARGE_TOTAL = 2_000_000
+export const MANY_FILES = 300
+
+/** Whether a diff of these files can be read whole. */
+export function readWhole(stats: readonly DiffStat[]): boolean {
+  return stats.length <= MANY_FILES && stats.reduce((total, stat) => total + stat.size, 0) <= LARGE_TOTAL
+}
+
+/** A size in bytes, as `12 KB` or `448 MB`. */
+export function bytes(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${Math.round(size / 1024).toLocaleString()} KB`
+  return `${(size / (1024 * 1024)).toLocaleString(undefined, { maximumFractionDigits: size < 10 * 1024 * 1024 ? 1 : 0 })} MB`
+}
 
 /** How many characters a file's diff holds. */
 export function diffSize(file: DiffFile): number {
