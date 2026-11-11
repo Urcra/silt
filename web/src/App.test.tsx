@@ -113,6 +113,7 @@ test('threads are grouped by project, newest first', () => {
     collaborators: [],
     writable: true,
     agent_state: null,
+    background: 0,
     last_ms: created_ms,
     merged: false,
     review: false,

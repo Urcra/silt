@@ -17,6 +17,7 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     collaborators: [],
     writable: true,
     agent_state: null,
+    background: 0,
     last_ms: 100,
     merged: false,
     review: false,
@@ -36,6 +37,12 @@ test('a thread waiting on the person shows first, even snoozed or settled', () =
   expect(section(thread('d', { agent_state: 'working' }), 0)).toBe('working')
   expect(section(thread('e', { merged: true }), 0)).toBe('settled')
   expect(section(thread('f'), 0)).toBe('active')
+})
+
+test('a thread whose agent left a command running in the background is in progress, though its turn ended', () => {
+  expect(section(thread('a', { agent_state: 'idle', background: 1 }, { settled: true }), 0)).toBe('working')
+  expect(section(thread('b', { agent_state: 'idle', background: 0 }), 0)).toBe('active')
+  expect(section(thread('c', { agent_state: 'awaiting_permission', background: 1 }), 0)).toBe('needs_you')
 })
 
 test('a snooze ends at its time, or at activity when it wakes on it', () => {

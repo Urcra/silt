@@ -82,6 +82,7 @@ impl Core {
                     collaborators: self.collaborators.get(&record.id).cloned().unwrap_or_default(),
                     writable: self.may_write(record.id),
                     agent_state: self.shown_state(record.id),
+                    background: self.shown_background(record.id),
                     last_ms: logged.last_ms.unwrap_or(record.created_ms),
                     merged: merged.contains(record.id.to_string().as_str()),
                     review: reviewing.contains(record.id.to_string().as_str()),

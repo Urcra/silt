@@ -16,7 +16,7 @@ import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
 import { type Sending, addSending, arrived, dropSending, useSending } from '../sending'
 import { formatKeys, useActions } from '../shortcuts'
-import { threadTone } from '../threadLook'
+import { inBackground, threadTone } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
@@ -1200,11 +1200,11 @@ function whereSaid(summary: ThreadSummary, device: string | null): { label: stri
 /** The thread's state beside its title, in words, when its agent is doing something; waiting on the person has its own pill. */
 function StatePill({ summary }: { summary: ThreadSummary }) {
   const state = summary.agent_state
-  if (state === 'working' || state === 'starting') {
+  if (state === 'working' || state === 'starting' || inBackground(summary)) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ok-tint px-2 py-0.5 text-2xs whitespace-nowrap text-ok max-md:hidden">
         <Dot tone="ok" />
-        {state === 'starting' ? 'Starting' : 'Working'}
+        {state === 'starting' ? 'Starting' : state === 'working' ? 'Working' : 'In the background'}
       </span>
     )
   }

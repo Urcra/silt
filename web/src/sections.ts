@@ -1,4 +1,5 @@
 import type { ThreadSummary } from './api'
+import { inProgress } from './threadLook'
 
 // Where a thread shows in the sidebar, derived from its state and this
 // person's (ADR 0024).
@@ -30,7 +31,7 @@ export function unread(thread: ThreadSummary): boolean {
 export function section(thread: ThreadSummary, now: number): Section {
   if (needsYou(thread)) return 'needs_you'
   if (thread.mine.pinned) return 'pinned'
-  if (thread.agent_state === 'working' || thread.agent_state === 'starting') return 'working'
+  if (inProgress(thread)) return 'working'
   if (settled(thread)) return 'settled'
   if (snoozed(thread, now)) return 'snoozed'
   return 'active'

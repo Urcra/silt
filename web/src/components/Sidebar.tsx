@@ -12,7 +12,7 @@ import { keys } from '../query'
 import { type Section, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
-import { WAIT_KINDS, threadDoing, waitKind } from '../threadLook'
+import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
 import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Tag, cx } from '../ui'
@@ -30,7 +30,7 @@ function stateLine(thread: ThreadSummary, now: number): { said: string | null; w
   const when = ago(thread.last_ms, now)
   if (!doing) return { said: null, when: /^\d/.test(when) ? `${when} ago` : when }
   const said = doing[0]!.toUpperCase() + doing.slice(1)
-  return { said, when: thread.agent_state === 'working' || thread.agent_state === 'starting' ? null : when }
+  return { said, when: inProgress(thread) ? null : when }
 }
 
 function StateLine({ said, when }: { said: string | null; when: string | null }) {
@@ -148,7 +148,7 @@ function ProjectGroup({
   const rest = newest.filter(held)
   const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
-  const working = threads.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
+  const working = threads.filter(inProgress).length
   return (
     <section aria-label={repo} className="mb-0.5">
       <div className="group/project flex items-center gap-1 pr-1">
@@ -225,7 +225,7 @@ function NavItem({
 /** This machine at the bottom: its name, how many agents run on it, and Settings. */
 function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const running = threads.filter((thread) => ['working', 'starting'].includes(thread.agent_state ?? '')).length
+  const running = threads.filter(inProgress).length
   const waiting = threads.filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
   const signIn = status.data?.servers?.[0]
   const name = signIn?.name ?? 'this machine'

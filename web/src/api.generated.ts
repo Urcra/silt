@@ -841,6 +841,11 @@ writable: boolean,
  */
 agent_state: AgentState | null, 
 /**
+ * Commands and subagents its agent left running, which go on after
+ * its turn ends.
+ */
+background: number, 
+/**
  * When something last happened in it.
  */
 last_ms: number, 
