@@ -43,12 +43,13 @@ const dictate = (page: Page) => page.getByRole('button', { name: 'Dictate', exac
 const stopDictating = (page: Page) => page.getByRole('button', { name: 'Stop dictating' })
 const draft = (page: Page) => page.getByLabel('draft')
 const heard = (page: Page) => page.getByLabel('heard so far')
+const bar = (page: Page) => page.getByRole('group', { name: 'dictation' })
 
 /** Accepts the offer of the speech model, which comes only when dictation is first asked for. */
 async function fetchModel(page: Page): Promise<void> {
   await dictate(page).click()
-  await page.getByRole('button', { name: 'Download' }).click()
-  await expect(page.getByText(/Dictation needs/)).toHaveCount(0)
+  await page.getByRole('dialog', { name: 'download the speech model' }).getByRole('button', { name: 'Download' }).click()
+  await expect(page.getByRole('dialog', { name: 'download the speech model' })).toHaveCount(0)
   await expect(page.getByText(/Downloading the speech model/)).toHaveCount(0)
   await expect(dictate(page)).toBeEnabled()
 }
@@ -59,16 +60,22 @@ test('no button without the speech helper', async ({ page }) => {
   await expect(dictate(page)).toHaveCount(0)
 })
 
-test('the words show as they come and join the draft when the take ends', async ({ page }) => {
+test('the words show at the caret as they come, and join the draft there when the take ends', async ({ page }) => {
   await openThread(page, start())
   await fetchModel(page)
-  await draft(page).fill('Please')
+  await draft(page).fill('Please now')
+  await draft(page).evaluate((box: HTMLTextAreaElement) => box.setSelectionRange(6, 6))
   await dictate(page).click()
-  await expect(heard(page)).toHaveText('hello there')
-  await expect(draft(page)).toHaveValue('Please')
+  await expect(heard(page)).toHaveText(' hello there ')
+  // Under the box, the take takes the settings' place.
+  await expect(bar(page)).toBeVisible()
+  await expect(page.getByLabel('agent to start')).toBeHidden()
+  await expect(draft(page)).toHaveValue('Please now')
   await stopDictating(page).click()
-  await expect(draft(page)).toHaveValue('Please Hello there.')
+  await expect(draft(page)).toHaveValue('Please Hello there. now')
   await expect(heard(page)).toHaveCount(0)
+  await expect(bar(page)).toHaveCount(0)
+  await expect(page.getByLabel('agent to start')).toBeVisible()
 })
 
 test('the model is not downloaded until the person agrees', async ({ page }) => {
@@ -82,20 +89,27 @@ test('the model is not downloaded until the person agrees', async ({ page }) => 
   expect(status).not.toContain('models')
 })
 
-test('with the option on, stopping talking sends the draft', async ({ page }) => {
-  await openThread(page, start({ FAKE_VOICE_PAUSE: '1' }))
+test('✓ keeps the words without sending them', async ({ page }) => {
+  await openThread(page, start())
   await fetchModel(page)
-  await page.getByRole('button', { name: 'Dictation options' }).click()
-  // The composer is docked at the bottom of a thread's page, so the menu opens upwards to stay in view.
-  await expect(page.getByRole('menuitem', { name: 'Send when I stop talking' })).toBeInViewport({ ratio: 1 })
-  await page.getByRole('menuitem', { name: 'Send when I stop talking' }).click()
   await dictate(page).click()
+  await expect(heard(page)).toHaveText('hello there')
+  await bar(page).getByRole('button', { name: 'Keep the words' }).click()
+  await expect(draft(page)).toHaveValue('Hello there.')
+})
+
+test('⏎ during a take keeps the words and sends the draft', async ({ page }) => {
+  await openThread(page, start())
+  await fetchModel(page)
+  await dictate(page).click()
+  await expect(heard(page)).toHaveText('hello there')
+  await page.keyboard.press('Enter')
   await expect(page.getByText('Hello there.').first()).toBeVisible()
   await expect(draft(page)).toHaveValue('')
   await expect(dictate(page)).toBeEnabled()
 })
 
-test('without the option, a pause leaves the take running', async ({ page }) => {
+test('a pause leaves the take running', async ({ page }) => {
   await openThread(page, start({ FAKE_VOICE_PAUSE: '1' }))
   await fetchModel(page)
   await dictate(page).click()
@@ -104,14 +118,35 @@ test('without the option, a pause leaves the take running', async ({ page }) => 
   await expect(draft(page)).toHaveValue('')
 })
 
+test('holding Ctrl+M talks until it is let go', async ({ page }) => {
+  await openThread(page, start())
+  await fetchModel(page)
+  await draft(page).focus()
+  await page.keyboard.down('Control')
+  await page.keyboard.down('m')
+  await expect(heard(page)).toHaveText('hello there')
+  await expect(bar(page).getByText('release')).toBeVisible()
+  await page.keyboard.up('m')
+  await page.keyboard.up('Control')
+  await expect(draft(page)).toHaveValue('Hello there.')
+})
+
+test('a tap of Ctrl+M starts a take, and another ends it', async ({ page }) => {
+  await openThread(page, start())
+  await fetchModel(page)
+  await draft(page).focus()
+  await page.keyboard.press('Control+m')
+  await expect(heard(page)).toHaveText('hello there')
+  await page.keyboard.press('Control+m')
+  await expect(draft(page)).toHaveValue('Hello there.')
+})
+
 test('a take with no words neither fills the draft nor sends it', async ({ page }) => {
   await openThread(page, start({ FAKE_VOICE_SILENT: '1' }))
   await fetchModel(page)
-  await page.getByRole('button', { name: 'Dictation options' }).click()
-  await page.getByRole('menuitem', { name: 'Send when I stop talking' }).click()
   await dictate(page).click()
   await expect(stopDictating(page)).toBeVisible()
-  await stopDictating(page).click()
+  await page.keyboard.press('Enter')
   // Which of the two depends on whether the fake microphone had beeped yet.
   await expect(page.getByText(/Silt didn't catch any words|Silt heard only silence/)).toBeVisible()
   await expect(draft(page)).toHaveValue('')
@@ -120,12 +155,14 @@ test('a take with no words neither fills the draft nor sends it', async ({ page 
 test('Escape throws the take away', async ({ page }) => {
   await openThread(page, start())
   await fetchModel(page)
+  await draft(page).fill('Keep this')
   await dictate(page).click()
-  await expect(heard(page)).toHaveText('hello there')
+  await expect(heard(page)).toHaveText(' hello there')
   await page.keyboard.press('Escape')
   await expect(heard(page)).toHaveCount(0)
   await expect(dictate(page)).toBeEnabled()
-  await expect(draft(page)).toHaveValue('')
+  await expect(draft(page)).toHaveValue('Keep this')
+  await expect(draft(page)).toBeFocused()
 })
 
 test('a take does not follow the person to another thread', async ({ page }) => {
@@ -150,4 +187,11 @@ test('a helper that dies says so and the button works again', async ({ page }) =
   await dictate(page).click()
   await expect(page.getByText('the speech helper stopped unexpectedly')).toBeVisible()
   await expect(dictate(page)).toBeEnabled()
+})
+
+test('the composer + menu opens upwards and stays in view', async ({ page }) => {
+  await openThread(page, start())
+  await page.getByRole('button', { name: 'add to the prompt' }).click()
+  // The composer is docked at the bottom of a thread's page.
+  await expect(page.getByRole('menuitem', { name: 'Attach files or images' })).toBeInViewport({ ratio: 1 })
 })

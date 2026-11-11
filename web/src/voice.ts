@@ -2,7 +2,7 @@
 // daemon, whose words stay in a preview until the take ends.
 
 import { useQuery } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { type VoiceDownload, type VoiceEvent, api, dictationSocket } from './api'
 import { keys } from './query'
 
@@ -12,7 +12,14 @@ const FRAME_SAMPLES = SPEECH_RATE / 10
 const LONGEST_TAKE_MS = 5 * 60 * 1000
 const FINISH_WAIT_MS = 10_000
 const DOWNLOAD_POLL_MS = 500
-const AUTO_SEND_KEY = 'silt-voice-auto-send'
+/** How many of the latest frames' levels the recording bar draws. */
+const LEVELS_KEPT = 160
+/** With not one sample above silence this long, the microphone is likely muted. */
+const QUIET_AFTER_MS = 1500
+/** Held at least this long, the dictation key talks while held; shorter, it's a tap that toggles. */
+export const HOLD_MS = 350
+const HINT_KEY = 'silt-voice-hint-sessions'
+const HINT_SESSIONS = 3
 
 /** Brings audio down to the speech rate, averaging what each output sample covers. */
 export class Downsampler {
@@ -78,6 +85,44 @@ export function insertWords(value: string, start: number, end: number, words: st
   return { value: `${before}${inserted}${after}`, caret: before.length + inserted.length }
 }
 
+/** How loud a frame is, from 0 to 1, on a scale that makes speech fill most of it. */
+export function level(frame: Float32Array): number {
+  if (frame.length === 0) return 0
+  let sum = 0
+  for (const sample of frame) sum += sample * sample
+  const rms = Math.sqrt(sum / frame.length)
+  return Math.min(1, Math.sqrt(rms * 8))
+}
+
+/** Whether a press of the dictation key that lasted from `down` to `up` held it, or tapped it. */
+export function pressed(down: number, up: number): 'hold' | 'tap' {
+  return up - down >= HOLD_MS ? 'hold' : 'tap'
+}
+
+/** The dictation key, as the composer names it. */
+export const DICTATION_KEYS = ['Ctrl', 'M']
+
+/** The dictation key: Ctrl+M, Control even on a Mac, where ⌘M minimises the window. */
+export function isDictationKey(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>): boolean {
+  return event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'm'
+}
+
+let hintCounted = false
+/** Whether the composer still says how to send and talk: in the first few sessions only, counted once a page load. */
+export function showKeyHint(): boolean {
+  try {
+    const seen = Number(localStorage.getItem(HINT_KEY) ?? '0')
+    if (!hintCounted) {
+      hintCounted = true
+      localStorage.setItem(HINT_KEY, String(seen + 1))
+      return seen + 1 <= HINT_SESSIONS
+    }
+    return seen <= HINT_SESSIONS
+  } catch {
+    return false
+  }
+}
+
 /** Why the microphone wouldn't open, said to the person. */
 export function microphoneProblem(failure: unknown): string {
   const name = failure instanceof DOMException || failure instanceof Error ? failure.name : ''
@@ -137,7 +182,15 @@ interface Take {
   /** The loudest sample so far: exactly none means a muted microphone. */
   peak: number
   send: boolean
+  /** Let go of before it was recording: it ends as soon as it is. */
+  endWhenOpen: boolean
   timers: ReturnType<typeof setTimeout>[]
+}
+
+/** Something that stopped a take or came of it; `note` is no fault, such as a take with no words. */
+export interface DictationProblem {
+  text: string
+  tone: 'note' | 'danger'
 }
 
 export function microphoneAvailable(): boolean {
@@ -148,31 +201,45 @@ export function microphoneAvailable(): boolean {
  * One composer's dictation. `onText` gets the words once a take ends, and
  * whether to send them. Only one take runs per composer, and it ends with it.
  */
-export function useDictation({ enabled, composer, onText }: { enabled: boolean; composer: string; onText: (text: string, send: boolean) => void }) {
+export function useDictation({
+  enabled,
+  composer,
+  onBegin,
+  onText,
+}: {
+  enabled: boolean
+  composer: string
+  /** As a take is asked for, before anything of it shows. */
+  onBegin?: () => void
+  onText: (text: string, send: boolean) => void
+}) {
   const status = useQuery({ queryKey: keys.voice, queryFn: api.voiceStatus, enabled, staleTime: 30_000 })
   const available = enabled && status.data?.helper === true && microphoneAvailable()
   const [phase, setPhase] = useState<DictationPhase>('idle')
   const [phrases, setPhrases] = useState<string[]>([])
   const [partial, setPartial] = useState('')
-  const [problem, setProblem] = useState<string>()
+  const [problem, setProblem] = useState<DictationProblem>()
   const [download, setDownload] = useState<VoiceDownload>()
-  const [autoSend, setAutoSendState] = useState(() => localStorage.getItem(AUTO_SEND_KEY) === '1')
+  const [levels, setLevels] = useState<number[]>([])
+  const [quiet, setQuiet] = useState(false)
+  const [since, setSince] = useState<number>()
+  /** Talking while the key is held, rather than until it's pressed again. */
+  const [holding, setHolding] = useState(false)
   const take = useRef<Take | null>(null)
   const latestOnText = useRef(onText)
+  const latestOnBegin = useRef(onBegin)
   useEffect(() => {
     latestOnText.current = onText
-  }, [onText])
-  const autoSendNow = useRef(autoSend)
-
-  const setAutoSend = useCallback((on: boolean) => {
-    autoSendNow.current = on
-    setAutoSendState(on)
-    localStorage.setItem(AUTO_SEND_KEY, on ? '1' : '0')
-  }, [])
+    latestOnBegin.current = onBegin
+  }, [onText, onBegin])
 
   const clear = useCallback(() => {
     setPhrases([])
     setPartial('')
+    setLevels([])
+    setQuiet(false)
+    setSince(undefined)
+    setHolding(false)
     setPhase('idle')
   }, [])
 
@@ -195,7 +262,7 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
       if (take.current !== current) return
       release(current)
       clear()
-      setProblem(message)
+      setProblem({ text: message, tone: 'danger' })
     },
     [clear, release],
   )
@@ -223,23 +290,34 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
         current.phrases.push(event.text)
         setPhrases([...current.phrases])
         setPartial('')
-      } else if (event.kind === 'paused') {
-        if (autoSendNow.current) finish(current, true)
       } else if (event.kind === 'failed') fail(current, event.message)
-      else {
+      else if (event.kind === 'done') {
         const text = current.phrases.join(' ')
         const { peak, send } = current
         release(current)
         clear()
         if (text) latestOnText.current(text, send)
-        else setProblem(peak === 0 ? 'Silt heard only silence; your microphone may be muted.' : "Silt didn't catch any words.")
+        else
+          setProblem({
+            text: peak === 0 ? 'Silt heard only silence; your microphone may be muted.' : "Silt didn't catch any words. Nothing was added.",
+            tone: 'note',
+          })
       }
     },
-    [clear, fail, finish, release],
+    [clear, fail, release],
   )
 
   const begin = useCallback(async () => {
-    const current: Take = { socket: undefined, closeMicrophone: undefined, framer: new Framer(FRAME_SAMPLES), phrases: [], peak: 0, send: false, timers: [] }
+    const current: Take = {
+      socket: undefined,
+      closeMicrophone: undefined,
+      framer: new Framer(FRAME_SAMPLES),
+      phrases: [],
+      peak: 0,
+      send: false,
+      endWhenOpen: false,
+      timers: [],
+    }
     take.current = current
     setPhase('starting')
     let closeMicrophone: () => void
@@ -247,6 +325,7 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
       closeMicrophone = await openMicrophone((samples) => {
         for (const sample of samples) current.peak = Math.max(current.peak, Math.abs(sample))
         for (const frame of current.framer.push(samples)) {
+          if (take.current === current) setLevels((shown) => [...shown.slice(1 - LEVELS_KEPT), level(frame)])
           if (current.socket?.readyState === WebSocket.OPEN) current.socket.send(frame.buffer as ArrayBuffer)
         }
       })
@@ -264,30 +343,83 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
     socket.onmessage = (message: MessageEvent<string>) => onEvent(current, JSON.parse(message.data) as VoiceEvent)
     socket.onclose = () => fail(current, 'Dictation stopped unexpectedly.')
     socket.onopen = () => {
-      if (take.current === current) setPhase('recording')
+      if (take.current !== current) return
+      setPhase('recording')
+      setSince(Date.now())
+      current.timers.push(setTimeout(() => take.current === current && current.peak === 0 && setQuiet(true), QUIET_AFTER_MS))
+      if (current.endWhenOpen) finish(current, current.send)
     }
-    current.timers.push(setTimeout(() => finish(current, autoSendNow.current), LONGEST_TAKE_MS))
+    current.timers.push(setTimeout(() => finish(current, false), LONGEST_TAKE_MS))
   }, [fail, finish, onEvent])
 
-  const press = useCallback(async () => {
+  /** Starts a take, or offers the model first where it isn't here yet. */
+  const start = useCallback(async () => {
     setProblem(undefined)
-    if (phase === 'recording' && take.current) {
-      finish(take.current, autoSendNow.current)
-      return
-    }
     if (phase === 'offering') {
       setPhase('idle')
       return
     }
     if (phase !== 'idle') return
+    latestOnBegin.current?.()
     try {
       const now = await api.voiceStatus()
       if (now.model) await begin()
       else setPhase('offering')
     } catch {
-      setProblem('Silt could not reach the speech helper.')
+      setProblem({ text: 'Silt could not reach the speech helper.', tone: 'danger' })
     }
-  }, [begin, finish, phase])
+  }, [begin, phase])
+
+  /** Ends the take, the words going into the draft, and sent with it when `send`. */
+  const end = useCallback(
+    (send: boolean) => {
+      const current = take.current
+      if (!current) return
+      if (current.closeMicrophone && current.socket?.readyState === WebSocket.OPEN) finish(current, send)
+      else {
+        current.endWhenOpen = true
+        current.send = send
+      }
+    },
+    [finish],
+  )
+
+  /** The mic button: starts a take, or ends one keeping its words. */
+  const press = useCallback(async () => {
+    if (phase === 'recording' || phase === 'starting') end(false)
+    else await start()
+  }, [end, phase, start])
+
+  // The dictation key, Ctrl+M: held, it talks until it's let go; tapped, it starts a take that a second tap ends.
+  const keyDown = useRef<number | null>(null)
+  const onKey = useCallback(
+    (event: KeyboardEvent | ReactKeyboardEvent) => {
+      if (!available || !isDictationKey(event)) return false
+      event.preventDefault()
+      if (event.repeat) return true
+      if (take.current) {
+        end(false)
+        return true
+      }
+      const down = Date.now()
+      keyDown.current = down
+      // Past the hold, the take lasts only while the key does.
+      setTimeout(() => keyDown.current === down && setHolding(true), HOLD_MS)
+      void start()
+      return true
+    },
+    [available, end, start],
+  )
+  useEffect(() => {
+    const up = (event: KeyboardEvent) => {
+      if (keyDown.current === null || (event.key.toLowerCase() !== 'm' && event.key !== 'Control')) return
+      const down = keyDown.current
+      keyDown.current = null
+      if (pressed(down, Date.now()) === 'hold') end(false)
+    }
+    window.addEventListener('keyup', up)
+    return () => window.removeEventListener('keyup', up)
+  }, [end])
 
   const startDownload = useCallback(async () => {
     setPhase('downloading')
@@ -304,7 +436,7 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
           setDownload(now.download ?? undefined)
           if (now.model) setPhase('idle')
           else if (now.failed) {
-            setProblem(`The speech model couldn't be downloaded: ${now.failed}`)
+            setProblem({ text: `The speech model couldn't be downloaded: ${now.failed}`, tone: 'danger' })
             setPhase('idle')
           }
         })
@@ -316,20 +448,49 @@ export function useDictation({ enabled, composer, onText }: { enabled: boolean; 
   // A take belongs to the composer it began in.
   useEffect(() => discard, [composer, discard])
 
-  // Escape throws the take away, and nothing else that listens for it should act.
+  // Escape throws the take away and ⏎ sends it, and nothing else that listens for either should act.
   useEffect(() => {
     if (phase !== 'starting' && phase !== 'recording') return undefined
     const key = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
+      if (event.key === 'Escape') discard()
+      else if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !(event.target instanceof HTMLButtonElement)) end(true)
+      else return
       event.preventDefault()
       event.stopPropagation()
-      discard()
     }
     window.addEventListener('keydown', key, true)
     return () => window.removeEventListener('keydown', key, true)
-  }, [phase, discard])
+  }, [phase, discard, end])
 
-  return { available, phase, phrases, partial, problem, download, autoSend, setAutoSend, press, startDownload, dismissOffer: clear }
+  return {
+    available,
+    phase,
+    phrases,
+    partial,
+    problem,
+    download,
+    levels,
+    quiet,
+    since,
+    holding,
+    press,
+    keep: () => end(false),
+    send: () => end(true),
+    discard,
+    onKey,
+    startDownload,
+    dismissOffer: clear,
+  }
+}
+
+/** Whether the row under the box has something to say of dictation: the download, or what came of a take. */
+export function hasVoiceNote(dictation: Dictation): boolean {
+  return dictation.phase === 'downloading' || dictation.problem !== undefined
+}
+
+/** Whether a take is under way, from asking for the microphone until its words are in. */
+export function taking(phase: DictationPhase): boolean {
+  return phase === 'starting' || phase === 'recording' || phase === 'finishing'
 }
 
 export type Dictation = ReturnType<typeof useDictation>

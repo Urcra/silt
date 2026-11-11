@@ -284,7 +284,7 @@ async function startFake(page: Page, prompt: string, preset?: string) {
   if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
   await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('first prompt').fill(prompt)
-  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await form.getByLabel('first prompt').press('Enter')
   await page.waitForURL(/\/t\/[0-9a-f]+$/)
 }
 

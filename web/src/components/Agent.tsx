@@ -9,8 +9,8 @@ import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
-import { type Takes, useAttachments } from '../attachments'
-import { AttachButton, AttachedFiles } from './Attachments'
+import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
 import { Markdown } from './Markdown'
@@ -590,7 +590,6 @@ export function AgentDock({
 
   const tools = (
     <>
-      {attachable && <AttachButton takes={takes} onFiles={attach} />}
       {/* The same row as New thread's: which agent, then its mode and settings. Another agent here takes the thread over. */}
       {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
         <ChipSelect
@@ -652,40 +651,29 @@ export function AgentDock({
   )
 
   const startName = agents.find((choice) => choice.id === agent)?.name ?? 'the agent'
-  const actions = startable ? (
-    <RoundButton
-      label="Start agent"
-      icon="arrowUp"
-      onClick={start}
-      title={`Starts ${startName} here${draft.trim() ? ' with your draft' : ''} (⏎)`}
-    />
-  ) : (
-    live && (
-      <>
-        {turning && draft.trim() && (
-          <Button variant="ghost" onClick={steer} title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}>
-            Steer now
-          </Button>
-        )}
-        {turning && !draft.trim() ? (
-          <RoundButton quiet label="Cancel turn" title="Stop the turn (Esc)" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
-        ) : (
-          <RoundButton
-            label={ready(status) ? 'Send' : 'Queue'}
-            icon="arrowUp"
-            disabled={!sendable}
-            onClick={() => send()}
-            title={
-              ready(status)
-                ? "Sends your draft together with everyone else's (⏎)"
-                : attached.length > 0
-                  ? 'Attached files go with a prompt the agent takes now'
-                  : `Queues your draft for when the agent is ready (⏎), or tells it now (${formatKeys('mod+⏎')})`
-            }
-          />
-        )}
-      </>
-    )
+  // ⏎ sends, so the box keeps only stopping the turn; a touch keyboard's ⏎ breaks the line, so there a button sends.
+  const actions = turning && (
+    <RoundButton quiet label="Cancel turn" title="Stop the turn (Esc)" icon="stop" onClick={() => act(api.cancelTurn(thread))} />
+  )
+  const touchSend = startable
+    ? { label: 'Start agent', title: `Starts ${startName} here${draft.trim() ? ' with your draft' : ''}` }
+    : live && draft.trim()
+      ? {
+          label: ready(status) ? 'Send' : 'Queue',
+          disabled: !sendable,
+          title: ready(status)
+            ? "Sends your draft together with everyone else's"
+            : attached.length > 0
+              ? 'Attached files go with a prompt the agent takes now'
+              : 'Queues your draft for when the agent is ready',
+        }
+      : undefined
+  const enter = startable ? `start ${startName}` : live && !ready(status) ? 'queue' : 'send'
+  const note = turning && draft.trim() && (
+    <Button variant="ghost" size="sm" onClick={steer} title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}>
+      Steer now
+      <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
+    </Button>
   )
 
   return (
@@ -700,6 +688,7 @@ export function AgentDock({
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onCycle={cycle}
         onFiles={attachable ? attach : undefined}
+        attach={attachChoice(takes)}
         commands={(live ? status.commands : undefined) ?? seen?.commands}
         voice={!hosted()}
         placeholder={
@@ -724,6 +713,9 @@ export function AgentDock({
         below={below}
         tools={tools}
         actions={actions}
+        note={note}
+        send={touchSend}
+        enter={enter}
       />
       {statusLine}
       {preset === 'full_access' && (

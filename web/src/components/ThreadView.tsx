@@ -880,7 +880,7 @@ function ChangesBar({
     )
   }
   return (
-    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-lg border-b border-line bg-bg px-3 py-1.5 text-xs">
+    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs">
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
         {files} {files === 1 ? 'file' : 'files'} changed

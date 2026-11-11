@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Downsampler, Framer, insertWords, microphoneProblem } from './voice'
+import { HOLD_MS, Downsampler, Framer, insertWords, microphoneProblem, isDictationKey, level, pressed } from './voice'
 
 const audio = (...samples: number[]) => Float32Array.from(samples)
 
@@ -77,5 +77,43 @@ describe('microphoneProblem', () => {
     expect(microphoneProblem(named('NotFoundError'))).toMatch(/No microphone/)
     expect(microphoneProblem(named('InvalidStateError'))).toMatch(/gst-plugins-good/)
     expect(microphoneProblem('odd')).toMatch(/could not be opened/)
+  })
+})
+
+describe('level', () => {
+  it('is nothing for silence', () => {
+    expect(level(new Float32Array(160))).toBe(0)
+  })
+
+  it('fills most of the scale for speech and never passes it', () => {
+    const speech = Float32Array.from({ length: 160 }, (_, index) => 0.1 * Math.sin(index / 3))
+    expect(level(speech)).toBeGreaterThan(0.5)
+    expect(level(Float32Array.from({ length: 160 }, () => 1))).toBe(1)
+  })
+})
+
+describe('pressed', () => {
+  it('tells a hold from a tap', () => {
+    expect(pressed(0, HOLD_MS - 1)).toBe('tap')
+    expect(pressed(0, HOLD_MS)).toBe('hold')
+  })
+})
+
+describe('isDictationKey', () => {
+  const key = (key: string, mods: Partial<Record<'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey', boolean>> = {}) => ({
+    key,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...mods,
+  })
+
+  it('is Ctrl+M alone', () => {
+    expect(isDictationKey(key('m', { ctrlKey: true }))).toBe(true)
+    expect(isDictationKey(key('M', { ctrlKey: true }))).toBe(true)
+    expect(isDictationKey(key('m'))).toBe(false)
+    expect(isDictationKey(key('m', { metaKey: true }))).toBe(false)
+    expect(isDictationKey(key('m', { ctrlKey: true, shiftKey: true }))).toBe(false)
   })
 })

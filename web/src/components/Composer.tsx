@@ -2,10 +2,13 @@ import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
 import { matching, typedCommand } from '../slashCommands'
-import { cx } from '../ui'
-import { insertWords, useDictation } from '../voice'
+import { Icon, Menu, type MenuItem, cx } from '../ui'
+import { DICTATION_KEYS, hasVoiceNote, insertWords, showKeyHint, taking, useDictation } from '../voice'
 import { ComposerFolded } from './composerFolded'
-import { VoiceButton, VoiceLine } from './VoiceButton'
+import { RoundButton } from './RoundButton'
+import { Keys, VoiceBar, VoiceButton, VoiceNote, VoiceOffer } from './VoiceButton'
+
+export { RoundButton }
 
 /**
  * Folds the row whose tools `content` holds when they're wider than `room`, and unfolds it once they'd fit
@@ -75,10 +78,87 @@ function CommandMenu({ id, offered, active, onPick }: { id: string; offered: Age
   )
 }
 
+/** Whether the pointer is a finger, where ⏎ on the keyboard breaks the line and a button has to send. */
+function useTouch(): boolean {
+  const query = '(pointer: coarse)'
+  const [touch, setTouch] = useState(() => window.matchMedia?.(query).matches ?? false)
+  useEffect(() => {
+    const media = window.matchMedia?.(query)
+    if (!media) return undefined
+    const changed = () => setTouch(media.matches)
+    media.addEventListener('change', changed)
+    return () => media.removeEventListener('change', changed)
+  }, [])
+  return touch
+}
+
+/** The box's text during a take, with the words heard so far in grey where they'll go, and the caret as a level meter. */
+function Heard({
+  value,
+  start,
+  end,
+  heard,
+  loudness,
+  height,
+  onKeyDown,
+}: {
+  value: string
+  start: number
+  end: number
+  heard: string
+  loudness: number
+  height: number | undefined
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
+}) {
+  const shown = useRef<HTMLDivElement>(null)
+  const caret = useRef<HTMLSpanElement>(null)
+  // It takes the focus from the box, so ⏎, Esc and the dictation key still reach the take.
+  useEffect(() => shown.current?.focus(), [])
+  useEffect(() => {
+    caret.current?.scrollIntoView({ block: 'nearest' })
+  }, [heard])
+  const next = heard ? insertWords(value, start, end, heard) : { value: value.slice(0, start) + value.slice(end), caret: start }
+  return (
+    <div
+      ref={shown}
+      tabIndex={-1}
+      aria-live="polite"
+      onKeyDown={onKeyDown}
+      style={{ minHeight: height }}
+      className="max-h-60 min-w-0 flex-1 overflow-y-auto px-1.5 py-1.5 text-sm leading-normal break-words whitespace-pre-wrap text-fg-1 focus:outline-none max-md:text-base"
+    >
+      {next.value.slice(0, heard ? start : next.caret)}
+      {heard && (
+        <span aria-label="heard so far" className="bg-[linear-gradient(transparent_84%,var(--accent-tint)_84%)] text-fg-3">
+          {next.value.slice(start, next.caret)}
+        </span>
+      )}
+      <span
+        ref={caret}
+        aria-hidden="true"
+        className="mx-px inline-block w-[3px] rounded-full bg-accent align-[-2px] transition-[height] duration-100"
+        style={{ height: `${4 + Math.round(loudness * 12)}px` }}
+      />
+      {next.value.slice(next.caret)}
+    </div>
+  )
+}
+
+/** The touch keyboard's way to send: ⏎ there breaks the line. */
+export interface TouchSend {
+  label: string
+  title: string
+  disabled?: boolean
+  busy?: boolean
+  /** Submits the form the composer is in rather than calling `onSend`. */
+  submit?: boolean
+}
+
 /**
- * The one composer (ADR 0044): centred on an empty thread, docked under a
- * running one. What's above the text, the text, then a row of its tools and
- * the button that sends it.
+ * The one composer (ADR 0044, ADR 0060): centred on an empty thread, docked under a
+ * running one. In the box, + for what goes with the prompt, the text, and the
+ * microphone; ⏎ sends. Under it, the agent's settings, or the take while one is
+ * recorded.
  */
 export function ComposerBox({
   id,
@@ -93,6 +173,11 @@ export function ComposerBox({
   below,
   tools,
   actions,
+  note,
+  menu = [],
+  attach,
+  send,
+  enter = 'send',
   waiting = false,
   onCycle,
   onFiles,
@@ -113,15 +198,27 @@ export function ComposerBox({
   top?: ReactNode
   /** Over the text: what's queued, what others are writing. */
   above?: ReactNode
-  /** Between the text and the tools: attached files. */
+  /** Over the text, under `above`: attached files. */
   below?: ReactNode
+  /** Under the box, on the right: the agent and its settings. */
   tools?: ReactNode
+  /** In the box after the microphone, such as stopping the agent's turn. */
   actions?: ReactNode
+  /** Under the box, on the left, such as steering now. */
+  note?: ReactNode
+  /** More of + 's menu, after attaching and the commands. */
+  menu?: MenuItem[]
+  /** What + 's Attach takes, where `onFiles` takes files. */
+  attach?: { label: string; accept?: string }
+  /** The send button on a touch screen; none elsewhere, where ⏎ sends. */
+  send?: TouchSend
+  /** What ⏎ does, for the hint: send, queue, start. */
+  enter?: string
   /** The agent waits on the person, so the box says so. */
   waiting?: boolean
   /** Shift+Tab: the agent's next mode, as in its own terminal. */
   onCycle?: () => void
-  /** Files pasted or dropped into the box; without it, the box takes none. */
+  /** Files pasted, dropped or attached through +; without it, the box takes none. */
   onFiles?: (files: File[], pasted: boolean) => void
   /** The agent's commands, offered as `/` starts the text. */
   commands?: AgentCommand[]
@@ -130,25 +227,42 @@ export function ComposerBox({
   className?: string
 }) {
   const box = useRef<HTMLTextAreaElement>(null)
+  const touch = useTouch()
+  const [hint] = useState(showKeyHint)
   // The draft that dictation will send, and where the caret goes, once it's in the box.
   const dictatedToSend = useRef<string | null>(null)
   const dictatedCaret = useRef<number | null>(null)
   const dictation = useDictation({
     enabled: voice,
     composer: id,
-    onText: (words, send) => {
+    onBegin: () =>
+      setFrozen({
+        start: box.current?.selectionStart ?? value.length,
+        end: box.current?.selectionEnd ?? value.length,
+        height: box.current?.offsetHeight,
+      }),
+    onText: (words, sendIt) => {
       const next = insertWords(value, box.current?.selectionStart ?? value.length, box.current?.selectionEnd ?? value.length, words)
       dictatedCaret.current = next.caret
-      dictatedToSend.current = send ? next.value : null
+      dictatedToSend.current = sendIt ? next.value : null
       edit(next.value)
     },
   })
+  const take = dictation.available && taking(dictation.phase)
+  // Where the words will go and the box's height, as they were when the take began, which the words heard keep to.
+  const [frozen, setFrozen] = useState<{ start: number; end: number; height: number | undefined }>()
   useLayoutEffect(() => {
     if (dictatedCaret.current === null) return
     box.current?.focus()
     box.current?.setSelectionRange(dictatedCaret.current, dictatedCaret.current)
     dictatedCaret.current = null
   }, [value])
+  // A take thrown away or failed gives the box its focus back.
+  const tookBefore = useRef(false)
+  useEffect(() => {
+    if (tookBefore.current && !take && dictatedCaret.current === null) box.current?.focus()
+    tookBefore.current = take
+  }, [take])
   useEffect(() => {
     if (dictatedToSend.current !== null && dictatedToSend.current === value) {
       dictatedToSend.current = null
@@ -161,7 +275,7 @@ export function ComposerBox({
   // The text Escape closed the menu on; it opens again once the text changes.
   const [dismissed, setDismissed] = useState<string>()
   const [chosen, setChosen] = useState(0)
-  const offered = typed === null || dismissed === value ? [] : matching(commands, typed)
+  const offered = typed === null || dismissed === value || take ? [] : matching(commands, typed)
   const active = Math.min(chosen, offered.length - 1)
   const edit = (text: string) => {
     setChosen(0)
@@ -198,9 +312,9 @@ export function ComposerBox({
   }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (offered.length > 0 && choosing(event)) return
+    if (dictation.onKey(event)) return
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
     // the button sends. Never while an input method is still composing a character.
-    const touch = window.matchMedia?.('(pointer: coarse)').matches ?? false
     if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey && !event.altKey && (!touch || event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       onSend(event.metaKey || event.ctrlKey)
@@ -210,53 +324,151 @@ export function ComposerBox({
       onCycle()
     }
   }
+  // By id rather than ref: these run from the menu's items, which are made as the box renders.
+  const choose = () => document.getElementById(`${id}-attach`)?.click()
+  const slash = () => {
+    edit('/')
+    document.getElementById(id)?.focus()
+  }
+  const plus: MenuItem[] = [
+    ...(onFiles && attach ? [{ label: attach.label, icon: 'attach' as const, onSelect: choose }] : []),
+    ...(commands.length > 0
+      ? [
+          {
+            label: 'Slash commands',
+            icon: 'terminal' as const,
+            hint: '/',
+            disabled: value.trim() !== '',
+            onSelect: slash,
+          },
+        ]
+      : []),
+    ...menu.map((item, index) => ({ ...item, divided: index === 0 && (Boolean(onFiles && attach) || commands.length > 0) })),
+  ]
+  const heard = [...dictation.phrases, dictation.partial].filter(Boolean).join(' ')
+  const left =
+    (dictation.available && hasVoiceNote(dictation) && <VoiceNote dictation={dictation} />) ||
+    note ||
+    (hint && value === '' && (
+      <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-fg-3 max-md:hidden">
+        <Keys keys={['⏎']} /> {enter}
+        {dictation.available && (
+          <>
+            {' '}
+            · hold <Keys keys={DICTATION_KEYS} /> to talk
+          </>
+        )}
+      </span>
+    ))
   return (
-    <div
-      onDragOver={dragOver}
-      onDragLeave={() => setDragging(false)}
-      onDrop={drop}
-      className={cx('relative flex flex-col rounded-lg border bg-elevated', dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong', className)}
-    >
-      {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
-      {top}
-      {above}
-      <label htmlFor={id} className="sr-only">
-        {label}
-      </label>
-      <textarea
-        ref={box}
-        id={id}
-        aria-label={label}
-        rows={rows}
-        value={value}
-        onChange={(event) => {
-          dictatedToSend.current = null
-          edit(event.target.value)
-        }}
-        onKeyDown={keyDown}
-        aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
-        aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
-        onPaste={paste}
-        placeholder={placeholder}
-        className="resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
-      />
-      {dictation.available && <VoiceLine dictation={dictation} />}
-      {below}
-      {/* One row however many tools: the agent's settings fold into one chip where they don't fit, and what still
-          doesn't scrolls sideways rather than starting a second row. */}
-      <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-        <span ref={room} className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
-          <span ref={content} className="flex w-max items-center gap-1 *:shrink-0">
+    <div className={cx('flex flex-col', className)}>
+      <div
+        onDragOver={dragOver}
+        onDragLeave={() => setDragging(false)}
+        onDrop={drop}
+        className={cx(
+          'relative flex flex-col rounded-xl border bg-elevated shadow-raised',
+          dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong',
+        )}
+      >
+        {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
+        {dictation.available && <VoiceOffer dictation={dictation} />}
+        {top}
+        {above}
+        {below}
+        {onFiles && attach && (
+          <input
+            id={`${id}-attach`}
+            type="file"
+            multiple
+            aria-label="attach files"
+            className="sr-only"
+            tabIndex={-1}
+            accept={attach.accept}
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])]
+              event.target.value = ''
+              onFiles(files, false)
+            }}
+          />
+        )}
+        <div className="flex items-end gap-1 p-1.5">
+          {plus.length > 0 && (
+            <Menu
+              above
+              align="left"
+              label="add to the prompt"
+              items={plus}
+              triggerClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-2 hover:bg-surface-2 hover:text-fg-1 aria-expanded:bg-surface-2 aria-expanded:text-fg-1 max-md:h-11 max-md:w-11"
+              trigger={<Icon name="plus" className="h-[18px] w-[18px]" />}
+            />
+          )}
+          <label htmlFor={id} className="sr-only">
+            {label}
+          </label>
+          <textarea
+            ref={box}
+            id={id}
+            aria-label={label}
+            rows={rows}
+            value={value}
+            onChange={(event) => {
+              dictatedToSend.current = null
+              edit(event.target.value)
+            }}
+            onKeyDown={keyDown}
+            aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
+            aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
+            onPaste={paste}
+            placeholder={placeholder}
+            className={cx(
+              'min-w-0 flex-1 resize-none self-stretch border-0 bg-transparent px-1.5 py-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base',
+              take && 'hidden',
+            )}
+          />
+          {take && frozen && (
+            <Heard
+              value={value}
+              start={Math.min(frozen.start, value.length)}
+              end={Math.min(frozen.end, value.length)}
+              heard={heard}
+              loudness={dictation.levels[dictation.levels.length - 1] ?? 0}
+              height={frozen.height}
+              onKeyDown={(event) => void dictation.onKey(event)}
+            />
+          )}
+          <span className="flex shrink-0 items-center gap-1">
+            {dictation.available && <VoiceButton dictation={dictation} />}
+            {actions}
+            {touch && send && !take && (
+              <RoundButton
+                type={send.submit ? 'submit' : 'button'}
+                label={send.label}
+                title={send.title}
+                icon="arrowUp"
+                disabled={send.disabled}
+                busy={send.busy}
+                onClick={send.submit ? undefined : () => onSend(false)}
+              />
+            )}
+          </span>
+        </div>
+      </div>
+      {/* Under the box, one row: a note or hint on the left, the agent's settings on the right, folded into one chip
+          where they don't fit; while a take runs, the take in their place. */}
+      <div className="flex min-h-9 items-center gap-2 px-1 pt-1">
+        {take ? (
+          <VoiceBar dictation={dictation} />
+        ) : (
+          // The settings come first: a note or hint gives way, cut short, where both don't fit.
+          left && <span className="flex max-w-[60%] min-w-0 shrink items-center gap-2 overflow-hidden">{left}</span>
+        )}
+        <span ref={room} className={cx('min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]', take && 'hidden')}>
+          <span ref={content} className="ml-auto flex w-max items-center gap-0.5 *:shrink-0">
             <ComposerFolded.Provider value={folded}>{tools}</ComposerFolded.Provider>
           </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-2">
-          {dictation.available && <VoiceButton dictation={dictation} />}
-          {actions}
         </span>
       </div>
     </div>
   )
 }
-
-export { RoundButton } from './RoundButton'
