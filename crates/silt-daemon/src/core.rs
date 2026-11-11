@@ -1423,7 +1423,7 @@ impl Core {
 
     /// Takes the files of `paths` that this checkout brought into its thread
     /// out of it again, as git ignores them now and doesn't track them; the
-    /// files stay on disk (ADR 0059). A dependency directory recorded before
+    /// files stay on disk (ADR 0060). A dependency directory recorded before
     /// `.gitignore` named it otherwise stays in the thread for good.
     async fn forget_ignored(&mut self, checkout_id: CheckoutId, ignored: Vec<String>) -> Result<(), CoreError> {
         if ignored.is_empty() {

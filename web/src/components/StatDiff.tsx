@@ -16,7 +16,7 @@ export interface DiffOf {
 /** How many files are listed before More files. */
 const LISTED = 200
 
-/** A diff too large to read whole: its files from their stats, each read and drawn only once opened (ADR 0059). */
+/** A diff too large to read whole: its files from their stats, each read and drawn only once opened (ADR 0060). */
 export function FilesByStats({
   thread,
   stats,

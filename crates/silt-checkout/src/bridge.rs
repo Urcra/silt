@@ -265,7 +265,7 @@ impl Bridge {
 
     /// Takes those of `paths` this checkout brought into the thread back out
     /// of it, leaving the disk as it is, as when git came to ignore them
-    /// (ADR 0059). Files others brought in stay: what this machine's own
+    /// (ADR 0060). Files others brought in stay: what this machine's own
     /// excludes leave out is no reason to take them from everyone. Returns
     /// the deltas and the paths taken out.
     pub fn forget(
