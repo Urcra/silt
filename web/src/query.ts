@@ -30,6 +30,7 @@ export const keys = {
   mr: (id: string) => ['mrs', id] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
+  voice: ['voice'] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
   found: ['projects', 'found'] as const,

@@ -6,6 +6,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="${SILT:-$root/target/debug/silt}"
 work=$(mktemp -d /tmp/silt-web-XXXXXX)
 export SILT_HOME="$work/silt"
+export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/claude"
 # Agent sessions on the machine running the tests would show in the import
 # offer, so each machine here has a home of its own.

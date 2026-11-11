@@ -5,6 +5,8 @@
 
 mod backends;
 mod daemon;
+#[cfg(target_os = "linux")]
+mod microphone;
 
 use std::collections::HashMap;
 use std::env;
@@ -16,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use exn::Exn;
-use tauri::webview::{NewWindowResponse, PageLoadEvent};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::backends::{Backend, Target};
@@ -115,8 +117,9 @@ fn open_window(
     let started = AtomicBool::new(false);
     let navigating = ui.clone();
     let loading = ui.clone();
+    let listening = ui.clone();
     let (switching, shown) = (target.clone(), target.clone());
-    WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
         .title("Silt")
         .inner_size(1440.0, 900.0)
         .min_inner_size(390.0, 600.0)
@@ -137,6 +140,18 @@ fn open_window(
             open_in_browser(&to);
             NewWindowResponse::Deny
         })
+        .on_permission_request(move |webview, kind| match kind {
+            PermissionKind::Microphone => {
+                let ui = listening.lock().expect("lock");
+                if webview.url().is_ok_and(|page| daemon::may_listen(ui.as_ref(), &page)) {
+                    PermissionResponse::Allow
+                } else {
+                    PermissionResponse::Deny
+                }
+            }
+            PermissionKind::Camera => PermissionResponse::Deny,
+            _ => PermissionResponse::Default,
+        })
         // Once the starting page has loaded, so it can show what went wrong.
         .on_page_load(move |window, payload| {
             if payload.event() == PageLoadEvent::Finished {
@@ -149,7 +164,10 @@ fn open_window(
                 std::thread::spawn(move || keep_ui(&window, &ui, &target, silts.as_deref()));
             }
         })
-        .build()
+        .build()?;
+    #[cfg(target_os = "linux")]
+    microphone::enable(&window)?;
+    Ok(window)
 }
 
 /// How often to look at the UI the window shows, and how long a look waits.

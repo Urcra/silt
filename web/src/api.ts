@@ -46,6 +46,7 @@ import type {
   ThreadLink,
   ThreadSummary,
   TurnInfo,
+  VoiceStatus,
 } from './api.generated'
 
 export type * from './api.generated'
@@ -115,7 +116,15 @@ const diffParams = (options: { turn?: number; base?: string }) => {
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
 
+/** A socket for one dictation: audio frames out, `VoiceEvent`s back (ADR 0061). */
+export function dictationSocket(): WebSocket {
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/voice/dictate')}?token=${token()}`)
+}
+
 export const api = {
+  voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
+  voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>

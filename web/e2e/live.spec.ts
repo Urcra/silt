@@ -52,7 +52,7 @@ async function pickProject(page: Page, project: RegExp) {
 
 /** Starts the new thread in the background, from its start menu. */
 async function startInTheBackground(page: Page) {
-  await page.getByRole('button', { name: 'More ways to start' }).click()
+  await page.getByRole('button', { name: 'add to the prompt' }).click()
   await page.getByRole('menuitem', { name: /^Start in the background/ }).click()
 }
 
@@ -138,14 +138,14 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
 
   await alice.getByLabel('permissions').selectOption('ask_for_everything')
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await alice.getByRole('button', { name: 'Start agent' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
 
   // A prompt the daemon refuses comes back to the draft rather than stay shown as sent.
   await alice.route('**/agent/prompt', (route) => route.fulfill({ status: 400, json: { error: 'not now' } }))
   await alice.getByLabel('draft').fill('add acp')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await expect(alice.getByText('not now')).toBeVisible()
   await expect(alice.getByLabel('draft')).toHaveValue('add acp')
   await expect(alice.getByTestId('sending')).toHaveCount(0)
@@ -155,7 +155,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
     await new Promise((resolve) => setTimeout(resolve, 2000))
     await route.fallback()
   })
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await expect(alice.getByTestId('sending')).toHaveText('add acp', { timeout: 1000 })
   await expect(alice.getByLabel('draft')).toHaveValue('')
   await expect(alice.getByText('not now')).toHaveCount(0)
@@ -176,22 +176,22 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(bob.getByTestId('editor')).toContainText('fn acp() {}', { timeout: 15_000 })
 
   await stopAgent(alice)
-  await expect(alice.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(alice.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await alice.getByRole('button', { name: 'Start agent' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await alice.getByLabel('draft').fill('once more')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   // A new process of this agent can't load its earlier session, so it starts
   // a new one primed with the conversation.
   await expect(alice.getByText(/^Done: You are continuing a conversation[\s\S]*once more$/)).toBeVisible()
   await alice.getByLabel('draft').fill('not this')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   await alice.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(alice.getByText('I was not allowed to edit.')).toBeVisible()
   // A question waits in the transcript where it was asked, answered by a choice.
   await alice.getByLabel('draft').fill('Ask me what to count')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   const question = alice.getByRole('region', { name: 'question' }).last()
   await expect(question).toContainText('What should the progress bar count?')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is asking you a question')
@@ -204,7 +204,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(question.getByRole('listitem').filter({ hasText: 'Bytes sent on the socket' })).toHaveClass(/bg-accent-tint/)
   // Or answered in your own words, which the agent hears as a steer.
   await alice.getByLabel('draft').fill('Ask me again')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   const again = alice.getByRole('region', { name: 'question' }).last()
   await expect(again).toContainText('waiting on you')
   await again.getByLabel('something else').fill('Packets acknowledged')
@@ -215,7 +215,7 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByText(/I was not allowed to edit/).last()).toBeVisible()
   // Claude's form follows each question with an optional box of your own and requires nothing: answered once something is chosen.
   await alice.getByLabel('draft').fill('Ask two things')
-  await alice.getByRole('button', { name: 'Send' }).click()
+  await alice.getByLabel('draft').press('Enter')
   const two = alice.getByRole('region', { name: 'question' }).last()
   await expect(two).toContainText('2 of 2')
   const answer = two.getByRole('button', { name: 'Answer', exact: true })
@@ -250,7 +250,7 @@ async function startInNewThread(page: Page, agent: string) {
   // A checkout of its own, so the tests' agents leave the clone as it is.
   await page.getByRole('radio', { name: 'Worktree' }).click()
   await page.getByLabel('agent to start').selectOption({ label: agent })
-  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await page.getByLabel('first prompt').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
 }
 
@@ -259,7 +259,7 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
   await machine.getByLabel('draft').fill('wait for me')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   const asked = machine.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
 
@@ -285,14 +285,14 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
   await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
 
   await there.getByLabel('draft').fill('from the browser')
-  await there.getByRole('button', { name: 'Send' }).click()
+  await there.getByLabel('draft').press('Enter')
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(there.getByRole('group', { name: 'permission' })).toBeVisible()
   await there.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(machine.getByText('I was not allowed to edit.')).toBeVisible()
   // A question the agent asks there is answered here, in place, through the server.
   await there.getByLabel('draft').fill('Ask me from the browser')
-  await there.getByRole('button', { name: 'Send' }).click()
+  await there.getByLabel('draft').press('Enter')
   const question = there.getByRole('region', { name: 'question' }).last()
   await expect(question).toContainText('waiting on you', { timeout: 15_000 })
   await question.getByRole('radio', { name: /Chunks completed/ }).click()
@@ -310,10 +310,10 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('draft').fill('first turn')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   await expect(machine.getByText('Done: first turn')).toBeVisible()
   await stopAgent(machine)
-  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(machine.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   const thread = new URL(machine.url()).pathname.split('/t/')[1]
 
   const hosted = await (await browser.newContext()).newPage()
@@ -329,10 +329,10 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
 
   await there.getByLabel('draft').fill('second turn')
-  await there.getByRole('button', { name: 'Send' }).click()
+  await there.getByLabel('draft').press('Enter')
   await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible()
   await stopAgent(there)
-  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(machine.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await machine.context().close()
   await hosted.context().close()
 })
@@ -342,7 +342,7 @@ test("another of Alice's machines directs the agent running on the first, throug
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
   await machine.getByLabel('draft').fill('from the desk')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   const asked = machine.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   const thread = new URL(machine.url()).pathname.split('/t/')[1]
@@ -359,13 +359,13 @@ test("another of Alice's machines directs the agent running on the first, throug
   await expect(state).toHaveText('Fake agent on alice is ready', { timeout: 10_000 })
 
   await laptop.getByLabel('draft').fill('from the laptop')
-  await laptop.getByRole('button', { name: 'Send' }).click()
+  await laptop.getByLabel('draft').press('Enter')
   await expect(asked).toContainText('Edit src/main.rs')
   await expect(laptop.getByRole('group', { name: 'permission' })).toBeVisible({ timeout: 10_000 })
   await laptop.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Reject' }).click()
   await expect(machine.getByText('I was not allowed to edit.').last()).toBeVisible()
   await stopAgent(laptop)
-  await expect(machine.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(machine.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await machine.context().close()
   await laptop.context().close()
 })
@@ -375,7 +375,7 @@ test('a new thread starts a Claude Code cloud session through claude, and lists 
   await page.getByRole('radio', { name: 'Cloud' }).click()
   await expect(page.getByLabel('agent to start')).toBeHidden()
   await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
-  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await page.getByLabel('first prompt').press('Enter')
   const launch = page.getByRole('region', { name: 'Cloud sessions' }).getByRole('listitem').filter({ hasText: 'tidy the readme in the cloud' })
   await expect(launch).toContainText('waiting for its thread', { timeout: 20_000 })
   await expect(launch.getByRole('link', { name: 'claude.ai' })).toHaveAttribute('href', 'https://claude.ai/code/session_01FakeCloud')
@@ -386,7 +386,7 @@ test('the inbox hears that an agent waits, and answers it in place', async ({ pa
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('permissions').selectOption('ask_for_everything')
   await page.getByLabel('draft').fill('ask me in the inbox')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
   const thread = new URL(page.url()).pathname.split('/t/')[1]
 
@@ -409,7 +409,7 @@ test('the inbox hears that an agent waits, and answers it in place', async ({ pa
 test("a running turn's thought under way shows in its card, where it will be recorded", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('Ponder the edit')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   const activity = page.getByTestId('activity')
   await expect(activity).toContainText('Checking what the edit left.')
   // Only there: not in the tail under it as well, to jump into the card once the next step records it.
@@ -442,7 +442,7 @@ test('a waiting agent notifies its person in a tab that is open but not in front
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
   await machine.getByLabel('draft').fill('notify me')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   const asked = machine.getByRole('group', { name: 'permission' })
   await expect(asked).toContainText('Edit src/main.rs')
   await expect
@@ -459,7 +459,7 @@ test('on a phone, the hosted app answers a waiting agent from Needs you', async 
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
   await machine.getByLabel('draft').fill('from my phone')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   await expect(machine.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
 
   const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage()
@@ -509,7 +509,7 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
   await machine.getByLabel('draft').fill('paired phone')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   await expect(machine.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
   const thread = new URL(machine.url()).pathname.split('/t/')[1]
 
@@ -540,9 +540,9 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
   await machine.getByRole('button', { name: 'Fork', exact: true }).click()
   await expect(machine.getByRole('main').getByText(/^Fork of/)).toBeVisible()
   await machine.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await machine.getByRole('button', { name: 'Start agent' }).click()
+  await machine.getByLabel('draft').press('Enter')
   await machine.getByLabel('draft').fill('fork work')
-  await machine.getByRole('button', { name: 'Send' }).click()
+  await machine.getByLabel('draft').press('Enter')
   await expect(machine.getByText(/^Done: [\s\S]*fork work$/)).toBeVisible()
   await stopAgent(machine)
   // The header's; the changes bar over the composer offers it too.
@@ -584,10 +584,10 @@ test('the server-hosted app reviews a merge request through a machine, and ticks
 test('a fork from an earlier turn has the conversation up to it', async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('the first turn')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText(/^Done: [\s\S]*the first turn$/)).toBeVisible()
   await page.getByLabel('draft').fill('the second turn')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText(/^Done: [\s\S]*the second turn$/)).toBeVisible()
   await stopAgent(page)
   const source = new URL(page.url()).pathname
@@ -604,11 +604,11 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   await startInNewThread(page, 'Fake agent')
   for (const prompt of ['revert keeps this', 'revert drops this']) {
     await page.getByLabel('draft').fill(prompt)
-    await page.getByRole('button', { name: 'Send' }).click()
+    await page.getByLabel('draft').press('Enter')
     await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   }
   await stopAgent(page)
-  await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(page.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
   const edits = () =>
     page.evaluate(async (thread) => {
@@ -630,10 +630,10 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
 
   // The agent started next is primed without the rewound turn.
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await page.getByRole('button', { name: 'Start agent' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await page.getByLabel('draft').fill('after the revert')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   const reply = page.getByText(/^Done: You are continuing a conversation[\s\S]*after the revert$/)
   await expect(reply).toContainText('revert keeps this')
   await expect(reply).not.toContainText('revert drops this')
@@ -644,7 +644,7 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   await startInNewThread(page, 'Fake agent')
   for (const prompt of ['permalink first', 'permalink second']) {
     await page.getByLabel('draft').fill(prompt)
-    await page.getByRole('button', { name: 'Send' }).click()
+    await page.getByLabel('draft').press('Enter')
     await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   }
   await stopAgent(page)
@@ -769,7 +769,7 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await startInNewThread(page, 'Fake agent')
   await expect(page.getByLabel('permissions')).toHaveValue('ask_before_commands')
   await page.getByLabel('draft').fill('hello')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: hello')).toBeVisible()
   await expect(page.getByRole('group', { name: 'permission' })).toHaveCount(0)
   // What it changed sits over the composer; with nothing committed on a branch, Create PR is off and says why.
@@ -783,7 +783,7 @@ test('a new thread starts with an agent in a known clone, which edits without as
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: add acp Later')).toBeVisible()
   await expect(page.getByText('Went on by itself.')).toBeVisible()
   await expect(page.getByText('without a prompt')).toHaveCount(0)
@@ -798,7 +798,7 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
 test("an agent's subagent and the command it left running show as cards, and the agent goes on once the command ends", async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Subagent Background')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: add acp Subagent Background')).toBeVisible()
   const cards = page.getByTestId('task')
   // The command runs on after the turn: its card stays out of the turn's fold, and it is listed above the composer until it ends.
@@ -820,7 +820,7 @@ test("an agent's subagent and the command it left running show as cards, and the
 test('a command the agent left running in the background is stopped from above the composer', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Keep')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: add acp Keep')).toBeVisible()
   const running = page.getByTestId('running-tasks')
   await expect(running).toContainText('keep-running')
@@ -841,10 +841,10 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   const permission = page.getByRole('group', { name: 'permission' })
 
   await draft.fill('first')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(permission).toBeVisible()
   await draft.fill('second')
-  await page.getByRole('button', { name: 'Queue', exact: true }).click()
+  await page.getByLabel('draft').press('Enter')
   const queued = page.getByRole('region', { name: 'queued prompts' })
   await expect(queued).toContainText('second')
   await permission.getByRole('button', { name: 'Allow' }).click()
@@ -895,7 +895,7 @@ test("the agent's modes and model are offered, and the Plan preset plans in its 
 
   await page.getByLabel('draft').fill('add a parser')
   await page.getByLabel('permissions').selectOption('plan')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Plan: add a parser')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
   await expect(mode).toHaveValue('plan')
@@ -912,7 +912,7 @@ test('the Plan preset asks an agent without a plan mode for a plan by the prompt
   await expect(page.getByLabel('mode', { exact: true })).toHaveCount(0)
   await page.getByLabel('draft').fill('add a lexer')
   await page.getByLabel('permissions').selectOption('plan')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   // This agent edits anyway; under Plan an edit asks first.
   const allow = () => page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
   await allow()
@@ -920,7 +920,7 @@ test('the Plan preset asks an agent without a plan mode for a plan by the prompt
   await expect(page.getByTestId('agent-state')).toHaveText('Plain agent wrote a plan for you to approve')
 
   await page.getByLabel('draft').fill('use a table instead')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await allow()
   await expect(page.getByText('Done: use a table instead')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Plain agent is ready')
@@ -934,7 +934,7 @@ test('files attached to a prompt reach the agent and are named in the conversati
   await page.getByLabel('attach files').setInputFiles([SHOT, NOTES])
   await expect(page.getByRole('list', { name: 'attached files' })).toContainText('shot.png')
   await page.getByLabel('draft').fill('look at these')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: look at these (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
   await expect(page.getByText(/\(attached: prompt\/\w+\/shot\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
@@ -948,7 +948,7 @@ test("an agent that takes no images is told a text file's content in the prompt,
 
   await page.getByLabel('draft').fill('see this')
   await page.getByLabel('attach files').setInputFiles([NOTES])
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   // The message is Markdown: the file's content shows as a code block.
   await expect(page.getByText(/^Done: see this\s*notes\.txt:\s*hello$/)).toBeVisible()
 })
@@ -982,7 +982,7 @@ test('an image pasted on New thread, and a file attached there, go with the firs
   const attached = page.getByRole('list', { name: 'attached files' })
   await expect(attached).toContainText('pasted-1.png')
   await expect(attached).toContainText('notes.txt')
-  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await page.getByLabel('first prompt').press('Enter')
   await expect(page.getByText('Done: look at this (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
   await expect(page.getByText(/\(attached: prompt\/\w+\/pasted-1\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
 })
@@ -995,7 +995,7 @@ test("files pasted and dropped into a running thread's composer reach the agent"
   await expect(attached).toContainText('pasted-1.png')
   await expect(attached).toContainText('notes.txt')
   await page.getByLabel('draft').fill('and these')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: and these (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
   await expect(attached).toBeHidden()
 })
@@ -1004,7 +1004,9 @@ test('an image pasted for an agent known to take none is refused at once', async
   await page.goto(live.alice)
   await page.getByLabel('agent to start').selectOption({ label: 'Plain agent' })
   // Known once the daemon has asked the agent what it offers.
-  await expect(page.getByTitle('Attach text files; Plain agent takes no images')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'add to the prompt' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Attach text files (Plain agent takes no images)' })).toBeVisible({ timeout: 30_000 })
+  await page.keyboard.press('Escape')
   await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
   await expect(page.getByText("Plain agent doesn't take files like pasted-1.png")).toBeVisible()
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
@@ -1013,10 +1015,10 @@ test('an image pasted for an agent known to take none is refused at once', async
 test("a review of the agent's changes goes back to it as one prompt", async ({ page }) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('add a function')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: add a function')).toBeVisible()
   await page.getByLabel('draft').fill('Rewrite main')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: Rewrite main')).toBeVisible()
 
   const changes = page.getByRole('region', { name: 'changes' })
@@ -1079,7 +1081,7 @@ test('two agents in two projects queue prompts, are answered from the Needs you 
 
   await origin.getByRole('link', { name: /^work in origin/ }).click()
   await page.getByLabel('draft').fill('then document it')
-  await page.getByRole('button', { name: 'Queue', exact: true }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByRole('region', { name: 'queued prompts' })).toContainText('then document it')
 
   // Each is answered from the queue, which lists both and shows the one chosen.
@@ -1120,7 +1122,7 @@ test('two agents in two projects queue prompts, are answered from the Needs you 
   const request = page.url()
   await page.getByRole('main').getByRole('link', { name: 'Open the fork' }).click()
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await page.getByRole('button', { name: 'Start agent' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await page.goto(request)
   await guide.getByRole('button', { name: "Ask the fork's agent" }).click()
@@ -1301,9 +1303,9 @@ test('the graph shows turns, commits, forks, requests and merges, and opens a tu
   await page.getByRole('button', { name: 'Fork', exact: true }).click()
   await expect(page.getByRole('main').getByText(/^Fork of/)).toBeVisible()
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await page.getByRole('button', { name: 'Start agent' }).click()
+  await page.getByLabel('draft').press('Enter')
   await page.getByLabel('draft').fill('work to merge')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText(/^Done: [\s\S]*work to merge$/)).toBeVisible()
   await stopAgent(page)
   await page.getByRole('button', { name: 'Offer as merge request' }).first().click()
@@ -1347,7 +1349,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await pickProject(page, /tools/)
   await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await form.getByLabel('first prompt').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
   await stopAgent(page)
@@ -1357,7 +1359,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await home.selectOption(live.server)
   await expect(page.getByText(/1 threads kept on this machine now sync there/).first()).toBeVisible()
   await page.goto(new URL(kept, live.alice).toString())
-  await expect(page.getByRole('button', { name: 'Start agent' })).toBeVisible()
+  await expect(page.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await expect(page.getByText('This machine only', { exact: true })).toHaveCount(0)
 })
 
@@ -1375,11 +1377,11 @@ test('a new project made from New thread starts its first thread in a folder mad
   const form = page.getByRole('form', { name: 'new thread' })
   await expect(form.getByRole('radio', { name: 'Local' })).toHaveAttribute('aria-checked', 'true')
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await form.getByLabel('first prompt').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
   await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
   await page.getByLabel('draft').fill('hello')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: hello')).toBeVisible()
   await stopAgent(page)
 })
@@ -1397,7 +1399,7 @@ test("the agent's commands are offered as / starts a prompt, in its thread and i
   await expect(draft).toHaveValue('/count ')
   await expect(commands).toBeHidden()
   await draft.pressSequentially('lines')
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: /count lines')).toBeVisible()
 
   await draft.fill('/')

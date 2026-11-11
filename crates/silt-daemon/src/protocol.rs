@@ -664,6 +664,48 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
+/// What the web UI's voice button can do on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct VoiceStatus {
+    /// Whether `silt-voice` is installed.
+    pub helper: bool,
+    /// Whether the speech model has been downloaded.
+    pub model: bool,
+    pub download: Option<VoiceDownload>,
+    /// Why the last download failed.
+    pub failed: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct VoiceDownload {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// What a dictation says as it goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum VoiceEvent {
+    /// The words of the current phrase so far; they may still change.
+    Partial {
+        text: String,
+    },
+    /// A finished phrase.
+    Segment {
+        text: String,
+    },
+    /// Silence went on past a finished phrase.
+    Paused,
+    /// All the audio has been heard.
+    Done,
+    Failed {
+        message: String,
+    },
+}
+
 /// A folder the agents' sessions ran in: a clone's root, or the folder
 /// itself outside any git repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1356,6 +1398,9 @@ mod tests {
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),
+            VoiceDownload::decl(&config),
+            VoiceEvent::decl(&config),
+            VoiceStatus::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

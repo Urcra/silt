@@ -47,3 +47,10 @@ export function useAttachments(takes: Takes) {
   const restore = (files: PromptAttachment[]) => setAttached((before) => [...files, ...before])
   return { attached, add, remove, restore, clear: () => setAttached([]) }
 }
+
+/** What the composer's + offers to attach, for what the agent can read. */
+export function attachChoice(takes: Takes): { label: string; accept?: string } {
+  if (takes.images !== false) return { label: 'Attach files or images' }
+  const accept = takes.files === false ? 'text/*,.md,.json,.ts,.tsx,.rs,.py,.toml,.yaml,.yml' : undefined
+  return { label: `Attach text files (${takes.agent} takes no images)`, accept }
+}

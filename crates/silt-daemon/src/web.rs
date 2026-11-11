@@ -22,6 +22,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::core::Event;
 use crate::protocol::{BusEvent, BusSubscription, CommentOn, Request, Response, SearchFilters};
+use crate::voice::{self, Voice};
 
 #[derive(Clone)]
 struct Web {
@@ -30,6 +31,7 @@ struct Web {
     token: String,
     port: u16,
     codes: OneTimeCodes,
+    voice: Arc<Voice>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -86,7 +88,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let codes = OneTimeCodes::default();
-    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone() };
+    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone(), voice: Arc::new(Voice::new()) };
     let api = Router::new()
         .route("/api/events", get(events_socket))
         .route("/api/status", get(status))
@@ -173,6 +175,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/in-flight", get(in_flight))
         .route("/api/threads/{id}/search", get(thread_search))
         .route("/api/trash", get(trash))
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/model", post(voice_model))
+        .route("/api/voice/dictate", get(voice_dictate))
         .layer(middleware::from_fn_with_state(web.clone(), authenticate));
     let app = api
         .route("/api/exchange", post(exchange))
@@ -342,6 +347,20 @@ async fn serve_events(mut socket: WebSocket, mut bus: broadcast::Receiver<BusEve
 
 async fn status(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Status).await
+}
+
+// The voice routes don't become socket `Request`s: streamed audio has no CLI
+// caller (ADR 0061).
+async fn voice_status(State(web): State<Web>) -> HttpResponse {
+    Json(web.voice.status()).into_response()
+}
+
+async fn voice_model(State(web): State<Web>) -> HttpResponse {
+    Json(web.voice.start_download()).into_response()
+}
+
+async fn voice_dictate(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
+    upgrade.max_message_size(voice::MOST_FRAME_BYTES).on_upgrade(move |socket| voice::dictate(socket, web.voice))
 }
 
 async fn threads(State(web): State<Web>) -> HttpResponse {
@@ -1072,7 +1091,7 @@ mod tests {
         let codes = OneTimeCodes::default();
         let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
         let bus = broadcast::channel(1).0;
-        let web = Web { events, bus, token: info.token.clone(), port: 1, codes };
+        let web = Web { events, bus, token: info.token.clone(), port: 1, codes, voice: Arc::new(Voice::new()) };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();

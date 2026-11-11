@@ -18,6 +18,7 @@ git clone -q --bare "$work/seed" "$work/origin.git"
 git clone -q "$work/origin.git" "$work/repo"
 
 export SILT_HOME="$work/silt"
+export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/claude"
 # Agent sessions on the machine running the tests would show in the import
 # offer, so each machine here has a home of its own.

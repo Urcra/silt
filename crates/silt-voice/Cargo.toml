@@ -1,0 +1,36 @@
+# Its own workspace, so building the rest of Silt never needs the speech
+# engine's native library (ADR 0061).
+[workspace]
+
+[package]
+name = "silt-voice"
+description = "Silt's speech helper: live dictation from audio on stdin, on this machine"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "silt-voice"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dependencies]
+bzip2 = "0.6"
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+sherpa-onnx = "=2.0.1"
+tar = "0.4"
+thiserror = "2.0.21"
+ureq = "3.5.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

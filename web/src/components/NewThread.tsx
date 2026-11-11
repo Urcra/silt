@@ -12,14 +12,15 @@ import { useMedia } from '../media'
 import { formatKeys } from '../shortcuts'
 import { store, stored } from '../stored'
 import { ago } from '../time'
-import { Button, Icon, Input, Kbd, Menu, Popover, Skeleton, Tabs, cx, toast } from '../ui'
+import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
-import { type Takes, useAttachments } from '../attachments'
-import { AttachButton, AttachedFiles } from './Attachments'
+import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
-import { ComposerBox, RoundButton } from './Composer'
+import { hosted } from '../served'
+import { ComposerBox } from './Composer'
 import { Page } from './Page'
 import { CloneHere } from './Projects'
 import { ThreadMark } from './ThreadMark'
@@ -606,11 +607,11 @@ export function NewThread() {
             placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
             commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
+            voice={!hosted()}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
             tools={
               chosenWhere !== 'cloud' && (
                 <>
-                  <AttachButton takes={takes} onFiles={attach} />
                   {agents.length > 0 ? (
                     <ChipSelect
                       ghost
@@ -648,21 +649,13 @@ export function NewThread() {
                 </>
               )
             }
-            actions={
-              <>
-                <span className="flex items-center">
-                  <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} busy={starting} title={chosenWhere === 'cloud' ? 'Start in the cloud (⏎)' : 'Start and open it (⏎)'} />
-                  <Menu
-                    label="More ways to start"
-                    trigger={<Icon name="chevronDown" className="h-3.5 w-3.5" />}
-                    items={[
-                      ...(chosenWhere === 'cloud' ? [] : [{ label: 'Start in the background', onSelect: () => start(true), disabled: !ready }]),
-                      { label: 'Save as a draft', onSelect: saveDraft, disabled: !prompt.trim() },
-                    ]}
-                  />
-                </span>
-              </>
-            }
+            attach={attachChoice(takes)}
+            enter="start"
+            send={{ label: 'Start', title: chosenWhere === 'cloud' ? 'Start in the cloud' : 'Start and open it', disabled: !ready, busy: starting, submit: true }}
+            menu={[
+              ...(chosenWhere === 'cloud' ? [] : [{ label: 'Start in the background', icon: 'clock' as const, onSelect: () => start(true), disabled: !ready }]),
+              { label: 'Save as a draft', icon: 'edit' as const, onSelect: saveDraft, disabled: !prompt.trim() },
+            ]}
           />
           <div className="mt-2.5 flex flex-wrap items-center gap-2 px-0.5">
             <div role="radiogroup" aria-label="works in" className="inline-flex overflow-hidden rounded-sm border border-line">

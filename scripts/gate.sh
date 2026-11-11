@@ -37,6 +37,20 @@ else
     echo "gate: skipping crates/silt-desktop, as WebKitGTK 4.1 isn't installed (scripts/cloud-setup.sh installs it)" >&2
 fi
 
+# The speech helper is its own workspace, as it links the speech engine's
+# native library, which its first build downloads (ADR 0061). Linux only for now.
+if [ "$(uname -s)" = Linux ]; then
+    (
+        cd crates/silt-voice
+        cargo fmt -- --check
+        cargo build
+        cargo clippy --all-targets -- -D warnings
+        cargo test
+    )
+else
+    echo "gate: skipping crates/silt-voice, which is built on Linux only for now" >&2
+fi
+
 # Performance budgets (ADR 0034), timed on an optimized build.
 cargo build --profile perf -p silt-cli -p silt-bench
 target/perf/silt-bench check --tolerance "${SILT_BENCH_TOLERANCE:-0}"
