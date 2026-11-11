@@ -1,4 +1,4 @@
-// Dictation in the composer (ADR 0059): the microphone's audio goes to the
+// Dictation in the composer (ADR 0061): the microphone's audio goes to the
 // daemon, whose words stay in a preview until the take ends.
 
 import { useQuery } from '@tanstack/react-query'

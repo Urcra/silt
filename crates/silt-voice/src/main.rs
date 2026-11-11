@@ -1,4 +1,4 @@
-//! Silt's speech helper (ADR 0059). The daemon runs it for each dictation:
+//! Silt's speech helper (ADR 0061). The daemon runs it for each dictation:
 //! audio stays in pipes and memory, and a crash here can't reach the daemon.
 
 mod listen;

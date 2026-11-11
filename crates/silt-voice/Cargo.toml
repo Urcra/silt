@@ -1,5 +1,5 @@
 # Its own workspace, so building the rest of Silt never needs the speech
-# engine's native library (ADR 0059).
+# engine's native library (ADR 0061).
 [workspace]
 
 [package]

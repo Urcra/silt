@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/*"]
 # Their own workspaces: one needs WebKitGTK (ADR 0041), the other the speech
-# engine's native library (ADR 0059).
+# engine's native library (ADR 0061).
 exclude = ["crates/silt-desktop", "crates/silt-voice"]
 
 [workspace.package]

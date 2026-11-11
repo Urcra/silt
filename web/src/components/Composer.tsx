@@ -155,7 +155,7 @@ export interface TouchSend {
 }
 
 /**
- * The one composer (ADR 0044, ADR 0060): centred on an empty thread, docked under a
+ * The one composer (ADR 0044, ADR 0062): centred on an empty thread, docked under a
  * running one. In the box, + for what goes with the prompt, the text, and the
  * microphone; ⏎ sends. Under it, the agent's settings, or the take while one is
  * recorded.

@@ -38,7 +38,7 @@ else
 fi
 
 # The speech helper is its own workspace, as it links the speech engine's
-# native library, which its first build downloads (ADR 0059). Linux only for now.
+# native library, which its first build downloads (ADR 0061). Linux only for now.
 if [ "$(uname -s)" = Linux ]; then
     (
         cd crates/silt-voice

@@ -347,7 +347,7 @@ async fn status(State(web): State<Web>) -> HttpResponse {
 }
 
 // The voice routes don't become socket `Request`s: streamed audio has no CLI
-// caller (ADR 0059).
+// caller (ADR 0061).
 async fn voice_status(State(web): State<Web>) -> HttpResponse {
     Json(web.voice.status()).into_response()
 }

@@ -53,7 +53,7 @@ install-desktop: check-webkit
         > "{{data_dir}}/applications/silt.desktop"
     -update-desktop-database "{{data_dir}}/applications" 2>/dev/null
 
-# Install `silt-voice` beside `silt`, for dictation in the web UI (ADR 0059)
+# Install `silt-voice` beside `silt`, for dictation in the web UI (ADR 0061)
 install-voice:
     cargo install --locked --path crates/silt-voice
 

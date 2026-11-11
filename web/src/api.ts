@@ -108,7 +108,7 @@ const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
 
-/** A socket for one dictation: audio frames out, `VoiceEvent`s back (ADR 0059). */
+/** A socket for one dictation: audio frames out, `VoiceEvent`s back (ADR 0061). */
 export function dictationSocket(): WebSocket {
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/voice/dictate')}?token=${token()}`)

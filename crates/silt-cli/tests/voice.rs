@@ -1,5 +1,5 @@
 //! Dictation through a real daemon, with `silt-fake-voice` in place of the
-//! speech helper (ADR 0059).
+//! speech helper (ADR 0061).
 
 mod common;
 

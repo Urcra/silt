@@ -1,4 +1,4 @@
-//! Dictation for the web UI (ADR 0059). The engine lives in a separate
+//! Dictation for the web UI (ADR 0061). The engine lives in a separate
 //! program, `silt-voice`, run once per take: the daemon only passes audio in
 //! and results out, and never keeps either.
 
