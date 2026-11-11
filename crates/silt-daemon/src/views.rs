@@ -634,7 +634,7 @@ impl Core {
 }
 
 /// The title the agent gave the conversation, or else its first prompt.
-fn title(conversation: &[&Delta]) -> Option<String> {
+pub(crate) fn title(conversation: &[&Delta]) -> Option<String> {
     named_title(conversation).or_else(|| first_prompt_and_messages(conversation).0)
 }
 

@@ -7,6 +7,7 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  ChatSettings,
   CloudLaunch,
   CommentOn,
   CommentView,
@@ -170,8 +171,13 @@ export const api = {
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
-  startAgent: (agent: string, where: { thread: string } | { clone: string }, options: Partial<StartOptions> = {}) =>
+  /** Starts `agent` in a thread, a clone, or with neither a new chat (`options.chat`, ADR 0059). */
+  startAgent: (agent: string, where: { thread: string } | { clone: string } | Record<string, never>, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  chatSettings: () => request<ChatSettings>('GET', '/api/chats/settings'),
+  setChatSettings: (settings: ChatSettings) => request<string>('PUT', '/api/chats/settings', settings),
+  /** Makes a chat's folder a project of its own; answers with the project. */
+  makeProject: (id: string) => request<string>('POST', `${thread(id)}/make-project`),
   // Claude Code cloud sessions, through the person's own `claude` (ADR 0040).
   cloudStart: (clone: string, task: string) => request<CloudLaunch>('POST', '/api/cloud', { clone, task }),
   cloudLaunches: () => request<CloudLaunch[]>('GET', '/api/cloud'),

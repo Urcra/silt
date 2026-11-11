@@ -41,6 +41,7 @@ function useGlobalActions() {
       : [
           { id: 'new', label: 'New thread in this project', keys: 'n', run: () => void navigate({ to: '/new', search: {} }) },
           { id: 'new-elsewhere', label: 'New thread in another project', keys: 'shift+n', run: () => void navigate({ to: '/new', search: { pick: 'projects' } }) },
+          { id: 'new-chat', label: 'New chat', keys: 'c', run: () => void navigate({ to: '/chat' }) },
         ]),
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/threads' }) },
     { id: 'settings', label: 'Settings', run: () => void navigate({ to: '/settings' }) },

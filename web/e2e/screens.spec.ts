@@ -88,6 +88,13 @@ test('the workspace home, a new thread (ADR 0044)', async ({ page }) => {
   })
 })
 
+test('a new chat (ADR 0059)', async ({ page }) => {
+  await open(page, '/chat')
+  await shoot(page, 'new-chat', async (shown) => {
+    await expect(shown.getByRole('form', { name: 'new chat' })).toBeVisible()
+  })
+})
+
 test('all threads', async ({ page }) => {
   await open(page, '/threads')
   await shoot(page, 'threads', async (shown) => {

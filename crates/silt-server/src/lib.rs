@@ -332,6 +332,7 @@ impl Server {
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))
             .route("/v1/threads/{id}/collaborators", post(collab::share))
+            .route("/v1/threads/{id}/project", post(projects::move_chat))
             .route("/v1/threads/{id}/delete", post(lifecycle::delete))
             .route("/v1/threads/{id}/restore", post(lifecycle::restore))
             .route("/v1/threads/{id}/purge", post(lifecycle::purge))
@@ -709,7 +710,11 @@ async fn register_thread(
     )
     .execute(db)
     .await?;
-    let visibility = visibility.map(|visibility| visibility.to_string());
+    // A chat is its person's own until they share it, and no org holds it
+    // (ADR 0059).
+    let chat = silt_types::is_chat(&thread.repo);
+    let visibility =
+        visibility.or_else(|| chat.then_some(silt_proto::Visibility::Private)).map(|visibility| visibility.to_string());
     sqlx::query!(
         "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
         thread_id,
@@ -721,7 +726,9 @@ async fn register_thread(
     )
     .execute(db)
     .await?;
-    orgs::place_project(db, &thread.repo, caller.user).await?;
+    if !chat {
+        orgs::place_project(db, &thread.repo, caller.user).await?;
+    }
     if let Some(origin_url) = origin_url.filter(|_| !thread.repo.is_empty()) {
         projects::note_origin(db, &thread.repo, &silt_proto::shareable_url(&origin_url)).await?;
     }
@@ -907,6 +914,9 @@ async fn set_visibility(
     let db = &server.shared.db;
     let visibility = body.visibility.to_string();
     match (body.repo, body.thread) {
+        (Some(repo), None) if silt_types::is_chat(&repo) => {
+            return Err(bad_request("chats have no project to set; set each chat's own visibility"));
+        }
         (Some(repo), None) => {
             // A repository nobody placed yet joins the caller's org only if
             // they administer the server, or work in it and may then decide

@@ -2,13 +2,16 @@
 
 use std::collections::HashMap;
 
+use std::str::FromStr;
+
 use axum::Json;
-use axum::extract::{Extension, State};
-use silt_proto::{GitNotes, ProjectInfo, ProjectsReply, Visibility, project_name};
+use axum::extract::{Extension, Path as UrlPath, State};
+use axum::http::StatusCode;
+use silt_proto::{GitNotes, MoveChat, ProjectInfo, ProjectsReply, Visibility, project_name};
 use silt_types::ThreadId;
 use sqlx::sqlite::SqlitePool;
 
-use crate::{ApiError, Caller, Server, UserId, bad_request, not_found};
+use crate::{ApiError, Caller, Server, UserId, bad_request, forbidden, id_bytes, not_found};
 
 /// The projects of the caller's orgs, with how many of their threads the
 /// caller can see.
@@ -63,6 +66,47 @@ pub(crate) async fn list(
 pub(crate) async fn note_origin(db: &SqlitePool, repo: &str, origin_url: &str) -> Result<(), sqlx::Error> {
     sqlx::query!("UPDATE projects SET origin_url = ? WHERE repo = ?", origin_url, repo).execute(db).await?;
     Ok(())
+}
+
+/// Moves one of the caller's chats into the project its folder became
+/// (ADR 0059). It keeps its own visibility, private unless they shared it.
+pub(crate) async fn move_chat(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(thread): UrlPath<String>,
+    Json(body): Json<MoveChat>,
+) -> Result<StatusCode, ApiError> {
+    let db = server.db();
+    let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
+    let repo = body.repo.trim();
+    if repo.is_empty() || silt_types::is_chat(repo) {
+        return Err(bad_request("name the project the chat moves to"));
+    }
+    let id = id_bytes(thread.0);
+    let row = sqlx::query!(
+        r#"SELECT owner_id AS "owner_id: UserId", repo, family_id FROM threads WHERE id = ? AND deleted_ms IS NULL"#,
+        id
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(not_found)?;
+    if row.owner_id != caller.user {
+        return Err(forbidden("only the chat's owner can move it"));
+    }
+    if !silt_types::is_chat(&row.repo) {
+        return Err(bad_request("the thread isn't a chat"));
+    }
+    let mut tx = crate::write_transaction(db).await?;
+    sqlx::query!("UPDATE threads SET repo = ? WHERE id = ?", repo, id).execute(&mut *tx).await?;
+    sqlx::query!("UPDATE families SET repo = ? WHERE id = ? AND root_thread = ?", repo, row.family_id, id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    crate::orgs::place_project(db, repo, caller.user).await?;
+    if let Some(origin_url) = body.origin_url {
+        note_origin(db, repo, &silt_proto::shareable_url(&origin_url)).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// A setting as the change gives it: `None` to keep it, empty to clear it.

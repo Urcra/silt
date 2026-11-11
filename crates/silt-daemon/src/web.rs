@@ -129,6 +129,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
+        .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
+        .route("/api/threads/{id}/make-project", post(make_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/tasks/{call}/stop", post(agent_stop_task))
@@ -530,6 +532,18 @@ struct AgentStart {
     agent: String,
     #[serde(default, flatten)]
     options: crate::protocol::StartOptions,
+}
+
+async fn chat_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ChatSettings).await
+}
+
+async fn set_chat_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ChatSettings>) -> HttpResponse {
+    ask(&web, Request::SetChatSettings { settings }).await
+}
+
+async fn make_project(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::MakeProject { thread }).await
 }
 
 async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {

@@ -287,6 +287,9 @@ pub(crate) async fn change(
             .execute(db)
             .await?;
         }
+        OrgChange::MoveProject { repo, .. } | OrgChange::ProjectSettings { repo, .. } if silt_types::is_chat(&repo) => {
+            return Err(bad_request("chats belong to no org and have no settings of a project"));
+        }
         OrgChange::MoveProject { repo, org } => {
             let target = org_id(db, &org).await?;
             require_owner(db, target, caller.user).await?;

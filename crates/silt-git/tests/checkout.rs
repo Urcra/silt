@@ -220,3 +220,22 @@ fn init_makes_the_folder_and_an_empty_repository() {
     assert_eq!(repo.head_commit().expect("head"), None);
     assert!(repo.project().expect("project").ends_with("/new/app"));
 }
+
+#[test]
+fn a_chat_is_its_own_repository_with_the_same_first_commit_everywhere() {
+    let (one, two) = (tempfile::tempdir().expect("temp dir"), tempfile::tempdir().expect("temp dir"));
+    let first = Repo::init_chat(&one.path().join("2026-11-03-which-sensor-1a2b3c")).expect("inits");
+    let second = Repo::init_chat(&two.path().join("elsewhere")).expect("inits");
+    assert!(first.is_chat());
+    assert_eq!(first.project().expect("project"), silt_types::CHATS);
+    let root = first.head_commit().expect("head").expect("a first commit");
+    assert_eq!(second.head_commit().expect("head"), Some(root), "the same commit on every machine");
+    assert!(first.files_at(root).expect("files").is_empty());
+    assert_eq!(first.head_branch().expect("branch").as_deref(), Some("main"));
+
+    first.leave_chats().expect("leaves");
+    let promoted = Repo::discover(first.root()).expect("discovers");
+    assert!(!promoted.is_chat());
+    assert!(promoted.project().expect("project").ends_with("/2026-11-03-which-sensor-1a2b3c"), "a project of its folder");
+    assert_eq!(promoted.head_commit().expect("head"), Some(root));
+}

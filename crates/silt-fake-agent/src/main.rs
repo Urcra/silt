@@ -464,5 +464,9 @@ pub(crate) async fn edit_main(cwd: &std::path::Path, prompt: &str) {
             format!("{kept}{line}\n")
         }
     };
+    // A chat's folder starts empty (ADR 0059).
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
     tokio::fs::write(&path, content).await.ok();
 }

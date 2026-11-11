@@ -35,7 +35,12 @@ pub fn io(error: std::io::Error) -> Failed {
     Failed(1, error.to_string())
 }
 
+/// Appends `text`, making the file and its folder as an agent would, as in
+/// a chat's empty folder (ADR 0059).
 pub fn append(path: &Path, text: &str) -> Step {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(io)?;
+    }
     fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| file.write_all(text.as_bytes())).map_err(io)
 }
 

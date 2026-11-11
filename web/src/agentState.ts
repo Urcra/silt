@@ -21,6 +21,18 @@ export function permissionModes(modes: AgentChoiceItem[] | null | undefined): bo
   return modes?.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
 }
 
+/** The agent's mode that does what `preset` says, as the daemon picks it, when it has one. */
+export function modeForPreset(preset: Preset, modes: AgentChoiceItem[] | null | undefined): string | undefined {
+  const wanted: Record<Preset, string[]> = {
+    plan: ['plan'],
+    ask_for_everything: ['default', 'read-only', 'agent'],
+    ask_before_commands: ['acceptEdits', 'agent'],
+    full_access: ['bypassPermissions', 'full-access', 'dontAsk'],
+  }
+  const key = (id: string) => id.split('#').pop() ?? id
+  return wanted[preset].map((id) => modes?.find((mode) => key(mode.id) === id)?.id).find(Boolean)
+}
+
 /** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0049). */
 export function presetDriven(setting: AgentSetting): boolean {
   const ids = new Set(setting.choices.map((choice) => choice.id.toLowerCase()))
