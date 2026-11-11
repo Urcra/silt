@@ -3,15 +3,16 @@ import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { PRESETS, modeForPreset, permissionModes, startSettings } from '../agentState'
 import { api, type Preset } from '../api'
-import { type Takes, useAttachments } from '../attachments'
+import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { useMedia } from '../media'
 import { keys, message } from '../query'
 import { addSending } from '../sending'
-import { Icon, Menu, Skeleton, toast } from '../ui'
+import { hosted } from '../served'
+import { Skeleton, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
-import { AttachButton, AttachedFiles } from './Attachments'
+import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
-import { ComposerBox, RoundButton } from './Composer'
+import { ComposerBox } from './Composer'
 import { Page } from './Page'
 
 /**
@@ -115,7 +116,6 @@ export function NewChat() {
             below={<AttachedFiles files={attached} onRemove={remove} />}
             tools={
               <>
-                <AttachButton takes={takes} onFiles={attach} />
                 {agents.length > 0 ? (
                   <ChipSelect
                     ghost
@@ -154,16 +154,11 @@ export function NewChat() {
                 )}
               </>
             }
-            actions={
-              <span className="flex items-center">
-                <RoundButton type="submit" label="Start" icon="arrowUp" disabled={!ready} busy={starting} title="Start and open it (⏎)" />
-                <Menu
-                  label="More ways to start"
-                  trigger={<Icon name="chevronDown" className="h-3.5 w-3.5" />}
-                  items={[{ label: 'Start in the background', onSelect: () => start(true), disabled: !ready }]}
-                />
-              </span>
-            }
+            voice={!hosted()}
+            attach={attachChoice(takes)}
+            enter="start"
+            send={{ label: 'Start', title: 'Start and open it', disabled: !ready, busy: starting, submit: true }}
+            menu={[{ label: 'Start in the background', icon: 'clock' as const, onSelect: () => start(true), disabled: !ready }]}
           />
           <p className="mt-2.5 px-0.5 text-xs text-fg-2">
             {`On ${device}, in a folder of its own. Private to you${synced ? ', and on your other devices too' : ''}.`}

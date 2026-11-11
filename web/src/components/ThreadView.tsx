@@ -1443,10 +1443,10 @@ function ThreadCommits({ thread }: { thread: string }) {
   )
 }
 
-/** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 /** How many of the thread's files Details lists before More. */
 const LISTED_FILES = 200
 
+/** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 function Details({
   thread,
   summary,
