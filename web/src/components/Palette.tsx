@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMatch, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useState } from 'react'
 import { api, short } from '../api'
+import { NEW_THREAD_DRAFT, keepDraft } from '../drafts'
 import { useNow } from '../now'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
@@ -89,7 +90,10 @@ function PaletteList({ close }: { close: () => void }) {
                 New thread{project && <> in <span className="font-mono">{project}</span></>}: “{typed}”
               </>
             ),
-            run: () => void navigate({ to: '/', search: { prompt: typed } }),
+            run: () => {
+              keepDraft(NEW_THREAD_DRAFT, typed)
+              void navigate({ to: '/' })
+            },
           },
           ...(here
             ? [

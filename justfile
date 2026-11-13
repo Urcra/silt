@@ -64,10 +64,10 @@ install-desktop: check-webkit
 install-voice:
     cargo install --locked --path crates/silt-voice
 
-# From WSL: install the CLI here, and the CLI and the desktop app on Windows
-install-wsl: install-cli install-windows
+# From WSL: install the CLI and the speech helper here, and those and the desktop app on Windows
+install-wsl: install-cli install-voice install-windows
 
-# From WSL: build with Windows' cargo and install into %LOCALAPPDATA%\Silt
+# From WSL: build with Windows' cargo and install the CLI, the desktop app and the speech helper into %LOCALAPPDATA%\Silt
 install-windows: build-web
     scripts/install-windows.sh
 

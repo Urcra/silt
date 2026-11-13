@@ -41,14 +41,17 @@ export function VoiceButton({ dictation }: { dictation: Dictation }) {
   )
 }
 
-/** The first press: the model is downloaded only once the person agrees. Over the box, by the mic. */
-export function VoiceOffer({ dictation }: { dictation: Dictation }) {
+/** The first press: the model is downloaded only once the person agrees. Over the mic, on its `side`. */
+export function VoiceOffer({ dictation, side }: { dictation: Dictation; side: 'left' | 'right' }) {
   if (dictation.phase !== 'offering') return null
   return (
     <div
       role="dialog"
       aria-label="download the speech model"
-      className="absolute right-2 bottom-full z-20 mb-2 w-72 rounded-md border border-line bg-elevated p-3 text-xs text-fg-2 shadow-overlay"
+      className={cx(
+        'absolute bottom-full z-20 mb-2 w-72 rounded-md border border-line bg-elevated p-3 text-xs text-fg-2 shadow-overlay',
+        side === 'left' ? 'left-0' : 'right-2',
+      )}
     >
       <p className="mb-1 text-sm font-medium text-fg-1">Download the speech model?</p>
       Dictation needs a {MODEL_MEGABYTES} MB speech model, downloaded once. It runs on this machine, and your voice never leaves it.

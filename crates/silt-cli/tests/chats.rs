@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{Machine, Server, eventually, origin};
+use common::{Machine, Server, canonical, eventually, origin};
 
 /// Fields drop in order: the machines stop their daemons before the
 /// directories holding their sockets go away.
@@ -95,14 +95,16 @@ fn a_chat_works_in_its_own_folder_continues_elsewhere_and_becomes_a_project() {
 
     let resumed = home.web("POST", &format!("/api/threads/{thread}/resume"), Some(serde_json::json!({})));
     let checkout = Path::new(resumed["checkout"].as_str().expect("its checkout")).to_owned();
-    assert!(checkout.starts_with(home.silt_home.join("chats")), "in a chat folder there: {}", checkout.display());
+    // The daemon names it by its long path; Windows' temp dir can be a short one (`RUNNER~1`).
+    let chats = canonical(&home.silt_home.join("chats"));
+    assert!(canonical(&checkout).starts_with(&chats), "in a chat folder there: {}", checkout.display());
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("its files came along").contains("fn acp() {}"));
     assert!(silt_git::Repo::discover(&checkout).expect("a repository").is_chat());
 
     let forked = home.web("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
     let fork_checkout = Path::new(forked["checkout"].as_str().expect("the fork's checkout")).to_owned();
     assert_ne!(fork_checkout, checkout, "a fork gets a folder of its own");
-    assert!(fork_checkout.starts_with(home.silt_home.join("chats")));
+    assert!(canonical(&fork_checkout).starts_with(&chats));
     assert!(fs::read_to_string(fork_checkout.join("src/main.rs")).expect("with the chat's files").contains("fn acp() {}"));
     let again = home.web("POST", &format!("/api/threads/{thread}/resume"), Some(serde_json::json!({})));
     assert_eq!(again["checkout"].as_str().map(Path::new), Some(checkout.as_path()), "the chat keeps its folder once forked");
