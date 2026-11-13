@@ -1,12 +1,22 @@
 import type { AgentStatus, ThreadSummary } from './api'
 import type { DotTone, IconName } from './ui'
 
+/** A command or subagent its agent left running goes on, though the agent's turn ended. */
+export function inBackground(thread: ThreadSummary): boolean {
+  return thread.background > 0 && thread.agent_state === 'idle'
+}
+
+/** Its agent works, or what it left running in the background does. */
+export function inProgress(thread: ThreadSummary): boolean {
+  return thread.agent_state === 'working' || thread.agent_state === 'starting' || inBackground(thread)
+}
+
 /** The dot before a thread: what it waits for, or whether its agent works. */
 export function threadTone(thread: ThreadSummary): DotTone {
   if (thread.agent_state === 'error') return 'danger'
   if (thread.agent_state === 'awaiting_permission' || thread.agent_state === 'awaiting_input') return 'warn'
   if (thread.review) return 'accent'
-  if (thread.agent_state === 'working' || thread.agent_state === 'starting') return 'ok'
+  if (inProgress(thread)) return 'ok'
   return 'idle'
 }
 
@@ -24,6 +34,7 @@ export function threadDoing(thread: ThreadSummary): string | null {
     case 'starting':
       return 'starting'
   }
+  if (inBackground(thread)) return 'running in the background'
   if (thread.review) return 'review requested'
   if (thread.location === 'moved') return 'moved to another device'
   if (thread.location === 'remote') return 'not on this machine'
@@ -32,7 +43,7 @@ export function threadDoing(thread: ThreadSummary): string | null {
 
 /** Where a thread's work is, as its chip says it. */
 export function threadWhere(thread: ThreadSummary): { label: string; tone: DotTone } {
-  const live = ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')
+  const live = ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') || inBackground(thread)
   if (thread.location === 'moved') return { label: 'Moved to another device', tone: 'idle' }
   if (thread.location === 'remote') return { label: 'On the server', tone: 'info' }
   return { label: live ? 'Here, live' : 'Here', tone: 'ok' }

@@ -69,5 +69,6 @@ fi
 step "crates"
 cargo fetch --locked
 cargo fetch --locked --manifest-path crates/silt-desktop/Cargo.toml
+cargo fetch --locked --manifest-path crates/silt-voice/Cargo.toml
 
 step "done"

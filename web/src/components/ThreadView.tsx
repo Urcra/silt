@@ -2,10 +2,11 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { type ReactNode, type RefObject, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AGENTS, api, short, type CommentView, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import { AGENTS, api, short, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
-import { parseFiles } from '../diffParse'
+import { readWhole } from '../diffParse'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -16,7 +17,7 @@ import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
 import { type Sending, addSending, arrived, dropSending, useSending } from '../sending'
 import { formatKeys, useActions } from '../shortcuts'
-import { threadTone } from '../threadLook'
+import { inBackground, threadTone } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
@@ -33,6 +34,7 @@ import {
   Input,
   KeyValue,
   Popover,
+  Select,
   Skeleton,
   Tabs,
   Tag,
@@ -45,6 +47,7 @@ import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
+import { FilesByStats } from './StatDiff'
 import { Markdown } from './Markdown'
 import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
@@ -555,12 +558,20 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
+  // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
+  const stats = useQuery({
+    queryKey: keys.diffStats(thread, { turn: turn.number }),
+    queryFn: () => api.diffStats(thread, { turn: turn.number }),
+    staleTime: Infinity,
+  })
+  const files = stats.data ?? null
+  const whole = files !== null && readWhole(files)
   const diff = useQuery({
     queryKey: keys.diff(thread, { turn: turn.number }),
     queryFn: () => api.diff(thread, { turn: turn.number }),
     staleTime: Infinity,
+    enabled: open && whole,
   })
-  const files = diff.data === undefined ? null : parseFiles(diff.data)
   const tools = row.entries.filter((entry) => entry.kind === 'tool_call').length
   const last = row.entries[row.entries.length - 1]
   const took = row.prompt && last ? duration(row.prompt.time_ms, last.time_ms) : null
@@ -645,7 +656,8 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
           <CopyLink path={`/t/${thread}#turn-${turn.number}`} thread={thread} label="Copy link" name={`link to turn ${turn.number}`} className={ghost} />
         </span>
       </div>
-      {open && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
+      {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
+      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={{ turn: turn.number }} />}
     </div>
   )
 }
@@ -880,7 +892,7 @@ function ChangesBar({
     )
   }
   return (
-    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-lg border-b border-line bg-bg px-3 py-1.5 text-xs">
+    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs">
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
         {files} {files === 1 ? 'file' : 'files'} changed
@@ -1019,7 +1031,15 @@ function ThreadMore({
             ))}
           </span>
           <div className="my-1 border-t border-line-subtle" />
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">Continue in a terminal, in a clone of the repository</p>
+          {summary && isChat(summary.repo) && !hosted() && (
+            <>
+              <ChatToProject thread={thread} summary={summary} onDone={close} />
+              <div className="my-1 border-t border-line-subtle" />
+            </>
+          )}
+          <p className="px-1 pb-0.5 text-2xs text-fg-2">
+            {summary && isChat(summary.repo) ? 'Continue in a terminal, anywhere' : 'Continue in a terminal, in a clone of the repository'}
+          </p>
           <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
             with
             <select
@@ -1076,6 +1096,118 @@ function ThreadMore({
         </>
       )}
     </Popover>
+  )
+}
+
+/**
+ * What a chat can become (ADR 0059): a project of its own, its folder as it is, or a new thread in a project that starts from the
+ * chat's conversation, with its files copied in.
+ */
+function ChatToProject({ thread, summary, onDone }: { thread: string; summary: ThreadSummary; onDone: () => void }) {
+  const navigate = useNavigate()
+  const queries = useQueryClient()
+  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
+  const clones = choices.data?.clones ?? []
+  const agents = choices.data?.agents ?? []
+  const [making, setMaking] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const [clone, setClone] = useState('')
+  const [copy, setCopy] = useState(true)
+  const [copyTo, setCopyTo] = useState(`notes/chat-${short(thread)}`)
+  const [prompt, setPrompt] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const chosen = clone || clones[0]?.path || ''
+  const agent = agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
+  const failed = (failure: unknown) => setError(message(failure))
+  const makeProject = () => {
+    setBusy(true)
+    api
+      .makeProject(thread)
+      .then((project) => {
+        toast(`The chat is now the project ${projectName(project)}`, 'ok')
+        void queries.invalidateQueries({ queryKey: keys.threads })
+        void queries.invalidateQueries({ queryKey: keys.projects })
+        void queries.invalidateQueries({ queryKey: keys.agents })
+        onDone()
+      }, failed)
+      .finally(() => setBusy(false))
+  }
+  const continueIn = () => {
+    setBusy(true)
+    api
+      .startAgent(agent, { clone: chosen }, { here: true, continues: thread, copy_to: copy ? copyTo.trim() : null, prompt: prompt.trim() || 'Carry on from the chat.' })
+      .then((started) => {
+        void queries.invalidateQueries({ queryKey: keys.threads })
+        onDone()
+        void navigate({ to: '/t/$id', params: { id: started } })
+      }, failed)
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="px-1 pb-0.5 text-2xs text-fg-2">This chat belongs to no project</p>
+      {!making ? (
+        <button type="button" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')} onClick={() => setMaking(true)}>
+          <Icon name="folder" />
+          Make it a project…
+        </button>
+      ) : (
+        <div className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs">
+          <p className="text-fg-2">Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.</p>
+          <span className="flex justify-end gap-1.5">
+            <Button variant="ghost" onClick={() => setMaking(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={busy} onClick={makeProject}>
+              Make it a project
+            </Button>
+          </span>
+        </div>
+      )}
+      {!continuing ? (
+        <button type="button" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')} onClick={() => setContinuing(true)}>
+          <Icon name="branch" />
+          Continue in a project…
+        </button>
+      ) : (
+        <form
+          className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs"
+          onSubmit={(event) => {
+            event.preventDefault()
+            continueIn()
+          }}
+        >
+          {clones.length === 0 ? (
+            <p className="text-fg-2">No project on this machine yet.</p>
+          ) : (
+            <Select aria-label="project to continue in" value={chosen} onChange={(event) => setClone(event.target.value)}>
+              {clones.map((candidate) => (
+                <option key={candidate.path} value={candidate.path}>
+                  {candidate.repo ? projectName(candidate.repo) : candidate.path}
+                </option>
+              ))}
+            </Select>
+          )}
+          <label className="flex items-center gap-1.5 text-fg-2">
+            <input type="checkbox" checked={copy} onChange={(event) => setCopy(event.target.checked)} />
+            Copy the chat&apos;s files to
+          </label>
+          {copy && <Input aria-label="folder in the project" value={copyTo} onChange={(event) => setCopyTo(event.target.value)} className="font-mono text-xs" />}
+          <Input aria-label="first prompt there" placeholder="Carry on from the chat." value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          <p className="text-fg-2">A new thread in your clone, its agent starting from this chat&apos;s conversation.</p>
+          <span className="flex justify-end gap-1.5">
+            <Button variant="ghost" onClick={() => setContinuing(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={busy || !chosen || !agent}>
+              Start there
+            </Button>
+          </span>
+        </form>
+      )}
+      {error && <p className="px-1 text-xs text-danger">{error}</p>}
+    </div>
   )
 }
 
@@ -1141,7 +1273,7 @@ function ThreadHeader({
         {/* What people know it by first: its project, branch, where it runs and its agent; the id last. */}
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight whitespace-nowrap text-fg-2">
           {summary && <span className="shrink-0 font-mono">{projectName(summary.repo || 'no remote')}</span>}
-          {branch && (
+          {branch && !isChat(summary?.repo) && (
             <span className="inline-flex min-w-0 shrink items-center gap-1" title={`The branch its latest commit went on: ${branch}`}>
               · <Icon name="branch" className="h-3 w-3 shrink-0" />
               <span className="max-w-[16ch] truncate font-mono">{branch}</span>
@@ -1200,11 +1332,11 @@ function whereSaid(summary: ThreadSummary, device: string | null): { label: stri
 /** The thread's state beside its title, in words, when its agent is doing something; waiting on the person has its own pill. */
 function StatePill({ summary }: { summary: ThreadSummary }) {
   const state = summary.agent_state
-  if (state === 'working' || state === 'starting') {
+  if (state === 'working' || state === 'starting' || inBackground(summary)) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ok-tint px-2 py-0.5 text-2xs whitespace-nowrap text-ok max-md:hidden">
         <Dot tone="ok" />
-        {state === 'starting' ? 'Starting' : 'Working'}
+        {state === 'starting' ? 'Starting' : state === 'working' ? 'Working' : 'In the background'}
       </span>
     )
   }
@@ -1311,12 +1443,15 @@ function ThreadCommits({ thread }: { thread: string }) {
   )
 }
 
+/** How many of the thread's files Details lists before More. */
+const LISTED_FILES = 200
+
 /** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 function Details({
   thread,
   summary,
   total,
-  diff,
+  files,
   codeComments,
   anchor,
   onChanged,
@@ -1325,7 +1460,7 @@ function Details({
   thread: string
   summary: ThreadSummary | undefined
   total: number
-  diff: string | undefined
+  files: DiffStat[] | null
   codeComments: CommentView[]
   anchor: Anchor
   onChanged: () => Promise<unknown>
@@ -1334,7 +1469,7 @@ function Details({
   const now = useNow()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
-  const files = diff === undefined ? null : parseFiles(diff)
+  const [listed, setListed] = useState(LISTED_FILES)
   const liveOn =
     summary?.location === 'moved' ? 'another device' : summary?.location === 'remote' ? 'the server only' : hosted() ? 'its machine' : device
   return (
@@ -1369,7 +1504,7 @@ function Details({
         {files === null && <Skeleton className="h-10" />}
         {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
         <ul className="flex flex-col gap-0.5 font-mono text-2xs">
-          {files?.map((file) => (
+          {files?.slice(0, listed).map((file) => (
             <li key={file.path} className="flex items-center gap-2 py-0.5">
               <a
                 href={appHref(filePath(thread, file.path))}
@@ -1382,6 +1517,11 @@ function Details({
             </li>
           ))}
         </ul>
+        {files && files.length > listed && (
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => setListed(listed + LISTED_FILES)}>
+            {(files.length - listed).toLocaleString()} more files
+          </Button>
+        )}
       </InspectorSection>
       <ThreadCommits thread={thread} />
       <InspectorSection title="Comments on code">
@@ -1463,7 +1603,8 @@ function ThreadBody({
   const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const diff = useQuery({ queryKey: keys.diff(thread, { base: '' }), queryFn: () => api.diff(thread, { base: '' }) })
+  // The thread's files and counts, without their lines: a thread that took in thousands of files must still open.
+  const stats = useQuery({ queryKey: keys.diffStats(thread, { base: '' }), queryFn: () => api.diffStats(thread, { base: '' }) })
   const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
@@ -1601,7 +1742,7 @@ function ThreadBody({
     else toEnd()
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
-  const files = useMemo(() => (diff.data === undefined ? null : parseFiles(diff.data)), [diff.data])
+  const files = stats.data ?? null
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
   const entryProps: EntryProps = {
     thread,
@@ -1669,7 +1810,7 @@ function ThreadBody({
                   id: 'changes',
                   label: (
                     <>
-                      Changes {totals && (totals.added > 0 || totals.removed > 0) && <Counts added={totals.added} removed={totals.removed} />}
+                      {isChat(summary?.repo) ? 'Files' : 'Changes'} {totals && (totals.added > 0 || totals.removed > 0) && <Counts added={totals.added} removed={totals.removed} />}
                     </>
                   ),
                 },
@@ -1701,7 +1842,7 @@ function ThreadBody({
               thread={thread}
               summary={summary}
               total={total}
-              diff={diff.data}
+              files={files}
               codeComments={codeComments}
               anchor={anchor}
               onChanged={reloadComments}

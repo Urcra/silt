@@ -28,7 +28,17 @@ impl Core {
     ) -> Result<Resumed, CoreError> {
         let target = agent.map(resolve_agent).transpose()?;
         let thread = self.find_thread(selector)?;
+        // A chat continues in its folder here, or a new one (ADR 0059).
+        let chat_folder = if self.is_chat(thread) {
+            Some(self.chat_folder_here(thread).map_or_else(|| self.new_chat_folder_for(thread), Ok)?)
+        } else {
+            None
+        };
+        let (cwd, here) = chat_folder.as_deref().map_or((cwd, here), |folder| (folder, true));
         let (repo, base) = self.prepare_thread(thread, cwd, here).await?;
+        if chat_folder.is_some() {
+            self.bind_chat_folder(thread, repo.root()).await?;
+        }
         self.take_lease(thread).await?;
         let resumed = self.check_out(thread, &repo, base, here, false, target).await?;
         self.warn_of_others_work(thread, thread).await;
@@ -49,11 +59,17 @@ impl Core {
     ) -> Result<Resumed, CoreError> {
         let target = agent.map(resolve_agent).transpose()?;
         let source = self.find_thread(selector)?;
+        // A chat's fork gets a folder of its own (ADR 0059).
+        let chat_folder = self.is_chat(source).then(|| self.new_chat_folder_for(source)).transpose()?;
+        let (cwd, here) = chat_folder.as_deref().map_or((cwd, here), |folder| (folder, true));
         let (repo, base) = self.prepare_thread(source, cwd, here).await?;
         let at = turn
             .map(|turn| self.turn_point(source, turn).ok_or_else(|| CoreError::Invalid(format!("the thread has no turn {turn}"))))
             .transpose()?;
         let fork = self.fork_thread_at(source, at, private.then_some(silt_proto::Visibility::Private)).await?;
+        if chat_folder.is_some() {
+            self.bind_chat_folder(fork, repo.root()).await?;
+        }
         self.register_thread_now(fork).await?;
         self.take_lease(fork).await?;
         let resumed = self.check_out(fork, &repo, base, here, true, target).await?;
@@ -98,7 +114,9 @@ impl Core {
         if identity != record.repo {
             return Err(CoreError::Invalid(format!("this clone is of {identity:?} but the thread belongs to {:?}", record.repo)));
         }
-        if here && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
+        // A chat's own folder holds only its files, which the thread has.
+        let own_chat = repo.is_chat() && record.repo_root == repo.root();
+        if here && !own_chat && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
             return Err(CoreError::Invalid("--here needs a clean working tree".into()));
         }
 
@@ -108,7 +126,8 @@ impl Core {
             self.ensure_commit(&repo, record.family, thread, base).await?;
         }
         self.project_family(record.family, &repo)?;
-        if record.repo_root.as_os_str().is_empty() {
+        // A chat's folder is bound by whoever picked it, as a fork's isn't its source's.
+        if record.repo_root.as_os_str().is_empty() && !silt_types::is_chat(&record.repo) {
             let updated = ThreadRecord { repo_root: repo.root().to_owned(), ..record };
             self.store.create_thread(&updated).await?;
             self.threads.insert(thread, updated);
@@ -171,6 +190,31 @@ impl Core {
         let checkout_id = self.attach_checkout(thread, &path, true).await?;
         self.materialize(checkout_id).await?;
         Ok((checkout_id, path))
+    }
+
+    /// Materializes the chat `thread` in its folder here, or a new one, for
+    /// an agent the web UI starts (ADR 0059).
+    pub(crate) async fn check_out_chat(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
+        let folder = self.chat_folder_here(thread).map_or_else(|| self.new_chat_folder_for(thread), Ok)?;
+        let (repo, _) = self.prepare_thread(thread, &folder, true).await?;
+        self.bind_chat_folder(thread, repo.root()).await?;
+        self.take_lease(thread).await?;
+        let path = repo.root().to_owned();
+        let checkout_id = self.attach_checkout(thread, &path, false).await?;
+        self.materialize(checkout_id).await?;
+        Ok((checkout_id, path))
+    }
+
+    /// Records `root` as the chat `thread`'s folder on this machine.
+    async fn bind_chat_folder(&mut self, thread: ThreadId, root: &Path) -> Result<(), CoreError> {
+        let record = &self.threads[&thread];
+        if record.repo_root == root {
+            return Ok(());
+        }
+        let updated = ThreadRecord { repo_root: root.to_owned(), ..record.clone() };
+        self.store.create_thread(&updated).await?;
+        self.threads.insert(thread, updated);
+        Ok(())
     }
 
     /// The thread's conversation so far, rendered for a new session to

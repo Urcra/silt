@@ -20,3 +20,13 @@ pub use frontier::{Frontier, Version};
 pub use hex::ParseIdError;
 pub use id::{ActorId, DeltaId, DeltaSpan, Lamport};
 pub use oid::GitOid;
+
+/// The project of chats, threads that belong to no repository (ADR 0059).
+/// No remote or folder normalizes to a name with `:` before its first `/`,
+/// so it can't name a repository.
+pub const CHATS: &str = "silt:chats";
+
+/// Whether `project` is [`CHATS`].
+pub fn is_chat(project: &str) -> bool {
+    project == CHATS
+}

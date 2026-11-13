@@ -264,6 +264,20 @@ replies: Array<ReplyView>, };
 
 export type CommitView = { commit: string, subject: string | null, branch: string | null, turn: number | null, time_ms: number, };
 
+export type DiffStat = { 
+/**
+ * Its new path, or its old one when deleted.
+ */
+path: string, 
+/**
+ * Where it was before it moved.
+ */
+old_path: string | null, added: number, removed: number, binary: boolean, 
+/**
+ * How long its part of the diff is, in bytes.
+ */
+size: number, };
+
 export type FileAt = { path: string, 
 /**
  * The version shown, for a link that keeps showing it.
@@ -812,7 +826,33 @@ plan: boolean,
 /**
  * Files sent with the first prompt.
  */
-attachments: Array<PromptAttachment>, };
+attachments: Array<PromptAttachment>, 
+/**
+ * A new thread is a chat, in a folder of its own rather than a clone
+ * (ADR 0059).
+ */
+chat: boolean, 
+/**
+ * A chat the new thread continues in a project: the agent starts from
+ * its conversation.
+ */
+continues: string | null, 
+/**
+ * Where in the new thread's checkout the chat's files are copied, a
+ * relative path; nowhere when unset.
+ */
+copy_to: string | null, };
+
+export type ChatSettings = { 
+/**
+ * Where chats' folders go; `$SILT_HOME/chats` when unset.
+ */
+dir: string | null, 
+/**
+ * The permissions a new chat starts with: full access, as a chat's
+ * folder holds only what its agent wrote there.
+ */
+preset: Preset, };
 
 export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
 
@@ -840,6 +880,11 @@ writable: boolean,
  * How the agent the web UI last ran in it here stands (ADR 0022).
  */
 agent_state: AgentState | null, 
+/**
+ * Commands and subagents its agent left running, which go on after
+ * its turn ends.
+ */
+background: number, 
 /**
  * When something last happened in it.
  */
@@ -901,3 +946,21 @@ added: boolean,
 sessions: Array<FoundSessions>, last_ms: number | null, };
 
 export type FoundSessions = { agent: string, count: number, };
+
+export type VoiceDownload = { done: number, total: number, };
+
+export type VoiceEvent = { "kind": "partial", text: string, } | { "kind": "segment", text: string, } | { "kind": "paused" } | { "kind": "done" } | { "kind": "failed", message: string, };
+
+export type VoiceStatus = { 
+/**
+ * Whether `silt-voice` is installed.
+ */
+helper: boolean, 
+/**
+ * Whether the speech model has been downloaded.
+ */
+model: boolean, download: VoiceDownload | null, 
+/**
+ * Why the last download failed.
+ */
+failed: string | null, };

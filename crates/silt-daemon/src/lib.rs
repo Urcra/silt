@@ -5,6 +5,7 @@ mod bus;
 mod capture;
 pub mod capture_lock;
 mod catch_up;
+pub mod chats;
 pub mod client;
 mod cloud;
 mod comments;
@@ -38,6 +39,7 @@ mod sync;
 mod sync_once;
 mod transcripts;
 mod views;
+mod voice;
 mod watch;
 mod web;
 

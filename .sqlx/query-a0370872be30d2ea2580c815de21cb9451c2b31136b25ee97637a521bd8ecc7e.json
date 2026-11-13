@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT owner_id AS \"owner_id: UserId\", repo, family_id FROM threads WHERE id = ? AND deleted_ms IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_id: UserId",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "owner_id"
+          }
+        }
+      },
+      {
+        "name": "repo",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "family_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a0370872be30d2ea2580c815de21cb9451c2b31136b25ee97637a521bd8ecc7e"
+}

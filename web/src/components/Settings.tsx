@@ -1,11 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
-import { api } from '../api'
-import { keys } from '../query'
+import { PRESETS } from '../agentState'
+import { api, type ChatSettings, type Preset } from '../api'
+import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { THEMES, type Theme, applyTheme, storedTheme } from '../theme'
-import { Dot, EmptyState, cx } from '../ui'
+import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
+import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
 import { NotificationBanner, NotificationSettings } from './Inbox'
 import { Orgs } from './Orgs'
@@ -25,6 +27,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
     label: 'You',
     sections: [
       { id: 'devices', label: 'Devices and sync' },
+      ...(hosted() ? [] : [{ id: 'chats', label: 'Chats' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
     ],
@@ -63,6 +66,67 @@ function Sync() {
         Another server: <code className="font-mono">silt auth login --server &lt;url&gt;</code>. Threads kept only on this machine go to a server with{' '}
         <code className="font-mono">silt send</code>.
       </p>
+    </section>
+  )
+}
+
+/** Where this machine keeps chats' folders, and what a new chat may do without asking (ADR 0059). */
+function Chats() {
+  const queries = useQueryClient()
+  const settings = useQuery({ queryKey: keys.chatSettings, queryFn: api.chatSettings })
+  const [dir, setDir] = useState<string>()
+  const [error, setError] = useState<string>()
+  const save = (next: ChatSettings) => {
+    setError(undefined)
+    api.setChatSettings(next).then(
+      () => {
+        void queries.invalidateQueries({ queryKey: keys.chatSettings })
+        toast('Chat settings saved', 'ok')
+      },
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
+  const current = settings.data
+  const shownDir = dir ?? current?.dir ?? ''
+  return (
+    <section aria-label="Chats" className="flex flex-col gap-3">
+      <h2 className={SETTINGS_HEADING}>Chats</h2>
+      <p className="text-sm text-fg-2">
+        A chat is a thread outside any project, for questions and research. Each one works in a folder of its own, is private to you, and goes to your other
+        devices like any thread.
+      </p>
+      {current && (
+        <>
+          <div className="flex flex-col gap-1.5 text-sm">
+            <span className="font-medium">Default permissions</span>
+            <span className="text-xs text-fg-2">A chat's folder holds only what its agent wrote there, so chats start with full access.</span>
+            <span>
+              <ChipSelect
+                label="default permissions for chats"
+                icon="lock"
+                value={current.preset}
+                onChange={(preset) => save({ ...current, preset: preset as Preset })}
+                options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+              />
+            </span>
+          </div>
+          <form
+            className="flex flex-col gap-1.5 text-sm"
+            onSubmit={(event) => {
+              event.preventDefault()
+              save({ ...current, dir: shownDir.trim() || null })
+            }}
+          >
+            <span className="font-medium">Folder</span>
+            <span className="text-xs text-fg-2">Where new chats' folders go. Left empty, they stay in Silt's data directory, out of sight.</span>
+            <span className="flex gap-1.5">
+              <Input aria-label="chats folder" placeholder="~/.local/share/silt/chats" value={shownDir} onChange={(event) => setDir(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+              <Button type="submit">Save</Button>
+            </span>
+          </form>
+        </>
+      )}
+      {error && <p className="text-xs text-danger">{error}</p>}
     </section>
   )
 }
@@ -115,6 +179,7 @@ export function Settings() {
     devices: <Devices>{!hosted() && <Sync />}</Devices>,
     orgs: <Orgs />,
     notifications: <Notifications />,
+    chats: <Chats />,
     appearance: <Appearance />,
   }
   return (

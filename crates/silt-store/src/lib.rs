@@ -1088,6 +1088,17 @@ impl Store {
         Ok(())
     }
 
+    /// [`Self::remove_disk_file`] for many paths, in one transaction.
+    pub async fn remove_disk_files(&self, checkout: CheckoutId, paths: &[String]) -> Result<(), StoreError> {
+        let checkout = checkout.0;
+        let mut tx = self.write_transaction().await?;
+        for path in paths {
+            sqlx::query!("DELETE FROM disk_files WHERE checkout_id = ? AND path = ?", checkout, path).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn add_session(&self, session: &SessionRecord, now_ms: i64) -> Result<(), StoreError> {
         let (thread, checkout) = (id_bytes(session.thread.0), session.checkout_id.0);
         sqlx::query!(

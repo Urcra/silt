@@ -48,6 +48,16 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
+    /// This machine's settings for chats (ADR 0059).
+    ChatSettings,
+    SetChatSettings {
+        settings: ChatSettings,
+    },
+    /// Makes a chat's folder a project of its own, with the chat's threads
+    /// in it (ADR 0059). Answers with the project's name.
+    MakeProject {
+        thread: String,
+    },
     /// Take over recording the running agent in `thread` from the wrapper
     /// that recorded it on its own until the daemon answered (ADR 0018).
     Adopt {
@@ -69,6 +79,17 @@ pub enum Request {
         /// Only these of the changed files, in path order: a page of them.
         #[serde(default)]
         files: Option<FilePage>,
+        /// Only the file at this path, new or old.
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// [`Request::Diff`]'s files, each with its counts and size but not its
+    /// lines.
+    DiffStats {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -643,6 +664,48 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
+/// What the web UI's voice button can do on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct VoiceStatus {
+    /// Whether `silt-voice` is installed.
+    pub helper: bool,
+    /// Whether the speech model has been downloaded.
+    pub model: bool,
+    pub download: Option<VoiceDownload>,
+    /// Why the last download failed.
+    pub failed: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct VoiceDownload {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// What a dictation says as it goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum VoiceEvent {
+    /// The words of the current phrase so far; they may still change.
+    Partial {
+        text: String,
+    },
+    /// A finished phrase.
+    Segment {
+        text: String,
+    },
+    /// Silence went on past a finished phrase.
+    Paused,
+    /// All the audio has been heard.
+    Done,
+    Failed {
+        message: String,
+    },
+}
+
 /// A folder the agents' sessions ran in: a clone's root, or the folder
 /// itself outside any git repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -951,6 +1014,33 @@ pub struct StartOptions {
     pub plan: bool,
     /// Files sent with the first prompt.
     pub attachments: Vec<PromptAttachment>,
+    /// A new thread is a chat, in a folder of its own rather than a clone
+    /// (ADR 0059).
+    pub chat: bool,
+    /// A chat the new thread continues in a project: the agent starts from
+    /// its conversation.
+    pub continues: Option<String>,
+    /// Where in the new thread's checkout the chat's files are copied, a
+    /// relative path; nowhere when unset.
+    pub copy_to: Option<String>,
+}
+
+/// This machine's settings for chats.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(default)]
+pub struct ChatSettings {
+    /// Where chats' folders go; `$SILT_HOME/chats` when unset.
+    pub dir: Option<PathBuf>,
+    /// The permissions a new chat starts with: full access, as a chat's
+    /// folder holds only what its agent wrote there.
+    pub preset: Preset,
+}
+
+impl Default for ChatSettings {
+    fn default() -> Self {
+        Self { dir: None, preset: Preset::FullAccess }
+    }
 }
 
 /// A mode, or one value of a setting.
@@ -1250,6 +1340,7 @@ mod tests {
             CommentOn::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
+            silt_proto::view::DiffStat::decl(&config),
             silt_proto::view::FileAt::decl(&config),
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),
@@ -1300,12 +1391,16 @@ mod tests {
             ShowLine::decl(&config),
             silt_proto::Snooze::decl(&config),
             StartOptions::decl(&config),
+            ChatSettings::decl(&config),
             StateChange::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),
+            VoiceDownload::decl(&config),
+            VoiceEvent::decl(&config),
+            VoiceStatus::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

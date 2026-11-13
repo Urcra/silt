@@ -179,9 +179,26 @@ pub fn stays_in_app(ui: Option<&Url>, to: &Url) -> bool {
     own || ui.is_some_and(|ui| ui.origin() == to.origin())
 }
 
+/// Whether the page at `page` may hear the microphone: only the daemon's own
+/// UI, which the window can stray from only by a navigation it refuses.
+pub fn may_listen(ui: Option<&Url>, page: &Url) -> bool {
+    ui.is_some_and(|ui| ui.origin() == page.origin())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_daemons_own_ui_may_listen() {
+        let ui = Url::parse("http://127.0.0.1:4321/#token=abc").expect("a URL");
+        let page = |url: &str| Url::parse(url).expect("a URL");
+        assert!(may_listen(Some(&ui), &page("http://127.0.0.1:4321/t/1")));
+        assert!(!may_listen(None, &page("http://127.0.0.1:4321/")));
+        for other in ["http://127.0.0.1:9/", "http://example.com:4321/", "tauri://localhost/index.html"] {
+            assert!(!may_listen(Some(&ui), &page(other)), "{other}");
+        }
+    }
 
     #[test]
     fn silt_bin_wins_then_the_one_beside_the_app_then_the_path() {

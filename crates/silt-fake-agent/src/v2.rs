@@ -5,7 +5,8 @@
 //! stopped. A prompt saying `Later` makes it go on by itself once it
 //! stopped, as Claude does when a background task ends, and stop again.
 //! `Subagent` makes it run a subagent in a session of its own, as Claude's
-//! Agent tool does; `Background` makes it leave a command running, which
+//! Agent tool does, and `Aside` one left running past the turn until it is
+//! cancelled; `Background` makes it leave a command running, which
 //! ends after the turn and sets the agent going again, unless cancelled.
 //! `Keep` makes it leave a real process running in the background, `silt-fake-agent
 //! keep-running <cwd>`, whose end it reports, as Claude does, and goes on about.
@@ -189,6 +190,11 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "state": {"state": "idle", "stopReason": "end_turn"}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "session_message", "messageId": "agent-1:reply", "senderSessionId": "fake-child-1", "recipientSessionId": session.to_string(), "content": [{"type": "text", "text": "2 lines"}]}))?;
                     }
+                    let aside = prompt.contains("Aside");
+                    if aside {
+                        say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-2", "title": "general-purpose", "description": "Watch the tests", "capabilities": {"cancel": {}}, "state": {"state": "running"}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "session_message", "messageId": "aside-1", "senderSessionId": session.to_string(), "recipientSessionId": "fake-child-2", "content": [{"type": "text", "text": "Watch the tests until told to stop."}]}))?;
+                    }
                     let background = prompt.contains("Background");
                     if background {
                         let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgfake1.");
@@ -241,6 +247,12 @@ pub async fn main() -> Result<()> {
                         }
                         say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-bg", "content": {"type": "text", "text": "The background command printed BG."}}))?;
                         return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
+                    if aside {
+                        while !cancelled.load(Ordering::SeqCst) {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                        return say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-2", "state": {"state": "idle", "stopReason": "cancelled"}}));
                     }
                     if prompt.contains("Later") {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;

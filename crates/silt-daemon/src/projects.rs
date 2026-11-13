@@ -30,6 +30,7 @@ impl Core {
                 }
             }
             let mut projects = merged(listed, local);
+            projects.retain(|project| !silt_types::is_chat(&project.repo));
             for project in &mut projects {
                 project.home = homes
                     .get(&project.repo)
@@ -128,6 +129,61 @@ impl Core {
                 self.follow_clone_to(&root, &project).await;
             }
         }
+    }
+
+    /// Makes the folder of the chat `selector` a project of its own, named
+    /// by the folder, and moves the chats recorded in it there, here and on
+    /// their server (ADR 0059). Returns the project.
+    pub(crate) async fn make_project(&mut self, selector: &str) -> Result<String, CoreError> {
+        let thread = self.find_thread(selector)?;
+        if !self.is_chat(thread) {
+            return Err(CoreError::Invalid(format!("thread {} isn't a chat", thread.short())));
+        }
+        let root = self
+            .chat_folder_here(thread)
+            .ok_or_else(|| CoreError::Invalid("the chat's folder isn't on this machine; continue it here first".into()))?;
+        let moving: Vec<ThreadId> = self
+            .threads
+            .values()
+            .filter(|record| record.repo_root == root && silt_types::is_chat(&record.repo))
+            .map(|record| record.id)
+            .collect();
+        if moving.iter().any(|thread| {
+            self.agent_state(*thread).is_some_and(|state| {
+                matches!(
+                    state,
+                    silt_proto::AgentState::Starting
+                        | silt_proto::AgentState::Working
+                        | silt_proto::AgentState::AwaitingPermission
+                        | silt_proto::AgentState::AwaitingInput
+                )
+            })
+        }) {
+            return Err(CoreError::Invalid("an agent is working in the chat; stop it or wait for it first".into()));
+        }
+        // What the folder names once it leaves the chats, as it has no remote.
+        let project = silt_git::normalize_remote(&root.to_string_lossy());
+        for thread in &moving {
+            if let Some(remote) = self.remote_for(*thread) {
+                let body = silt_proto::MoveChat { repo: project.clone(), origin_url: None };
+                remote
+                    .move_chat(*thread, &body)
+                    .await
+                    .map_err(|source| CoreError::Server { doing: "move the chat into its project", source })?;
+            }
+        }
+        silt_git::Repo::discover(&root)?.leave_chats()?;
+        self.store.move_threads(&moving, silt_types::CHATS, &project, &root).await?;
+        for thread in &moving {
+            self.threads.get_mut(thread).expect("listed above").repo = project.clone();
+        }
+        if let Some(crate::homes::Home::Server(url)) = self.new_home(silt_types::CHATS) {
+            self.store.set_project_home(&project, crate::homes::Home::Server(url.clone()).stored()).await?;
+            self.project_homes.insert(project.clone(), crate::homes::Home::Server(url));
+        }
+        self.remember_clone(&root).await;
+        self.announce(crate::protocol::BusEvent::Threads);
+        Ok(project)
     }
 
     /// Makes the folder `path` and an empty git repository in it, then adds

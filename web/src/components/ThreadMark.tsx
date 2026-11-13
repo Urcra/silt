@@ -1,6 +1,6 @@
 import type { ThreadSummary } from '../api'
 import { settled } from '../sections'
-import { threadDoing } from '../threadLook'
+import { inProgress, threadDoing } from '../threadLook'
 import { Spinner, cx } from '../ui'
 
 /**
@@ -9,7 +9,7 @@ import { Spinner, cx } from '../ui'
  * an open ring otherwise.
  */
 export function ThreadMark({ thread }: { thread: ThreadSummary }) {
-  if (thread.agent_state === 'working' || thread.agent_state === 'starting') return <Spinner label="working" />
+  if (inProgress(thread)) return <Spinner label={threadDoing(thread) ?? 'working'} />
   const waiting = thread.agent_state === 'awaiting_permission' || thread.agent_state === 'awaiting_input' || thread.review
   const done = !waiting && settled(thread)
   const label = threadDoing(thread) ?? (done ? 'settled' : undefined)

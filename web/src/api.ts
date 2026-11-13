@@ -7,11 +7,13 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  ChatSettings,
   CloudLaunch,
   CommentOn,
   CommentView,
   CommitView,
   DaemonStatus,
+  DiffStat,
   FileAt,
   FoundFolder,
   DeviceChange,
@@ -44,6 +46,7 @@ import type {
   ThreadLink,
   ThreadSummary,
   TurnInfo,
+  VoiceStatus,
 } from './api.generated'
 
 export type * from './api.generated'
@@ -104,10 +107,24 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
+const diffParams = (options: { turn?: number; base?: string }) => {
+  const params = new URLSearchParams()
+  if (options.turn !== undefined) params.set('turn', String(options.turn))
+  if (options.base) params.set('base', options.base)
+  return params
+}
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
 
+/** A socket for one dictation: audio frames out, `VoiceEvent`s back (ADR 0061). */
+export function dictationSocket(): WebSocket {
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/voice/dictate')}?token=${token()}`)
+}
+
 export const api = {
+  voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
+  voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
@@ -125,17 +142,19 @@ export const api = {
     }
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
-  /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order. */
-  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number } = {}) => {
-    const params = new URLSearchParams()
-    if (options.turn !== undefined) params.set('turn', String(options.turn))
-    if (options.base) params.set('base', options.base)
+  /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order; with `path`, only that file. */
+  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number; path?: string } = {}) => {
+    const params = diffParams(options)
     if (options.limit !== undefined) {
       params.set('offset', String(options.offset ?? 0))
       params.set('limit', String(options.limit))
     }
+    if (options.path) params.set('path', options.path)
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
+  /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
+  diffStats: (id: string, options: { turn?: number; base?: string } = {}) =>
+    request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
   comments: (id: string, base?: string) =>
     request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
@@ -161,8 +180,13 @@ export const api = {
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
-  startAgent: (agent: string, where: { thread: string } | { clone: string }, options: Partial<StartOptions> = {}) =>
+  /** Starts `agent` in a thread, a clone, or with neither a new chat (`options.chat`, ADR 0059). */
+  startAgent: (agent: string, where: { thread: string } | { clone: string } | Record<string, never>, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  chatSettings: () => request<ChatSettings>('GET', '/api/chats/settings'),
+  setChatSettings: (settings: ChatSettings) => request<string>('PUT', '/api/chats/settings', settings),
+  /** Makes a chat's folder a project of its own; answers with the project. */
+  makeProject: (id: string) => request<string>('POST', `${thread(id)}/make-project`),
   // Claude Code cloud sessions, through the person's own `claude` (ADR 0040).
   cloudStart: (clone: string, task: string) => request<CloudLaunch>('POST', '/api/cloud', { clone, task }),
   cloudLaunches: () => request<CloudLaunch[]>('GET', '/api/cloud'),

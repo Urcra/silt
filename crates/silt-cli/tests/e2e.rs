@@ -289,7 +289,27 @@ fn the_web_ui_reads_a_diff_a_page_of_files_at_a_time() {
     let (first, rest, whole) = (diff("?offset=0&limit=2"), diff("?offset=2&limit=2"), diff(""));
     assert_eq!(first.matches("diff --git").count(), 2);
     assert_eq!(rest.matches("diff --git").count(), 1);
-    assert_eq!(first + &rest, whole, "the pages make up the whole diff, in path order");
+    assert_eq!(first.clone() + &rest, whole, "the pages make up the whole diff, in path order");
+
+    let output = Command::new("curl")
+        .args(["-s", "-H"])
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg(format!("{base}/api/threads/{thread}/diff/stats"))
+        .output()
+        .expect("curl runs");
+    let stats: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).expect("the diff's files");
+    assert_eq!(stats.len(), 3, "{stats:?}");
+    let mut by_path = String::new();
+    for stat in &stats {
+        let path = stat["path"].as_str().expect("a path");
+        let one = diff(&format!("?path={path}"));
+        assert_eq!(one.matches("diff --git").count(), 1, "{one}");
+        assert_eq!(stat["size"].as_u64(), Some(one.len() as u64), "its size is its part of the diff");
+        let added = one.lines().filter(|line| line.starts_with('+') && !line.starts_with("+++")).count();
+        assert_eq!(stat["added"].as_u64(), Some(added as u64), "{one}");
+        by_path += &one;
+    }
+    assert_eq!(by_path, whole, "file by file, the stats' order is the diff's");
 }
 
 #[test]
@@ -900,6 +920,7 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert!(eventually(|| kept(&env).len() == 1), "the command runs");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!(["keep-1"]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 1, "the thread list says something still runs");
     let (refused, said) = api.call("POST", &format!("/api/threads/{thread}/agent/tasks/run-1/stop"), None);
     assert!(!refused && said["error"].as_str().is_some_and(|error| error.contains("isn't running")), "{said}");
 
@@ -920,6 +941,29 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert!(!entries.iter().any(|entry| entry["text"] == "The kept command ended."), "it was stopped before it went on");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
+/// A subagent the agent left running past its turn keeps the thread in
+/// progress until it ends, as the person stopping the agent ends it.
+#[test]
+fn a_subagent_left_running_keeps_its_thread_in_progress_until_it_ends() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Aside");
+    settled_history(&api, &thread, "Done: add acp Aside");
+    assert_eq!(listed_background(&api, &thread), 1, "the subagent still runs, though the turn ended");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/cancel"), None);
+    assert!(eventually(|| listed_background(&api, &thread) == 0), "the subagent stopped with the agent");
+    assert_eq!(task_news(&api, &thread, "aside-1"), ["running", "stopped"]);
+}
+
+/// How many commands and subagents the thread list says the thread's agent
+/// left running.
+fn listed_background(api: &Api, thread: &str) -> u64 {
+    let threads = api.ok("GET", "/api/threads", None);
+    let listed = threads.as_array().expect("a list").iter().find(|listed| listed["id"] == thread).expect("listed");
+    listed["background"].as_u64().expect("a count")
 }
 
 /// What the agent left running goes with it, whether the person stops the
@@ -1070,6 +1114,30 @@ fn isolated_sessions_work_in_a_managed_checkout() {
     assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").contains("fn farewell"));
     assert_eq!(fs::read_to_string(env.repo.join("src/main.rs")).expect("read"), "fn main() {}\n");
     assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+}
+
+#[test]
+fn files_recorded_before_gitignore_named_them_leave_the_thread_but_not_the_disk() {
+    let env = Env::new();
+    env.silt(&["claude", "--isolated"]);
+    let thread = env.thread();
+    let checkout = env.isolated_checkout();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    fs::create_dir_all(checkout.join(".venv/lib")).expect("mkdir");
+    fs::write(checkout.join(".venv/lib/site.py"), "import os\n").expect("an environment made before it's ignored");
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("b/.venv/lib/site.py")));
+
+    fs::write(checkout.join(".gitignore"), ".venv/\n").expect("ignore it");
+    assert!(
+        eventually(|| {
+            let diff = env.stdout(&["diff", &thread]);
+            diff.contains("b/.gitignore") && !diff.contains("b/.venv")
+        }),
+        "{}",
+        env.stdout(&["diff", &thread])
+    );
+    assert_eq!(fs::read_to_string(checkout.join(".venv/lib/site.py")).expect("still there"), "import os\n");
+    assert!(env.stdout(&["diff", &thread]).contains("+fn farewell() {}"), "the rest of the thread stays");
 }
 
 #[test]

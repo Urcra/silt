@@ -34,6 +34,10 @@ pub struct ThreadSummary {
     /// How the agent the web UI last ran in it here stands (ADR 0022).
     #[serde(default)]
     pub agent_state: Option<AgentState>,
+    /// Commands and subagents its agent left running, which go on after
+    /// its turn ends.
+    #[serde(default)]
+    pub background: u32,
     /// When something last happened in it.
     #[serde(default)]
     pub last_ms: i64,
@@ -724,6 +728,24 @@ pub struct FileQuery {
     pub path: String,
     #[serde(default)]
     pub at: Option<String>,
+}
+
+/// One file of a diff, without the diff: what a page lists before it asks
+/// for a file's lines, as a diff of thousands of files is too large to read
+/// whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DiffStat {
+    /// Its new path, or its old one when deleted.
+    pub path: String,
+    /// Where it was before it moved.
+    pub old_path: Option<String>,
+    pub added: u32,
+    pub removed: u32,
+    pub binary: bool,
+    /// How long its part of the diff is, in bytes.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
 }
 
 /// A file as a permalink shows it.

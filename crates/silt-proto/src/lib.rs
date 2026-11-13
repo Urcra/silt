@@ -10,8 +10,10 @@ pub mod view;
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
 /// rewound turns (ADR 0029). 6: a thread names its cloud session (ADR 0040).
 /// 8: comments sent to the agent in a review (ADR 0055). 9: an agent's
-/// sign-in, asked and answered from the web UI (ADR 0056).
-pub const PROTOCOL: u32 = 9;
+/// sign-in, asked and answered from the web UI (ADR 0056). 10: chats, kept
+/// out of every org, and moved into the project their folder becomes
+/// (ADR 0059).
+pub const PROTOCOL: u32 = 10;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -422,6 +424,14 @@ pub struct VisibilityRequest {
     pub repo: Option<String>,
     pub thread: Option<ThreadId>,
     pub visibility: Visibility,
+}
+
+/// Moves a chat into `repo`, the project its folder became (ADR 0059);
+/// owner only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveChat {
+    pub repo: String,
+    pub origin_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1013,6 +1023,9 @@ pub struct AgentReport {
     /// The sign-in it waits on, when its own expired (ADR 0056).
     #[serde(default)]
     pub sign_in: Option<SignInAsked>,
+    /// Commands and subagents it left running, which go on after its turn.
+    #[serde(default)]
+    pub background: u32,
 }
 
 /// An agent that needs signing in, as its card shows it (ADR 0056). What

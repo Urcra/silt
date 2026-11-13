@@ -88,6 +88,13 @@ test('the workspace home, a new thread (ADR 0044)', async ({ page }) => {
   })
 })
 
+test('a new chat (ADR 0059)', async ({ page }) => {
+  await open(page, '/chat')
+  await shoot(page, 'new-chat', async (shown) => {
+    await expect(shown.getByRole('form', { name: 'new chat' })).toBeVisible()
+  })
+})
+
 test('all threads', async ({ page }) => {
   await open(page, '/threads')
   await shoot(page, 'threads', async (shown) => {
@@ -284,7 +291,7 @@ async function startFake(page: Page, prompt: string, preset?: string) {
   if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
   await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('first prompt').fill(prompt)
-  await form.getByRole('button', { name: 'Start', exact: true }).click()
+  await form.getByLabel('first prompt').press('Enter')
   await page.waitForURL(/\/t\/[0-9a-f]+$/)
 }
 

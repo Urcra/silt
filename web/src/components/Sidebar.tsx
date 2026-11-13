@@ -3,6 +3,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
+import { isChat } from '../chats'
 import { useTopic } from '../bus'
 import { switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
@@ -12,7 +13,7 @@ import { keys } from '../query'
 import { type Section, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
-import { WAIT_KINDS, threadDoing, waitKind } from '../threadLook'
+import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
 import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Tag, cx } from '../ui'
@@ -30,7 +31,7 @@ function stateLine(thread: ThreadSummary, now: number): { said: string | null; w
   const when = ago(thread.last_ms, now)
   if (!doing) return { said: null, when: /^\d/.test(when) ? `${when} ago` : when }
   const said = doing[0]!.toUpperCase() + doing.slice(1)
-  return { said, when: thread.agent_state === 'working' || thread.agent_state === 'starting' ? null : when }
+  return { said, when: inProgress(thread) ? null : when }
 }
 
 function StateLine({ said, when }: { said: string | null; when: string | null }) {
@@ -148,7 +149,7 @@ function ProjectGroup({
   const rest = newest.filter(held)
   const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
-  const working = threads.filter((thread) => thread.agent_state === 'working' || thread.agent_state === 'starting').length
+  const working = threads.filter(inProgress).length
   return (
     <section aria-label={repo} className="mb-0.5">
       <div className="group/project flex items-center gap-1 pr-1">
@@ -197,6 +198,46 @@ function ProjectGroup({
   )
 }
 
+/** The chats, newest first, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
+function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
+  const [showRest, setShowRest] = useState(false)
+  const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
+  const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
+  const shown = newest.filter((thread) => !held(thread))
+  const rest = newest.filter(held)
+  return (
+    <section aria-label="chats" className="mt-2">
+      <SectionLabel
+        className="px-2"
+        aside={
+          !hosted() && (
+            <Link to="/chat" aria-label="New chat" className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2">
+              <Icon name="plus" className="h-3.5 w-3.5" />
+            </Link>
+          )
+        }
+      >
+        Chats
+      </SectionLabel>
+      <ul>
+        {(showRest ? [...shown, ...rest] : shown).map((thread) => (
+          <ThreadItem key={thread.id} thread={thread} />
+        ))}
+      </ul>
+      {rest.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={showRest}
+          onClick={() => setShowRest(!showRest)}
+          className="block py-1 pr-2 pl-2 text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
+        >
+          {showRest ? 'Show fewer' : `Show ${rest.length} more`}
+        </button>
+      )}
+    </section>
+  )
+}
+
 function NavItem({
   to,
   icon,
@@ -225,7 +266,7 @@ function NavItem({
 /** This machine at the bottom: its name, how many agents run on it, and Settings. */
 function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const running = threads.filter((thread) => ['working', 'starting'].includes(thread.agent_state ?? '')).length
+  const running = threads.filter(inProgress).length
   const waiting = threads.filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
   const signIn = status.data?.servers?.[0]
   const name = signIn?.name ?? 'this machine'
@@ -298,8 +339,11 @@ export function Sidebar() {
   const grouped = sections(mine, now)
   // A thread that needs the person stays in its project too, where it lives.
   const listed = mine.filter((thread) => [...LISTED, 'needs_you'].includes(section(thread, now)))
+  // Chats have a section of their own above the projects (ADR 0059).
+  const chats = listed.filter((thread) => isChat(thread.repo))
+  const inProjects = listed.filter((thread) => !isChat(thread.repo))
   const [showOlder, setShowOlder] = useState(false)
-  const byProject = projects(listed)
+  const byProject = projects(inProjects)
   const isOlder = ([, inRepo]: [string, ThreadSummary[]]) => inRepo.every((thread) => old(thread, now))
   const recentProjects = byProject.filter((project) => !isOlder(project))
   const olderProjects = byProject.filter(isOlder)
@@ -329,6 +373,13 @@ export function Sidebar() {
           <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
           <span className="flex-1">New thread</span>
           <Kbd>{formatKeys('n')}</Kbd>
+        </Link>
+      )}
+      {!hosted() && (
+        <Link to="/chat" className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
+          <Icon name="comment" className="h-[15px] w-[15px] shrink-0" />
+          <span className="flex-1">New chat</span>
+          <Kbd>{formatKeys('c')}</Kbd>
         </Link>
       )}
       <NavItem to="/threads" icon="list">
@@ -375,6 +426,7 @@ export function Sidebar() {
           </ul>
         </section>
       )}
+      {chats.length > 0 && <ChatGroup threads={chats} now={now} />}
       <SectionLabel
         className="mt-2 px-2"
         aside={
@@ -392,7 +444,7 @@ export function Sidebar() {
       >
         Projects
       </SectionLabel>
-      {threads.isSuccess && listed.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
+      {threads.isSuccess && inProjects.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
       {recentProjects.map(([repo, inRepo]) => (
         <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
       ))}

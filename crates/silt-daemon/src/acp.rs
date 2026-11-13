@@ -104,6 +104,11 @@ pub(crate) struct AcpRun {
     woke_by: Vec<String>,
     /// Commands left running in the background, by the agent's id for each.
     background: HashMap<String, Background>,
+    /// Subagents running, by the call that started each, which may go on
+    /// after the turn.
+    subagents: HashSet<String>,
+    /// How many commands and subagents the thread list was last told of.
+    background_listed: usize,
     /// Background commands the person stopped, by the call that started
     /// each: the agent's later news of their end is no news.
     stopped_tasks: HashSet<String>,
@@ -165,6 +170,11 @@ impl AcpRun {
             AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() => AgentState::AwaitingPermission,
             other => other,
         }
+    }
+
+    /// How many commands and subagents it left running.
+    fn in_background(&self) -> usize {
+        self.background.len() + self.subagents.len()
     }
 
     fn plan_mode(&self) -> Option<&str> {
@@ -462,9 +472,21 @@ impl Core {
         if let Some(refused) = seen_accepts.and_then(|accepts| attachments.iter().find(|attachment| !accepts.takes(attachment))) {
             return Err(CoreError::Invalid(format!("{} doesn't take files like {}", info.name, refused.name)));
         }
+        let continues = options.continues.as_deref().map(|selector| self.find_thread(selector)).transpose()?;
+        if continues.is_some_and(|chat| !self.is_chat(chat)) {
+            return Err(CoreError::Invalid("only a chat continues in a project".into()));
+        }
+        if options.copy_to.is_some() && continues.is_none() {
+            return Err(CoreError::Invalid("files are copied from the chat a thread continues".into()));
+        }
+        let copy_to = options.copy_to.as_deref().map(copy_target).transpose()?;
+        if options.chat && (thread.is_some() || clone.is_some() || options.base.is_some() || options.here || continues.is_some())
+        {
+            return Err(CoreError::Invalid("a chat starts in a folder of its own, not in a thread or clone".into()));
+        }
         let (thread, checkout_id, checkout) = match (thread, clone) {
             (Some(selector), _) => {
-                if options.base.is_some() || options.here || options.visibility.is_some() {
+                if options.base.is_some() || options.here || options.visibility.is_some() || continues.is_some() {
                     return Err(CoreError::Invalid(
                         "a thread keeps its checkout and visibility; those are for a new thread".into(),
                     ));
@@ -488,8 +510,26 @@ impl Core {
                 }
                 (created.thread, created.checkout_id, created.checkout)
             }
+            (None, None) if options.chat => {
+                let folder = crate::chats::new_folder(&self.data_dir, options.prompt.as_deref().unwrap_or_default())?;
+                let created = self.create_thread(&folder, false, false, None).await?;
+                if options.preset.is_none() {
+                    options.preset = Some(crate::chats::settings(&self.data_dir).preset);
+                }
+                (created.thread, created.checkout_id, created.checkout)
+            }
             (None, None) => return Err(CoreError::Invalid("pick a thread or a clone to start the agent in".into())),
         };
+        if let Some(chat) = continues
+            && let (Some(to), Some(from)) = (&copy_to, self.chat_folder_here(chat))
+        {
+            copy_chat_files(&from, &checkout.join(to))?;
+        }
+        let primer = continues.and_then(|chat| {
+            self.primer(chat).map(|transcript| {
+                format!("This thread continues chat {} in this project. The chat so far:\n\n{transcript}", chat.short())
+            })
+        });
         if let Some(preset) = options.preset {
             self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
         }
@@ -521,7 +561,7 @@ impl Core {
                 queued: Vec::new(),
                 session: None,
                 load,
-                primer: None,
+                primer,
                 state: AgentState::Starting,
                 text: String::new(),
                 thought: String::new(),
@@ -552,6 +592,8 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
+                subagents: HashSet::new(),
+                background_listed: 0,
                 stopped_tasks: HashSet::new(),
                 hush: None,
                 stopped: false,
@@ -598,6 +640,9 @@ impl Core {
     pub(crate) async fn checkout_for_agent(&mut self, thread: ThreadId) -> Result<(CheckoutId, PathBuf), CoreError> {
         if let Some(checkout) = self.checkouts.values().find(|checkout| checkout.record.thread == thread) {
             return Ok((checkout.record.id, checkout.record.path.clone()));
+        }
+        if self.is_chat(thread) {
+            return self.check_out_chat(thread).await;
         }
         let record = &self.threads[&thread];
         let clone = self
@@ -842,13 +887,26 @@ impl Core {
         }
     }
 
+    /// How many commands and subagents the thread's agent here left
+    /// running.
+    pub(crate) fn background_here(&self, thread: ThreadId) -> u32 {
+        self.acp.get(&thread).map_or(0, |run| u32::try_from(run.in_background()).unwrap_or(u32::MAX))
+    }
+
     /// Tells browsers how the thread's agent stands, and stores it when its
     /// state or error changed.
     pub(crate) async fn agent_changed(&mut self, thread: ThreadId) {
         self.announce_agent(thread);
-        let Some(run) = self.acp.get(&thread) else {
+        let Some(run) = self.acp.get_mut(&thread) else {
             return;
         };
+        // The thread list shows what still runs in the background, which
+        // doesn't change the agent's state.
+        if run.background_listed != run.in_background() {
+            run.background_listed = run.in_background();
+            self.announce(crate::protocol::BusEvent::Threads);
+        }
+        let run = &self.acp[&thread];
         let stored = self.agent_runs.get(&thread);
         let record = silt_store::AgentRunRecord {
             agent: run.info.name.clone(),
@@ -1334,6 +1392,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Exited) => {
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.background.clear();
+                run.subagents.clear();
                 run.state = AgentState::Stopped;
                 run.handle = None;
                 self.close_agent_session(thread).await?;
@@ -1397,7 +1456,8 @@ impl Core {
         .await?;
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.session = Some(id);
-        run.primer = primer;
+        // A chat continued here keeps its own primer when the thread has none.
+        run.primer = primer.or(run.primer.take());
         self.record_acp(thread, &acp::session(&agent_id, &name, native)).await
     }
 
@@ -1497,6 +1557,13 @@ impl Core {
                             });
                         } else {
                             run.background.remove(task);
+                        }
+                    }
+                    if news.kind.as_deref() == Some("subagent") {
+                        if news.status == "running" {
+                            run.subagents.insert(id.clone());
+                        } else {
+                            run.subagents.remove(&id);
                         }
                     }
                     // Between turns, what ended is what the agent will likely go on about.
@@ -1836,6 +1903,43 @@ const ASK_AGAIN_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How long an agent asked what it offers may take to open its session.
 const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Where in a checkout a chat's files may be copied: a relative path of
+/// plain names, as it may come from another person's browser.
+fn copy_target(path: &str) -> Result<PathBuf, CoreError> {
+    let path = Path::new(path.trim());
+    let plain = path.components().all(|component| matches!(component, std::path::Component::Normal(_)));
+    if path.as_os_str().is_empty() || !plain {
+        return Err(CoreError::Invalid("copy the chat's files to a folder inside the checkout, such as `notes/chat`".into()));
+    }
+    Ok(path.to_owned())
+}
+
+/// Copies the files of a chat's folder, but not its git, into `to`. Links
+/// are skipped, as they could point anywhere.
+fn copy_chat_files(from: &Path, to: &Path) -> Result<(), CoreError> {
+    if to.exists() && std::fs::read_dir(to)?.next().is_some() {
+        return Err(CoreError::Invalid(format!("{} already has files; pick another folder for the chat's", to.display())));
+    }
+    fn copy(from: &Path, to: &Path, top: bool) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let target = to.join(entry.file_name());
+            if top && entry.file_name() == ".git" {
+                continue;
+            }
+            if kind.is_dir() {
+                copy(&entry.path(), &target, false)?;
+            } else if kind.is_file() {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
+    Ok(copy(from, to, true)?)
+}
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64)

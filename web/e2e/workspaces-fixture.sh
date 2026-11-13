@@ -37,6 +37,7 @@ work_url=$(serve work)
 oss_url=$(serve oss)
 
 export SILT_HOME="$work/ada/silt"
+export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/ada/claude"
 # Agent sessions on the machine running the tests would show in the import
 # offer, so each machine here has a home of its own.

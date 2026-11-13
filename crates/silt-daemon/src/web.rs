@@ -22,6 +22,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::core::Event;
 use crate::protocol::{BusEvent, BusSubscription, CommentOn, Request, Response, SearchFilters};
+use crate::voice::{self, Voice};
 
 #[derive(Clone)]
 struct Web {
@@ -30,6 +31,7 @@ struct Web {
     token: String,
     port: u16,
     codes: OneTimeCodes,
+    voice: Arc<Voice>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -86,7 +88,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let codes = OneTimeCodes::default();
-    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone() };
+    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone(), voice: Arc::new(Voice::new()) };
     let api = Router::new()
         .route("/api/events", get(events_socket))
         .route("/api/status", get(status))
@@ -98,6 +100,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/commits", get(commits))
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
+        .route("/api/threads/{id}/diff/stats", get(diff_stats))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/sent", post(comments_sent))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
@@ -128,6 +131,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
+        .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
+        .route("/api/threads/{id}/make-project", post(make_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
         .route("/api/threads/{id}/agent/tasks/{call}/stop", post(agent_stop_task))
@@ -170,6 +175,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/in-flight", get(in_flight))
         .route("/api/threads/{id}/search", get(thread_search))
         .route("/api/trash", get(trash))
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/model", post(voice_model))
+        .route("/api/voice/dictate", get(voice_dictate))
         .layer(middleware::from_fn_with_state(web.clone(), authenticate));
     let app = api
         .route("/api/exchange", post(exchange))
@@ -341,6 +349,20 @@ async fn status(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Status).await
 }
 
+// The voice routes don't become socket `Request`s: streamed audio has no CLI
+// caller (ADR 0061).
+async fn voice_status(State(web): State<Web>) -> HttpResponse {
+    Json(web.voice.status()).into_response()
+}
+
+async fn voice_model(State(web): State<Web>) -> HttpResponse {
+    Json(web.voice.start_download()).into_response()
+}
+
+async fn voice_dictate(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
+    upgrade.max_message_size(voice::MOST_FRAME_BYTES).on_upgrade(move |socket| voice::dictate(socket, web.voice))
+}
+
 async fn threads(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Threads).await
 }
@@ -384,12 +406,19 @@ struct DiffQuery {
     /// A page of the changed files, as the changes panel shows them.
     offset: Option<usize>,
     limit: Option<usize>,
+    /// One file, as a diff too large to read whole is read.
+    path: Option<String>,
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let request = Request::Diff { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()), files };
+    let base = query.base.filter(|base| !base.is_empty());
+    let request = Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()) };
     ask(&web, request).await
+}
+
+async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -522,6 +551,18 @@ struct AgentStart {
     agent: String,
     #[serde(default, flatten)]
     options: crate::protocol::StartOptions,
+}
+
+async fn chat_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ChatSettings).await
+}
+
+async fn set_chat_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ChatSettings>) -> HttpResponse {
+    ask(&web, Request::SetChatSettings { settings }).await
+}
+
+async fn make_project(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::MakeProject { thread }).await
 }
 
 async fn agent_start(State(web): State<Web>, Json(body): Json<AgentStart>) -> HttpResponse {
@@ -1050,7 +1091,7 @@ mod tests {
         let codes = OneTimeCodes::default();
         let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
         let bus = broadcast::channel(1).0;
-        let web = Web { events, bus, token: info.token.clone(), port: 1, codes };
+        let web = Web { events, bus, token: info.token.clone(), port: 1, codes, voice: Arc::new(Voice::new()) };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();

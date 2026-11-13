@@ -15,8 +15,8 @@ default:
 # Build the CLI and the desktop app
 build: build-cli build-desktop
 
-# Install the CLI and the desktop app
-install: install-cli install-desktop
+# Install the CLI, the desktop app and the speech helper
+install: install-cli install-desktop install-voice
 
 # Build the web UI, which the CLI embeds
 build-web:
@@ -36,11 +36,17 @@ install-cli: build-web
     cargo install --locked --path crates/silt-cli
     "{{bin_dir}}/silt" log > /dev/null
 
-# Install `silt-desktop` beside `silt`, with a launcher entry for the silt:// links
+# Install `silt-desktop` beside `silt`, with a launcher entry for the silt:// links.
+# Wayland matches a window to its entry by file name, and the window's app id is
+# the binary's name, so the entry is `silt-desktop.desktop`.
 install-desktop: check-webkit
     cargo install --locked --path crates/silt-desktop --features tauri/custom-protocol
+    install -Dm644 crates/silt-desktop/icons/32x32.png "{{data_dir}}/icons/hicolor/32x32/apps/silt.png"
     install -Dm644 crates/silt-desktop/icons/128x128.png "{{data_dir}}/icons/hicolor/128x128/apps/silt.png"
+    install -Dm644 crates/silt-desktop/icons/128x128@2x.png "{{data_dir}}/icons/hicolor/256x256/apps/silt.png"
+    install -Dm644 crates/silt-desktop/icons/icon.png "{{data_dir}}/icons/hicolor/512x512/apps/silt.png"
     install -d "{{data_dir}}/applications"
+    rm -f "{{data_dir}}/applications/silt.desktop"
     printf '%s\n' \
         '[Desktop Entry]' \
         'Type=Application' \
@@ -50,8 +56,13 @@ install-desktop: check-webkit
         'Icon=silt' \
         'Categories=Development;' \
         'MimeType=x-scheme-handler/silt;' \
-        > "{{data_dir}}/applications/silt.desktop"
+        'StartupWMClass=silt-desktop' \
+        > "{{data_dir}}/applications/silt-desktop.desktop"
     -update-desktop-database "{{data_dir}}/applications" 2>/dev/null
+
+# Install `silt-voice` beside `silt`, for dictation in the web UI (ADR 0061)
+install-voice:
+    cargo install --locked --path crates/silt-voice
 
 # From WSL: install the CLI here, and the CLI and the desktop app on Windows
 install-wsl: install-cli install-windows
@@ -64,7 +75,9 @@ install-windows: build-web
 uninstall:
     -cargo uninstall silt-cli
     -cargo uninstall silt-desktop
-    rm -f "{{data_dir}}/applications/silt.desktop" "{{data_dir}}/icons/hicolor/128x128/apps/silt.png"
+    -cargo uninstall silt-voice
+    rm -f "{{data_dir}}/applications/silt-desktop.desktop" "{{data_dir}}/applications/silt.desktop"
+    for size in 32x32 128x128 256x256 512x512; do rm -f "{{data_dir}}/icons/hicolor/$size/apps/silt.png"; done
 
 [private]
 check-webkit:

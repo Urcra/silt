@@ -24,10 +24,13 @@ export const keys = {
   queue: (id: string) => ['thread', id, 'queue'] as const,
   diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,
   diffPages: (id: string, base: string) => ['thread', id, 'diff-pages', base] as const,
+  diffStats: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff-stats', options] as const,
+  diffFile: (id: string, options: { turn?: number; base?: string }, path: string) => ['thread', id, 'diff-file', options, path] as const,
   mrs: ['mrs'] as const,
   mr: (id: string) => ['mrs', id] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
+  voice: ['voice'] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
   found: ['projects', 'found'] as const,
@@ -36,6 +39,7 @@ export const keys = {
   links: (thread: string) => ['links', thread] as const,
   notificationSettings: ['notification-settings'] as const,
   status: ['status'] as const,
+  chatSettings: ['chat-settings'] as const,
 }
 
 export function message(error: unknown): string {

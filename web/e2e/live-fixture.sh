@@ -46,6 +46,7 @@ machine() {
     user=$1
     home=${2:-$1}
     export SILT_HOME="$work/$home/silt"
+    export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
     export CLAUDE_CONFIG_DIR="$work/$home/claude"
     # Agent sessions on the machine running the tests would show in the import
     # offer, so each machine here has a home of its own.
