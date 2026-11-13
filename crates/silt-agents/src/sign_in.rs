@@ -5,11 +5,18 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 /// How much of the terminal's last output the person can unfold.
 const TAIL_LINES: usize = 12;
+
+/// A program asking where the cursor is, and the answer: the top left.
+const CURSOR_ASKED: &[u8] = b"\x1b[6n";
+const CURSOR_AT: &[u8] = b"\x1b[1;1R";
+
+type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
 
 /// What a running sign-in reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +31,7 @@ pub enum LoginEvent {
 pub struct Login {
     // Held so the terminal stays open while the program runs.
     _master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Writer,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -60,12 +67,25 @@ impl Login {
         drop(pty.slave);
         let killer = child.clone_killer();
         let mut reader = pty.master.try_clone_reader().map_err(std::io::Error::other)?;
-        let writer = pty.master.take_writer().map_err(std::io::Error::other)?;
+        let writer: Writer = Arc::new(Mutex::new(pty.master.take_writer().map_err(std::io::Error::other)?));
+        let answers = writer.clone();
         let mut printed = report.clone();
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
+            // The end of the last read, should a question be split across two.
+            let mut carried = Vec::new();
             while let Ok(read @ 1..) = reader.read(&mut buffer) {
-                printed(LoginEvent::Output(buffer[..read].to_vec()));
+                let chunk = &buffer[..read];
+                carried.extend_from_slice(chunk);
+                // Windows' console asks first, and shows nothing of the program until answered, as a terminal would.
+                if carried.windows(CURSOR_ASKED.len()).any(|window| window == CURSOR_ASKED) {
+                    carried.clear();
+                    if let Ok(mut writer) = answers.lock() {
+                        let _ = writer.write_all(CURSOR_AT).and_then(|()| writer.flush());
+                    }
+                }
+                carried.drain(..carried.len().saturating_sub(CURSOR_ASKED.len() - 1));
+                printed(LoginEvent::Output(chunk.to_vec()));
             }
         });
         std::thread::spawn(move || {
@@ -77,9 +97,10 @@ impl Login {
 
     /// Types `line` and Enter, as the person would.
     pub fn type_line(&mut self, line: &str) -> std::io::Result<()> {
-        self.writer.write_all(line.trim().as_bytes())?;
-        self.writer.write_all(b"\r")?;
-        self.writer.flush()
+        let mut writer = self.writer.lock().map_err(|_| std::io::Error::other("the terminal's writer panicked"))?;
+        writer.write_all(line.trim().as_bytes())?;
+        writer.write_all(b"\r")?;
+        writer.flush()
     }
 
     pub fn stop(&mut self) {
@@ -209,5 +230,29 @@ mod tests {
             }
         };
         assert!(success);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_asks_where_the_cursor_is_is_answered() {
+        let (sender, received) = std::sync::mpsc::channel();
+        let env = vec![("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())];
+        // Raw, so the answer, which ends in no newline, reaches the program as it comes.
+        let script = "stty raw -echo; printf '\\033[6n'; dd bs=1 count=6 2>/dev/null | od -c | head -1; stty sane";
+        let _login =
+            Login::start("sh", &["-c".into(), script.into()], &env, Path::new("."), move |event| drop(sender.send(event)))
+                .expect("starts");
+        let mut output = Vec::new();
+        loop {
+            match received.recv_timeout(std::time::Duration::from_secs(10)).expect("it reports") {
+                LoginEvent::Output(chunk) => output.extend(chunk),
+                LoginEvent::Exited { success } => {
+                    assert!(success);
+                    break;
+                }
+            }
+        }
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("033   [   1   ;   1   R"), "{output}");
     }
 }
