@@ -15,6 +15,7 @@ import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
@@ -459,7 +460,7 @@ export function NewThread() {
   const [chosenAgent, setAgent] = useState<string>()
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const [chosenPreset, setPreset] = useState<Preset>()
-  const [prompt, setPrompt] = useState(search.prompt ?? '')
+  const [prompt, setPrompt] = useDraft(NEW_THREAD_DRAFT)
   const [drafts, setDrafts] = useState(() => stored<Draft[]>(DRAFTS_KEY, []))
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)

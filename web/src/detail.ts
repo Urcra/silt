@@ -62,16 +62,3 @@ export function useDetailChoice(): [Detail, (detail: Detail) => void] {
 export function useGroupingChoice(): [Grouping, (grouping: Grouping) => void] {
   return useKept(GROUPING_KEY, GROUPINGS, 'turn')
 }
-
-/** Drafts for a thread about to open, such as a prompt to edit in a fork made for it. */
-const pending = new Map<string, string>()
-
-export function leaveDraft(thread: string, draft: string) {
-  pending.set(thread, draft)
-}
-
-export function takeDraft(thread: string): string | undefined {
-  const draft = pending.get(thread)
-  pending.delete(thread)
-  return draft
-}

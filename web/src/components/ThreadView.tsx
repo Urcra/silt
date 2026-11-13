@@ -56,7 +56,8 @@ import { ShareDialog } from './ShareDialog'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
 import { unrecorded } from '../unrecorded'
-import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, leaveDraft, takeDraft, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
+import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
+import { keepDraft, threadDraft, useDraft } from '../drafts'
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -178,7 +179,7 @@ function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: 
   const edit = () =>
     api.fork(thread, turn! - 1).then(
       (made) => {
-        leaveDraft(made.thread, entry.text)
+        keepDraft(threadDraft(made.thread), entry.text)
         void navigate({ to: '/t/$id', params: { id: made.thread } })
       },
       (failure: unknown) => toast(message(failure), 'danger'),
@@ -1613,7 +1614,7 @@ function ThreadBody({
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
   const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useDraft(threadDraft(thread))
   const [detail, setDetail] = useDetailChoice()
   const [grouping, setGrouping] = useGroupingChoice()
   const [thoughts, setThoughts] = useState({ open: false, times: 0 })
@@ -1621,13 +1622,6 @@ function ThreadBody({
     const open = !thoughts.open
     setThoughts({ open, times: thoughts.times + 1 })
     toast(open ? `Every thought open · ${formatKeys('shift+t')} closes them` : 'Every thought closed')
-  }
-  // A prompt to edit, left by Edit on the thread this one was forked from.
-  const [leftFor, setLeftFor] = useState<string>()
-  if (leftFor !== thread) {
-    setLeftFor(thread)
-    const left = takeDraft(thread)
-    if (left) setDraft(left)
   }
   const navigate = useNavigate()
   const hash = useRouterState({ select: (state) => state.location.hash })
@@ -1644,7 +1638,7 @@ function ThreadBody({
   )
   const people = usePresence(thread, null, null, draft, undefined, !hosted())
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
-  const clearDraft = useCallback(() => setDraft(''), [])
+  const clearDraft = useCallback(() => setDraft(''), [setDraft])
   useClearSentDraft(lastPrompt, draft, clearDraft)
   const sending = useSending(thread)
   const landedPrompts = useMemo(() => arrived(sending, entries), [sending, entries])
@@ -1661,7 +1655,7 @@ function ThreadBody({
     if (agentState !== 'error' || before === 'error' || waitingPrompts.length === 0) return
     dropSending(thread, waitingPrompts.map((item) => item.id))
     setDraft((current) => (current.trim() ? current : waitingPrompts.map((item) => item.text).join('\n\n')))
-  }, [agentState, thread, waitingPrompts])
+  }, [agentState, thread, waitingPrompts, setDraft])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),

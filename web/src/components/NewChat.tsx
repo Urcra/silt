@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { PRESETS, modeForPreset, permissionModes, startSettings } from '../agentState'
 import { api, type Preset } from '../api'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
 import { useMedia } from '../media'
 import { keys, message } from '../query'
 import { addSending } from '../sending'
@@ -29,7 +30,7 @@ export function NewChat() {
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const [chosenPreset, setPreset] = useState<Preset>()
   const [mode, setMode] = useState<string>()
-  const [prompt, setPrompt] = useState('')
+  const [prompt, setPrompt] = useDraft(NEW_CHAT_DRAFT)
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const agents = choices.data?.agents ?? []

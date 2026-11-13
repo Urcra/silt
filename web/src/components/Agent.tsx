@@ -681,7 +681,8 @@ export function AgentDock({
       <ComposerBox
         id={`draft-${thread}`}
         label="draft"
-        rows={narrow ? 1 : 2}
+        rows={1}
+        layout="inline"
         value={draft}
         onChange={onDraft}
         onSend={send}

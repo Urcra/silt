@@ -44,6 +44,41 @@ function useFolded() {
   return { room, content, folded }
 }
 
+/** Half the pane the composer is in, past which the box scrolls rather than grows. */
+function growLimit(element: HTMLElement): number {
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const { overflowY } = getComputedStyle(parent)
+    if (overflowY === 'auto' || overflowY === 'scroll') return parent.clientHeight / 2
+  }
+  return window.innerHeight / 2
+}
+
+/** Makes `element` as tall as its text, from its `rows` up to half the pane, and keeps it so as the pane resizes. */
+function growWithText(element: HTMLTextAreaElement): () => void {
+  const fit = () => {
+    // Hidden during a take, it measures nothing and would collapse.
+    if (element.offsetParent === null) return
+    element.style.height = 'auto'
+    const limit = growLimit(element)
+    element.style.height = `${Math.min(element.scrollHeight, limit)}px`
+    element.style.overflowY = element.scrollHeight > limit ? 'auto' : 'hidden'
+  }
+  fit()
+  window.addEventListener('resize', fit)
+  if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', fit)
+  let width = element.clientWidth
+  const rewrapped = new ResizeObserver(() => {
+    if (element.clientWidth === width) return
+    width = element.clientWidth
+    fit()
+  })
+  rewrapped.observe(element)
+  return () => {
+    rewrapped.disconnect()
+    window.removeEventListener('resize', fit)
+  }
+}
+
 /** The agent's commands that match the one being typed, over the box; the one picked fills in its name. */
 function CommandMenu({ id, offered, active, onPick }: { id: string; offered: AgentCommand[]; active: number; onPick: (command: AgentCommand) => void }) {
   useEffect(() => {
@@ -100,6 +135,7 @@ function Heard({
   heard,
   loudness,
   height,
+  limit,
   onKeyDown,
 }: {
   value: string
@@ -108,6 +144,7 @@ function Heard({
   heard: string
   loudness: number
   height: number | undefined
+  limit: number | undefined
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
   const shown = useRef<HTMLDivElement>(null)
@@ -124,8 +161,8 @@ function Heard({
       tabIndex={-1}
       aria-live="polite"
       onKeyDown={onKeyDown}
-      style={{ minHeight: height }}
-      className="max-h-60 min-w-0 flex-1 overflow-y-auto px-1.5 py-1.5 text-sm leading-normal break-words whitespace-pre-wrap text-fg-1 focus:outline-none max-md:text-base"
+      style={{ minHeight: height, maxHeight: limit }}
+      className="min-w-0 flex-1 overflow-y-auto px-1.5 py-1.5 text-sm leading-normal break-words whitespace-pre-wrap text-fg-1 focus:outline-none max-md:text-base"
     >
       {next.value.slice(0, heard ? start : next.caret)}
       {heard && (
@@ -155,10 +192,10 @@ export interface TouchSend {
 }
 
 /**
- * The one composer (ADR 0044, ADR 0062): centred on an empty thread, docked under a
- * running one. In the box, + for what goes with the prompt, the text, and the
- * microphone; ⏎ sends. Under it, the agent's settings, or the take while one is
- * recorded.
+ * The one composer (ADR 0044, ADR 0062, ADR 0063): + for what goes with the prompt, the text, and the
+ * microphone; ⏎ sends. Stacked, on New thread and New chat, the text fills the box over a row of + and the
+ * microphone. In line, under a thread, the box is one line of text, with + and the microphone under it. Under
+ * the box, the agent's settings, or the take while one is recorded.
  */
 export function ComposerBox({
   id,
@@ -168,6 +205,7 @@ export function ComposerBox({
   onSend,
   placeholder,
   rows = 3,
+  layout = 'stacked',
   top,
   above,
   below,
@@ -193,7 +231,9 @@ export function ComposerBox({
   /** ⏎ sends; mod+⏎ sends now, interrupting the agent's turn where it has one. */
   onSend: (now: boolean) => void
   placeholder: string
+  /** The box's least height, in lines; it grows with the text up to half the pane. */
   rows?: number
+  layout?: 'stacked' | 'inline'
   /** Docked on the box's top edge, set off from the rest: what the thread changed. */
   top?: ReactNode
   /** Over the text: what's queued, what others are writing. */
@@ -202,7 +242,7 @@ export function ComposerBox({
   below?: ReactNode
   /** Under the box, on the right: the agent and its settings. */
   tools?: ReactNode
-  /** In the box after the microphone, such as stopping the agent's turn. */
+  /** In the box on the right, such as stopping the agent's turn. */
   actions?: ReactNode
   /** Under the box, on the left, such as steering now. */
   note?: ReactNode
@@ -240,6 +280,7 @@ export function ComposerBox({
         start: box.current?.selectionStart ?? value.length,
         end: box.current?.selectionEnd ?? value.length,
         height: box.current?.offsetHeight,
+        limit: box.current ? growLimit(box.current) : undefined,
       }),
     onText: (words, sendIt) => {
       const next = insertWords(value, box.current?.selectionStart ?? value.length, box.current?.selectionEnd ?? value.length, words)
@@ -250,7 +291,8 @@ export function ComposerBox({
   })
   const take = dictation.available && taking(dictation.phase)
   // Where the words will go and the box's height, as they were when the take began, which the words heard keep to.
-  const [frozen, setFrozen] = useState<{ start: number; end: number; height: number | undefined }>()
+  const [frozen, setFrozen] = useState<{ start: number; end: number; height: number | undefined; limit: number | undefined }>()
+  useLayoutEffect(() => (box.current ? growWithText(box.current) : undefined), [value])
   useLayoutEffect(() => {
     if (dictatedCaret.current === null) return
     box.current?.focus()
@@ -360,6 +402,35 @@ export function ComposerBox({
         )}
       </span>
     ))
+  const inline = layout === 'inline'
+  const adding = plus.length > 0 && (
+    <Menu
+      above
+      align="left"
+      label="add to the prompt"
+      items={plus}
+      triggerClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-2 hover:bg-surface-2 hover:text-fg-1 aria-expanded:bg-surface-2 aria-expanded:text-fg-1 max-md:h-11 max-md:w-11"
+      trigger={<Icon name="plus" className="h-[18px] w-[18px]" />}
+    />
+  )
+  const microphone = dictation.available && <VoiceButton dictation={dictation} />
+  const touchSend = touch && send && !take && (
+    <RoundButton
+      type={send.submit ? 'submit' : 'button'}
+      label={send.label}
+      title={send.title}
+      icon="arrowUp"
+      disabled={send.disabled}
+      busy={send.busy}
+      onClick={send.submit ? undefined : () => onSend(false)}
+    />
+  )
+  const ending = (actions || touchSend) && (
+    <span className="flex shrink-0 items-center gap-1">
+      {actions}
+      {touchSend}
+    </span>
+  )
   return (
     <div className={cx('flex flex-col', className)}>
       <div
@@ -372,7 +443,7 @@ export function ComposerBox({
         )}
       >
         {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
-        {dictation.available && <VoiceOffer dictation={dictation} />}
+        {!inline && dictation.available && <VoiceOffer dictation={dictation} side="right" />}
         {top}
         {above}
         {below}
@@ -392,76 +463,79 @@ export function ComposerBox({
             }}
           />
         )}
-        <div className="flex items-end gap-1 p-1.5">
-          {plus.length > 0 && (
-            <Menu
-              above
-              align="left"
-              label="add to the prompt"
-              items={plus}
-              triggerClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-2 hover:bg-surface-2 hover:text-fg-1 aria-expanded:bg-surface-2 aria-expanded:text-fg-1 max-md:h-11 max-md:w-11"
-              trigger={<Icon name="plus" className="h-[18px] w-[18px]" />}
-            />
-          )}
-          <label htmlFor={id} className="sr-only">
-            {label}
-          </label>
-          <textarea
-            ref={box}
-            id={id}
-            aria-label={label}
-            rows={rows}
-            value={value}
-            onChange={(event) => {
-              dictatedToSend.current = null
-              edit(event.target.value)
-            }}
-            onKeyDown={keyDown}
-            aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
-            aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
-            onPaste={paste}
-            placeholder={placeholder}
-            className={cx(
-              'min-w-0 flex-1 resize-none self-stretch border-0 bg-transparent px-1.5 py-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base',
-              take && 'hidden',
-            )}
-          />
-          {take && frozen && (
-            <Heard
+        <div className={cx('flex gap-1 p-1.5', inline ? 'items-end' : 'flex-col')}>
+          {/* A row of its own: as a column's flex-1, the text would shrink rather than grow the box. */}
+          <div className={cx('flex min-w-0 items-end', inline && 'flex-1')}>
+            <label htmlFor={id} className="sr-only">
+              {label}
+            </label>
+            <textarea
+              ref={box}
+              id={id}
+              aria-label={label}
+              rows={rows}
               value={value}
-              start={Math.min(frozen.start, value.length)}
-              end={Math.min(frozen.end, value.length)}
-              heard={heard}
-              loudness={dictation.levels[dictation.levels.length - 1] ?? 0}
-              height={frozen.height}
-              onKeyDown={(event) => void dictation.onKey(event)}
+              onChange={(event) => {
+                dictatedToSend.current = null
+                edit(event.target.value)
+              }}
+              onKeyDown={keyDown}
+              aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
+              aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
+              onPaste={paste}
+              placeholder={placeholder}
+              className={cx(
+                'min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base',
+                take && 'hidden',
+              )}
             />
-          )}
-          <span className="flex shrink-0 items-center gap-1">
-            {dictation.available && <VoiceButton dictation={dictation} />}
-            {actions}
-            {touch && send && !take && (
-              <RoundButton
-                type={send.submit ? 'submit' : 'button'}
-                label={send.label}
-                title={send.title}
-                icon="arrowUp"
-                disabled={send.disabled}
-                busy={send.busy}
-                onClick={send.submit ? undefined : () => onSend(false)}
+            {take && frozen && (
+              <Heard
+                value={value}
+                start={Math.min(frozen.start, value.length)}
+                end={Math.min(frozen.end, value.length)}
+                heard={heard}
+                loudness={dictation.levels[dictation.levels.length - 1] ?? 0}
+                height={frozen.height}
+                limit={frozen.limit}
+                onKeyDown={(event) => void dictation.onKey(event)}
               />
             )}
-          </span>
+          </div>
+          {inline ? (
+            ending
+          ) : (
+            <span className="flex items-center gap-1">
+              {adding}
+              <span className="ml-auto flex items-center gap-1">
+                {microphone}
+                {ending}
+              </span>
+            </span>
+          )}
         </div>
       </div>
-      {/* Under the box, one row: a note or hint on the left, the agent's settings on the right, folded into one chip
-          where they don't fit; while a take runs, the take in their place. */}
+      {/* Under the box, one row: + and the microphone in line, a note or hint, and the agent's settings on the right,
+          folded into one chip where they don't fit; while a take runs, the take in their place. */}
       <div className="flex min-h-9 items-center gap-2 px-1 pt-1">
         {take ? (
-          <VoiceBar dictation={dictation} />
+          <>
+            {/* It stays where it was pressed, to be pressed again to keep the words. */}
+            {inline && microphone}
+            <VoiceBar dictation={dictation} />
+          </>
         ) : (
-          // The settings come first: a note or hint gives way, cut short, where both don't fit.
-          left && <span className="flex max-w-[60%] min-w-0 shrink items-center gap-2 overflow-hidden">{left}</span>
+          <>
+            {inline && (adding || microphone) && (
+              <span className="relative flex shrink-0 items-center gap-0.5">
+                {adding}
+                {microphone}
+                {dictation.available && <VoiceOffer dictation={dictation} side="left" />}
+              </span>
+            )}
+            {/* The settings come first: a note or hint gives way, cut short, where both don't fit. */}
+            {left && <span className="flex max-w-[60%] min-w-0 shrink items-center gap-2 overflow-hidden">{left}</span>}
+          </>
         )}
         <span ref={room} className={cx('min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]', take && 'hidden')}>
           <span ref={content} className="ml-auto flex w-max items-center gap-0.5 *:shrink-0">

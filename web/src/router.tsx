@@ -6,11 +6,10 @@ import { phone } from './shell'
 
 const root = createRootRoute({ component: Layout })
 
-/** What the new thread at `/` opens with: a project, the picker open on a tab, or a prompt typed elsewhere. */
+/** What the new thread at `/` opens with: a project, or the picker open on a tab. */
 export interface NewThreadSearch {
   project?: string
   pick?: 'projects' | 'new' | 'folder' | 'clone' | 'workspace'
-  prompt?: string
 }
 
 const PICKS = ['projects', 'new', 'folder', 'clone', 'workspace']
@@ -18,9 +17,7 @@ const PICKS = ['projects', 'new', 'folder', 'clone', 'workspace']
 function newThreadSearch(search: Record<string, unknown>): NewThreadSearch {
   return {
     ...(typeof search.project === 'string' ? { project: search.project } : {}),
-    ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),
-    ...(typeof search.prompt === 'string' ? { prompt: search.prompt } : {}),
-  }
+    ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),  }
 }
 
 /** A path moved into Settings (ADR 0044). */

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# From WSL, builds this tree with Windows' own cargo and installs `silt.exe`
-# and `silt-desktop.exe` where the desktop installer puts them (ADR 0045).
+# From WSL, builds this tree with Windows' own cargo and installs `silt.exe`,
+# `silt-desktop.exe` and `silt-voice.exe` with its speech engine's DLLs where
+# the desktop installer puts them (ADR 0045).
 # Run by `just install-wsl`, after `web/dist` is built.
 #
 # Windows' cargo builds a copy on its own drive: from \\wsl.localhost it
@@ -35,21 +36,26 @@ echo "install-windows: copying the tree to $src"
 mkdir -p "$src"
 rsync -rlt --files-from="$files" "$root/" "$src/"
 # A file deleted here still in the copy, such as a migration, would be built in.
-(cd "$src" && find . \( -path ./target -o -path ./crates/silt-desktop/target \) -prune -o -type f -print | sed 's|^\./||' | sort) \
+(cd "$src" && find . \( -path ./target -o -path './crates/*/target' \) -prune -o -type f -print | sed 's|^\./||' | sort) \
     | comm -13 "$files" - \
     | (cd "$src" && xargs -r -d '\n' rm -f)
 
 cd "$src"
-echo "install-windows: building silt.exe and silt-desktop.exe"
+echo "install-windows: building silt.exe, silt-desktop.exe and silt-voice.exe"
 windows 'cargo build --release --locked -p silt-cli; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    cargo build --release --locked --manifest-path crates/silt-desktop/Cargo.toml --features tauri/custom-protocol; exit $LASTEXITCODE'
+    cargo build --release --locked --manifest-path crates/silt-desktop/Cargo.toml --features tauri/custom-protocol; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    cargo build --release --locked --manifest-path crates/silt-voice/Cargo.toml; exit $LASTEXITCODE'
 
-# A running program can't be overwritten on Windows, only renamed: the
-# daemon and the app keep their old build until they restart.
+# A running program, or a DLL one has loaded, can't be overwritten on Windows,
+# only renamed: the daemon, the app and a dictation keep their old build until
+# they restart. The daemon finds silt-voice.exe beside silt.exe, and Windows
+# finds its DLLs beside it.
 windows '$app = Join-Path $env:LOCALAPPDATA "Silt"
     New-Item -ItemType Directory -Force $app | Out-Null
     Get-ChildItem $app -Filter *.old | Remove-Item -ErrorAction SilentlyContinue
-    $built = @{ "silt.exe" = "target\release\silt.exe"; "silt-desktop.exe" = "crates\silt-desktop\target\release\silt-desktop.exe" }
+    $voice = "crates\silt-voice\target\release"
+    $built = @{ "silt.exe" = "target\release\silt.exe"; "silt-desktop.exe" = "crates\silt-desktop\target\release\silt-desktop.exe"; "silt-voice.exe" = "$voice\silt-voice.exe" }
+    Get-ChildItem $voice -Filter *.dll | ForEach-Object { $built[$_.Name] = $_.FullName }
     foreach ($name in $built.Keys) {
         $to = Join-Path $app $name
         if (Test-Path $to) { Move-Item $to "$to.$(Get-Date -Format yyyyMMddHHmmss).old" }
