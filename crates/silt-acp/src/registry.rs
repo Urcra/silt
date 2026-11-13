@@ -119,6 +119,15 @@ fn bare(name: &str) -> &str {
 /// and words too plain to be one agent's, such as Kilo's `@kilocode/cli`.
 const NOT_AGENTS: [&str; 9] = ["cli", "code", "cursor", "factory", "github", "kiro", "qoder", "windsurf", "zed"];
 
+/// Registry agents whose own CLI serves ACP, as a subcommand: Silt runs
+/// it when installed, signed in as the person signed it in, rather than
+/// download the registry's separate build.
+const OWN_CLIS: [(&str, &str, &[&str]); 1] = [("antigravity-acp", "agy", &["acp"])];
+
+fn own_cli(agent_id: &str) -> Option<(&'static str, &'static [&'static str])> {
+    OWN_CLIS.into_iter().find(|(id, _, _)| *id == agent_id).map(|(_, program, args)| (program, args))
+}
+
 impl Entry {
     /// The names its CLI may go by. The registry doesn't say, so they're
     /// guessed from the id, the package and the binary's command.
@@ -132,6 +141,7 @@ impl Entry {
             .chain(self.id.split('-').next())
             .chain(packages)
             .chain(commands)
+            .chain(own_cli(&self.id).map(|(program, _)| program))
             .flat_map(|name| [name, bare(name)])
             .filter(|name| is_plain_relative(name) && !NOT_AGENTS.contains(name))
             .map(str::to_owned)
@@ -255,6 +265,7 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
         id if id.contains("claude") => &["ANTHROPIC_", "CLAUDE_"],
         id if id.contains("codex") || id.contains("openai") => &["OPENAI_", "CODEX_"],
         id if id.contains("gemini") => &["GEMINI_", "GOOGLE_"],
+        id if id.contains("antigravity") => &["GEMINI_", "GOOGLE_", "AGY_", "ANTIGRAVITY_"],
         id if id.contains("copilot") => &["GITHUB_", "GH_", "COPILOT_"],
         _ => &[],
     };
@@ -408,6 +419,10 @@ pub struct AgentCommand {
 /// The command that starts `agent`, downloading and unpacking a binary
 /// distribution into `data_dir` first when needed.
 pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
+    let programs = silt_os::Programs::on(&silt_os::linux_path(&std::env::var_os("PATH").unwrap_or_default()));
+    if let Some(own) = own_command(agent, &programs) {
+        return Ok(own);
+    }
     match &agent.distribution {
         Distribution::Command { program, args, env } => {
             Ok(AgentCommand { program: program.clone(), args: args.clone(), env: env.clone() })
@@ -418,6 +433,13 @@ pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand,
         }
         Distribution::Unavailable => Err(RegistryError::NoBuild(agent.id.clone())),
     }
+}
+
+/// The agent's own CLI, when it serves ACP and is on `PATH`.
+fn own_command(agent: &AgentInfo, programs: &silt_os::Programs) -> Option<AgentCommand> {
+    let (program, args) = own_cli(&agent.id)?;
+    programs.find(program)?;
+    Some(AgentCommand { program: program.to_owned(), args: args.iter().map(|arg| (*arg).to_owned()).collect(), env: Vec::new() })
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -613,6 +635,7 @@ mod tests {
         assert!(clis("claude-acp").contains(&"claude".to_owned()));
         assert!(clis("github-copilot-cli").contains(&"copilot".to_owned()));
         assert!(clis("gemini").contains(&"gemini".to_owned()));
+        assert!(clis("antigravity-acp").contains(&"agy".to_owned()));
         assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
         assert!(!clis("cursor").contains(&"cursor".to_owned()), "an editor's launcher");
         assert!(!clis("minimax-code").contains(&"code".to_owned()), "VS Code's launcher");
@@ -634,6 +657,7 @@ mod tests {
         program("gemini", 0o644);
         program("cursor", 0o755);
         program("code", 0o755);
+        program("agy", 0o755);
         let stamped = data.path().join("agents/goose/build");
         std::fs::create_dir_all(&stamped).expect("mkdir");
         std::fs::write(stamped.join(".silt-program-sha256"), "00").expect("stamp");
@@ -658,7 +682,16 @@ mod tests {
             .map(|agent| agent.id)
             .collect();
         let goose = if platform().is_some() { vec!["goose"] } else { Vec::new() };
-        let expected: Vec<&str> = ["claude-acp"].into_iter().chain(goose).chain(["claude", "/bin/sh"]).collect();
+        let expected: Vec<&str> =
+            ["antigravity-acp", "claude-acp"].into_iter().chain(goose).chain(["claude", "/bin/sh"]).collect();
         assert_eq!(offered, expected);
+        let antigravity = parse(SNAPSHOT).into_iter().find(|agent| agent.id == "antigravity-acp").expect("listed");
+        assert_eq!(
+            own_command(&antigravity, &programs),
+            Some(AgentCommand { program: "agy".into(), args: vec!["acp".into()], env: Vec::new() }),
+            "its own CLI rather than the registry's build"
+        );
+        let elsewhere = silt_os::Programs::on(data.path().as_os_str());
+        assert_eq!(own_command(&antigravity, &elsewhere), None);
     }
 }

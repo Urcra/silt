@@ -17,6 +17,8 @@ pub enum AgentError {
     OpenCode { command: String, stderr: String },
     #[error("OpenCode's export is not JSON")]
     Export(#[source] serde_json::Error),
+    #[error("Antigravity no longer keeps conversation {0} on this machine")]
+    NotKept(String),
     /// A recorded session whose id, subagent names or side files would lead
     /// outside its agent's session store.
     #[error("the recorded session has an unsafe {0}")]

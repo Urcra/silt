@@ -231,6 +231,7 @@ impl Machine {
             .env("SILT_CLAUDE_BIN", &self.fake)
             .env("SILT_CODEX_BIN", fake_agent("codex"))
             .env("SILT_GEMINI_BIN", fake_agent("gemini"))
+            .env("SILT_AGY_BIN", fake_agent("agy"))
             .env("SILT_COPILOT_BIN", fake_agent("copilot"))
             .env("SILT_OPENCODE_BIN", fake_agent("opencode"))
             .env("CODEX_HOME", self.agents.join("codex"))

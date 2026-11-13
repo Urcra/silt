@@ -472,9 +472,16 @@ impl Core {
             .find(|candidate| candidate.record.path == checkout)
             .map(|candidate| candidate.record.id)
             .expect("attached above");
-        if target.id() == source.id() {
+        let same = if target.id() == source.id() {
             let recorded = self.recorded_session(family_id, &history, &session, as_fork, target).await?;
             let recorded = recorded.checked().map_err(|source| CoreError::Agent { doing: "restore the session", source })?;
+            // An agent that can't take the session back starts primed, as
+            // another agent would.
+            target.can_restore(&recorded).then_some(recorded)
+        } else {
+            None
+        };
+        if let Some(recorded) = same {
             let transcript = restore(target, checkout, &agent_cwd, &recorded).await?;
             let recorded = recorded.into_inner();
             let new_id = recorded.id.clone();

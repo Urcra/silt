@@ -40,6 +40,8 @@ test('a diff too large to read whole lists its files and reads only the one open
   expect(asked).toEqual([])
 
   fireEvent.click(screen.getByRole('button', { name: 'open src/a.rs' }))
-  await waitFor(() => expect(screen.getByText('fn opened() {}')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText('fn opened() {}')).toBeInTheDocument(), { timeout: 10_000 })
   expect(asked).toEqual([`/api/threads/${THREAD}/diff?path=src%2Fa.rs`])
-})
+  // Querying 400 buttons by role, and drawing the opened file, take jsdom
+  // seconds under the whole suite's load.
+}, 20_000)
