@@ -35,14 +35,20 @@ fn read(path: &Path) -> String {
 /// Fires the prompt hook the way Claude Code would for `machine`'s most
 /// recently restored session and returns what the hook printed.
 fn prompt_hook(machine: &Machine, session: &str) -> String {
+    hook(machine, session, "UserPromptSubmit")
+}
+
+/// Fires `event`'s hook as Claude Code would for `session` on `machine`, and
+/// returns what the hook printed.
+fn hook(machine: &Machine, session: &str, event: &str) -> String {
     let mut child = Command::new(env!("CARGO_BIN_EXE_silt"))
-        .args(["hook", "UserPromptSubmit"])
+        .args(["hook", event])
         .env("SILT_HOME", &machine.silt_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .expect("hook runs");
-    let input = format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit"}}"#);
+    let input = format!(r#"{{"session_id":"{session}","hook_event_name":"{event}"}}"#);
     std::io::Write::write_all(&mut child.stdin.take().expect("stdin"), input.as_bytes()).expect("write input");
     String::from_utf8_lossy(&child.wait_with_output().expect("hook finishes").stdout).into_owned()
 }
@@ -118,6 +124,9 @@ fn a_teammate_forks_pulls_and_offers_work_back() {
         read(&transcript) + "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"alice: continuing upstream\"}}\n",
     )
     .expect("append to Alice's session");
+    // Her clone is hers again between turns: the turn she starts takes in what she changed meanwhile.
+    hook(alice, &alice_session, "UserPromptSubmit");
+    hook(alice, &alice_session, "Stop");
     assert!(eventually(|| bob.try_stdout(&["diff", &thread]).contains("+// alice was here")));
     assert!(eventually(|| bob.stdout(&["show", &thread]).contains("alice: continuing upstream")));
 
