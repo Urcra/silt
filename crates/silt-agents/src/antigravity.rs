@@ -127,16 +127,25 @@ pub fn on_disk_in(app: &Path) -> Vec<OnDisk> {
 }
 
 /// The newest conversation of `cwd` written since `since_ms` in `app`
-/// whose id isn't in `known`, leaving out subagents'.
+/// whose id isn't in `known`, leaving out subagents'. Started with a prompt
+/// (`-i`) in a folder it doesn't trust yet, agy lists a conversation with
+/// no workspace at all, so such a one is taken when none names `cwd`.
 pub fn discover_in(app: &Path, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-    summaries(app)
+    let fresh: Vec<(bool, i64, PathBuf, String)> = summaries(app)
         .into_iter()
-        .filter(|summary| summary.parent.is_none() && summary.cwd.as_deref() == Some(cwd) && !known.contains(&summary.id))
-        .map(|summary| (transcript_in(app, &summary.id), summary.id))
-        .filter_map(|(transcript, id)| Some((crate::modified_ms(&transcript)?, transcript, id)))
-        .filter(|(modified, _, _)| *modified >= since_ms)
-        .max_by_key(|(modified, _, _)| *modified)
-        .map(|(_, transcript, id)| Found { id, transcript })
+        .filter(|summary| summary.parent.is_none() && !known.contains(&summary.id))
+        .filter(|summary| summary.cwd.as_deref().is_none_or(|ran| ran == cwd))
+        .filter_map(|summary| {
+            let transcript = transcript_in(app, &summary.id);
+            let modified = crate::modified_ms(&transcript)?;
+            Some((summary.cwd.is_some(), modified, transcript, summary.id))
+        })
+        .filter(|(_, modified, _, _)| *modified >= since_ms)
+        .collect();
+    fresh
+        .into_iter()
+        .max_by_key(|(placed, modified, _, _)| (*placed, *modified))
+        .map(|(_, _, transcript, id)| Found { id, transcript })
 }
 
 /// The transcripts of the subagents the conversation in `transcript` started.
@@ -151,6 +160,32 @@ pub fn subagents_in(app: &Path, transcript: &Path) -> Vec<(String, PathBuf)> {
         .filter(|(transcript, _)| transcript.is_file())
         .map(|(transcript, id)| (id, transcript))
         .collect();
+    found.sort();
+    found
+}
+
+/// What a conversation's steps point to by path, under its
+/// `.system_generated` directory `dir`: a tool's output too long for its
+/// step, `steps/<n>/output.txt`, and a background task's log,
+/// `tasks/<task>.log`.
+pub fn outputs_in(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
+    for (kind, inner) in [("steps", Some("output.txt")), ("tasks", None)] {
+        let Ok(entries) = fs::read_dir(dir.join(kind)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let (path, name) = match inner {
+                Some(file) => (entry.path().join(file), format!("{kind}/{name}/{file}")),
+                None if name.ends_with(".log") => (entry.path(), format!("{kind}/{name}")),
+                None => continue,
+            };
+            if path.is_file() && crate::is_side_file_name(&name) {
+                found.push((name, path));
+            }
+        }
+    }
     found.sort();
     found
 }
@@ -175,6 +210,11 @@ pub struct AntigravityReader {
     pending: VecDeque<Pending>,
     /// Subagents by conversation id, with the call that started each.
     subagents: HashMap<String, String>,
+    /// Commands left running in the background, by task id: the call that
+    /// started each and its command line.
+    commands: HashMap<String, (String, String)>,
+    /// What set the agent going again after its turn ended, as a notice said.
+    cause: Option<String>,
     /// Whether the last turn ended, so a step the agent takes after is a
     /// turn it opened itself.
     stopped: bool,
@@ -199,7 +239,11 @@ impl Reader for AntigravityReader {
                 if self.stopped {
                     self.stopped = false;
                     read.marks.push(Mark::PromptSubmitted);
-                    read.entries.push(Entry::Woke { text: crate::acp::WOKE.to_owned() });
+                    let text = match self.cause.take() {
+                        Some(cause) => format!("{cause}, and the agent went on by itself."),
+                        None => crate::acp::WOKE.to_owned(),
+                    };
+                    read.entries.push(Entry::Woke { text });
                 }
                 let thinking = text("thinking");
                 if !thinking.is_empty() {
@@ -234,15 +278,30 @@ impl Reader for AntigravityReader {
             }
             "GENERIC" => match self.pending.pop_front() {
                 Some(call) => {
-                    let done = text("status") == "DONE";
-                    let said = if done || text("error").is_empty() { text("content") } else { text("error") };
+                    let status = text("status");
+                    let done = status == "DONE";
+                    // A command that outlasts its wait goes on as a task, and
+                    // its call answers at once.
+                    let ok = done || status == "RUNNING";
+                    let said = if ok || text("error").is_empty() { text("content") } else { text("error") };
                     let said = without_stamps(&said);
                     let subagent = (call.name == "invoke_subagent" && done).then(|| started_subagent(&said)).flatten();
+                    let command = (status == "RUNNING").then(|| backgrounded(&said)).flatten();
+                    let cancelled = (call.name == "manage_task" && done).then(|| cancelled(&said)).flatten();
                     read.marks.push(Mark::ToolFinished { tool_use_id: call.id.clone() });
-                    read.entries.push(Entry::ToolResult { tool_use_id: call.id.clone(), text: said, is_error: !done });
+                    read.entries.push(Entry::ToolResult { tool_use_id: call.id.clone(), text: said, is_error: !ok });
                     if let Some(subagent) = subagent {
                         self.subagents.insert(subagent.clone(), call.id.clone());
                         read.entries.push(Entry::Task(task(&subagent, &call.id, TaskStatus::Running, None)));
+                    }
+                    if let Some((id, line)) = command {
+                        read.entries.push(Entry::Task(background(&id, &call.id, TaskStatus::Running, None)));
+                        self.commands.insert(id, (call.id.clone(), line));
+                    }
+                    if let Some(id) = cancelled
+                        && let Some((started, _)) = self.commands.remove(&id)
+                    {
+                        read.entries.push(Entry::Task(background(&id, &started, TaskStatus::Stopped, None)));
                     }
                 }
                 None => read.entries.push(Entry::Other { kind: "step".into() }),
@@ -251,14 +310,20 @@ impl Reader for AntigravityReader {
                 let content = text("content");
                 let idle =
                     self.subagents.iter().find(|(subagent, _)| content.contains(&format!("Subagent {subagent} has gone idle")));
-                match idle {
-                    Some((subagent, call)) => {
-                        let said = content
-                            .split_once("most recent response: ")
-                            .map(|(_, said)| said.split("</SYSTEM_MESSAGE>").next().unwrap_or(said).trim().to_owned());
-                        read.entries.push(Entry::Task(task(subagent, call, TaskStatus::Completed, said)));
-                    }
-                    None => read.entries.push(Entry::Other { kind: "system".into() }),
+                if let Some((subagent, call)) = idle {
+                    let said = content
+                        .split_once("most recent response: ")
+                        .map(|(_, said)| said.split("</SYSTEM_MESSAGE>").next().unwrap_or(said).trim().to_owned());
+                    read.entries.push(Entry::Task(task(subagent, call, TaskStatus::Completed, said)));
+                    self.cause = Some("A subagent finished".into());
+                } else if let Some((id, result)) = finished(&content)
+                    && let Some((call, line)) = self.commands.remove(&id)
+                {
+                    let status = if result.contains("exited with code 0.") { TaskStatus::Completed } else { TaskStatus::Failed };
+                    read.entries.push(Entry::Task(background(&id, &call, status, Some(result))));
+                    self.cause = Some(format!("`{line}` finished in the background"));
+                } else {
+                    read.entries.push(Entry::Other { kind: "system".into() });
                 }
             }
             other => read.entries.push(Entry::Other { kind: other.to_ascii_lowercase() }),
@@ -293,6 +358,35 @@ fn started_subagent(said: &str) -> Option<String> {
     let mut stream = serde_json::Deserializer::from_str(&said[start..]).into_iter::<Value>();
     let id = stream.next()?.ok()?.get("conversationId")?.as_str()?.to_owned();
     crate::is_safe_id(&id).then_some(id)
+}
+
+/// The task a command went on as, and its command line, from its call's
+/// answer: `Tool is running as a background task with task id: <id>` and
+/// `Task Description: <command>`.
+fn backgrounded(said: &str) -> Option<(String, String)> {
+    let id = said.split_once("background task with task id: ")?.1.lines().next()?.trim().to_owned();
+    let line =
+        said.split_once("Task Description: ").and_then(|(_, rest)| rest.lines().next()).unwrap_or_default().trim().to_owned();
+    (!id.is_empty()).then_some((id, line))
+}
+
+/// The task `manage_task` stopped: `Task "<id>" cancelled.`
+fn cancelled(said: &str) -> Option<String> {
+    let (id, rest) = said.trim().strip_prefix("Task \"")?.split_once('"')?;
+    (rest.trim() == "cancelled.").then(|| id.to_owned())
+}
+
+/// The task a notice says ended, and what it ended with:
+/// `Task id "<id>" finished with result:\n<result>\n\nLog: …`.
+fn finished(notice: &str) -> Option<(String, String)> {
+    let (id, rest) = notice.split_once("Task id \"")?.1.split_once('"')?;
+    let result = rest.trim_start().strip_prefix("finished with result:")?;
+    let result = result.split("\nLog: ").next().unwrap_or(result).split("</SYSTEM_MESSAGE>").next().unwrap_or(result);
+    Some((id.to_owned(), result.trim().to_owned()))
+}
+
+fn background(id: &str, call: &str, status: TaskStatus, summary: Option<String>) -> Task {
+    Task { id: id.to_owned(), call: Some(call.to_owned()), kind: Some(TaskKind::Background), status, side: None, summary }
 }
 
 fn task(subagent: &str, call: &str, status: TaskStatus, summary: Option<String>) -> Task {
@@ -395,6 +489,15 @@ impl Agent for Antigravity {
     fn transcript(&self, _cwd: &Path, id: &str) -> Option<PathBuf> {
         let app = app_dir(&gemini_dir()?);
         crate::is_safe_id(id).then(|| transcript_in(&app, id))
+    }
+
+    /// `brain/<id>/.system_generated`, which the steps name files under.
+    fn session_dir(&self, transcript: &Path) -> Option<PathBuf> {
+        Some(transcript.parent()?.parent()?.to_owned())
+    }
+
+    fn attachments(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
+        self.session_dir(transcript).map(|dir| outputs_in(&dir)).unwrap_or_default()
     }
 
     fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
@@ -543,9 +646,73 @@ mod tests {
                 &task(sub, "step-1-0", TaskStatus::Completed, Some("12 files".into()))
             ]
         );
-        assert!(entries.contains(&Entry::Woke { text: crate::acp::WOKE.into() }));
+        assert!(entries.contains(&Entry::Woke { text: "A subagent finished, and the agent went on by itself.".into() }));
         assert_eq!(marks.iter().filter(|mark| **mark == Mark::Stopped).count(), 2, "{marks:?}");
         assert_eq!(marks.iter().filter(|mark| **mark == Mark::PromptSubmitted).count(), 1, "the turn it opened");
+    }
+
+    /// Records as agy 1.5.8 wrote them for a command that outlasted its
+    /// wait, and for one stopped with `manage_task`.
+    #[test]
+    fn a_command_left_in_the_background_runs_until_a_notice_says_it_ended() {
+        let id = "1e7426aa-34e6-4cb9-a165-266f7f750de9/task-2";
+        let started = |index: u64, line: &str| {
+            [
+                json!({"step_index": index, "type": "PLANNER_RESPONSE", "status": "DONE",
+                    "tool_calls": [{"name": "run_command", "args": {"CommandLine": line, "WaitMsBeforeAsync": 500}}]}),
+                json!({"step_index": index + 1, "type": "GENERIC", "status": "RUNNING",
+                    "content": format!("Created At: 2026-11-13T13:33:59Z\nTool is running as a background task with task id: {id}\nTask Description: {line}\nTask logs are available at: file:///h/task-2.log")}),
+            ]
+        };
+        let tasks = |entries: &[Entry]| -> Vec<(TaskStatus, Option<String>)> {
+            entries
+                .iter()
+                .filter_map(|entry| if let Entry::Task(task) = entry { Some((task.status, task.summary.clone())) } else { None })
+                .collect()
+        };
+        let mut lines = started(1, "sleep 6; echo bg-finished").to_vec();
+        lines.extend([
+            json!({"step_index": 3, "type": "PLANNER_RESPONSE", "status": "DONE", "content": "It runs in the background."}),
+            json!({"step_index": 4, "type": "SYSTEM_MESSAGE", "status": "DONE",
+                "content": format!("<SYSTEM_MESSAGE>\n[Message] sender={id} content=Task id \"{id}\" finished with result:\nCommand exited with code 0.\n\nCommand output:\nbg-finished\r\n\nLog: file:///h/task-2.log\n</SYSTEM_MESSAGE>")}),
+            json!({"step_index": 5, "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Noted the end."}),
+        ]);
+        let (entries, _) = read_all(&lines);
+        assert!(
+            entries.iter().any(|entry| matches!(entry, Entry::ToolResult { is_error: false, .. })),
+            "a call that went on isn't a failure"
+        );
+        assert_eq!(
+            tasks(&entries),
+            [
+                (TaskStatus::Running, None),
+                (TaskStatus::Completed, Some("Command exited with code 0.\n\nCommand output:\nbg-finished".into()))
+            ]
+        );
+        assert!(entries.contains(&Entry::Woke {
+            text: "`sleep 6; echo bg-finished` finished in the background, and the agent went on by itself.".into()
+        }));
+
+        let mut lines = started(1, "sleep 30").to_vec();
+        lines.extend([
+            json!({"step_index": 3, "type": "PLANNER_RESPONSE", "status": "DONE",
+                "tool_calls": [{"name": "manage_task", "args": {"Action": "kill", "TaskId": "task-2"}}]}),
+            generic(4, "DONE", &format!("Task \"{id}\" cancelled.")),
+        ]);
+        let (entries, _) = read_all(&lines);
+        assert_eq!(tasks(&entries), [(TaskStatus::Running, None), (TaskStatus::Stopped, None)]);
+    }
+
+    #[test]
+    fn long_outputs_and_task_logs_go_with_the_conversation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for file in ["steps/2/output.txt", "steps/4/output.txt", "tasks/task-2.log", "messages/read.json"] {
+            let path = dir.path().join(file);
+            fs::create_dir_all(path.parent().expect("dir")).expect("mkdir");
+            fs::write(path, "out").expect("write");
+        }
+        let names: Vec<String> = outputs_in(dir.path()).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, ["steps/2/output.txt", "steps/4/output.txt", "tasks/task-2.log"]);
     }
 
     #[test]

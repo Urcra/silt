@@ -156,7 +156,18 @@ async fn agent() -> Result<()> {
         .builder()
         .name("silt-fake-agent")
         .on_receive_request(
-            async move |_initialize: InitializeRequest, responder, _connection| {
+            async move |initialize: InitializeRequest, responder, _connection| {
+                // As Antigravity's `agy acp` does, it may list its terminal
+                // sign-in only to a client that says, in v1, it runs one.
+                let asked = serde_json::to_value(&initialize)
+                    .ok()
+                    .and_then(|raw| raw.pointer("/clientCapabilities/auth/terminal")?.as_bool())
+                    == Some(true);
+                let methods = if std::env::var_os("FAKE_ACP_SIGN_IN_IF_ASKED").is_some() && !asked {
+                    serde_json::json!([])
+                } else {
+                    sign_in_methods("id")
+                };
                 responder.respond(
                     InitializeResponse::new(ProtocolVersion::V1)
                         .agent_capabilities(
@@ -165,7 +176,7 @@ async fn agent() -> Result<()> {
                                 .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
                         )
                         .agent_info(Implementation::new("fake-agent", "1.0"))
-                        .auth_methods(serde_json::from_value(sign_in_methods("id")).map_err(agent_client_protocol::Error::into_internal_error)?),
+                        .auth_methods(serde_json::from_value(methods).map_err(agent_client_protocol::Error::into_internal_error)?),
                 )
             },
             agent_client_protocol::on_receive_request!(),

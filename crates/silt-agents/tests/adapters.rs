@@ -117,6 +117,21 @@ fn antigravity_conversations_are_found_by_where_its_index_says_they_run() {
     let transcript = app.join("brain").join(main).join(".system_generated/logs/transcript_full.jsonl");
     finds_as_a_new_run(|since, known| silt_agents::antigravity::discover_in(app, &cwd, since, known), main, &transcript);
 
+    // Started with `-i` in a folder agy doesn't trust yet, a conversation
+    // names no workspace; it is found only when none names the folder.
+    let unplaced = "0c1f0000-0000-4000-8000-000000000004";
+    index
+        .execute("INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?1, '')", [unplaced])
+        .expect("row");
+    let untrusted = app.join("brain").join(unplaced).join(".system_generated/logs/transcript_full.jsonl");
+    fs::create_dir_all(untrusted.parent().expect("dir")).expect("mkdir");
+    fs::write(&untrusted, "{}\n").expect("transcript");
+    let since = silt_agents::time::parse_timestamp(&silt_agents::time::timestamp_now()).expect("now") - 60_000;
+    let found = |known: &[String]| silt_agents::antigravity::discover_in(app, &cwd, since, known).map(|found| found.id);
+    assert_eq!(found(&[]).as_deref(), Some(main), "one that names the folder comes first");
+    assert_eq!(found(&[main.to_owned()]).as_deref(), Some(unplaced));
+    index.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?1", [unplaced]).expect("delete");
+
     let on_disk = silt_agents::antigravity::on_disk_in(app);
     let found: Vec<(&str, Option<&Path>)> = on_disk.iter().map(|found| (found.id.as_str(), found.cwd.as_deref())).collect();
     assert_eq!(

@@ -185,6 +185,21 @@ mod tests {
     }
 
     #[test]
+    fn reads_antigravity_s_link_and_its_ask_for_the_code() {
+        // As `agy acp --login` 1.5.8 prints it, the link shortened.
+        let link = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=x&state=y";
+        let output = format!(
+            "Open this link in a browser to log in with Google:\r\n\r\n  {link}\r\n\r\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:\r\n"
+        );
+        let screen = LoginScreen::read(output.as_bytes());
+        assert_eq!(screen.link.as_deref(), Some(link));
+        assert_eq!(screen.code, None);
+        assert!(screen.asks_code);
+        let refused = format!("{output}bad\r\n\r\ncouldn't log in: token exchange failed: oauth2: \"invalid_grant\"\r\n");
+        assert!(LoginScreen::read(refused.as_bytes()).failure().is_some());
+    }
+
+    #[test]
     fn reads_a_device_flow_s_page_and_code() {
         let output = "! First copy your one-time code: WDJB-MJH7\r\nOpen https://github.com/login/device in your browser.\r\nWaiting for authorization...\r\n";
         let screen = LoginScreen::read(output.as_bytes());

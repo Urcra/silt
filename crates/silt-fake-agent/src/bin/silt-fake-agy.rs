@@ -43,7 +43,9 @@ fn run() -> Step {
         return turn(&transcript, &cwd, &env_or("FAKE_SAY", "Continuing in agy"), &env_or("FAKE_LINE", "fn agy() {}"));
     }
     let id = uuid::Uuid::new_v4().to_string();
-    list(&app, &id, &cwd)?;
+    // Started with a prompt in a folder it doesn't trust yet, as Silt's
+    // checkouts are at first, agy lists the conversation without a workspace.
+    list(&app, &id, prompt.is_none().then_some(cwd.as_path()))?;
     let transcript = transcript(&app, &id);
     match prompt {
         Some(prompt) => {
@@ -61,7 +63,7 @@ fn transcript(app: &Path, id: &str) -> PathBuf {
 
 /// Starts the conversation's store and lists it in the index, as agy does
 /// before the first step.
-fn list(app: &Path, id: &str, cwd: &Path) -> Step {
+fn list(app: &Path, id: &str, cwd: Option<&Path>) -> Step {
     fs::create_dir_all(app.join("conversations")).map_err(io)?;
     write(&app.join("conversations").join(format!("{id}.db")), b"")?;
     let failed = |error: rusqlite::Error| Failed(1, error.to_string());
@@ -72,7 +74,7 @@ fn list(app: &Path, id: &str, cwd: &Path) -> Step {
              workspace_uris text NOT NULL, parent_conversation_id text NOT NULL DEFAULT '')",
         )
         .map_err(failed)?;
-    let uris = json!([format!("file://{}", uri_path(cwd))]).to_string();
+    let uris = cwd.map_or_else(String::new, |cwd| json!([format!("file://{}", uri_path(cwd))]).to_string());
     index
         .execute("INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?1, ?2)", (id, uris))
         .map_err(failed)?;
