@@ -552,13 +552,14 @@ export function NewThread() {
           // The agent takes the first prompt once it's up, seconds later; the thread shows it as sent meanwhile.
           if (!background && prompt.trim()) addSending(thread, prompt, attached.map((file) => file.name), 0)
           clear()
+          // The draft was this one's; New thread opens empty next time.
+          setPrompt('')
           void queries.invalidateQueries({ queryKey: keys.threads })
           if (!background) {
             void navigate({ to: '/t/$id', params: { id: thread } })
             return
           }
           toast(`${agentName} started in a new thread`, 'ok')
-          setPrompt('')
         },
         (failure: unknown) => setError(message(failure)),
       )

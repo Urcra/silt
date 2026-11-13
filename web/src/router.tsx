@@ -17,7 +17,8 @@ const PICKS = ['projects', 'new', 'folder', 'clone', 'workspace']
 function newThreadSearch(search: Record<string, unknown>): NewThreadSearch {
   return {
     ...(typeof search.project === 'string' ? { project: search.project } : {}),
-    ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),  }
+    ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),
+  }
 }
 
 /** A path moved into Settings (ADR 0044). */

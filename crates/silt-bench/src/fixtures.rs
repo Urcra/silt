@@ -69,6 +69,9 @@ pub fn write_repo(repo: &Path, files: usize) -> io::Result<()> {
         fs::write(dir.join(format!("f{index}.rs")), format!("pub fn f{index}() {{}}\n"))?;
     }
     git(repo, &["init", "-q", "-b", "main"])?;
+    // A commit of 50k objects sets off git's auto-gc in the background, which
+    // repacks them while the fixture is renamed into place and cloned.
+    git(repo, &["config", "gc.auto", "0"])?;
     git(repo, &["add", "."])?;
     git(repo, &["-c", "user.name=bench", "-c", "user.email=bench@example.com", "commit", "-q", "-m", "files"])
 }

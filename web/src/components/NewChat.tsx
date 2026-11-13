@@ -74,13 +74,14 @@ export function NewChat() {
         (thread) => {
           if (!background && prompt.trim()) addSending(thread, prompt, attached.map((file) => file.name), 0)
           clear()
+          // The draft was this one's; New chat opens empty next time.
+          setPrompt('')
           void queries.invalidateQueries({ queryKey: keys.threads })
           if (!background) {
             void navigate({ to: '/t/$id', params: { id: thread } })
             return
           }
           toast(`${agentName} started in a new chat`, 'ok')
-          setPrompt('')
         },
         (failure: unknown) => setError(message(failure)),
       )

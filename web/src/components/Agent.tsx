@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { type Dispatch, type ReactNode, type SetStateAction, useState } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useRef, useState } from 'react'
 import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment, type SignInAsked } from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
@@ -510,16 +510,47 @@ export function AgentDock({
       setError(message(failure))
     })
   }
+  // The agent asked to start here, until the page hears how it stands: ⏎ meanwhile mustn't start it again.
+  const starting = useRef<Promise<unknown>>(undefined)
+  const state = status?.state
+  useEffect(() => {
+    starting.current = undefined
+  }, [state, thread])
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
     if (!startable) return
     const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
     const mode = startModes ? (chosenMode ?? null) : null
-    optimistic((text, files) => api.startAgent(agent, { thread }, { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files }))
+    optimistic((text, files) => {
+      const started = api.startAgent(agent, { thread }, { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files })
+      starting.current = started
+      const failed = () => {
+        if (starting.current === started) starting.current = undefined
+      }
+      started.catch(failed)
+      return started
+    })
+  }
+  // The draft goes once the agent has started, which queues it as it does any prompt before the agent is ready.
+  const queueAfter = (pending: Promise<unknown>) => {
+    if (!draft.trim()) return
+    const text = draft
+    const files = attached
+    setError(undefined)
+    onDraft('')
+    clear()
+    pending
+      .then(() => api.prompt(thread, text, false, files))
+      .catch((failure: unknown) => {
+        onDraft((current) => (current.trim() ? `${current}\n\n${text}` : text))
+        restore(files)
+        setError(message(failure))
+      })
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
   const send = (now = false) => {
+    if (starting.current) return queueAfter(starting.current)
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
     if (!live || !sendable) return
