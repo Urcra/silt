@@ -451,7 +451,7 @@ frozen: boolean, revoked: boolean,
  */
 url: string | null, 
 /**
- * The one artifact it shows, rather than the conversation (ADR 0066).
+ * The one artifact it shows, rather than the conversation (ADR 0067).
  */
 artifact: LinkedArtifact | null, };
 
@@ -499,7 +499,7 @@ outcome: ToolOutcome | null,
  */
 image: ImageView | null, 
 /**
- * On an `artifact`: what the agent showed the person (ADR 0066).
+ * On an `artifact`: what the agent showed the person (ADR 0067).
  */
 artifact: ArtifactView | null, 
 /**

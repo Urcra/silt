@@ -171,7 +171,7 @@ fn unfenced(output: String) -> String {
     }
 }
 
-/// What the agent showed the person, recorded by Silt itself (ADR 0066).
+/// What the agent showed the person, recorded by Silt itself (ADR 0067).
 pub fn artifact(artifact: &silt_proto::view::ArtifactView) -> String {
     let mut record = serde_json::to_value(artifact).unwrap_or_else(|_| json!({}));
     record["t"] = json!("artifact");

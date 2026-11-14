@@ -1,4 +1,4 @@
-// What agents showed the person (ADR 0066): artifacts, each a run of
+// What agents showed the person (ADR 0067): artifacts, each a run of
 // versions under one id, and images shown in the conversation.
 
 import type { ArtifactContent, ArtifactView, CommentView, HistoryEntry } from './api'

@@ -1,9 +1,9 @@
-// What agents showed the person (ADR 0066): images in the conversation,
+// What agents showed the person (ADR 0067): images in the conversation,
 // artifact cards there, and the panel that shows an artifact beside it.
 
 import { useQuery } from '@tanstack/react-query'
-import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { api, type ArtifactContent, type ArtifactView, type CommentView, type HistoryEntry } from '../api'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { api, type ArtifactContent, type ArtifactView, type CommentView } from '../api'
 import {
   type ArtifactGroup,
   type ArtifactVersion,
@@ -17,7 +17,7 @@ import {
   textOf,
   versionOf,
 } from '../artifacts'
-import { ArtifactActions, type Opened, useArtifactContent } from '../artifactActions'
+import type { Opened } from '../artifactActions'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
@@ -25,83 +25,8 @@ import { Links } from './ShareDialog'
 import { ago } from '../time'
 import { Dialog, Icon, IconButton, Menu, Spinner, cx, toast } from '../ui'
 import { ArtifactCommentsButton, AskForChange } from './ArtifactComments'
+import { KindIcon, ShownImage } from './ArtifactCards'
 import { Markdown } from './Markdown'
-
-/** An image an agent showed in the conversation, with its caption; it opens at full size. */
-export function ShownImage({ thread, entry }: { thread: string; entry: HistoryEntry }) {
-  const artifact = entry.artifact!
-  const content = useArtifactContent(thread, artifact)
-  const [open, setOpen] = useState(false)
-  const alt = artifact.caption ?? artifact.title
-  return (
-    <figure className="flex w-fit max-w-full flex-col gap-1.5" data-testid="shown-image">
-      <button
-        type="button"
-        aria-label={`open the image ${alt}`}
-        onClick={() => setOpen(true)}
-        disabled={!content.data}
-        className="flex min-h-24 min-w-32 items-center justify-center overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
-      >
-        {content.data ? (
-          <img src={dataUrl(content.data)} alt={alt} className="block max-h-72 max-w-full object-contain md:max-w-[420px]" />
-        ) : content.error ? (
-          <span className="px-3 text-2xs text-fg-2">{message(content.error)}</span>
-        ) : (
-          <Spinner />
-        )}
-      </button>
-      <figcaption className="text-2xs text-fg-3">
-        {artifact.caption && <span className="text-fg-2">{artifact.caption} · </span>}
-        {artifact.media_type.replace(/^image\//, '').toUpperCase()} · {sizeOf(artifact.size)}
-      </figcaption>
-      {content.data && (
-        <Dialog open={open} onClose={() => setOpen(false)} title={alt} wide>
-          <img src={dataUrl(content.data)} alt={alt} className="max-h-[75vh] w-full object-contain" />
-        </Dialog>
-      )}
-    </figure>
-  )
-}
-
-function sizeOf(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function KindIcon({ kind, className }: { kind: string; className?: string }) {
-  return <Icon name={kind === 'image' || kind === 'svg' ? 'image' : kind === 'mermaid' ? 'graph' : 'file'} className={className} />
-}
-
-/** An artifact version as the conversation shows it where the agent made it: a card that opens it beside the conversation. */
-export function ArtifactCard({ entry }: { entry: HistoryEntry }) {
-  const artifact = entry.artifact!
-  const actions = useContext(ArtifactActions)
-  const open = actions?.opened?.id === artifact.id
-  return (
-    <button
-      type="button"
-      data-testid="artifact-card"
-      onClick={() => actions?.open(artifact.id, artifact.version)}
-      aria-label={`Open the artifact ${artifact.title}, version ${artifact.version}`}
-      className={cx(
-        'flex w-full max-w-[420px] items-center gap-3 rounded-md border bg-elevated px-3 py-2.5 text-left hover:border-line-strong',
-        open ? 'border-accent shadow-[0_0_0_3px_var(--accent-tint)]' : 'border-line',
-      )}
-    >
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-accent-tint text-accent-fg">
-        <KindIcon kind={artifact.kind} className="h-5 w-5" />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium">{artifact.title}</span>
-        <span className="text-xs text-fg-2">
-          {kindLabel(artifact.kind)} · v{artifact.version}
-        </span>
-      </span>
-      <span className="shrink-0 text-xs text-accent-fg">{open ? 'Open beside' : 'Open'}</span>
-    </button>
-  )
-}
 
 /** The Artifacts tab with none open: the thread's artifacts, the one changed last first, and the images agents showed. */
 export function ArtifactList({
@@ -170,7 +95,7 @@ const ZOOMS = [50, 75, 100, 125, 150, 200]
 const PILL = 'inline-flex h-8 items-center rounded-lg border border-line bg-elevated shadow-overlay max-md:h-11'
 
 /**
- * An open artifact (ADR 0066): its header takes the panel's top row, its page fills the rest edge to edge, and its
+ * An open artifact (ADR 0067): its header takes the panel's top row, its page fills the rest edge to edge, and its
  * version and view float over the page's top.
  */
 export function ArtifactViewer({

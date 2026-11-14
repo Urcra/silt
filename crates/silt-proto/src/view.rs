@@ -347,7 +347,7 @@ pub struct HistoryEntry {
     /// On an `image`: the picture the entry before it carried.
     #[serde(default)]
     pub image: Option<ImageView>,
-    /// On an `artifact`: what the agent showed the person (ADR 0066).
+    /// On an `artifact`: what the agent showed the person (ADR 0067).
     #[serde(default)]
     pub artifact: Option<ArtifactView>,
     /// On a `usage`: what one of the agent's messages cost.
@@ -395,7 +395,7 @@ pub struct PlanStepView {
 }
 
 /// One version of what an agent showed the person: an image in the
-/// conversation, or an artifact beside it (ADR 0066).
+/// conversation, or an artifact beside it (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ArtifactView {
@@ -818,7 +818,7 @@ pub struct ThreadLink {
     /// Only when just made: the server keeps no copy of the token.
     #[serde(default)]
     pub url: Option<String>,
-    /// The one artifact it shows, rather than the conversation (ADR 0066).
+    /// The one artifact it shows, rather than the conversation (ADR 0067).
     #[serde(default)]
     pub artifact: Option<LinkedArtifact>,
 }

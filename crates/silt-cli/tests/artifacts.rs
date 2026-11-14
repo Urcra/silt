@@ -1,4 +1,4 @@
-//! Artifacts (ADR 0066) between machines: what an agent showed on one
+//! Artifacts (ADR 0067) between machines: what an agent showed on one
 //! machine reaches the person's other machines with the thread.
 
 mod common;
@@ -92,7 +92,7 @@ fn fetch(url: &str, headers: &[&str]) -> (String, Vec<String>, String) {
     (status, found, body.to_owned())
 }
 
-/// A read-only link to one artifact (ADR 0066) shows it alone, its content
+/// A read-only link to one artifact (ADR 0067) shows it alone, its content
 /// served under a sandbox that lets it reach nothing; a link names only an
 /// artifact the thread has.
 #[test]

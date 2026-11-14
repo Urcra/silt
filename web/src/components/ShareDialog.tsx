@@ -8,7 +8,7 @@ import { Mock } from './Mock'
 
 /**
  * A read-only link to the thread, for anyone holding one (ADR 0027); only its owner has them. With `artifact`, links to
- * that artifact alone (ADR 0066), at the version shown or following new ones.
+ * that artifact alone (ADR 0067), at the version shown or following new ones.
  */
 export function Links({ thread, artifact }: { thread: string; artifact?: { id: string; version: number } }) {
   const links = useQuery({ queryKey: keys.links(thread), queryFn: () => api.links(thread), retry: false })

@@ -28,7 +28,7 @@ struct DaemonTools {
     checkout: PathBuf,
     /// The run's token, which scopes every answer to its workspace (ADR 0065).
     token: Option<String>,
-    /// A person watches the run in the web UI (ADR 0066).
+    /// A person watches the run in the web UI (ADR 0067).
     shows: bool,
 }
 

@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { type ReactNode, type RefObject, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
@@ -53,7 +53,7 @@ import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
-import { ArtifactCard, ArtifactList, ArtifactViewer, ShownImage } from './Artifacts'
+import { ArtifactCard, ShownImage } from './ArtifactCards'
 import { ArtifactActions, type Opened } from '../artifactActions'
 import { artifactsOf, shownImagesOf } from '../artifacts'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
@@ -61,6 +61,10 @@ import { LiveQuestions } from '../liveQuestions'
 import { unrecorded } from '../unrecorded'
 import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
 import { keepDraft, threadDraft, useDraft } from '../drafts'
+
+// The panel's viewer and list load only once there is an artifact to show.
+const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactViewer })))
+const ArtifactList = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactList })))
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -1626,7 +1630,7 @@ function ThreadBody({
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
   const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
-  // The artifact the panel shows (ADR 0066), and whether it takes the conversation's space too.
+  // The artifact the panel shows (ADR 0067), and whether it takes the conversation's space too.
   const [opened, setOpened] = useState<Opened | null>(null)
   const [full, setFull] = useState(false)
   const [draft, setDraft] = useDraft(threadDraft(thread))
@@ -1849,6 +1853,7 @@ function ThreadBody({
       inspector={
         (panel || sheet) &&
         (tab === 'artifacts' && opened ? (
+          <Suspense fallback={null}>
           <ArtifactViewer
             thread={thread}
             groups={groups}
@@ -1868,6 +1873,7 @@ function ThreadBody({
             onCommentsChanged={reloadComments}
             phone={!desktop}
           />
+          </Suspense>
         ) : (
         <div className="flex flex-col">
           <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
@@ -1894,7 +1900,9 @@ function ThreadBody({
             {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
           </div>
           {tab === 'artifacts' ? (
-            <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
+            <Suspense fallback={null}>
+              <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
+            </Suspense>
           ) : tab === 'lineage' ? (
             <div className="flex flex-col gap-6 px-5 py-5">
               {summary && (

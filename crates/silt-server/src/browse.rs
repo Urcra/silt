@@ -345,7 +345,7 @@ async fn history(
 }
 
 /// An artifact's content, if an artifact of the thread names the blob
-/// (ADR 0066).
+/// (ADR 0067).
 async fn artifact_content(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,

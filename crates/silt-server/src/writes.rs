@@ -148,7 +148,7 @@ struct SentComments {
 
 /// Records that comments went to the thread's agent in a prompt, as a
 /// machine does once a review or an artifact's comments are sent (ADR 0055,
-/// ADR 0066).
+/// ADR 0067).
 async fn comments_sent(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
