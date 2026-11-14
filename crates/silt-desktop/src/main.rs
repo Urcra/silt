@@ -11,7 +11,7 @@ mod microphone;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,7 +53,12 @@ fn main() {
             {
                 *target.lock().expect("lock") = Target { backend, project: None };
             }
-            open_window(app.handle(), ui, target, known)?;
+            let dir = app.path().app_data_dir().ok();
+            let silts = Arc::new(Silts::load(dir.as_ref().map(|dir| dir.join(WSL_SILTS))));
+            let shown = target.lock().expect("lock").backend.clone();
+            let (others, starting) = (known.clone(), silts.clone());
+            std::thread::spawn(move || start_the_others(&others, &shown, &native_silt(), &starting));
+            open_window(app.handle(), ui, target, known, silts, dir)?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -63,15 +68,16 @@ fn main() {
 /// The file in the app's data dir that keeps the backend last shown.
 const LAST_BACKEND: &str = "backend";
 
+/// The file in the app's data dir that keeps each distribution's `silt`.
+const WSL_SILTS: &str = "wsl-silt.json";
+
 /// The backend last shown, if the app still knows it.
 fn last_backend(file: &Path, known: &[Backend]) -> Option<Backend> {
     let text = fs::read_to_string(file).ok()?;
     Backend::parse(text.trim()).filter(|backend| known.contains(backend))
 }
 
-/// This computer, and on Windows each WSL distribution. A distribution's
-/// `silt` is looked for only once it's picked, so the app doesn't start
-/// every distribution.
+/// This computer, and on Windows each WSL distribution.
 fn known_backends() -> Vec<Backend> {
     let mut known = vec![Backend::Native];
     if cfg!(windows) {
@@ -113,6 +119,8 @@ fn open_window(
     ui: Arc<Mutex<Option<Url>>>,
     target: Arc<Mutex<Target>>,
     known: Arc<Vec<Backend>>,
+    silts: Arc<Silts>,
+    dir: Option<PathBuf>,
 ) -> tauri::Result<WebviewWindow> {
     let started = AtomicBool::new(false);
     let navigating = ui.clone();
@@ -158,10 +166,8 @@ fn open_window(
                 let _ = window.eval(current_script(&shown.lock().expect("lock")));
             }
             if payload.event() == PageLoadEvent::Finished && !started.swap(true, Ordering::SeqCst) {
-                let ui = loading.clone();
-                let target = target.clone();
-                let silts = window.app_handle().path().app_data_dir().ok().map(|dir| dir.join("wsl-silt.json"));
-                std::thread::spawn(move || keep_ui(&window, &ui, &target, silts.as_deref()));
+                let (ui, target, silts, dir) = (loading.clone(), target.clone(), silts.clone(), dir.clone());
+                std::thread::spawn(move || keep_ui(&window, &ui, &target, &silts, dir.as_deref()));
             }
         })
         .build()?;
@@ -179,11 +185,8 @@ const CHECK_WAIT: Duration = Duration::from_secs(3);
 /// again and the window follows it to the same page. When another backend
 /// or project is asked for, the window goes there. Until the UI first
 /// loads, the starting page says why it hasn't.
-fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Target>, silts: Option<&Path>) {
-    let exe = env::current_exe().ok();
-    let program = daemon::silt_program(env::var_os("SILT_BIN"), exe.as_deref(), |path| path.is_file());
-    let mut wsl_silt =
-        silts.and_then(|file| fs::read_to_string(file).ok()).map(|text| backends::remembered_silts(&text)).unwrap_or_default();
+fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Target>, silts: &Silts, dir: Option<&Path>) {
+    let program = native_silt();
     let mut showing: Option<Target> = None;
     let mut lost = true;
     let mut failures = 0;
@@ -208,8 +211,7 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
         };
         // Another backend or project starts on its own page.
         let carried = if showing.as_ref() == Some(&wanted) { known.as_ref() } else { None };
-        let known_silts = wsl_silt.clone();
-        let opened = command_for(&wanted, &program, &mut wsl_silt).and_then(daemon::open_web).and_then(|new| {
+        let opened = command_for(&wanted, &program, silts).and_then(daemon::open_web).and_then(|new| {
             let moved = daemon::same_page_on(Some(&shown), carried, &new);
             eprintln!("silt-desktop: showing {}{}", new.origin().ascii_serialization(), moved.path());
             *ui.lock().expect("lock") = Some(new);
@@ -224,17 +226,12 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
         if opened.is_err()
             && let Backend::Wsl(distribution) = &wanted.backend
         {
-            wsl_silt.remove(distribution);
-        }
-        if wsl_silt != known_silts
-            && let Some(file) = silts
-        {
-            remember(file, &wsl_silt);
+            silts.forget(distribution);
         }
         match opened {
             Ok(()) => {
                 if showing.as_ref().is_none_or(|shown| shown.backend != wanted.backend)
-                    && let Some(dir) = silts.and_then(Path::parent)
+                    && let Some(dir) = dir
                 {
                     remember_backend(dir, &wanted.backend);
                 }
@@ -257,36 +254,106 @@ fn keep_ui(window: &WebviewWindow, ui: &Mutex<Option<Url>>, target: &Mutex<Targe
     }
 }
 
-/// The command that asks the target's `silt` for its UI. A distribution's
-/// `silt` is found once and remembered.
-fn command_for(
-    target: &Target,
-    program: &std::path::Path,
-    wsl_silt: &mut HashMap<String, String>,
-) -> Result<Command, Exn<DesktopError>> {
-    let Backend::Wsl(distribution) = &target.backend else {
-        return Ok(backends::open_web(target, program, ""));
+/// The `silt` this computer's backend runs.
+fn native_silt() -> PathBuf {
+    let exe = env::current_exe().ok();
+    daemon::silt_program(env::var_os("SILT_BIN"), exe.as_deref(), |path| path.is_file())
+}
+
+/// The command that asks the target's `silt` for its UI.
+fn command_for(target: &Target, program: &Path, silts: &Silts) -> Result<Command, Exn<DesktopError>> {
+    let wsl_silt = match &target.backend {
+        Backend::Native => String::new(),
+        Backend::Wsl(distribution) => silts.find(distribution)?,
     };
-    if !wsl_silt.contains_key(distribution) {
+    Ok(backends::open_web(target, program, &wsl_silt))
+}
+
+/// Starts the daemon of each backend but the one the window shows, which
+/// the window starts itself, so every backend's watchers and sync run from
+/// the app's launch rather than once it's picked. Each distribution starts
+/// at once, as a distribution's first start can take seconds. A
+/// distribution without `silt` is left alone.
+fn start_the_others(known: &[Backend], shown: &Backend, program: &Path, silts: &Silts) {
+    std::thread::scope(|scope| {
+        for backend in known.iter().filter(|backend| *backend != shown) {
+            scope.spawn(move || {
+                let wsl_silt = match backend {
+                    Backend::Native => String::new(),
+                    Backend::Wsl(distribution) => match silts.find(distribution) {
+                        Ok(found) => found,
+                        Err(error) => return eprintln!("silt-desktop: not starting {}: {}", backend.label(), explain(&error)),
+                    },
+                };
+                match daemon::run(backends::start_daemon(backend, program, &wsl_silt)) {
+                    Ok(()) => eprintln!("silt-desktop: started {}", backend.label()),
+                    Err(error) => {
+                        if let Backend::Wsl(distribution) = backend {
+                            silts.forget(distribution);
+                        }
+                        eprintln!("silt-desktop: could not start {}: {}", backend.label(), explain(&error));
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// Each distribution's `silt` as last found, shared by the window and the
+/// starts at launch, and remembered across launches. A `silt` moved or
+/// uninstalled since it was found is forgotten when it fails, and looked
+/// for again next time.
+struct Silts {
+    file: Option<PathBuf>,
+    paths: Mutex<HashMap<String, String>>,
+}
+
+impl Silts {
+    fn load(file: Option<PathBuf>) -> Self {
+        let paths = file
+            .as_deref()
+            .and_then(|file| fs::read_to_string(file).ok())
+            .map(|text| backends::remembered_silts(&text))
+            .unwrap_or_default();
+        Self { file, paths: Mutex::new(paths) }
+    }
+
+    /// The distribution's `silt`, looked for once through a login shell.
+    fn find(&self, distribution: &str) -> Result<String, Exn<DesktopError>> {
+        if let Some(found) = self.paths.lock().expect("lock").get(distribution) {
+            return Ok(found.clone());
+        }
         let found = daemon::output_of(backends::find_silt(distribution))
             .and_then(|stdout| backends::found_silt(&String::from_utf8_lossy(&stdout)))
-            .ok_or_else(|| Exn::new(DesktopError::NoSiltIn(distribution.clone())))?;
-        wsl_silt.insert(distribution.clone(), found);
+            .ok_or_else(|| Exn::new(DesktopError::NoSiltIn(distribution.to_owned())))?;
+        let mut paths = self.paths.lock().expect("lock");
+        paths.insert(distribution.to_owned(), found.clone());
+        self.save(&paths);
+        Ok(found)
     }
-    Ok(backends::open_web(target, program, &wsl_silt[distribution]))
+
+    fn forget(&self, distribution: &str) {
+        let mut paths = self.paths.lock().expect("lock");
+        if paths.remove(distribution).is_some() {
+            self.save(&paths);
+        }
+    }
+
+    fn save(&self, paths: &HashMap<String, String>) {
+        let Some(file) = &self.file else {
+            return;
+        };
+        let written =
+            file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(file, backends::remember_silts(paths)));
+        if let Err(error) = written {
+            eprintln!("silt-desktop: could not remember where silt is in each distribution: {error}");
+        }
+    }
 }
 
 fn remember_backend(dir: &Path, backend: &Backend) {
     if let Err(error) = fs::create_dir_all(dir).and_then(|()| fs::write(dir.join(LAST_BACKEND), backend.id())) {
         eprintln!("silt-desktop: could not remember the backend shown: {error}");
-    }
-}
-
-fn remember(file: &Path, silts: &HashMap<String, String>) {
-    let written =
-        file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(file, backends::remember_silts(silts)));
-    if let Err(error) = written {
-        eprintln!("silt-desktop: could not remember where silt is in each distribution: {error}");
     }
 }
 
@@ -350,14 +417,46 @@ mod tests {
             return;
         };
         let program = daemon::silt_program(env::var_os("SILT_BIN"), None, |_| false);
-        let mut silts = HashMap::new();
+        let silts = Silts::load(None);
         for backend in [Backend::Native, Backend::Wsl(distribution.clone())] {
+            let wsl_silt = match &backend {
+                Backend::Native => String::new(),
+                Backend::Wsl(distribution) => silts.find(distribution).unwrap_or_else(|error| panic!("{}", explain(&error))),
+            };
+            daemon::run(backends::start_daemon(&backend, &program, &wsl_silt))
+                .unwrap_or_else(|error| panic!("{backend:?} starts: {}", explain(&error)));
             let target = Target { backend, project: None };
-            let ui = command_for(&target, &program, &mut silts)
+            let ui = command_for(&target, &program, &silts)
                 .and_then(daemon::open_web)
                 .unwrap_or_else(|error| panic!("{target:?}: {}", explain(&error)));
             assert_eq!(daemon::check(&ui, CHECK_WAIT), Answer::Up, "{target:?} answers at {}", ui.origin().ascii_serialization());
         }
-        assert!(silts[&distribution].starts_with('/'), "the distribution's silt was found: {silts:?}");
+        let found = silts.find(&distribution).expect("found before");
+        assert!(found.starts_with('/'), "the distribution's silt was found: {found}");
+    }
+
+    /// At launch, every backend but the one shown is started; a
+    /// distribution whose `silt` can't be found is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn the_backends_not_shown_start_at_launch() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("silt-desktop-start-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("a temporary dir");
+        let (program, ran) = (dir.join("silt"), dir.join("ran"));
+        fs::write(&program, format!("#!/bin/sh\necho \"$@\" >> '{}'\n", ran.display())).expect("a stand-in silt");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("executable");
+        let silts = Silts::load(Some(dir.join(WSL_SILTS)));
+        let known = [Backend::Native, Backend::Wsl("no-such-distribution".into())];
+
+        start_the_others(&known, &known[1], &program, &silts);
+        assert_eq!(fs::read_to_string(&ran).expect("silt ran"), "daemon start\n");
+
+        fs::remove_file(&ran).expect("removed");
+        start_the_others(&known, &Backend::Native, &program, &silts);
+        assert!(!ran.exists(), "only the shown backend was this computer's");
+        assert!(silts.paths.lock().expect("lock").is_empty());
+        fs::remove_dir_all(&dir).expect("cleaned up");
     }
 }
