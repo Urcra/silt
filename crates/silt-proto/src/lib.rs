@@ -12,8 +12,9 @@ pub mod view;
 /// 8: comments sent to the agent in a review (ADR 0055). 9: an agent's
 /// sign-in, asked and answered from the web UI (ADR 0056). 10: chats, kept
 /// out of every org, and moved into the project their folder becomes
-/// (ADR 0059).
-pub const PROTOCOL: u32 = 10;
+/// (ADR 0059). 11: a thread's files marked seen, and the turn a person
+/// reviewed it through (ADR 0067).
+pub const PROTOCOL: u32 = 11;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -144,6 +145,9 @@ pub struct ThreadState {
     /// When the person last looked at the thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_ms: Option<Stamped<i64>>,
+    /// The turn the person reviewed the thread's changes through (ADR 0067).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_turn: Option<Stamped<u32>>,
 }
 
 fn newest<T: Ord + Copy>(mine: &mut Option<Stamped<T>>, theirs: Option<Stamped<T>>) -> bool {
@@ -160,7 +164,7 @@ fn newest<T: Ord + Copy>(mine: &mut Option<Stamped<T>>, theirs: Option<Stamped<T
 
 impl ThreadState {
     pub fn new(thread: ThreadId) -> Self {
-        Self { thread, pinned: None, snooze: None, settled: None, seen_ms: None }
+        Self { thread, pinned: None, snooze: None, settled: None, seen_ms: None, reviewed_turn: None }
     }
 
     /// Takes each of `other`'s fields that is newer; says whether any was.
@@ -169,12 +173,14 @@ impl ThreadState {
         let snooze = newest(&mut self.snooze, other.snooze);
         let settled = newest(&mut self.settled, other.settled);
         let seen = newest(&mut self.seen_ms, other.seen_ms);
-        pinned || snooze || settled || seen
+        let reviewed = newest(&mut self.reviewed_turn, other.reviewed_turn);
+        pinned || snooze || settled || seen || reviewed
     }
 }
 
-/// Whether a person has looked at a file of a merge request, at the
-/// version whose `hash` it had then (ADR 0024). The newer mark wins.
+/// Whether a person has looked at a file of a merge request, or of a
+/// thread (ADR 0067), at the version whose `hash` it had then (ADR 0024).
+/// The newer mark wins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SeenMark {
@@ -184,6 +190,10 @@ pub struct SeenMark {
     pub hash: String,
     pub seen: bool,
     pub at_ms: i64,
+    /// For a thread's file, the thread's version it was looked at, so what
+    /// changed since can be shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 impl SeenMark {
@@ -197,6 +207,13 @@ impl SeenMark {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MrSeen {
     pub mr: DeltaId,
+    pub marks: Vec<SeenMark>,
+}
+
+/// A person's marks on one thread's files (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadSeen {
+    pub thread: ThreadId,
     pub marks: Vec<SeenMark>,
 }
 
@@ -580,6 +597,33 @@ mod tests {
         tie_a.merge(&tie_b);
         tie_b.merge(&a);
         assert_eq!(tie_a, tie_b);
+    }
+
+    #[test]
+    fn the_turn_reviewed_through_merges_as_the_other_fields_do() {
+        let thread = ThreadId(7);
+        let reviewed = |value, at_ms| ThreadState { reviewed_turn: Some(Stamped { value, at_ms }), ..ThreadState::new(thread) };
+        let mut laptop = reviewed(3, 10);
+        assert!(laptop.merge(&reviewed(5, 20)));
+        assert!(!laptop.merge(&reviewed(4, 15)), "an older review changes nothing");
+        assert_eq!(laptop.reviewed_turn.map(|turn| turn.value), Some(5));
+        let json = serde_json::to_string(&ThreadState::new(thread)).expect("serializes");
+        assert!(!json.contains("reviewed_turn"), "{json}");
+    }
+
+    #[test]
+    fn a_seen_mark_names_its_version_only_for_a_threads_file() {
+        let request = SeenMark { path: "a.rs".into(), hash: "h".into(), seen: true, at_ms: 1, version: None };
+        let json = serde_json::to_string(&request).expect("serializes");
+        assert!(!json.contains("version"), "{json}");
+        let old: SeenMark =
+            serde_json::from_str(r#"{"path":"a.rs","hash":"h","seen":true,"at_ms":1}"#).expect("an older mark reads");
+        assert_eq!(old, request);
+        let thread = SeenMark { version: Some("1@3".into()), ..request };
+        assert_eq!(
+            serde_json::from_str::<SeenMark>(&serde_json::to_string(&thread).expect("serializes")).expect("reads"),
+            thread
+        );
     }
 
     #[test]

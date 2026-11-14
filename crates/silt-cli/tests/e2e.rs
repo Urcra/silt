@@ -1551,6 +1551,102 @@ fn diffs_start_from_the_base_asked_for() {
 }
 
 #[test]
+fn a_diff_covers_a_range_of_turns_and_says_which_turn_wrote_each_line() {
+    let env = Env::with_claude("tools");
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread, "--turn", "2"]).contains("+# Notes")));
+    let both = env.stdout(&["diff", &thread, "--turn", "1", "--to-turn", "2"]);
+    assert!(both.contains("+fn farewell() {}") && both.contains("+pub fn help() {}") && both.contains("+# Notes"), "{both}");
+    let second = env.stdout(&["diff", &thread, "--turn", "2"]);
+    assert!(!second.contains("farewell"), "{second}");
+    let backwards = env.run(&["diff", &thread, "--turn", "2", "--to-turn", "1"]);
+    assert!(String::from_utf8_lossy(&backwards.stderr).contains("comes before turn 2"));
+
+    let api = Api::open(&env);
+    let (ok, turns) = api.call("GET", &format!("/api/threads/{thread}/diff/turns"), None);
+    assert!(ok, "{turns}");
+    let runs =
+        |path: &str| turns.as_array().expect("files").iter().find(|file| file["path"] == path).map(|file| file["runs"].clone());
+    // The first line came from git, so no turn wrote it.
+    assert_eq!(runs("src/main.rs"), Some(serde_json::json!([{"start": 2, "end": 2, "turn": 1}])));
+    assert_eq!(runs("NOTES.md"), Some(serde_json::json!([{"start": 1, "end": 1, "turn": 2}])));
+    let (_, second) = api.call("GET", &format!("/api/threads/{thread}/diff/turns?turn=2"), None);
+    assert_eq!(second.as_array().map(Vec::len), Some(1), "{second}");
+}
+
+#[test]
+fn a_file_marked_seen_comes_back_with_the_lines_written_since() {
+    let env = Env::new();
+    env.silt(&["claude", "--isolated"]);
+    let thread = env.thread();
+    let checkout = env.isolated_checkout();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    let api = Api::open(&env);
+    let seen = || {
+        let (ok, view) = api.call("GET", &format!("/api/threads/{thread}/seen"), None);
+        assert!(ok, "{view}");
+        view
+    };
+    assert_eq!(seen()["files"], serde_json::json!([]));
+    let head = seen()["head"].as_str().expect("a version").to_owned();
+    let mark = serde_json::json!({"path": "src/main.rs", "seen": true, "at": head});
+    let (ok, marked) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(mark));
+    assert!(ok, "{marked}");
+    assert_eq!(seen()["files"], serde_json::json!([{"path": "src/main.rs", "seen": "seen", "new_lines": []}]));
+
+    // The file changes after: it comes back, with the line written since.
+    let main = checkout.join("src/main.rs");
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn later() {}\n").expect("write");
+    assert!(eventually(|| seen()["files"][0]["seen"] == "changed"));
+    assert_eq!(seen()["files"][0]["new_lines"], serde_json::json!([{"start": 3, "end": 3}]));
+
+    // A version that isn't the thread's is refused.
+    let elsewhere = serde_json::json!({"path": "src/main.rs", "seen": true, "at": "not a version"});
+    let (ok, _) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(elsewhere));
+    assert!(!ok);
+}
+
+#[test]
+fn a_pending_comments_anchor_follows_its_text_until_it_lands() {
+    let env = Env::new();
+    env.silt(&["claude", "--isolated"]);
+    let thread = env.thread();
+    let checkout = env.isolated_checkout();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    let api = Api::open(&env);
+    let lines = serde_json::json!({"on": "lines", "path": "src/main.rs", "start": 2, "end": 2});
+    let (ok, pending) = api.call("POST", &format!("/api/threads/{thread}/comments/anchor"), Some(lines));
+    assert!(ok, "{pending}");
+    let anchor = pending["anchor"].as_str().expect("an anchor").to_owned();
+    let place = || {
+        let body = serde_json::json!({"base": null, "anchors": [anchor]});
+        let (ok, placed) = api.call("POST", &format!("/api/threads/{thread}/comments/place"), Some(body));
+        assert!(ok, "{placed}");
+        placed[0].clone()
+    };
+    assert_eq!(place()["start"], 2);
+    let (_, recorded) = api.call("GET", &format!("/api/threads/{thread}/comments"), None);
+    assert_eq!(recorded, serde_json::json!([]), "nothing is recorded until the review is sent");
+
+    // A line written above it moves it down with its text.
+    let main = checkout.join("src/main.rs");
+    fs::write(&main, format!("// header\n{}", fs::read_to_string(&main).expect("read"))).expect("write");
+    assert!(eventually(|| place()["start"] == 3));
+    let comment = serde_json::json!({"on": {"on": "anchored", "anchor": anchor}, "text": "name it better"});
+    let (ok, made) = api.call("POST", &format!("/api/threads/{thread}/comments"), Some(comment));
+    assert!(ok, "{made}");
+    assert_eq!(made["location"]["start"], 3, "{made}");
+
+    // Once its text is gone it's outdated; an anchor that isn't this thread's isn't placed.
+    fs::write(&main, "// header\nfn main() {}\n").expect("write");
+    assert!(eventually(|| place()["outdated"] == true));
+    let body = serde_json::json!({"base": null, "anchors": ["{\"Code\":{}}", "not json"]});
+    let (_, placed) = api.call("POST", &format!("/api/threads/{thread}/comments/place"), Some(body));
+    assert_eq!(placed, serde_json::json!([{"at": "unknown"}, {"at": "unknown"}]));
+}
+
+#[test]
 fn uncommitted_changes_are_where_a_thread_starts_not_its_edits() {
     let env = Env::new();
     fs::write(env.repo.join("notes.md"), "draft\n").expect("write");

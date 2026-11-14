@@ -1,3 +1,4 @@
+import type { DiffSpec } from './api'
 import { QueryClient } from '@tanstack/react-query'
 
 export const queryClient = new QueryClient({
@@ -23,9 +24,11 @@ export const keys = {
   comments: (id: string) => ['thread', id, 'comments'] as const,
   queue: (id: string) => ['thread', id, 'queue'] as const,
   diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,
-  diffPages: (id: string, base: string) => ['thread', id, 'diff-pages', base] as const,
-  diffStats: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff-stats', options] as const,
-  diffFile: (id: string, options: { turn?: number; base?: string }, path: string) => ['thread', id, 'diff-file', options, path] as const,
+  diffPages: (id: string, spec: DiffSpec) => ['thread', id, 'diff-pages', spec] as const,
+  diffStats: (id: string, options: DiffSpec) => ['thread', id, 'diff-stats', options] as const,
+  diffFile: (id: string, options: DiffSpec, path: string) => ['thread', id, 'diff-file', options, path] as const,
+  diffTurns: (id: string, spec: DiffSpec) => ['thread', id, 'diff-turns', spec] as const,
+  threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   mr: (id: string) => ['mrs', id] as const,
   inbox: (all: boolean) => ['inbox', all] as const,

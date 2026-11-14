@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO thread_seen_marks (thread_id, path, hash, version, seen, at_ms, pending) VALUES (?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT (thread_id, path) DO UPDATE SET hash = excluded.hash, version = excluded.version, seen = excluded.seen,\n                 at_ms = excluded.at_ms, pending = excluded.pending",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "fe209b80382a4dcd254413cc673b4851921594ac39bb4b4a5073901167cdf184"
+}

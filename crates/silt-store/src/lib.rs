@@ -72,6 +72,19 @@ pub struct SeenRecord {
     pub pending: bool,
 }
 
+/// A seen mark on a thread's file (ADR 0067), with the thread's version it
+/// was seen at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSeenRecord {
+    pub thread: ThreadId,
+    pub path: String,
+    pub hash: String,
+    pub version: Option<String>,
+    pub seen: bool,
+    pub at_ms: i64,
+    pub pending: bool,
+}
+
 /// How the agent the web UI last ran in a thread stands (ADR 0022); its
 /// state, preset and mode by name, as the daemon spells them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -946,6 +959,46 @@ impl Store {
             mark.mr,
             mark.path,
             mark.hash,
+            mark.seen,
+            mark.at_ms,
+            mark.pending,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// This person's seen marks on threads' files, and whether the server
+    /// has yet to hear of each (ADR 0067).
+    pub async fn thread_seen_marks(&self) -> Result<Vec<ThreadSeenRecord>, StoreError> {
+        let rows = sqlx::query!("SELECT thread_id, path, hash, version, seen, at_ms, pending FROM thread_seen_marks")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ThreadSeenRecord {
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    path: row.path,
+                    hash: row.hash,
+                    version: row.version,
+                    seen: row.seen != 0,
+                    at_ms: row.at_ms,
+                    pending: row.pending != 0,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn put_thread_seen_mark(&self, mark: &ThreadSeenRecord) -> Result<(), StoreError> {
+        let thread = id_bytes(mark.thread.0);
+        sqlx::query!(
+            "INSERT INTO thread_seen_marks (thread_id, path, hash, version, seen, at_ms, pending) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (thread_id, path) DO UPDATE SET hash = excluded.hash, version = excluded.version, seen = excluded.seen,
+                 at_ms = excluded.at_ms, pending = excluded.pending",
+            thread,
+            mark.path,
+            mark.hash,
+            mark.version,
             mark.seen,
             mark.at_ms,
             mark.pending,

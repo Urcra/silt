@@ -101,8 +101,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/diff/stats", get(diff_stats))
+        .route("/api/threads/{id}/diff/turns", get(diff_turns))
+        .route("/api/threads/{id}/seen", get(thread_seen).put(mark_thread_seen))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/sent", post(comments_sent))
+        .route("/api/threads/{id}/comments/anchor", post(anchor_lines))
+        .route("/api/threads/{id}/comments/place", post(place_anchors))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/api/search", get(search))
@@ -404,6 +408,8 @@ async fn graph(State(web): State<Web>, Query(query): Query<silt_proto::view::Gra
 #[derive(Deserialize)]
 struct DiffQuery {
     turn: Option<usize>,
+    /// With `turn`, the last of a range of turns.
+    to_turn: Option<usize>,
     base: Option<String>,
     /// A page of the changed files, as the changes panel shows them.
     offset: Option<usize>,
@@ -415,12 +421,33 @@ struct DiffQuery {
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
     let base = query.base.filter(|base| !base.is_empty());
-    let request = Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()) };
-    ask(&web, request).await
+    let path = query.path.filter(|path| !path.is_empty());
+    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path }).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) }).await
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base }).await
+}
+
+async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base }).await
+}
+
+async fn mark_thread_seen(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(mark): Json<silt_proto::view::MarkSeen>,
+) -> HttpResponse {
+    ask(&web, Request::MarkThreadSeen { thread, mark }).await
+}
+
+async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let base = query.base.filter(|base| !base.is_empty());
+    let path = query.path.filter(|path| !path.is_empty());
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -456,6 +483,22 @@ struct NewComment {
 async fn add_comment(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<NewComment>) -> HttpResponse {
     let request = Request::Comment { thread, on: body.on, text: body.text, cwd: no_clone() };
     ask(&web, request).await
+}
+
+async fn anchor_lines(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(on): Json<silt_proto::view::CommentOn>,
+) -> HttpResponse {
+    ask(&web, Request::AnchorLines { thread, on, cwd: no_clone() }).await
+}
+
+async fn place_anchors(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(place): Json<silt_proto::view::PlaceAnchors>,
+) -> HttpResponse {
+    ask(&web, Request::PlaceAnchors { thread, place, cwd: no_clone() }).await
 }
 
 async fn resolve_comment(State(web): State<Web>, Path((thread, comment)): Path<(String, String)>) -> HttpResponse {

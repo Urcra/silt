@@ -144,6 +144,17 @@ test("a thread's details", async ({ page }) => {
   }
 })
 
+test("a thread's review, across the page (ADR 0067)", async ({ page }) => {
+  // A phone reviews in the panel's sheet, so the review is a desktop's only.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await open(page, `/t/${world.thread}/review`)
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+    await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toContainText('fn farewell() {}')
+    await expect(page).toHaveScreenshot(`review-desktop-${colorScheme}.png`, shotOptions(page))
+  }
+})
+
 test('a live session', async ({ page }) => {
   await open(page, `/t/${world.thread}/live`)
   await shoot(page, 'live', async (shown) => {

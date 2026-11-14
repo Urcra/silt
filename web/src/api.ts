@@ -9,15 +9,17 @@ import type {
   AgentChoices,
   ChatSettings,
   CloudLaunch,
+  CommentLocation,
   CommentOn,
   CommentView,
   CommitView,
   DaemonStatus,
-  DiffStat,
-  FileAt,
-  FoundFolder,
   DeviceChange,
   DeviceView,
+  DiffStat,
+  FileAt,
+  FileTurns,
+  FoundFolder,
   GraphQuery,
   GraphRow,
   HistoryPage,
@@ -25,13 +27,16 @@ import type {
   InboxRead,
   KindSetting,
   LiveState,
+  MarkSeen,
   Mine,
   MrDetails,
   MrSummary,
   NewLink,
   OrgChange,
   OrgInfo,
+  PendingAnchor,
   PhonePairing,
+  PlaceAnchors,
   PresenceReply,
   Preset,
   Project,
@@ -44,6 +49,7 @@ import type {
   StartOptions,
   StateChange,
   ThreadLink,
+  ThreadSeenView,
   ThreadSummary,
   TurnInfo,
   VoiceStatus,
@@ -109,9 +115,17 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-const diffParams = (options: { turn?: number; base?: string }) => {
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`. */
+export interface DiffSpec {
+  turn?: number
+  toTurn?: number
+  base?: string
+}
+
+const diffParams = (options: DiffSpec) => {
   const params = new URLSearchParams()
   if (options.turn !== undefined) params.set('turn', String(options.turn))
+  if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
   return params
 }
@@ -145,7 +159,7 @@ export const api = {
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
   /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order; with `path`, only that file. */
-  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number; path?: string } = {}) => {
+  diff: (id: string, options: DiffSpec & { offset?: number; limit?: number; path?: string } = {}) => {
     const params = diffParams(options)
     if (options.limit !== undefined) {
       params.set('offset', String(options.offset ?? 0))
@@ -155,14 +169,22 @@ export const api = {
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
   /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
-  diffStats: (id: string, options: { turn?: number; base?: string } = {}) =>
-    request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
+  diffStats: (id: string, options: DiffSpec = {}) => request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
+  /** The diff's files this person marked seen: each as they saw it, or changed since, with the lines new since (ADR 0067). */
+  threadSeen: (id: string, options: DiffSpec = {}) => request<ThreadSeenView>('GET', `${thread(id)}/seen?${diffParams(options)}`),
+  markThreadSeen: (id: string, mark: MarkSeen) => request<string>('PUT', `${thread(id)}/seen`, mark),
+  /** For the diff's files, the turns that last wrote their new lines. */
+  diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
   comments: (id: string, base?: string) =>
     request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
+  /** Anchors lines for a pending review comment, recording nothing, so it follows their text (ADR 0066). */
+  anchorLines: (id: string, on: CommentOn) => request<PendingAnchor>('POST', `${thread(id)}/comments/anchor`, on),
+  /** Where pending review comments' anchors are now, and at `base`, as comments are placed. */
+  placeAnchors: (id: string, place: PlaceAnchors) => request<CommentLocation[]>('POST', `${thread(id)}/comments/place`, place),
   reply: (id: string, comment: string, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments/${encodeURIComponent(comment)}/replies`, { text }),
   resolveComment: (id: string, comment: string) =>

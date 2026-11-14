@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CommentView } from './api'
 import { parseFiles } from './diffParse'
-import { itemOf, linesOf, quoteOf, reviewPrompt } from './review'
+import { itemOf, linesOf, quoteOf, reviewPrompt, shownAt } from './review'
 
 const DIFF = `diff --git a/src/main.rs b/src/main.rs
 --- a/src/main.rs
@@ -53,4 +53,16 @@ describe('review', () => {
     const prompt = reviewPrompt([{ at: { path: 'README.md', start: 1, end: 1 }, text: 'fix', quote: ['+```rust'] }])
     expect(prompt).toContain('````diff\n+```rust\n````')
   })
+})
+
+it('a pending comment shows where its anchor is now, beside the base once deleted, or outdated once gone', () => {
+  const draft = { id: '1', at: { path: 'src/a.rs', start: 2, end: 2 }, text: 'retry it', quote: ['+send()'], anchor: '{}' }
+  const lines = (outdated: boolean, before: { start: number; end: number } | null = null) =>
+    ({ at: 'lines', path: 'src/a.rs', start: 5, end: 6, outdated, before }) as const
+  expect(shownAt(draft, lines(false))).toEqual({ path: 'src/a.rs', start: 5, end: 6, side: 'new' })
+  expect(shownAt(draft, lines(true, { start: 2, end: 2 }))).toEqual({ path: 'src/a.rs', start: 2, end: 2, side: 'old' })
+  expect(shownAt(draft, lines(true))).toBe('outdated')
+  // One written before it took an anchor, or not placed yet, stays where it was written.
+  expect(shownAt({ ...draft, anchor: undefined }, lines(false))).toEqual(draft.at)
+  expect(shownAt(draft, undefined)).toEqual(draft.at)
 })

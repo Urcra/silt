@@ -332,7 +332,7 @@ async fn a_merge_request_shares_a_private_fork_read_past_before() {
     // Alice ticks a file of the request as seen; an older mark from another
     // device doesn't untick it, and Dave can't mark a request he can't see.
     let mr = opened_id(&world.family);
-    let mark = |seen, at_ms| silt_proto::SeenMark { path: "quiet.rs".into(), hash: "h1".into(), seen, at_ms };
+    let mark = |seen, at_ms| silt_proto::SeenMark { path: "quiet.rs".into(), hash: "h1".into(), seen, at_ms, version: None };
     let put = |client: &Client, mark: silt_proto::SeenMark| client.request(Method::PUT, &format!("/v1/me/seen/{mr}")).json(&mark);
     assert_eq!(alice.send(put(alice, mark(true, 20))).await, StatusCode::NO_CONTENT);
     assert_eq!(alice.send(put(alice, mark(false, 10))).await, StatusCode::NO_CONTENT);
@@ -385,6 +385,8 @@ async fn nothing_is_open_without_signing_in() {
         (Method::GET, "/v1/projects".to_owned()),
         (Method::GET, "/v1/me/threads".to_owned()),
         (Method::PATCH, format!("/v1/me/threads/{THREAD}")),
+        (Method::GET, "/v1/me/thread-seen".to_owned()),
+        (Method::PUT, format!("/v1/me/thread-seen/{THREAD}")),
         (Method::GET, "/v1/trash".to_owned()),
         (Method::POST, format!("/v1/threads/{THREAD}/delete")),
         (Method::GET, format!("/git/{REPO}/info/refs?service=git-upload-pack")),
@@ -417,6 +419,31 @@ async fn each_person_keeps_their_own_state_of_a_thread_they_see() {
     assert_eq!(change(person("erin"), &pinned_at(true, 40)).await.expect("sends").status(), StatusCode::NOT_FOUND);
     let elsewhere = ThreadState::new(ThreadId(999));
     assert_eq!(change(&world.alice, &elsewhere).await.expect("sends").status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn each_person_keeps_their_own_seen_files_of_a_thread_they_see() {
+    use silt_proto::{SeenMark, ThreadSeen};
+    let world = world(Visibility::Team("core".into())).await;
+    let person = |name: &str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let mark = |seen, at_ms| SeenMark { path: "src/a.rs".into(), hash: "h1".into(), seen, at_ms, version: Some("1@3".into()) };
+    let put = |client: &Client, thread: ThreadId, mark: SeenMark| {
+        client.request(Method::PUT, &format!("/v1/me/thread-seen/{thread}")).json(&mark)
+    };
+    async fn marks(client: &Client) -> Vec<ThreadSeen> {
+        client.request(Method::GET, "/v1/me/thread-seen").send().await.expect("sends").json().await.expect("marks")
+    }
+
+    // An older mark from another device doesn't untick a newer one.
+    assert_eq!(world.alice.send(put(&world.alice, THREAD, mark(true, 20))).await, StatusCode::NO_CONTENT);
+    assert_eq!(world.alice.send(put(&world.alice, THREAD, mark(false, 10))).await, StatusCode::NO_CONTENT);
+    assert_eq!(marks(&world.alice).await, [ThreadSeen { thread: THREAD, marks: vec![mark(true, 20)] }]);
+
+    // Bob shares the thread but not Alice's marks on it; Erin can't see it.
+    assert!(marks(person("bob")).await.is_empty());
+    assert_eq!(person("erin").send(put(person("erin"), THREAD, mark(true, 30))).await, StatusCode::NOT_FOUND);
+    let long = SeenMark { path: "a".repeat(5000), ..mark(true, 40) };
+    assert_eq!(world.alice.send(put(&world.alice, THREAD, long)).await, StatusCode::BAD_REQUEST);
 }
 
 /// A browser signed in on the server's page, reading the hosted app's API.

@@ -257,6 +257,17 @@ impl Remote {
         Ok(())
     }
 
+    pub async fn thread_seen(&self) -> Result<Vec<silt_proto::ThreadSeen>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/thread-seen").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn mark_thread_seen(&self, thread: ThreadId, mark: &silt_proto::SeenMark) -> Result<(), RemoteError> {
+        let response = self.request(reqwest::Method::PUT, &format!("/v1/me/thread-seen/{thread}")).json(mark).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
         Ok(checked(response).await?.json().await?)

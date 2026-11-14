@@ -24,7 +24,7 @@ function thread(id: string, server: string | null, repo: string, local_only = fa
     last_ms: 0,
     merged: false,
     review: false,
-    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null },
+    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null, reviewed_turn: null },
     visibility: null,
     server,
     local_only,

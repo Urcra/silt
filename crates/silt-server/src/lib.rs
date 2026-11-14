@@ -350,6 +350,8 @@ impl Server {
             .route("/v1/me/threads/{thread}", patch(me::change_thread))
             .route("/v1/me/seen", get(me::seen))
             .route("/v1/me/seen/{mr}", put(me::mark_seen))
+            .route("/v1/me/thread-seen", get(me::thread_seen))
+            .route("/v1/me/thread-seen/{thread}", put(me::mark_thread_seen))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())

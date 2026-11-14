@@ -72,6 +72,8 @@ function useDismiss(open: boolean, close: () => void, box: React.RefObject<HTMLE
     if (!open) return
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      // Taken here, so the page's own Escape (leaving the review, stopping the turn) doesn't run as well.
+      event.preventDefault()
       close()
       trigger.current?.focus()
     }
@@ -79,10 +81,10 @@ function useDismiss(open: boolean, close: () => void, box: React.RefObject<HTMLE
       const target = event.target as Node
       if (!box.current?.contains(target) && !trigger.current?.contains(target)) close()
     }
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     document.addEventListener('pointerdown', onPointer)
     return () => {
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
       document.removeEventListener('pointerdown', onPointer)
     }
   }, [open, close, box, trigger])
@@ -193,6 +195,7 @@ export function Popover({
   align = 'left',
   className,
   openOnMount = false,
+  opener,
 }: {
   trigger: ReactNode
   children: ReactNode | ((close: () => void) => ReactNode)
@@ -205,6 +208,8 @@ export function Popover({
   className?: string
   /** Opens as soon as it's shown, such as when a link asked for it. */
   openOnMount?: boolean
+  /** Handed what opens it, and null once gone, for a key to open it from elsewhere. */
+  opener?: (open: (() => void) | null) => void
 }) {
   // Where the panel goes, measured from the trigger as it opens; it floats
   // over the page so no scrolling box around the trigger clips it.
@@ -231,6 +236,11 @@ export function Popover({
     if (open) close()
     else place()
   }
+  useEffect(() => {
+    if (!opener) return
+    opener(place)
+    return () => opener(null)
+  }, [opener, place])
   const opened = useRef(false)
   useEffect(() => {
     if (!openOnMount || opened.current) return

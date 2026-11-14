@@ -38,6 +38,8 @@ const PATHS = {
   x: <path d="m4 4 8 8M12 4l-8 8" />,
   plus: <path d="M8 3v10M3 8h10" />,
   chevronDown: <path d="m4 6 4 4 4-4" />,
+  expand: <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />,
+  collapse: <path d="M13 3 9.5 6.5M9.5 3v3.5H13M3 13l3.5-3.5M6.5 13V9.5H3" />,
   chevronRight: <path d="m6 4 4 4-4 4" />,
   play: <path d="M5 3.5v9l7-4.5z" />,
   stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
