@@ -909,38 +909,7 @@ pub struct LiveState {
     pub preset: Preset,
 }
 
-/// Which permission requests the daemon answers for the person (ADR 0022).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum Preset {
-    /// Edits, reads and searches go through; anything else asks.
-    #[default]
-    AskBeforeCommands,
-    AskForEverything,
-    /// Nothing asks.
-    FullAccess,
-    /// Every prompt asks for a plan first; reads and searches go through,
-    /// and anything else asks (ADR 0044).
-    Plan,
-}
-
-impl Preset {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AskBeforeCommands => "ask_before_commands",
-            Self::AskForEverything => "ask_for_everything",
-            Self::FullAccess => "full_access",
-            Self::Plan => "plan",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        [Self::AskBeforeCommands, Self::AskForEverything, Self::FullAccess, Self::Plan]
-            .into_iter()
-            .find(|preset| preset.as_str() == name)
-    }
-}
+pub use silt_workspace::Preset;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]

@@ -1,0 +1,485 @@
+use std::collections::BTreeSet;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::Preset;
+
+/// An agent as rules name it: the same for its CLI and its ACP adapter
+/// (`claude`, `codex`, `copilot`, …).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
+pub struct AgentKey(String);
+
+impl Serialize for AgentKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
+impl AgentKey {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into().to_ascii_lowercase())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AgentKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The agent a start asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentChoice {
+    Known {
+        key: AgentKey,
+        name: String,
+    },
+    /// One of the person's own, from `agents.json`.
+    Custom {
+        name: String,
+    },
+}
+
+impl AgentChoice {
+    fn name(&self) -> &str {
+        match self {
+            Self::Known { name, .. } | Self::Custom { name } => name,
+        }
+    }
+}
+
+/// What an agent may do in a workspace. A rule left unset restricts
+/// nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Policy {
+    /// The agents allowed; any when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<BTreeSet<AgentKey>>,
+    /// Whether `agents.json`'s agents are allowed; they are when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_agents: Option<bool>,
+    /// The most an agent may do without asking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_preset: Option<Preset>,
+    /// The agent runs only with its own sandbox on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sandbox: bool,
+    /// The sandbox also hides Silt's data and other workspaces; implies
+    /// `sandbox`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub isolated: bool,
+    /// Projects keep the workspace's server: no other, and not this machine
+    /// only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home_locked: bool,
+}
+
+impl Policy {
+    pub fn sandbox_required(&self) -> bool {
+        self.sandbox || self.isolated
+    }
+
+    pub fn allows_full_access(&self) -> bool {
+        self.max_preset.is_none_or(|cap| cap == Preset::FullAccess)
+    }
+
+    /// Both policies at once: each rule as the stricter of the two sets it.
+    pub fn stricter(&self, other: &Self) -> Self {
+        Self {
+            agents: match (&self.agents, &other.agents) {
+                (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
+                (one, other) => one.clone().or_else(|| other.clone()),
+            },
+            custom_agents: match (self.custom_agents, other.custom_agents) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (one, other) => one.or(other),
+            },
+            max_preset: match (self.max_preset, other.max_preset) {
+                (Some(mine), Some(theirs)) => Some(mine.stricter(theirs)),
+                (one, other) => one.or(other),
+            },
+            sandbox: self.sandbox || other.sandbox,
+            isolated: self.isolated || other.isolated,
+            home_locked: self.home_locked || other.home_locked,
+        }
+    }
+}
+
+/// Where a rule came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum Source {
+    /// The person's own, on this machine.
+    Local,
+    /// An org's policy on its server.
+    Org { org: String, server: String },
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Local => f.write_str("your rules"),
+            Self::Org { org, server } => write!(f, "{org}'s policy on {}", host(server)),
+        }
+    }
+}
+
+impl Source {
+    fn allows(&self) -> &'static str {
+        match self {
+            Self::Local => "allow",
+            Self::Org { .. } => "allows",
+        }
+    }
+}
+
+fn host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split('/').next().unwrap_or(rest)
+}
+
+/// An org's policy, as a machine last fetched it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct OrgPolicy {
+    pub org: String,
+    pub server: String,
+    pub policy: Policy,
+}
+
+/// What an agent's mode means for its permissions (ADR 0048, ADR 0049).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeMeaning {
+    /// The mode answers as this preset would.
+    Preset(Preset),
+    /// The agent's modes say how it works, not what it asks.
+    NotPermissions,
+    /// A mode of an agent whose modes are its permissions, which Silt doesn't
+    /// know.
+    Unknown,
+}
+
+/// Which rule refused, and what was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Broken {
+    Agent { agent: String, allowed: Vec<AgentKey> },
+    CustomAgent { agent: String },
+    Preset { asked: Preset, cap: Preset },
+    Mode { mode: String, cap: Preset },
+    Flag { flag: String, agent: String, cap: Preset },
+    Sandbox { agent: String },
+    Home,
+    Move { project: String, servers: Vec<String>, to: Option<String> },
+    WaitingForPolicy,
+}
+
+/// A start or a change the rules refuse, saying which rule and whose.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{}", self.message())]
+pub struct Refusal {
+    pub workspace: String,
+    pub broken: Box<Broken>,
+    pub origin: Source,
+}
+
+impl Refusal {
+    pub fn message(&self) -> String {
+        let Self { workspace, broken, origin: source } = self;
+        let allows = source.allows();
+        match broken.as_ref() {
+            Broken::Agent { agent, allowed } => {
+                let allowed: Vec<&str> = allowed.iter().map(AgentKey::as_str).collect();
+                if allowed.is_empty() {
+                    format!("{agent} isn't allowed in {workspace}: {source} {allows} no agent")
+                } else {
+                    format!("{agent} isn't allowed in {workspace}: {source} {allows} {}", allowed.join(", "))
+                }
+            }
+            Broken::CustomAgent { agent } => format!("{agent} isn't allowed in {workspace}: {source} {allows} no custom agents"),
+            Broken::Preset { asked, cap } => {
+                format!("{} isn't allowed in {workspace}: {source} {allows} at most {}", asked.label(), cap.label())
+            }
+            Broken::Mode { mode, cap } => {
+                format!("the {mode} mode isn't allowed in {workspace}: {source} {allows} at most {}", cap.label())
+            }
+            Broken::Flag { flag, agent, cap } => format!(
+                "{flag} stops {agent} asking before it acts, which {workspace} doesn't allow: {source} {allows} at most {}",
+                cap.label()
+            ),
+            Broken::Sandbox { agent } => {
+                format!("{workspace} needs the agent's own sandbox, which Silt can't turn on for {agent} ({source})")
+            }
+            Broken::Home => format!("{workspace}'s projects sync with its server only ({source})"),
+            Broken::Move { project, servers, to } => {
+                let to =
+                    to.as_deref().map_or("keeps its threads on this machine".to_owned(), |to| format!("syncs with {}", host(to)));
+                let servers: Vec<&str> = servers.iter().map(|server| host(server)).collect();
+                format!(
+                    "{project} can't move to {workspace}: its threads sync with {}, and {workspace} {to}; threads never move between servers",
+                    servers.join(", ")
+                )
+            }
+            Broken::WaitingForPolicy => format!("{workspace} is waiting for {source}; signing in to it fetches it"),
+        }
+    }
+}
+
+/// The rules of one workspace: the person's own and its org's, which apply
+/// together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rules<'a> {
+    pub workspace: &'a str,
+    pub local: &'a Policy,
+    /// The org's policy, when the workspace is bound to an org: `Err` until
+    /// a machine has fetched it once.
+    pub org: Option<Result<&'a OrgPolicy, Source>>,
+}
+
+impl Rules<'_> {
+    /// The rules in effect, both at once.
+    pub fn effective(&self) -> Policy {
+        match &self.org {
+            Some(Ok(org)) => self.local.stricter(&org.policy),
+            _ => self.local.clone(),
+        }
+    }
+
+    fn each(&self) -> Result<Vec<(&Policy, Source)>, Refusal> {
+        let mut all = vec![(self.local, Source::Local)];
+        match &self.org {
+            Some(Ok(org)) => all.push((&org.policy, Source::Org { org: org.org.clone(), server: org.server.clone() })),
+            Some(Err(source)) => return Err(self.refusal(Broken::WaitingForPolicy, source.clone())),
+            None => {}
+        }
+        Ok(all)
+    }
+
+    fn refusal(&self, broken: Broken, source: Source) -> Refusal {
+        Refusal { workspace: self.workspace.to_owned(), broken: Box::new(broken), origin: source }
+    }
+
+    /// The org's rules are checked first, so a refusal names them when both
+    /// would refuse.
+    fn check(&self, broken: impl Fn(&Policy) -> Option<Broken>) -> Result<(), Refusal> {
+        for (policy, source) in self.each()?.into_iter().rev() {
+            if let Some(broken) = broken(policy) {
+                return Err(self.refusal(broken, source));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this agent may start here, sandboxed if the rules say so.
+    pub fn check_agent(&self, agent: &AgentChoice, can_sandbox: bool) -> Result<(), Refusal> {
+        self.check(|policy| match agent {
+            AgentChoice::Known { key, name } => policy
+                .agents
+                .as_ref()
+                .filter(|allowed| !allowed.contains(key))
+                .map(|allowed| Broken::Agent { agent: name.clone(), allowed: allowed.iter().cloned().collect() }),
+            AgentChoice::Custom { name } => {
+                (policy.custom_agents == Some(false)).then(|| Broken::CustomAgent { agent: name.clone() })
+            }
+        })?;
+        self.check(|policy| {
+            (policy.sandbox_required() && !can_sandbox).then(|| Broken::Sandbox { agent: agent.name().to_owned() })
+        })
+    }
+
+    pub fn check_preset(&self, preset: Preset) -> Result<(), Refusal> {
+        self.check(|policy| policy.max_preset.filter(|cap| !preset.within(*cap)).map(|cap| Broken::Preset { asked: preset, cap }))
+    }
+
+    pub fn check_mode(&self, mode: &str, meaning: ModeMeaning) -> Result<(), Refusal> {
+        self.check(|policy| {
+            let cap = policy.max_preset?;
+            let refused = match meaning {
+                ModeMeaning::Preset(preset) => !preset.within(cap),
+                ModeMeaning::NotPermissions => false,
+                ModeMeaning::Unknown => cap != Preset::FullAccess,
+            };
+            refused.then(|| Broken::Mode { mode: mode.to_owned(), cap })
+        })
+    }
+
+    /// `flag` is one the agent's adapter knows to stop it asking.
+    pub fn check_flag(&self, flag: &str, agent: &str) -> Result<(), Refusal> {
+        self.check(|policy| {
+            policy.max_preset.filter(|cap| *cap != Preset::FullAccess).map(|cap| Broken::Flag {
+                flag: flag.to_owned(),
+                agent: agent.to_owned(),
+                cap,
+            })
+        })
+    }
+
+    /// Whether a project's home may be set apart from the workspace's server.
+    pub fn check_home(&self) -> Result<(), Refusal> {
+        self.check(|policy| policy.home_locked.then_some(Broken::Home))
+    }
+}
+
+/// Whether a project whose threads already sync with `servers` may move to
+/// a workspace syncing with `to`: threads never move between servers
+/// (ADR 0032).
+pub fn check_move(project: &str, servers: &[String], workspace: &str, to: Option<&str>) -> Result<(), Refusal> {
+    let elsewhere: Vec<String> = servers.iter().filter(|server| Some(server.as_str()) != to).cloned().collect();
+    if elsewhere.is_empty() {
+        return Ok(());
+    }
+    Err(Refusal {
+        workspace: workspace.to_owned(),
+        broken: Box::new(Broken::Move { project: project.to_owned(), servers: elsewhere, to: to.map(str::to_owned) }),
+        origin: Source::Local,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(keys: &[&str]) -> Option<BTreeSet<AgentKey>> {
+        Some(keys.iter().map(|key| AgentKey::new(*key)).collect())
+    }
+
+    fn known(key: &str, name: &str) -> AgentChoice {
+        AgentChoice::Known { key: AgentKey::new(key), name: name.into() }
+    }
+
+    fn acme(policy: Policy) -> OrgPolicy {
+        OrgPolicy { org: "acme".into(), server: "https://silt.acme.dev".into(), policy }
+    }
+
+    #[test]
+    fn stricter_takes_the_stricter_of_each_rule() {
+        let mine = Policy {
+            agents: keys(&["claude", "copilot"]),
+            max_preset: Some(Preset::FullAccess),
+            sandbox: true,
+            ..Policy::default()
+        };
+        let theirs = Policy {
+            agents: keys(&["copilot", "codex"]),
+            custom_agents: Some(false),
+            max_preset: Some(Preset::AskBeforeCommands),
+            home_locked: true,
+            ..Policy::default()
+        };
+        let both = mine.stricter(&theirs);
+        assert_eq!(both.agents, keys(&["copilot"]));
+        assert_eq!(both.custom_agents, Some(false));
+        assert_eq!(both.max_preset, Some(Preset::AskBeforeCommands));
+        assert!(both.sandbox && both.home_locked && !both.isolated);
+        assert_eq!(both, theirs.stricter(&mine));
+        assert_eq!(Policy::default().stricter(&theirs), theirs);
+    }
+
+    #[test]
+    fn the_org_policy_refuses_and_says_so() {
+        let local = Policy { isolated: true, ..Policy::default() };
+        let org = acme(Policy { agents: keys(&["copilot"]), max_preset: Some(Preset::AskBeforeCommands), ..Policy::default() });
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
+
+        let refusal = rules.check_agent(&known("claude", "Claude Code"), true).unwrap_err();
+        assert_eq!(refusal.to_string(), "Claude Code isn't allowed in Work: acme's policy on silt.acme.dev allows copilot");
+        assert_eq!(rules.check_agent(&known("copilot", "GitHub Copilot"), true), Ok(()));
+        // Isolated is the person's own rule, and Copilot can't sandbox here.
+        let refusal = rules.check_agent(&known("copilot", "GitHub Copilot"), false).unwrap_err();
+        assert_eq!(refusal.origin, Source::Local);
+        assert!(matches!(*refusal.broken, Broken::Sandbox { .. }));
+
+        assert_eq!(rules.check_preset(Preset::Plan), Ok(()));
+        assert_eq!(
+            rules.check_preset(Preset::FullAccess).unwrap_err().to_string(),
+            "Full access isn't allowed in Work: acme's policy on silt.acme.dev allows at most Ask before commands"
+        );
+        assert_eq!(
+            rules.check_flag("--yolo", "Copilot").unwrap_err().to_string(),
+            "--yolo stops Copilot asking before it acts, which Work doesn't allow: acme's policy on silt.acme.dev allows at most Ask before commands"
+        );
+        assert_eq!(rules.effective().agents, keys(&["copilot"]));
+        assert!(rules.effective().isolated);
+    }
+
+    #[test]
+    fn modes_are_capped_by_the_preset_they_mean() {
+        let local = Policy { max_preset: Some(Preset::AskBeforeCommands), ..Policy::default() };
+        let rules = Rules { workspace: "Work", local: &local, org: None };
+        let cases = [
+            ("acceptEdits", ModeMeaning::Preset(Preset::AskBeforeCommands), true),
+            ("bypassPermissions", ModeMeaning::Preset(Preset::FullAccess), false),
+            ("plan", ModeMeaning::Preset(Preset::Plan), true),
+            ("agent", ModeMeaning::NotPermissions, true),
+            ("whatever-new", ModeMeaning::Unknown, false),
+        ];
+        for (mode, meaning, allowed) in cases {
+            assert_eq!(rules.check_mode(mode, meaning).is_ok(), allowed, "{mode}");
+        }
+        let open = Policy::default();
+        let rules = Rules { workspace: "Personal", local: &open, org: None };
+        assert_eq!(rules.check_mode("whatever-new", ModeMeaning::Unknown), Ok(()));
+        assert_eq!(rules.check_flag("--dangerously-skip-permissions", "Claude Code"), Ok(()));
+    }
+
+    #[test]
+    fn custom_agents_and_the_home() {
+        let local = Policy { custom_agents: Some(false), home_locked: true, ..Policy::default() };
+        let rules = Rules { workspace: "Work", local: &local, org: None };
+        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, true).unwrap_err();
+        assert_eq!(refusal.to_string(), "My agent isn't allowed in Work: your rules allow no custom agents");
+        assert_eq!(rules.check_home().unwrap_err().to_string(), "Work's projects sync with its server only (your rules)");
+    }
+
+    #[test]
+    fn nothing_starts_before_the_org_policy_arrives() {
+        let local = Policy::default();
+        let waiting = Source::Org { org: "acme".into(), server: "https://silt.acme.dev".into() };
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Err(waiting)) };
+        assert_eq!(
+            rules.check_preset(Preset::AskForEverything).unwrap_err().to_string(),
+            "Work is waiting for acme's policy on silt.acme.dev; signing in to it fetches it"
+        );
+    }
+
+    #[test]
+    fn projects_move_only_within_their_server() {
+        let acme = Some("https://silt.acme.dev");
+        assert_eq!(check_move("silt", &[], "Work", acme), Ok(()));
+        assert_eq!(check_move("billing", &["https://silt.acme.dev".into()], "Work", acme), Ok(()));
+        assert_eq!(
+            check_move("silt", &["https://silt.example.dev".into()], "Work", acme).unwrap_err().to_string(),
+            "silt can't move to Work: its threads sync with silt.example.dev, and Work syncs with silt.acme.dev; threads never move between servers"
+        );
+        assert!(check_move("silt", &["https://silt.example.dev".into()], "Experiments", None).is_err());
+    }
+
+    #[test]
+    fn the_policy_reads_back() {
+        let policy = Policy {
+            agents: keys(&["Copilot"]),
+            max_preset: Some(Preset::AskBeforeCommands),
+            isolated: true,
+            ..Policy::default()
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        assert_eq!(json, r#"{"agents":["copilot"],"max_preset":"ask_before_commands","isolated":true}"#);
+        assert_eq!(serde_json::from_str::<Policy>(&json).unwrap(), policy);
+        assert_eq!(serde_json::from_str::<Policy>("{}").unwrap(), Policy::default());
+        assert_eq!(serde_json::from_str::<Policy>(r#"{"agents":["Copilot"]}"#).unwrap().agents, keys(&["copilot"]));
+    }
+}

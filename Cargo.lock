@@ -5172,6 +5172,7 @@ dependencies = [
  "silt-sync",
  "silt-types",
  "silt-web",
+ "silt-workspace",
  "similar",
  "tempfile",
  "thiserror 2.0.21",
@@ -5377,6 +5378,16 @@ name = "silt-web"
 version = "0.0.1"
 dependencies = [
  "rust-embed",
+]
+
+[[package]]
+name = "silt-workspace"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ts-rs",
 ]
 
 [[package]]
