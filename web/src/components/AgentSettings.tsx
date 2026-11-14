@@ -15,6 +15,11 @@ function isEffort(setting: AgentSetting): boolean {
   return setting.category === 'thought_level' || /^(effort|reasoning|thinking)/i.test(setting.id)
 }
 
+/** Its name where it's listed on its own, the same for every agent's model and effort. */
+export function settingLabel(setting: AgentSetting): string {
+  return isModel(setting) ? 'Model' : isEffort(setting) ? 'Effort' : setting.name
+}
+
 /**
  * An agent's mode and settings as both composers show them, in one row: the
  * mode, the model and how hard it thinks as chips, everything else behind one

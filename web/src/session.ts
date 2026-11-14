@@ -28,7 +28,7 @@ const NO_TOOL = { id: null, text: '' }
 const SAID_MS = 5000
 
 /** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
-export function useLive(thread: string, total = 0): Live & { setPreset: (preset: Preset) => void } {
+export function useLive(thread: string, total = 0): Live & { heard: boolean; setPreset: (preset: Preset) => void } {
   const entries = useRef(total)
   useEffect(() => {
     entries.current = total
@@ -42,12 +42,15 @@ export function useLive(thread: string, total = 0): Live & { setPreset: (preset:
     said: NOTHING_SAID,
     began: 0,
   })
+  // `agent` is null both before the page hears and when no agent runs; only the second may start one.
+  const [heardFor, setHeardFor] = useState<string>()
   const [round, setRound] = useState(0)
   useEffect(() => {
     let current = true
     api.live(thread).then(
-      (state) =>
-        current &&
+      (state) => {
+        if (!current) return
+        setHeardFor(thread)
         setLive((previous) => ({
           ...previous,
           changes: previous.deltas !== null && previous.deltas !== state.deltas ? previous.changes + 1 : previous.changes,
@@ -56,8 +59,9 @@ export function useLive(thread: string, total = 0): Live & { setPreset: (preset:
           preset: state.preset,
           said: NOTHING_SAID,
           began: entries.current,
-        })),
-      () => undefined,
+        }))
+      },
+      () => current && setHeardFor(thread),
     )
     return () => {
       current = false
@@ -80,6 +84,7 @@ export function useLive(thread: string, total = 0): Live & { setPreset: (preset:
         previous.deltas === event.deltas ? previous : { ...previous, deltas: event.deltas, changes: previous.changes + 1 },
       )
     } else if (event.event === 'agent') {
+      setHeardFor(thread)
       const working = event.status?.state === 'working' || event.status?.state === 'awaiting_permission'
       setLive((previous) => {
         const before = previous.agent
@@ -101,7 +106,7 @@ export function useLive(thread: string, total = 0): Live & { setPreset: (preset:
       })
     }
   })
-  return { ...live, setPreset: (preset) => setLive((previous) => ({ ...previous, preset })) }
+  return { ...live, heard: heardFor === thread, setPreset: (preset) => setLive((previous) => ({ ...previous, preset })) }
 }
 
 /** Tells the others what this viewer is doing; returns what they are doing. */

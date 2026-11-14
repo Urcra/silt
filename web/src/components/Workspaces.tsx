@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
-import { PRESETS } from '../agentState'
-import { api, type MatchRule, type Policy, type Preset, type Workspace, type WorkspaceView, type Workspaces as WorkspacesFile } from '../api'
+import { PRESETS, permissionModes, startSettings } from '../agentState'
+import { type AgentChoice, type AgentDefaults, api, type MatchRule, type Policy, type Preset, type Workspace, type WorkspaceView, type Workspaces as WorkspacesFile } from '../api'
 import { keys, message } from '../query'
 import { KNOWN_AGENTS, PRESET_LABELS, rulesLine, serverLine } from '../rules'
 import { serverName } from '../served'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { Button, EmptyState, Input, Select, cx, toast } from '../ui'
+import { settingLabel } from './AgentSettings'
 import { WorkspaceBadge } from './WorkspaceSwitcher'
 
 /** A workspace's id from its name, as `silt workspace new` makes it. */
@@ -178,7 +179,13 @@ export function WorkspacesSettings() {
       </Section>
 
       <Section title="Which projects belong here">
-        {workspace.rules.length === 0 && <p className="px-4 py-3 text-sm text-fg-2">No rules yet: only projects you put here yourself.</p>}
+        {workspace.rules.length === 0 && (
+          <p className="px-4 py-3 text-sm text-fg-2">
+            {workspace.id === file.default
+              ? 'No rules needed: as the default, it has every project no other workspace’s rules match, and those you put here yourself.'
+              : 'No rules yet: only projects you put here yourself.'}
+          </p>
+        )}
         {workspace.rules.map((rule, index) => (
           <div key={`${rule.kind}${rule.pattern}`} className="flex items-center gap-2 border-b border-line-subtle px-4 py-2.5 last:border-b-0">
             <span className="rounded-sm border border-line px-1.5 font-mono text-2xs text-fg-2">{rule.kind}</span>
@@ -192,7 +199,8 @@ export function WorkspacesSettings() {
         <AddRule onAdd={(rule) => change({ rules: [...workspace.rules, rule] })} />
       </Section>
       <p className={cx(SUB, '-mt-3')}>
-        The most specific rule wins: a remote beats a folder, a longer match beats a shorter one. A project you put in a workspace yourself ignores rules. Projects
+        A remote's <code className="font-mono">*</code> is one part of its path, and a trailing <code className="font-mono">**</code> any number of them; a folder
+        covers everything under it. The most specific rule wins: a remote beats a folder, a longer match beats a shorter one. A project you put in a workspace yourself ignores rules. Projects
         nothing matches go to <strong>{file.workspaces.find((candidate) => candidate.id === file.default)?.name}</strong>, the default.
       </p>
 
@@ -216,6 +224,13 @@ export function WorkspacesSettings() {
           <span>Chats' permissions</span>
           <PresetSelect label="default permissions for chats" value={workspace.defaults.chats_preset ?? null} onChange={(chats_preset) => change({ defaults: { ...workspace.defaults, chats_preset } })} />
         </div>
+        <AgentDefaultsRows
+          key={workspace.id}
+          agents={agents.data?.agents ?? []}
+          preferred={workspace.defaults.agent ?? undefined}
+          value={workspace.defaults.agents ?? {}}
+          onChange={(next) => change({ defaults: { ...workspace.defaults, agents: next } })}
+        />
       </Section>
 
       <Section title="Agent accounts">
@@ -357,6 +372,78 @@ function agentsText(agents: string[] | null | undefined): string {
 function projectsBy(view: WorkspaceView | undefined, rule: MatchRule): string {
   const count = view?.projects.filter((project) => project.why.kind === 'rule' && project.why.rule.pattern === rule.pattern).length ?? 0
   return count === 0 ? 'no projects yet' : count === 1 ? '1 project' : `${count} projects`
+}
+
+/** An agent's model, effort and mode for new threads, chosen from what it listed when it last ran here. */
+function AgentDefaultsRows({
+  agents,
+  preferred,
+  value,
+  onChange,
+}: {
+  agents: AgentChoice[]
+  preferred?: string
+  value: Record<string, AgentDefaults>
+  onChange: (next: Record<string, AgentDefaults>) => void
+}) {
+  const [picked, setPicked] = useState<string>()
+  const agent = agents.find((candidate) => candidate.id === (picked ?? preferred)) ?? agents[0]
+  if (!agent) return null
+  const modes = permissionModes(agent.modes?.available) ? agent.modes!.available : []
+  const settings = startSettings(agent.settings, agent.modes?.available)
+  const chosen = value[agent.id] ?? {}
+  const set = (next: AgentDefaults) => {
+    const rest = Object.fromEntries(Object.entries(value).filter(([id]) => id !== agent.id))
+    onChange(next.mode || Object.keys(next.settings ?? {}).length > 0 ? { ...rest, [agent.id]: next } : rest)
+  }
+  const setSetting = (id: string, choice: string) => {
+    const others = Object.fromEntries(Object.entries(chosen.settings ?? {}).filter(([kept]) => kept !== id))
+    set({ ...chosen, settings: choice ? { ...others, [id]: choice } : others })
+  }
+  return (
+    <>
+      <div className={ROW}>
+        <span>Model, effort and mode</span>
+        <div className="flex flex-col gap-1">
+          <Select aria-label="agent whose defaults to set" value={agent.id} onChange={(event) => setPicked(event.target.value)}>
+            {agents.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.name}
+                {value[candidate.id] ? ' · set' : ''}
+              </option>
+            ))}
+          </Select>
+          {settings.length === 0 && modes.length === 0 && <span className={SUB}>{agent.name} lists its models and modes the first time it runs here.</span>}
+        </div>
+      </div>
+      {settings.map((setting) => (
+        <div key={setting.id} className={ROW}>
+          <span>{settingLabel(setting)}</span>
+          <Select aria-label={`default ${settingLabel(setting).toLowerCase()} for ${agent.name}`} value={chosen.settings?.[setting.id] ?? ''} onChange={(event) => setSetting(setting.id, event.target.value)}>
+            <option value="">As it last ran</option>
+            {setting.choices.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+      ))}
+      {modes.length > 0 && (
+        <div className={ROW}>
+          <span>Mode</span>
+          <Select aria-label={`default mode for ${agent.name}`} value={chosen.mode ?? ''} onChange={(event) => set({ ...chosen, mode: event.target.value || null })}>
+            <option value="">As it last ran</option>
+            {modes.map((mode) => (
+              <option key={mode.id} value={mode.id}>
+                {mode.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
+    </>
+  )
 }
 
 function PresetSelect({

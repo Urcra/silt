@@ -30,7 +30,8 @@ function start(env: Record<string, string> = {}, helper = HELPER): Fixture {
 test.afterEach(() => {
   if (!started) return
   execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: started.siltHome } })
-  rmSync(started.work, { recursive: true, force: true })
+  // A daemon's agents can still be writing there for a moment after it stops.
+  rmSync(started.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   started = undefined
 })
 

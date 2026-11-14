@@ -20,7 +20,7 @@ const FILE: &str = "workspaces.json";
 /// so the one Default workspace follows the default sign-in.
 pub fn load(data_dir: &Path) -> Option<Workspaces> {
     let bytes = std::fs::read(data_dir.join(FILE)).ok()?;
-    match serde_json::from_slice::<Workspaces>(&bytes) {
+    match serde_json::from_slice::<Workspaces>(&bytes).map(tidied) {
         Ok(workspaces) if workspaces.validate().is_ok() => Some(workspaces),
         Ok(workspaces) => {
             tracing::warn!(error = %workspaces.validate().unwrap_err(), "ignoring {FILE}");
@@ -31,6 +31,11 @@ pub fn load(data_dir: &Path) -> Option<Workspaces> {
             None
         }
     }
+}
+
+fn tidied(mut workspaces: Workspaces) -> Workspaces {
+    workspaces.tidy();
+    workspaces
 }
 
 pub(crate) fn save(data_dir: &Path, workspaces: &Workspaces) -> Result<(), CoreError> {
@@ -61,8 +66,7 @@ pub fn folder_rule(folder: &str) -> Result<MatchRule, CoreError> {
     if !Path::new(&expanded).is_absolute() && !expanded.starts_with('/') {
         return Err(CoreError::Invalid(format!("the folder {folder} must be absolute or start with ~")));
     }
-    let expanded = expanded.replace('\\', "/");
-    Ok(MatchRule::Folder(expanded.trim_end_matches('/').to_owned()))
+    Ok(MatchRule::folder(&expanded.replace('\\', "/")))
 }
 
 /// Why a project is in its workspace, as the Projects page says it.
@@ -198,6 +202,7 @@ impl Core {
 
     /// Replaces the workspaces with `workspaces`, checked first.
     pub(crate) fn set_workspaces(&mut self, workspaces: Workspaces) -> Result<(), CoreError> {
+        let workspaces = tidied(workspaces);
         for workspace in &workspaces.workspaces {
             if let Some(binding) = &workspace.server
                 && !self.remotes.iter().any(|remote| remote.config.url == binding.url)

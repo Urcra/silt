@@ -1487,6 +1487,7 @@ mod tests {
             silt_workspace::ServerBinding::decl(&config),
             silt_workspace::MatchRule::decl(&config),
             silt_workspace::Defaults::decl(&config),
+            silt_workspace::AgentDefaults::decl(&config),
             silt_workspace::Policy::decl(&config),
             silt_workspace::OrgPolicy::decl(&config),
             silt_workspace::Why::decl(&config),

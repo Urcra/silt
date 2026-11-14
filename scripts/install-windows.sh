@@ -41,6 +41,16 @@ rsync -rlt --files-from="$files" "$root/" "$src/"
     | (cd "$src" && xargs -r -d '\n' rm -f)
 
 cd "$src"
+
+# sherpa-onnx-sys fetches its library only when its build script runs, which
+# cargo skips once it has, and then reuses any lib directory, even one
+# emptied by an older copy of this script's cleanup.
+prebuilt=crates/silt-voice/target/sherpa-onnx-prebuilt
+if ! compgen -G "$prebuilt/*/lib/sherpa-onnx-c-api.lib" >/dev/null; then
+    rm -rf "$prebuilt"
+    windows 'cargo clean --release --manifest-path crates/silt-voice/Cargo.toml -p sherpa-onnx-sys; exit $LASTEXITCODE'
+fi
+
 echo "install-windows: building silt.exe, silt-desktop.exe and silt-voice.exe"
 windows 'cargo build --release --locked -p silt-cli; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     cargo build --release --locked --manifest-path crates/silt-desktop/Cargo.toml --features tauri/custom-protocol; if ($LASTEXITCODE) { exit $LASTEXITCODE }

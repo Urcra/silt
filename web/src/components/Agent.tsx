@@ -424,6 +424,7 @@ function ContinueOn({ thread, act }: { thread: string; act: (action: Promise<unk
 export function AgentDock({
   thread,
   status,
+  heard,
   preset,
   onPreset,
   draft,
@@ -435,6 +436,8 @@ export function AgentDock({
 }: {
   thread: string
   status: AgentStatus | null
+  /** Whether the page has heard how the agent stands; until then a null `status` doesn't mean none runs. */
+  heard: boolean
   preset: Preset
   onPreset: (preset: Preset) => void
   draft: string
@@ -554,8 +557,16 @@ export function AgentDock({
       })
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
+  // ⏎ before the page knows whether an agent runs, or which it may start, goes once it knows, rather than start
+  // one that's running already or drop the draft.
+  const known = heard && (hosted() || !choices.isPending)
+  const held = useRef<{ now: boolean }>(undefined)
   // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
   const send = (now = false) => {
+    if (!known) {
+      held.current = { now }
+      return
+    }
     if (starting.current) return queueAfter(starting.current)
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
@@ -568,6 +579,12 @@ export function AgentDock({
       })
     optimistic((text, files) => api.prompt(thread, text, false, files))
   }
+  useEffect(() => {
+    if (!known || !held.current) return
+    const { now } = held.current
+    held.current = undefined
+    send(now)
+  })
 
   // While a turn runs, the line above the composer says so, with its clock.
   // Shift+Tab moves to the agent's next mode, or Silt's next preset for an agent without modes.

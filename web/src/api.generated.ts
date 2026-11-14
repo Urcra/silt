@@ -934,7 +934,13 @@ export type ServerBinding = { url: string, org?: string | null, };
 
 export type MatchRule = { "kind": "remote", "pattern": string } | { "kind": "folder", "pattern": string };
 
-export type Defaults = { agent?: string | null, preset?: Preset | null, chats_preset?: Preset | null, };
+export type Defaults = { agent?: string | null, preset?: Preset | null, chats_preset?: Preset | null, 
+/**
+ * By agent id, as each agent's models and modes are its own.
+ */
+agents?: { [key in string]: AgentDefaults }, };
+
+export type AgentDefaults = { mode?: string | null, settings?: { [key in string]: string }, };
 
 export type Policy = { 
 /**

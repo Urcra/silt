@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { useState } from 'react'
-import { PRESETS, permissionModes, startSettings } from '../agentState'
-import { api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary, type WorkspaceView } from '../api'
-import { agentRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
+import { useEffect, useRef, useState } from 'react'
+import { PRESETS, permissionModes, startSettings, startingValue } from '../agentState'
+import { type AgentSetting, api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary, type WorkspaceView } from '../api'
+import { agentRefused, modeRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
 import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -17,6 +17,7 @@ import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '..
 import { AgentSettings } from './AgentSettings'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
+import { useHeldSend } from '../heldSend'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
@@ -27,6 +28,7 @@ import { Page } from './Page'
 import { CloneHere } from './Projects'
 import { ThreadMark } from './ThreadMark'
 import { addSending } from '../sending'
+import { useTypeahead } from '../typeahead'
 
 interface Draft {
   text: string
@@ -186,6 +188,45 @@ function sessionsSaid(folder: FoundFolder): string {
   return `${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]} ${total === 1 ? 'session' : 'sessions'}`
 }
 
+function cloneName(clone: CloneInfo): string {
+  return projectName(clone.repo || clone.path.replaceAll('\\', '/'))
+}
+
+/** This machine's projects, the one picked focused as they open so typing its first letters moves to another. */
+function ProjectList({ clones, value, onPick }: { clones: CloneInfo[]; value: string; onPick: (path: string) => void }) {
+  const list = useRef<HTMLUListElement>(null)
+  const [opened] = useState(() => Math.max(0, clones.findIndex((clone) => clone.path === value)))
+  useEffect(() => {
+    const box = list.current
+    // Back from another tab, focus stays on the tabs.
+    if (!box || box.closest('[role=dialog]')?.contains(document.activeElement)) return
+    box.querySelectorAll<HTMLButtonElement>('button')[opened]?.focus()
+  }, [opened])
+  return (
+    <ul ref={list} role="listbox" aria-label="projects" className="flex flex-col">
+      {clones.map((clone) => (
+        <li key={clone.path} role="option" aria-selected={clone.path === value}>
+          <button
+            type="button"
+            onClick={() => onPick(clone.path)}
+            className={cx(
+              'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 focus-visible:bg-surface-2 max-md:min-h-11',
+              clone.path === value && 'bg-surface-2',
+            )}
+          >
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="font-mono font-medium">{clone.repo ? projectName(clone.repo) : clone.path}</span>
+              <span className="truncate font-mono text-2xs text-fg-2">{clone.path}</span>
+            </span>
+            {clone.path === value && <Icon name="check" className="text-accent-fg" />}
+          </button>
+        </li>
+      ))}
+      {clones.length === 0 && <li className="px-2 py-1.5 text-xs text-fg-2">No projects on this machine yet.</li>}
+    </ul>
+  )
+}
+
 /** The project picker (ADR 0044): the projects here, a folder, a clone, or one of the workspace's not on this machine. */
 function ProjectPicker({
   clones,
@@ -212,6 +253,7 @@ function ProjectPicker({
     onPick(path)
     close()
   }
+  const typeTo = useTypeahead((panel) => [...panel.querySelectorAll<HTMLButtonElement>('[aria-label=projects] button')], clones.map(cloneName))
   return (
     <Popover
       label="Pick a project"
@@ -229,7 +271,7 @@ function ProjectPicker({
       {(close) => (
         // The picker sits in the new thread's form, and React carries a
         // portal's events to it: its own forms' submits stop here.
-        <div className="flex flex-col gap-2 font-sans text-sm font-normal" onSubmit={(event) => event.stopPropagation()}>
+        <div className="flex flex-col gap-2 font-sans text-sm font-normal" onSubmit={(event) => event.stopPropagation()} onKeyDown={tab === 'projects' ? typeTo : undefined}>
           <Tabs
             label="open from"
             tabs={[
@@ -243,27 +285,14 @@ function ProjectPicker({
             onChange={setTab}
           />
           {tab === 'projects' && (
-            <ul role="listbox" aria-label="projects" className="flex flex-col">
-              {clones.map((clone) => (
-                <li key={clone.path} role="option" aria-selected={clone.path === value}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onPick(clone.path)
-                      close()
-                    }}
-                    className={cx('flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11', clone.path === value && 'bg-surface-2')}
-                  >
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="font-mono font-medium">{clone.repo ? projectName(clone.repo) : clone.path}</span>
-                      <span className="truncate font-mono text-2xs text-fg-2">{clone.path}</span>
-                    </span>
-                    {clone.path === value && <Icon name="check" className="text-accent-fg" />}
-                  </button>
-                </li>
-              ))}
-              {clones.length === 0 && <li className="px-2 py-1.5 text-xs text-fg-2">No projects on this machine yet.</li>}
-            </ul>
+            <ProjectList
+              clones={clones}
+              value={value}
+              onPick={(path) => {
+                onPick(path)
+                close()
+              }}
+            />
           )}
           {tab === 'new' && <NewProject near={chosen?.path ?? clones[0]?.path} onAdded={(path) => added(path, close)} />}
           {tab === 'folder' && <OpenFolder found={found.data ?? []} onAdded={(path) => added(path, close)} />}
@@ -505,7 +534,10 @@ export function NewThread() {
   const modes = seen?.modes?.available
   const settings = startSettings(seen?.settings ?? [], modes)
   const [mode, setMode] = useState<string>()
-  const chosenMode = mode ?? seen?.modes?.current
+  const agentDefaults = workspace?.workspace.defaults.agents?.[agent]
+  const defaultMode = modes?.find((choice) => choice.id === agentDefaults?.mode && !modeRefused(workspace, agent, choice.id))?.id
+  const chosenMode = mode ?? defaultMode ?? seen?.modes?.current
+  const settingValue = (setting: AgentSetting) => startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
   // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
   const modesArePermissions = permissionModes(modes)
   const takes: Takes = { agent: agentName || 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
@@ -569,7 +601,7 @@ export function NewThread() {
           base: chosenWhere === 'worktree' && base ? base : null,
           // In the mode chosen here where its modes are its permissions, else the one its preset says; its model and the rest as shown.
           mode: modesArePermissions ? (chosenMode ?? null) : null,
-          settings: settings.map((setting) => [setting.id, chosenSettings[setting.id] ?? setting.current]),
+          settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           visibility: null,
           prompt: prompt.trim() ? prompt : null,
@@ -596,6 +628,9 @@ export function NewThread() {
       .finally(() => setStarting(false))
   }
 
+  const ready = !starting && Boolean(project) && (chosenWhere === 'cloud' ? Boolean(prompt.trim()) : Boolean(agent))
+  const send = useHeldSend(choices.isPending, ready, () => start(false))
+
   if (choices.isSuccess && clones.length === 0) {
     return (
       <Page title="New thread" meta="first open" label="new thread">
@@ -604,7 +639,6 @@ export function NewThread() {
     )
   }
 
-  const ready = !starting && Boolean(project) && (chosenWhere === 'cloud' ? Boolean(prompt.trim()) : Boolean(agent))
   return (
     <Page title="New thread" flush label="new thread">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
@@ -622,7 +656,7 @@ export function NewThread() {
           className="flex flex-col"
           onSubmit={(event) => {
             event.preventDefault()
-            start(false)
+            send()
           }}
         >
           <ComposerBox
@@ -631,7 +665,7 @@ export function NewThread() {
             rows={4}
             value={prompt}
             onChange={setPrompt}
-            onSend={() => ready && start(false)}
+            onSend={send}
             onCycle={() => {
               if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
@@ -666,7 +700,7 @@ export function NewThread() {
                     mode={chosenMode}
                     onMode={setMode}
                     settings={settings}
-                    value={(setting) => chosenSettings[setting.id] ?? setting.current}
+                    value={settingValue}
                     onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
                     narrow={narrow}
                   />

@@ -280,6 +280,8 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
         <span className="shrink-0">Runs on</span>
         <Menu
           label="where Silt runs"
+          above
+          align="left"
           trigger={
             <span className="inline-flex min-w-0 items-center gap-1 text-fg-1">
               <span className="truncate">{backends.find((backend) => backend.id === current)?.label ?? 'This computer'}</span>

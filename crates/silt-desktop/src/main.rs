@@ -3,6 +3,10 @@
 //! the window leaves it and its agents running. On Windows the window also
 //! shows WSL distributions' daemons (ADR 0045).
 
+// A console program would open a console window beside the app's own on
+// Windows; debug builds keep it for their logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod backends;
 mod daemon;
 #[cfg(target_os = "linux")]
