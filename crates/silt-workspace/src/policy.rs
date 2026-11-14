@@ -42,13 +42,14 @@ impl fmt::Display for AgentKey {
 
 /// The agents rules know by name, each with its CLI's and its ACP
 /// adapter's ids, and how people call it.
-pub const KNOWN_AGENTS: [(&str, &[&str], &str); 6] = [
+pub const KNOWN_AGENTS: [(&str, &[&str], &str); 7] = [
     ("claude", &["claude-code", "claude-acp"], "Claude Code"),
     ("codex", &["codex", "codex-acp"], "Codex"),
     ("copilot", &["copilot-cli", "github-copilot-cli"], "GitHub Copilot"),
     ("gemini", &["gemini-cli", "gemini"], "Gemini CLI"),
     ("agy", &["antigravity-cli", "antigravity-acp"], "Antigravity"),
     ("opencode", &["opencode", "opencode-v2"], "OpenCode"),
+    ("local", &["local"], "Silt on a local model"),
 ];
 
 /// The key rules name an agent by, from its CLI adapter's or ACP registry

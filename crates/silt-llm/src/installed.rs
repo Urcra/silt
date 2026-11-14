@@ -145,6 +145,21 @@ impl Models {
         found
     }
 
+    /// [`Models::list`], without waiting on a runtime.
+    pub fn list_now(&self) -> Vec<Installed> {
+        let mut found: Vec<Installed> = std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let id = ModelId::new(entry.ok()?.file_name().to_str()?).ok()?;
+                let bytes = std::fs::read(self.model_dir(&id).join(MANIFEST)).ok()?;
+                serde_json::from_slice::<Installed>(&bytes).ok().filter(|model| model.id == id)
+            })
+            .collect();
+        found.sort_by(|a, b| a.id.cmp(&b.id));
+        found
+    }
+
     pub async fn get(&self, id: &ModelId) -> Option<Installed> {
         let bytes = fs::read(self.model_dir(id).join(MANIFEST)).await.ok()?;
         serde_json::from_slice::<Installed>(&bytes).ok().filter(|model| model.id == *id)

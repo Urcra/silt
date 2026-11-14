@@ -21,6 +21,7 @@ thiserror = "2.0.21"
 silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-git = { path = "../silt-git" }
+silt-local = { path = "../silt-local" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }

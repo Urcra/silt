@@ -11,6 +11,7 @@ export const KNOWN_AGENTS: { key: string; ids: string[]; name: string }[] = [
   { key: 'gemini', ids: ['gemini-cli', 'gemini'], name: 'Gemini CLI' },
   { key: 'agy', ids: ['antigravity-cli', 'antigravity-acp'], name: 'Antigravity' },
   { key: 'opencode', ids: ['opencode', 'opencode-v2'], name: 'OpenCode' },
+  { key: 'local', ids: ['local'], name: 'Silt on a local model' },
 ]
 
 export function agentKey(id: string): string {

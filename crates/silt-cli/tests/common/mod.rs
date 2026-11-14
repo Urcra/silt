@@ -239,6 +239,8 @@ impl Machine {
             .env("COPILOT_HOME", self.agents.join("copilot"))
             .env("FAKE_OPENCODE_DIR", self.agents.join("opencode"))
             .env("FAKE_LOG_DIR", self.agents.join("logs"))
+            .env("SILT_LLAMA_SERVER", fake_agent("llama"))
+            .env("FAKE_MODEL_LOG", self.agents.join("logs/model-requests.jsonl"))
             .env("HOME", self.agents.parent().expect("the machine's home"))
             .envs(envs.iter().copied());
         command

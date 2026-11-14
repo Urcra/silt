@@ -1,0 +1,19 @@
+[package]
+name = "silt-local"
+description = "Silt's own agent, on a local model through the daemon's gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-client-protocol = { version = "3.4", features = ["stdio"] }
+reqwest = { version = "0.13.5", features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.0", features = ["fs", "io-util", "macros", "rt", "sync"] }
+uuid = { version = "1.28.0", features = ["v4"] }

@@ -4392,6 +4392,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -4414,12 +4415,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -5113,6 +5116,7 @@ dependencies = [
  "silt-agents",
  "silt-daemon",
  "silt-git",
+ "silt-local",
  "silt-mcp",
  "silt-os",
  "silt-proto",
@@ -5153,6 +5157,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
+ "futures-util",
  "notify",
  "notify-debouncer-full",
  "postcard",
@@ -5165,6 +5170,7 @@ dependencies = [
  "silt-crdt",
  "silt-git",
  "silt-llm",
+ "silt-local",
  "silt-log",
  "silt-mcp",
  "silt-os",
@@ -5226,6 +5232,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "silt-local"
+version = "0.0.1"
+dependencies = [
+ "agent-client-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -6556,6 +6574,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

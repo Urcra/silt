@@ -13,6 +13,7 @@ mod control;
 mod core;
 mod disk;
 mod forks;
+mod gateway;
 mod history;
 mod homes;
 mod import;

@@ -478,6 +478,7 @@ impl Core {
         events: mpsc::UnboundedSender<Event>,
         resident: bool,
     ) -> Result<Self, CoreError> {
+        let models = std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir, store.clone()));
         let mut core = Self {
             store,
             actor,
@@ -518,7 +519,7 @@ impl Core {
             known_secrets: HashSet::new(),
             last_listings: HashMap::new(),
             notes_settings: crate::notes::NotesSettings::default(),
-            models: std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir)),
+            models,
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),

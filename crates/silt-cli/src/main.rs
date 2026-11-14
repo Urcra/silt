@@ -308,6 +308,12 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// Silt's own agent, which the daemon runs over ACP
+    #[command(hide = true)]
+    Agent {
+        #[command(subcommand)]
+        agent: AgentCommand,
+    },
     /// Called by agent hooks; reads the hook input on stdin
     #[command(hide = true)]
     Hook {
@@ -415,6 +421,25 @@ enum AuthCommand {
     },
     /// Show which servers this machine syncs with
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Silt's own agent, on a model this machine runs through the daemon's gateway
+    Local,
+}
+
+/// Serves `silt agent local` on stdin and stdout; its sessions go to
+/// `SILT_LOCAL_HOME`, which the daemon sets, else the data dir's `local/`.
+fn local_agent() -> Result<(), Exn<CliError>> {
+    let home = std::env::var_os("SILT_LOCAL_HOME")
+        .filter(|home| !home.is_empty())
+        .map_or_else(|| silt_daemon::paths::data_dir().join("local"), PathBuf::from);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| commands::fail(format!("could not start a runtime: {error}")))?;
+    runtime.block_on(silt_local::serve(home)).map_err(|error| commands::fail(format!("the local agent stopped: {error}")))
 }
 
 #[derive(Debug, Subcommand)]
@@ -897,6 +922,7 @@ fn run() -> Result<(), Exn<CliError>> {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())
         }
+        Command::Agent { agent: AgentCommand::Local } => local_agent(),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())

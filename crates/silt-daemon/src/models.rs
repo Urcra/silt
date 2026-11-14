@@ -13,6 +13,9 @@ use crate::protocol::{CatalogModel, LocalModel, LocalModels, ModelFit, ModelPull
 
 pub(crate) struct LocalModelsHere {
     models: Models,
+    store: silt_store::Store,
+    /// The model gateway's address, once it's started (ADR 0066).
+    gateway: tokio::sync::OnceCell<String>,
     hub: Hub,
     client: reqwest::Client,
     pulling: Mutex<Pulling>,
@@ -56,15 +59,31 @@ impl Wanted {
 }
 
 impl LocalModelsHere {
-    pub(crate) fn new(data_dir: &Path) -> Self {
+    pub(crate) fn new(data_dir: &Path, store: silt_store::Store) -> Self {
         let hub = env::var("SILT_HUGGINGFACE_URL").map(Hub::new).unwrap_or_default();
         Self {
             models: Models::new(data_dir.join("models").join("llm")),
+            store,
+            gateway: tokio::sync::OnceCell::new(),
             hub,
             client: reqwest::Client::new(),
             pulling: Mutex::default(),
             devices: Mutex::default(),
         }
+    }
+
+    /// Where agents reach local models, starting the gateway the first time.
+    pub(crate) async fn gateway(&self) -> Result<String, CoreError> {
+        let url = self
+            .gateway
+            .get_or_try_init(|| crate::gateway::start(self.store.clone(), self.models.clone(), Self::server()))
+            .await?;
+        Ok(url.clone())
+    }
+
+    /// The models here, as `local`'s model setting offers them.
+    pub(crate) fn installed_now(&self) -> Vec<Installed> {
+        self.models.list_now()
     }
 
     /// The `llama-server` this machine runs models with.

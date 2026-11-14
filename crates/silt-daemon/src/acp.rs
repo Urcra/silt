@@ -339,7 +339,61 @@ impl AcpRun {
     }
 }
 
+/// The agents this machine can start: those installed here, then Silt's
+/// own, last so it's never the one a new thread starts with unasked.
+pub(crate) fn agents_here(data_dir: &Path) -> Vec<AgentInfo> {
+    let mut agents = registry::installed_here(data_dir);
+    agents.push(registry::local_agent(&silt_exe()));
+    agents
+}
+
 impl Core {
+    /// What `local` offers: Chat, and the models downloaded here. It isn't
+    /// asked, as the daemon knows.
+    fn local_offer(&self) -> Seen {
+        let models = self.models.installed_now();
+        let choices: Vec<crate::protocol::AgentChoiceItem> = models
+            .iter()
+            .map(|model| crate::protocol::AgentChoiceItem {
+                id: model.id.to_string(),
+                name: model.name.clone(),
+                description: None,
+            })
+            .collect();
+        let chat = crate::protocol::AgentChoiceItem {
+            id: silt_local::CHAT.to_owned(),
+            name: "Chat".to_owned(),
+            description: Some("Only talks: no tools".to_owned()),
+        };
+        Seen {
+            modes: Some(crate::protocol::AgentModes { current: silt_local::CHAT.to_owned(), available: vec![chat], plan: None }),
+            settings: choices
+                .first()
+                .map(|first| crate::protocol::AgentSetting {
+                    id: "model".to_owned(),
+                    name: "Model".to_owned(),
+                    category: Some("model".to_owned()),
+                    current: first.id.clone(),
+                    choices: choices.clone(),
+                })
+                .into_iter()
+                .collect(),
+            takes: None,
+            seen_ms: 0,
+            presents_plans: false,
+            commands: Vec::new(),
+        }
+    }
+
+    /// What `local` needs to reach the gateway with its run's token.
+    async fn local_env(&self, token: &str) -> Result<Vec<(String, String)>, CoreError> {
+        Ok(vec![
+            ("SILT_MODEL_URL".to_owned(), self.models.gateway().await?),
+            ("SILT_MODEL_TOKEN".to_owned(), token.to_owned()),
+            ("SILT_LOCAL_HOME".to_owned(), self.data_dir.join("local").to_string_lossy().into_owned()),
+        ])
+    }
+
     /// The agents the web UI can start. The registry's copy is brought up to
     /// date in the background the first time someone looks, not whenever a
     /// daemon starts; the bundled one answers meanwhile.
@@ -353,11 +407,11 @@ impl Core {
         clones.sort_by(|a, b| a.repo.cmp(&b.repo));
         let mut seen = read_seen(&self.data_dir);
         let now = now_ms();
-        let installed = registry::installed_here(&self.data_dir);
+        let installed = agents_here(&self.data_dir);
         // What each offers as last seen here, else as Silt knows it; one not asked lately is asked again, behind the answer.
         let asking = std::env::var_os("SILT_ASK_AGENTS").is_none_or(|value| value != "0");
         // One that didn't answer isn't asked again before then either, rather than on every look.
-        for agent in &installed {
+        for agent in installed.iter().filter(|agent| agent.id != registry::LOCAL_AGENT) {
             if asking
                 && seen.get(&agent.id).is_none_or(|seen| now - seen.seen_ms > ASK_AGAIN_MS)
                 && self.asked.get(&agent.id).is_none_or(|asked| now - asked > ASK_AGAIN_MS)
@@ -370,7 +424,9 @@ impl Core {
             agents: installed
                 .into_iter()
                 .map(|agent| {
-                    let Seen { modes, settings, takes, commands, .. } = seen.remove(&agent.id).unwrap_or_else(|| {
+                    let offered =
+                        if agent.id == registry::LOCAL_AGENT { Some(self.local_offer()) } else { seen.remove(&agent.id) };
+                    let Seen { modes, settings, takes, commands, .. } = offered.unwrap_or_else(|| {
                         silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
                             modes: Some((&modes).into()),
                             settings: settings.iter().map(Into::into).collect(),
@@ -457,8 +513,8 @@ impl Core {
         agent: &str,
         mut options: StartOptions,
     ) -> Result<String, CoreError> {
-        let info = registry::all(&self.data_dir)
-            .into_iter()
+        let info = std::iter::once(registry::local_agent(&silt_exe()))
+            .chain(registry::all(&self.data_dir))
             .find(|candidate| candidate.id == agent)
             .ok_or_else(|| CoreError::Invalid(format!("no agent called {agent}")))?;
         if options.prompt.as_ref().is_some_and(|prompt| prompt.trim().is_empty()) {
@@ -562,11 +618,15 @@ impl Core {
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
         let token = self.mint_run_token(thread, &workspace.id).await?;
+        let local_token = token.clone();
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
         if let Some((_, args)) = &mut start.mcp {
             args.extend(["--token".to_owned(), token]);
         }
         start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
+        if info.id == registry::LOCAL_AGENT {
+            start.env.extend(self.local_env(&local_token).await?);
+        }
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
@@ -2070,7 +2130,7 @@ fn mode_key(mode: &str) -> &str {
 /// Claude's, Codex's and Copilot's adapters use.
 fn preset_for_mode(mode: &str) -> Option<Preset> {
     match mode_key(mode) {
-        "default" | "read-only" => Some(Preset::AskForEverything),
+        "default" | "read-only" | silt_local::CHAT => Some(Preset::AskForEverything),
         "acceptEdits" => Some(Preset::AskBeforeCommands),
         "bypassPermissions" | "auto" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
         _ => None,
