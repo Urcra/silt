@@ -170,6 +170,20 @@ pub struct Defaults {
     pub preset: Option<Preset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chats_preset: Option<Preset>,
+    /// By agent id, as each agent's models and modes are its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, AgentDefaults>,
+}
+
+/// An agent's mode and settings (its model, effort, …) by the ids the
+/// agent lists them with; those it no longer lists are left as it says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AgentDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

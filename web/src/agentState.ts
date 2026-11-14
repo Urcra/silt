@@ -47,6 +47,11 @@ export function startSettings(settings: AgentSetting[], modes: AgentChoiceItem[]
   return settings.filter((setting) => !(modes?.length && setting.category === 'mode') && !presetDriven(setting))
 }
 
+/** What a setting starts with: the person's choice, else the workspace's default while the agent still lists it, else as it last ran. */
+export function startingValue(setting: AgentSetting, chosen: string | undefined, preferred: string | undefined): string {
+  return chosen ?? (preferred !== undefined && setting.choices.some((choice) => choice.id === preferred) ? preferred : setting.current)
+}
+
 /** How a state reads after the agent's name (ADR 0022). */
 export const STATE_PHRASE: Record<AgentState, string> = {
   starting: 'is starting',
