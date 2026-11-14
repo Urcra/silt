@@ -8,7 +8,7 @@ afterEach(cleanup)
 const THREAD = '0123456789abcdef0123456789abcdef'
 
 function reviewOf(review: Review): ReviewState {
-  return { review, add: vi.fn(), edit: vi.fn(), remove: vi.fn(), setNote: vi.fn(), clear: vi.fn() }
+  return { review, add: vi.fn(), setAnchor: vi.fn(), edit: vi.fn(), remove: vi.fn(), setNote: vi.fn(), clear: vi.fn() }
 }
 
 const PENDING = reviewOf({ note: '', drafts: [{ id: '1', at: { path: 'src/a.rs', start: 2, end: 4 }, text: 'retry it', quote: ['+send(chunk);'] }] })
@@ -41,4 +41,12 @@ test('with no agent running here the review is copied, and an idle agent has no 
 test('nothing pending, nothing to finish', () => {
   render(<FinishReview {...props} review={reviewOf({ note: '', drafts: [] })} agent="Claude Agent" />)
   expect(screen.queryByRole('button', { name: 'Finish review' })).toBeNull()
+})
+
+test('with nothing pending, the review can still be marked reviewed through a turn', () => {
+  render(<FinishReview {...props} review={reviewOf({ note: '', drafts: [] })} agent="Claude Agent" reviewedTurn={3} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Finish review' }))
+  expect(screen.getByRole('radio', { name: 'Mark reviewed through turn 3' })).toBeChecked()
+  expect(screen.queryByRole('radio', { name: 'Request changes' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Mark reviewed' })).toBeInTheDocument()
 })

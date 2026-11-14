@@ -8,6 +8,10 @@ export interface Kept {
   other: string
   commit: string
   layout: DiffLayout
+  /** The turns picked, first and last, in place of `view`. */
+  turns?: [number, number]
+  /** Whether the person picked the turns, or all of them, rather than start after the turn they reviewed through. */
+  chosen?: boolean
   /** The file it was last on, for the panel to scroll to on the way back. */
   file?: string
 }

@@ -22,7 +22,7 @@ use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
 use crate::remote::{self, Remote};
 use crate::sessions::{self, PendingSession, Session};
-use crate::views::Only;
+use crate::views::{Only, TurnRange};
 use crate::watch::{Watched, Watchers};
 
 pub enum Event {
@@ -631,12 +631,24 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, base, files, path } => {
+            Request::Diff { thread, turn, to_turn, base, files, path } => {
                 let only = Only { files, path: path.as_deref() };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), only)))
+                let turns = TurnRange { turn, to_turn };
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only)))
             }
-            Request::DiffStats { thread, turn, base } => {
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref())))
+            Request::DiffStats { thread, turn, to_turn, base } => {
+                let turns = TurnRange { turn, to_turn };
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref())))
+            }
+            Request::ThreadSeen { thread, turn, to_turn, base } => {
+                let turns = TurnRange { turn, to_turn };
+                to_response(self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref())))
+            }
+            Request::MarkThreadSeen { thread, mark } => to_response(self.mark_thread_seen(&thread, mark).await),
+            Request::DiffTurns { thread, turn, to_turn, base, files, path } => {
+                let only = Only { files, path: path.as_deref() };
+                let turns = TurnRange { turn, to_turn };
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only)))
             }
             Request::Search { query, limit, filters } => {
                 to_response(self.search(&query, limit, &filters).await.map(|results| self.scoped_results(results)))
@@ -737,6 +749,8 @@ impl Core {
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
+            Request::AnchorLines { thread, on, cwd } => to_response(self.anchor_lines(&thread, on, &cwd).await),
+            Request::PlaceAnchors { thread, place, cwd } => to_response(self.place_anchors(&thread, place, &cwd).await),
             Request::CommentsSent { thread, comments, cwd } => to_response(self.comments_sent(&thread, &comments, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
             Request::Reply { thread, comment, text, cwd } => to_response(self.reply(&thread, &comment, text, &cwd).await),

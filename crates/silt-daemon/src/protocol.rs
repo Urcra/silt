@@ -74,6 +74,9 @@ pub enum Request {
     Diff {
         thread: String,
         turn: Option<usize>,
+        /// With `turn`, the last of a range of turns.
+        #[serde(default)]
+        to_turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
         /// Only these of the changed files, in path order: a page of them.
@@ -89,7 +92,38 @@ pub enum Request {
         thread: String,
         turn: Option<usize>,
         #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
         base: Option<String>,
+    },
+    /// For [`Request::Diff`]'s files the person marked seen, whether each is
+    /// as they saw it, and the lines new since (ADR 0067).
+    ThreadSeen {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
+    },
+    /// Marks a file of the thread seen, or not, at a version the review read.
+    MarkThreadSeen {
+        thread: String,
+        mark: silt_proto::view::MarkSeen,
+    },
+    /// For [`Request::Diff`]'s files, the turn that last wrote each of their
+    /// new lines.
+    DiffTurns {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
+        #[serde(default)]
+        files: Option<FilePage>,
+        #[serde(default)]
+        path: Option<String>,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -283,6 +317,19 @@ pub enum Request {
         /// A diff base to place code comments in too, such as `last-turn`.
         #[serde(default)]
         base: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Anchors lines for a pending review comment, recording nothing
+    /// (ADR 0066).
+    AnchorLines {
+        thread: String,
+        on: CommentOn,
+        cwd: PathBuf,
+    },
+    /// Where pending review comments' anchors are now, and at `base`.
+    PlaceAnchors {
+        thread: String,
+        place: silt_proto::view::PlaceAnchors,
         cwd: PathBuf,
     },
     /// Marks comments as sent to the thread's agent (ADR 0055).
@@ -1370,9 +1417,17 @@ mod tests {
             CommentLocation::decl(&config),
             LineSpan::decl(&config),
             CommentOn::decl(&config),
+            silt_proto::view::PendingAnchor::decl(&config),
+            silt_proto::view::PlaceAnchors::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
             silt_proto::view::DiffStat::decl(&config),
+            silt_proto::view::FileTurns::decl(&config),
+            silt_proto::view::TurnRun::decl(&config),
+            silt_proto::view::Seen::decl(&config),
+            silt_proto::view::FileSeen::decl(&config),
+            silt_proto::view::ThreadSeenView::decl(&config),
+            silt_proto::view::MarkSeen::decl(&config),
             silt_proto::view::FileAt::decl(&config),
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),

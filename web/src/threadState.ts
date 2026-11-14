@@ -8,7 +8,7 @@ import { toast } from './ui'
 const HOUR_MS = 60 * 60 * 1000
 /** Far enough ahead that only activity ends it. */
 const UNTIL_ACTIVITY_MS = 365 * 24 * HOUR_MS
-const NOTHING: StateChange = { pinned: null, snooze: null, settled: null, seen: false }
+const NOTHING: StateChange = { pinned: null, snooze: null, settled: null, seen: false, reviewed_turn: null }
 
 /** Pin, snooze or settle a thread for this person (ADR 0024), as menu items. */
 export function useThreadState(thread: ThreadSummary): { label: string; onSelect: () => void }[] {

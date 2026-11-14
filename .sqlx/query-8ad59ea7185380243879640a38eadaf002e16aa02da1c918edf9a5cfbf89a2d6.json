@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO thread_seen (user_id, thread_id, path, hash, version, seen, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT (user_id, thread_id, path) DO UPDATE SET hash = excluded.hash, version = excluded.version,\n             seen = excluded.seen, at_ms = excluded.at_ms\n         WHERE excluded.at_ms > thread_seen.at_ms OR (excluded.at_ms = thread_seen.at_ms AND excluded.seen > thread_seen.seen)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "8ad59ea7185380243879640a38eadaf002e16aa02da1c918edf9a5cfbf89a2d6"
+}

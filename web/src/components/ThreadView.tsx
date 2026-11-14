@@ -1685,7 +1685,7 @@ function ThreadBody({
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
   useEffect(() => {
-    if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true }).catch(() => undefined)
+    if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true, reviewed_turn: null }).catch(() => undefined)
   }, [thread, unseen])
 
   // A plan call's own output is the plan again, then the agent's note that it was approved; the plan card shows it once.

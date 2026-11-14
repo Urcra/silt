@@ -259,57 +259,41 @@ impl Core {
     pub(crate) fn diff(
         &self,
         thread: ThreadId,
-        turn: Option<usize>,
+        turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
     ) -> Result<String, CoreError> {
-        Ok(render_diff(&self.diff_changes(thread, turn, base, only)?))
+        Ok(render_diff(&self.diff_changes(thread, turns, base, only)?))
     }
 
     /// [`Self::diff`]'s files, each with its counts and how long its part of
     /// the diff is, so a page can ask for one file at a time.
-    pub(crate) fn diff_stats(
-        &self,
-        thread: ThreadId,
-        turn: Option<usize>,
-        base: Option<&str>,
-    ) -> Result<Vec<DiffStat>, CoreError> {
-        Ok(self.diff_changes(thread, turn, base, Only::default())?.iter().map(diff_stat).collect())
+    pub(crate) fn diff_stats(&self, thread: ThreadId, turns: TurnRange, base: Option<&str>) -> Result<Vec<DiffStat>, CoreError> {
+        Ok(self.diff_changes(thread, turns, base, Only::default())?.iter().map(diff_stat).collect())
     }
 
-    fn diff_changes(
-        &self,
-        thread: ThreadId,
-        turn: Option<usize>,
-        base: Option<&str>,
-        only: Only<'_>,
-    ) -> Result<Vec<FileChange>, CoreError> {
+    /// The family a thread's diff reads, here.
+    pub(crate) fn diff_family(&self, thread: ThreadId) -> Result<(FamilyId, &Family), CoreError> {
         let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
             .get(&family_id)
             .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
-        let graph = family.graph();
-        let head = family.thread_head(thread);
-        if turn.is_none()
-            && let Some(rev) = base.and_then(git_base)
-        {
-            return self.diff_against_git(family_id, &graph.version_vector(&head), rev, only);
-        }
-        let (from, to) = match (turn, base) {
-            (Some(turn), _) => {
-                let marks = prompt_marks(family, thread);
-                let start = turn
-                    .checked_sub(1)
-                    .and_then(|index| marks.get(index))
-                    .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))?;
-                let next = marks.get(turn).cloned().unwrap_or_else(|| head.clone());
-                let end = turn_end(family, thread, start, &next).unwrap_or(next);
-                (graph.version_vector(start), graph.version_vector(&end))
-            }
-            (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
-        };
-        Ok(self.changes_in(family_id, &from, &to, only))
+        Ok((family_id, family))
+    }
+
+    pub(crate) fn diff_changes(
+        &self,
+        thread: ThreadId,
+        turns: TurnRange,
+        base: Option<&str>,
+        only: Only<'_>,
+    ) -> Result<Vec<FileChange>, CoreError> {
+        let (family_id, family) = self.diff_family(thread)?;
+        Ok(match diff_range(family, thread, turns, base)? {
+            DiffRange::Git { head, rev } => self.diff_against_git(family_id, &head, rev, only)?,
+            DiffRange::Versions { from, to } => self.changes_in(family_id, &from, &to, only),
+        })
     }
 
     /// How the files at `head` differ from a commit's tree in this machine's
@@ -826,6 +810,67 @@ pub(crate) enum GitBase<'a> {
     Rev(&'a str),
 }
 
+/// Which turns a diff covers: one, or `turn` to `to_turn`; none for the
+/// diff from a base.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TurnRange {
+    pub(crate) turn: Option<usize>,
+    pub(crate) to_turn: Option<usize>,
+}
+
+/// The versions a diff runs between, or a branch as git has it against the
+/// thread's head.
+pub(crate) enum DiffRange<'a> {
+    Versions { from: VersionVector, to: VersionVector },
+    Git { head: VersionVector, rev: GitBase<'a> },
+}
+
+impl DiffRange<'_> {
+    /// The version whose files the diff's new side shows.
+    pub(crate) fn to(&self) -> &VersionVector {
+        match self {
+            Self::Versions { to, .. } => to,
+            Self::Git { head, .. } => head,
+        }
+    }
+}
+
+/// The versions a diff of `thread` runs between: a range of its turns,
+/// from the first's prompt to where the last ended, else from `base` to its
+/// head.
+pub(crate) fn diff_range<'a>(
+    family: &Family,
+    thread: ThreadId,
+    turns: TurnRange,
+    base: Option<&'a str>,
+) -> Result<DiffRange<'a>, CoreError> {
+    let graph = family.graph();
+    let head = family.thread_head(thread);
+    let Some(first) = turns.turn else {
+        if turns.to_turn.is_some() {
+            return Err(CoreError::Invalid("a range of turns needs its first turn".into()));
+        }
+        return Ok(match base.and_then(git_base) {
+            Some(rev) => DiffRange::Git { head: graph.version_vector(&head), rev },
+            None => DiffRange::Versions { from: diff_base(family, thread, base)?, to: graph.version_vector(&head) },
+        });
+    };
+    let last = turns.to_turn.unwrap_or(first);
+    if last < first {
+        return Err(CoreError::Invalid(format!("turn {last} comes before turn {first}")));
+    }
+    let marks = prompt_marks(family, thread);
+    let at = |turn: usize| {
+        turn.checked_sub(1)
+            .and_then(|index| marks.get(index))
+            .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))
+    };
+    let (start, last_start) = (at(first)?, at(last)?);
+    let next = marks.get(last).cloned().unwrap_or_else(|| head.clone());
+    let end = turn_end(family, thread, last_start, &next).unwrap_or(next);
+    Ok(DiffRange::Versions { from: graph.version_vector(start), to: graph.version_vector(&end) })
+}
+
 pub(crate) fn git_base(base: &str) -> Option<GitBase<'_>> {
     match base {
         "main" => Some(GitBase::Main),
@@ -912,7 +957,7 @@ fn turn_end(family: &Family, thread: ThreadId, start: &Frontier, next: &Frontier
     Some(graph.minimize(std::iter::once(in_turn[stop]).chain(late).map(|delta| delta.span.last())))
 }
 
-fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
+pub(crate) fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
     family
         .conversation(thread)
         .filter(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })))

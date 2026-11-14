@@ -5,8 +5,8 @@ import { type ReviewItem, type ReviewState, reviewPrompt } from './review'
 import { toast } from './ui'
 
 /** How a review leaves: as a prompt to the agent running here, in place of its running turn, copied for one in a
- * terminal, or kept as comments for later. */
-export type Finish = 'send' | 'steer' | 'copy' | 'save'
+ * terminal, kept as comments for later, or with nothing to change, as reviewed through a turn (ADR 0067). */
+export type Finish = 'send' | 'steer' | 'copy' | 'save' | 'reviewed'
 
 export interface FinishProps {
   thread: string
@@ -19,10 +19,12 @@ export interface FinishProps {
   /** Whether that agent is in a turn, which a review then waits for or stops. */
   working?: boolean
   onSent: () => Promise<unknown>
+  /** The turn a review marked reviewed is through, where it can be marked so. */
+  reviewedTurn?: number
 }
 
 /** Finishing a review: each pending comment becomes a comment, then the lot goes to the agent as one prompt. */
-export function useFinishReview({ thread, review, unsent, items, agent, onSent }: FinishProps) {
+export function useFinishReview({ thread, review, unsent, items, agent, onSent, reviewedTurn }: FinishProps) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
   const { drafts, note } = review.review
@@ -41,9 +43,16 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent }
       // Each draft becomes a comment first, and leaves the review once it is one, so a failure halfway repeats none.
       for (const draft of drafts) {
         const { at } = draft
-        const made = await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base: draft.base }, draft.text)
+        const on = draft.anchor ? { on: 'anchored' as const, anchor: draft.anchor } : { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base }
+        const made = await api.addComment(thread, on, draft.text)
         review.remove(draft.id)
         ids.push(made.id)
+      }
+      if (how === 'reviewed' && reviewedTurn !== undefined) {
+        await api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: false, reviewed_turn: reviewedTurn })
+        review.setNote('')
+        toast(drafts.length > 0 ? `Reviewed through turn ${reviewedTurn}; the comments are kept` : `Reviewed through turn ${reviewedTurn}`, 'ok')
+        return true
       }
       if (how === 'save') {
         review.setNote('')

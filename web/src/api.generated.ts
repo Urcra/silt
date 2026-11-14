@@ -255,7 +255,11 @@ before: LineSpan | null, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, };
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, } | { "on": "anchored", anchor: string, };
+
+export type PendingAnchor = { anchor: string, };
+
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**
@@ -282,6 +286,18 @@ old_path: string | null, added: number, removed: number, binary: boolean,
  * How long its part of the diff is, in bytes.
  */
 size: number, };
+
+export type FileTurns = { path: string, runs: Array<TurnRun>, };
+
+export type TurnRun = { start: number, end: number, turn: number, };
+
+export type Seen = "seen" | "changed";
+
+export type FileSeen = { path: string, seen: Seen, new_lines: Array<LineSpan>, };
+
+export type ThreadSeenView = { head: string, files: Array<FileSeen>, };
+
+export type MarkSeen = { path: string, seen: boolean, at: string, };
 
 export type FileAt = { path: string, 
 /**
@@ -625,7 +641,11 @@ snoozed_at: number | null, wake_on_activity: boolean, settled: boolean,
 /**
  * When they last opened it.
  */
-seen_ms: number | null, };
+seen_ms: number | null, 
+/**
+ * The turn they reviewed its changes through.
+ */
+reviewed_turn: number | null, };
 
 export type Mount = { 
 /**
@@ -952,7 +972,11 @@ export type WorkspaceId = string;
 
 export type AgentKey = string;
 
-export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
+export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, 
+/**
+ * The turn the thread was reviewed through.
+ */
+reviewed_turn: number | null, };
 
 export type TextKind = "message" | "thought" | "tool";
 

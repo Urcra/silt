@@ -1029,9 +1029,9 @@ pub fn show(thread: &str) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn diff(thread: &str, turn: Option<usize>, base: Option<String>) -> Result<(), Exn<CliError>> {
+pub fn diff(thread: &str, turn: Option<usize>, to_turn: Option<usize>, base: Option<String>) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let diff: String = call(&Request::Diff { thread: thread.into(), turn, base, files: None, path: None })?;
+    let diff: String = call(&Request::Diff { thread: thread.into(), turn, to_turn, base, files: None, path: None })?;
     print!("{}", render::safe(&diff));
     Ok(())
 }

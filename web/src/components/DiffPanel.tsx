@@ -10,6 +10,7 @@ import { Button, Input, Select, Skeleton, Tabs } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { type DiffLayout, DiffView } from './DiffView'
 import { FinishReview } from './FinishReview'
+import { OutdatedDrafts } from './OutdatedDrafts'
 import { FilesByStats } from './StatDiff'
 
 const LAYOUTS: { id: DiffLayout; label: string }[] = [
@@ -57,7 +58,7 @@ export const DiffPanel = memo(function DiffPanel({
   const [commit, setCommit] = useState('')
   const base = baseOf(view, other, commit)
   const review = useReview(thread)
-  const { stats, whole, diff, text, files, commenting, unsent, changed, error } = useThreadDiff(thread, base, review, onCommented, agent)
+  const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, { base }, review, onCommented, agent)
   const shownReviewed = text !== undefined && reviewed !== undefined
   useEffect(() => {
     if (shownReviewed) document.getElementById(`file-${reviewed}`)?.scrollIntoView({ block: 'start' })
@@ -91,9 +92,10 @@ export const DiffPanel = memo(function DiffPanel({
       )}
       {(review.review.drafts.length > 0 || unsent.length > 0) && (
         <div className="flex justify-end">
-          <FinishReview thread={thread} review={review} unsent={unsent} items={(comment) => itemOf(comment, files)} agent={agent} working={working} onSent={changed} />
+          <FinishReview thread={thread} review={pending} unsent={unsent} items={(comment) => itemOf(comment, files)} agent={agent} working={working} onSent={changed} />
         </div>
       )}
+      <OutdatedDrafts drafts={outdated} review={review} />
       {error && <p className="text-sm text-danger">{message(error)}</p>}
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
       {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={{ base }} commenting={commenting} />}

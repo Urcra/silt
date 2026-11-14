@@ -87,6 +87,8 @@ pub struct Mine {
     pub settled: bool,
     /// When they last opened it.
     pub seen_ms: Option<i64>,
+    /// The turn they reviewed its changes through.
+    pub reviewed_turn: Option<u32>,
 }
 
 impl Mine {
@@ -102,6 +104,7 @@ impl Mine {
             wake_on_activity: snooze.is_some_and(|snooze| snooze.wake_on_activity),
             settled: value(state.and_then(|state| state.settled)),
             seen_ms: state.and_then(|state| state.seen_ms).map(|seen| seen.value),
+            reviewed_turn: state.and_then(|state| state.reviewed_turn).map(|turn| turn.value),
         }
     }
 }
@@ -115,6 +118,8 @@ pub struct StateChange {
     pub snooze: Option<Snooze>,
     pub settled: Option<bool>,
     pub seen: bool,
+    /// The turn the thread was reviewed through.
+    pub reviewed_turn: Option<u32>,
 }
 
 impl StateChange {
@@ -127,6 +132,7 @@ impl StateChange {
             snooze: self.snooze.map(|snooze| crate::Stamped { value: snooze, at_ms: now }),
             settled: self.settled.map(at),
             seen_ms: self.seen.then_some(crate::Stamped { value: now, at_ms: now }),
+            reviewed_turn: self.reviewed_turn.map(|value| crate::Stamped { value, at_ms: now }),
         }
     }
 }
@@ -621,6 +627,27 @@ pub enum CommentOn {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
     },
+    /// Lines held by an anchor a pending review comment took when it was
+    /// written, so it lands where its text is now (ADR 0066).
+    Anchored { anchor: String },
+}
+
+/// Where a pending review comment's lines are held, as the daemon anchored
+/// them without recording a comment (ADR 0066). The browser keeps it as is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PendingAnchor {
+    pub anchor: String,
+}
+
+/// Anchors of pending review comments to place in the thread as it is now,
+/// and at `base` too, as comments are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PlaceAnchors {
+    #[serde(default)]
+    pub base: Option<String>,
+    pub anchors: Vec<String>,
 }
 
 /// One of the person's signed-in devices (ADR 0026).
@@ -757,6 +784,65 @@ pub struct DiffStat {
     pub size: u64,
 }
 
+/// The turns that last wrote a file's lines, as a diff's new side numbers
+/// them: runs of lines from one turn. Lines from git, or from before the
+/// thread's first turn, are in none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileTurns {
+    pub path: String,
+    pub runs: Vec<TurnRun>,
+}
+
+/// Lines `start` to `end`, from 1 and inclusive, last written in `turn`,
+/// counted as the thread's turns are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TurnRun {
+    pub start: u32,
+    pub end: u32,
+    pub turn: u32,
+}
+
+/// Whether a thread's file was marked seen as it is now, or changed since
+/// (ADR 0067).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Seen {
+    Seen,
+    Changed,
+}
+
+/// A file of a thread's diff marked seen: whether it changed since, and
+/// which of its lines are new since, as the diff's new side numbers them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileSeen {
+    pub path: String,
+    pub seen: Seen,
+    pub new_lines: Vec<LineSpan>,
+}
+
+/// The files of a thread's diff the person marked seen, and the version the
+/// diff was read at, which a new mark names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ThreadSeenView {
+    pub head: String,
+    pub files: Vec<FileSeen>,
+}
+
+/// A file of a thread marked seen, or not, as it was at `at`, a version the
+/// review read (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct MarkSeen {
+    pub path: String,
+    pub seen: bool,
+    pub at: String,
+}
+
 /// A file as a permalink shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -854,7 +940,7 @@ mod tests {
     #[test]
     fn a_change_from_the_web_ui_sets_only_what_it_names() {
         let thread = ThreadId(3);
-        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true };
+        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true, reviewed_turn: None };
         let state = change.stamped(thread, 50);
         assert_eq!(state.pinned, Some(Stamped { value: true, at_ms: 50 }));
         assert_eq!((state.snooze, state.settled), (None, None));

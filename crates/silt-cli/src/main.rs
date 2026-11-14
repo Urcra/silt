@@ -192,6 +192,9 @@ enum Command {
         /// Only the changes made in this turn (1-based)
         #[arg(long, conflicts_with = "base")]
         turn: Option<usize>,
+        /// With --turn, the changes of every turn from it to this one
+        #[arg(long, requires = "turn")]
+        to_turn: Option<usize>,
         /// Diff from merge-base (with the fork's source), last-commit,
         /// last-turn or commit:<sha>; by default from the thread's start.
         /// Or against a branch as git has it now: main or branch:<name>
@@ -830,7 +833,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Log { commit: None } => commands::log(),
         Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
-        Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
+        Command::Diff { thread, turn, to_turn, base } => commands::diff(&thread, turn, to_turn, base),
         Command::Search { query, repo, author, status, branch, file, since, until } => {
             commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
         }

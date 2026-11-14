@@ -29,15 +29,25 @@ function Choice({ value, picked, onPick, title, children }: { value: Finish; pic
 
 /** The review's state and its Finish: what's pending, and a popover that sends it, as a forge's review does. */
 export function FinishReview(props: FinishProps & { opener?: (open: (() => void) | null) => void }) {
-  const { review, unsent, agent, working = false, opener } = props
+  const { review, unsent, agent, working = false, opener, reviewedTurn } = props
   const { count, sending, error, finish } = useFinishReview(props)
   const { drafts, note } = review.review
   const [picked, setPicked] = useState<Finish>(agent ? 'send' : 'copy')
-  const how: Finish = !agent && (picked === 'send' || picked === 'steer') ? 'copy' : !working && picked === 'steer' ? 'send' : picked
+  // With nothing pending there's only the review to record.
+  const how: Finish =
+    count === 0
+      ? 'reviewed'
+      : !agent && (picked === 'send' || picked === 'steer')
+        ? 'copy'
+        : !working && picked === 'steer'
+          ? 'send'
+          : picked === 'reviewed' && reviewedTurn === undefined
+            ? 'save'
+            : picked
   const who = agent ?? 'the agent'
-  if (count === 0) return null
+  if (count === 0 && reviewedTurn === undefined) return null
   const comments = `${count} ${count === 1 ? 'comment' : 'comments'}`
-  const submit = { send: 'Request changes', steer: 'Request changes now', copy: `Copy ${comments}`, save: 'Keep as comments' }[how]
+  const submit = { send: 'Request changes', steer: 'Request changes now', copy: `Copy ${comments}`, save: 'Keep as comments', reviewed: 'Mark reviewed' }[how]
   return (
     <span role="group" aria-label="review" className="flex items-center gap-2">
       <span className="text-2xs whitespace-nowrap text-fg-2">
@@ -64,23 +74,25 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
           >
             <span className="flex items-baseline gap-2">
               <span className="text-sm font-medium">Finish review</span>
-              <span className="text-2xs text-fg-2">{comments}</span>
+              <span className="text-2xs text-fg-2">{count === 0 ? 'nothing pending' : comments}</span>
             </span>
-            <Textarea
-              aria-label="review note"
-              autoFocus
-              rows={3}
-              className="text-xs"
-              placeholder={`A note for ${who} with the comments (optional)`}
-              value={note}
-              onChange={(event) => review.setNote(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault()
-                  void finish(how).then((done) => done && close())
-                }
-              }}
-            />
+            {count > 0 && (
+              <Textarea
+                aria-label="review note"
+                autoFocus
+                rows={3}
+                className="text-xs"
+                placeholder={`A note for ${who} with the comments (optional)`}
+                value={note}
+                onChange={(event) => review.setNote(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault()
+                    void finish(how).then((done) => done && close())
+                  }
+                }}
+              />
+            )}
             <ul aria-label="comments in the review" className="flex flex-col gap-0.5 font-mono text-2xs text-fg-2">
               {drafts.map((draft) => (
                 <li key={draft.id} className="truncate">
@@ -96,7 +108,7 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
             </ul>
             <fieldset className="flex flex-col gap-0.5">
               <legend className="pb-1 text-2xs text-fg-2">What {who} gets</legend>
-              {agent ? (
+              {count === 0 ? null : agent ? (
                 <>
                   <Choice value="send" picked={how} onPick={setPicked} title="Request changes">
                     {working
@@ -114,9 +126,18 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
                   No agent runs here from Silt: paste the review where it runs.
                 </Choice>
               )}
-              <Choice value="save" picked={how} onPick={setPicked} title="Keep as comments">
-                Saved on the thread and synced; send them whenever you like.
-              </Choice>
+              {count > 0 && (
+                <Choice value="save" picked={how} onPick={setPicked} title="Keep as comments">
+                  Saved on the thread and synced; send them whenever you like.
+                </Choice>
+              )}
+              {reviewedTurn !== undefined && (
+                <Choice value="reviewed" picked={how} onPick={setPicked} title={`Mark reviewed through turn ${reviewedTurn}`}>
+                  {count > 0
+                    ? 'Nothing for the agent: the comments are kept, and the next review starts after this turn.'
+                    : 'Nothing to change. The next review starts after this turn.'}
+                </Choice>
+              )}
             </fieldset>
             <span className="flex flex-wrap items-center gap-1.5 border-t border-line-subtle pt-2">
               {drafts.length > 0 && (
@@ -133,7 +154,7 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
                   Discard
                 </Button>
               )}
-              {agent && (
+              {agent && count > 0 && (
                 <Button variant="ghost" size="sm" disabled={sending} onClick={() => void finish('copy').then((done) => done && close())}>
                   Copy for a terminal
                 </Button>

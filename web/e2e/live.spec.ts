@@ -1098,6 +1098,70 @@ test('the review expands across the page, split, and its keys move through the d
   await expect(page).not.toHaveURL(/\/t\//)
 })
 
+test("the review names the turn that wrote each hunk, and shows one turn's changes alone", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
+  const thread = new URL(page.url()).pathname.split('/')[2]
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  const changes = page.getByRole('region', { name: 'changes' })
+  await expect(changes.locator('[data-hunk]').first()).toContainText(/turns? \d/)
+  const turns = page.getByRole('group', { name: 'turns' })
+  await turns.getByRole('button', { name: '1', exact: true }).click()
+  await expect(turns.getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(changes.locator('[data-hunk]').first()).toContainText('turn 1 · add a function')
+  await expect(changes.getByText(/^turn 2/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'All changes' }).click()
+  await expect(page.getByLabel('compare')).toBeVisible()
+
+  // t opens the hunk's turn in the conversation.
+  await page.keyboard.press('n')
+  await page.keyboard.press('t')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}#turn-\\d+$`))
+})
+
+test('a file marked seen comes back when the agent changes it, and the next review starts after the turn reviewed', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  const files = page.getByRole('navigation', { name: 'files' })
+  const main = files.getByRole('checkbox', { name: 'seen src/main.rs' })
+  await main.check()
+  await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
+  // Nothing to change: the review is marked reviewed through the turn.
+  await page.getByRole('button', { name: 'Finish review' }).click()
+  await page.getByRole('dialog', { name: 'finish review' }).getByRole('button', { name: 'Mark reviewed' }).click()
+  await expect(page.getByText('Reviewed through turn 1', { exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: /^Conversation/ }).click()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  // The review starts after the turn reviewed, and the file seen before comes back half-ticked.
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '2', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(files).toContainText(/new since you saw it|changed since you saw it/)
+  await expect(main).not.toBeChecked()
+  await expect(page.getByTestId('seen-count')).toHaveText('0/1 seen')
+  // v ticks it off again.
+  await page.keyboard.press('j')
+  await page.keyboard.press('v')
+  await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
+})
+
 /** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */
 async function startInBackground(page: Page, project: RegExp, prompt: string) {
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()

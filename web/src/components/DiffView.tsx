@@ -221,6 +221,7 @@ function HunkView({
   note,
   current = false,
   ask,
+  fresh,
 }: {
   file: DiffFile
   hunk: Hunk
@@ -236,6 +237,8 @@ function HunkView({
   current?: boolean
   /** Lines to open a comment on, asked for by key; `key` asks again for the same ones. */
   ask?: Ask
+  /** New-side lines written since the person saw the file, marked at their edge. */
+  fresh?: ReadonlySet<number>
 }) {
   const code = hunk.lines.map((line) => line.text).join('\n')
   const highlighted = useHighlighted(code, languageOf(file.path))
@@ -365,6 +368,8 @@ function HunkView({
       <span className="bg-surface-1" />
     )
   const ring = 'ring-1 ring-accent ring-inset'
+  const isFresh = (line: CodeLine | null) => line !== null && line.newLine !== null && fresh?.has(line.newLine) === true
+  const freshEdge = 'shadow-[inset_3px_0_0_var(--info)]'
   return (
     <>
       {!bare && (
@@ -393,7 +398,7 @@ function HunkView({
         ? hunk.lines.map((line, index) => (
             <div key={index}>
               <div
-                className={cx('group grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line, sideFor(line)) && ring)}
+                className={cx('group grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line, sideFor(line)) && ring, isFresh(line) && freshEdge)}
                 onMouseEnter={() => dragOver(line)}
               >
                 <Gutter line={line.oldLine} kind={line.kind}>
@@ -426,7 +431,7 @@ function HunkView({
                     {right && numberOf(right, 'new')}
                   </Gutter>
                   <span
-                    className={cx('group flex min-w-0', right && right.kind === 'add' && ROW.add, right && picked(right, 'new') && ring)}
+                    className={cx('group flex min-w-0', right && right.kind === 'add' && ROW.add, right && picked(right, 'new') && ring, isFresh(right) && freshEdge)}
                     onMouseEnter={() => right && dragOver(right)}
                   >
                     {codeCell(right)}
@@ -450,6 +455,7 @@ function FileHunks({
   note,
   cursor,
   ask,
+  fresh,
 }: {
   file: DiffFile
   layout: DiffLayout
@@ -458,6 +464,7 @@ function FileHunks({
   note?: HunkNote
   cursor?: Cursor
   ask?: Ask
+  fresh?: ReadonlySet<number>
 }) {
   const size = diffSize(file)
   const [shown, setShown] = useState(size <= LARGE_DIFF)
@@ -483,6 +490,7 @@ function FileHunks({
       note={note?.(file, hunk, index)}
       current={cursor?.path === file.path && cursor.hunk === index}
       ask={ask}
+      fresh={fresh}
     />
   ))
 }
@@ -506,6 +514,7 @@ export function DiffView({
   hunkNote,
   cursor,
   ask,
+  fresh,
 }: {
   /** The diff, or its files already parsed. */
   text?: string
@@ -525,6 +534,8 @@ export function DiffView({
   hunkNote?: HunkNote
   cursor?: Cursor
   ask?: Ask
+  /** A file's lines written since the person saw it. */
+  fresh?: (path: string) => ReadonlySet<number> | undefined
 }) {
   const files = (given ?? parseFiles(text ?? '')).filter((file) => only === undefined || file.path === only)
   if (files.length === 0) return <p className="text-sm text-fg-2">No changes.</p>
@@ -569,7 +580,7 @@ export function DiffView({
         >
           <div className="overflow-x-auto font-mono text-xs leading-5">
             <div className="min-w-fit">
-              <FileHunks file={file} layout={layout} commenting={commenting} note={hunkNote} cursor={cursor} ask={ask} />
+              <FileHunks file={file} layout={layout} commenting={commenting} note={hunkNote} cursor={cursor} ask={ask} fresh={fresh?.(file.path)} />
             </div>
           </div>
         </DiffBlock>
