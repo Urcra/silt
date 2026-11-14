@@ -19,7 +19,7 @@ test.beforeAll(() => {
 
 test.afterAll(() => {
   execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(world.work, 'silt') } })
-  rmSync(world.work, { recursive: true, force: true })
+  rmSync(world.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 /** Picks how the transcript groups the agent's work, or how much each step shows, from the thread's menu. */

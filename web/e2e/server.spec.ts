@@ -111,7 +111,7 @@ client_secret = "shh"
 test.afterAll(() => {
   server?.kill()
   provider?.close()
-  rmSync(work, { recursive: true, force: true })
+  rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 test('people sign in with a password', async ({ page }) => {

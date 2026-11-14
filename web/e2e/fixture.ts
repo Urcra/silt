@@ -47,6 +47,6 @@ export async function allThreads(page: Page): Promise<void> {
 export function removeFixture(): void {
   const { siltHome, work } = fixture()
   execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: siltHome } })
-  rmSync(work, { recursive: true, force: true })
+  rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   rmSync(FILE, { force: true })
 }
