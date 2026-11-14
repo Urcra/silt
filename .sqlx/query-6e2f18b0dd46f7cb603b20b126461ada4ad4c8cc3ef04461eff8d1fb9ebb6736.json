@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state, head FROM checkout_git_states WHERE checkout_id = ? AND thread_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkout_git_states",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "head",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkout_git_states",
+            "name": "head"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6e2f18b0dd46f7cb603b20b126461ada4ad4c8cc3ef04461eff8d1fb9ebb6736"
+}

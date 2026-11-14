@@ -620,6 +620,10 @@ pub enum CommentOn {
         end: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        /// The lines are numbered as a diff with git's rewrites left out
+        /// shows them (ADR 0066).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hide_git: bool,
     },
 }
 

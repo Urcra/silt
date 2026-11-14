@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checkout_git_states (checkout_id, thread_id, state, head) VALUES (?, ?, ?, ?)\n             ON CONFLICT (checkout_id, thread_id) DO UPDATE SET state = excluded.state, head = excluded.head",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "ae7aff8ab3448615e474a32388a102a312ea93f9b4690f4f70681dda99295334"
+}

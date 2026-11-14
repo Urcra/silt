@@ -1297,6 +1297,29 @@ impl Core {
         Ok(())
     }
 
+    /// The files of `thread`, as it has them now, that the session's tool
+    /// call edited.
+    fn paths_edited_by(&self, family: FamilyId, thread: ThreadId, session: &SessionRef, tool_use_id: &str) -> Vec<String> {
+        let Some(family) = self.families().get(&family) else {
+            return Vec::new();
+        };
+        let by_tool = |author: &Author| matches!(author, Author::Agent { session: id, tool_use_id: Some(tool), .. } if *id == session.id && tool == tool_use_id);
+        let inodes: HashSet<silt_crdt::InodeId> = family
+            .log()
+            .iter()
+            .rev()
+            .filter(|delta| delta.thread == thread && by_tool(&delta.author))
+            .filter_map(crate::core::touched_inode)
+            .collect();
+        family
+            .thread_view(thread)
+            .paths()
+            .iter()
+            .filter(|(_, inode)| inodes.contains(inode))
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
     /// Keeps the git state a tool call starts at, and records when it ends
     /// whether git rewrote the worktree meanwhile, so the edits credited to
     /// it read as git's (ADR 0066). In the shared step, as a hook's process
@@ -1333,7 +1356,10 @@ impl Core {
         let Ok(started) = started.parse::<silt_git::GitState>() else {
             return Ok(());
         };
-        if !self.checkouts[&checkout].repo.rewritten_since(&started) {
+        let repo = &self.checkouts[&checkout].repo;
+        let rewritten = repo.rewritten_since(&started)
+            || (started.has_stash() && repo.applied_from_stash(&self.paths_edited_by(family, thread, &reference, &tool_use_id)));
+        if !rewritten {
             return Ok(());
         }
         let head = self.families()[&family].thread_head(thread);

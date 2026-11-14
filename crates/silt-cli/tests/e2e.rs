@@ -418,10 +418,47 @@ fn a_session_recorded_without_the_daemon_projects_as_one_recorded_by_it() {
 
 #[test]
 fn what_git_rewrote_in_a_tool_call_can_be_left_out_of_the_diff() {
+    git_left_out("git", true);
+}
+
+#[test]
+fn what_git_rewrote_between_turns_can_be_left_out_of_the_diff() {
+    git_left_out("git-by-hand", false);
+}
+
+#[test]
+fn what_a_stash_apply_wrote_can_be_left_out_of_the_diff() {
+    let env = Env::with_claude("git");
+    fs::write(env.repo.join("lib.rs"), "fn lib() {}\n").expect("write");
+    git(&env.repo, &["add", "."]);
+    git(&env.repo, &["commit", "-q", "-m", "lib"]);
+    fs::write(env.repo.join("lib.rs"), "fn stashed() {}\nfn lib() {}\n").expect("write");
+    git(&env.repo, &["stash", "-q"]);
+    let ran = env.run_with(&["claude"], &[("FAKE_GIT", "stash apply -q")]);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let thread = env.thread();
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).contains("+fn stashed() {}")),
+        "the diff has what the stash brought back:\n{}",
+        env.stdout(&["diff", &thread])
+    );
+    let mine = env.stdout(&["diff", &thread, "--hide-git"]);
+    assert!(mine.contains("+fn mine() {}") && mine.contains("+fn after() {}") && !mine.contains("fn stashed"), "{mine}");
+}
+
+/// The stand-in's `script` edits `src/main.rs`, merges `upstream` (a new
+/// `pulled.rs` and a line atop `lib.rs`) and edits `lib.rs`: `--hide-git`
+/// shows its edits alone, numbered without git's line, with the daemon and
+/// without.
+fn git_left_out(script: &'static str, in_one_turn: bool) {
     for daemonless in [false, true] {
-        let env = Env::with_claude("git");
+        let env = Env::with_claude(script);
+        fs::write(env.repo.join("lib.rs"), "fn lib() {}\n").expect("write");
+        git(&env.repo, &["add", "."]);
+        git(&env.repo, &["commit", "-q", "-m", "lib"]);
         git(&env.repo, &["checkout", "-q", "-b", "upstream"]);
         fs::write(env.repo.join("pulled.rs"), "fn theirs() {}\n").expect("write");
+        fs::write(env.repo.join("lib.rs"), "fn upstream() {}\nfn lib() {}\n").expect("write");
         git(&env.repo, &["add", "."]);
         git(&env.repo, &["commit", "-q", "-m", "upstream"]);
         git(&env.repo, &["checkout", "-q", "main"]);
@@ -432,15 +469,25 @@ fn what_git_rewrote_in_a_tool_call_can_be_left_out_of_the_diff() {
         assert!(
             eventually(|| {
                 let diff = env.stdout(&["diff", &thread]);
-                diff.contains("+fn mine() {}") && diff.contains("+fn theirs() {}")
+                diff.contains("+fn mine() {}") && diff.contains("+fn theirs() {}") && diff.contains("+fn after() {}")
             }),
-            "the diff has both the agent's edit and git's:\n{}",
+            "the diff has both the agent's edits and git's:\n{}",
             env.stdout(&["diff", &thread])
         );
         let mine = env.stdout(&["diff", &thread, "--hide-git"]);
         assert!(mine.contains("+fn mine() {}") && !mine.contains("pulled.rs"), "daemonless: {daemonless}\n{mine}");
-        let turn = env.stdout(&["diff", &thread, "--turn", "1", "--hide-git"]);
-        assert!(turn.contains("+fn mine() {}") && !turn.contains("pulled.rs"), "daemonless: {daemonless}\n{turn}");
+        assert!(mine.contains("+fn after() {}") && !mine.contains("fn upstream"), "daemonless: {daemonless}\n{mine}");
+        if in_one_turn {
+            let turn = env.stdout(&["diff", &thread, "--turn", "1", "--hide-git"]);
+            assert!(turn.contains("+fn mine() {}") && !turn.contains("pulled.rs"), "daemonless: {daemonless}\n{turn}");
+        }
+
+        // `fn after` is line 2 without git's line above it, and line 3 on disk.
+        env.silt(&["comment", &thread, "--file", "lib.rs", "--lines", "2", "--hide-git", "why", "after?"]);
+        let on_disk = env.stdout(&["comments", &thread]);
+        assert!(on_disk.contains("lib.rs:3"), "daemonless: {daemonless}\n{on_disk}");
+        let without_git = env.stdout(&["comments", &thread, "--hide-git"]);
+        assert!(without_git.contains("lib.rs:2"), "daemonless: {daemonless}\n{without_git}");
     }
 }
 

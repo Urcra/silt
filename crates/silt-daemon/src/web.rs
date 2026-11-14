@@ -443,11 +443,15 @@ fn no_clone() -> std::path::PathBuf {
 #[derive(Deserialize)]
 struct CommentsQuery {
     base: Option<String>,
+    /// `hide` places them as a diff without git's rewrites shows the lines.
+    #[serde(default)]
+    git: Option<String>,
 }
 
 async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
+    let hide_git = silt_proto::view::GitQuery { git: query.git }.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::Comments { thread, base, cwd: no_clone() }).await
+    ask(&web, Request::Comments { thread, base, hide_git, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]

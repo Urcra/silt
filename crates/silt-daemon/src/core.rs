@@ -736,7 +736,9 @@ impl Core {
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
+            Request::Comments { thread, base, hide_git, cwd } => {
+                to_response(self.list_comments(&thread, base.as_deref(), hide_git, &cwd).await)
+            }
             Request::CommentsSent { thread, comments, cwd } => to_response(self.comments_sent(&thread, &comments, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
             Request::Reply { thread, comment, text, cwd } => to_response(self.reply(&thread, &comment, text, &cwd).await),
@@ -987,7 +989,40 @@ impl Core {
 
     pub(crate) async fn rescan(&mut self, checkout: CheckoutId) -> Result<(), CoreError> {
         let root = self.checkout(checkout)?.record.path.clone();
-        self.ingest_paths(checkout, vec![root]).await
+        self.ingest_paths(checkout, vec![root]).await?;
+        self.note_git_since(checkout).await
+    }
+
+    /// When git moved the checkout's refs since its thread last looked,
+    /// other than by a commit, the edits recorded as the person's since
+    /// then are git's, as a `git pull` run by hand between turns makes
+    /// (ADR 0066). A tool call that ran git is the tool's (`note_git`).
+    async fn note_git_since(&mut self, checkout_id: CheckoutId) -> Result<(), CoreError> {
+        let checkout = self.checkout(checkout_id)?;
+        let (family_id, thread, now) = (checkout.family, checkout.record.thread, checkout.repo.git_state());
+        let Some(family) = self.families.get(&family_id) else {
+            return Ok(());
+        };
+        let head = family.thread_head(thread);
+        let looked = self.store.checkout_git_state(checkout_id, thread).await?;
+        self.store.put_checkout_git_state(checkout_id, thread, &now.to_string(), &head.to_string()).await?;
+        let Some((state, since)) = looked else {
+            return Ok(());
+        };
+        let (Ok(state), Ok(since)) = (state.parse::<silt_git::GitState>(), since.parse::<Frontier>()) else {
+            return Ok(());
+        };
+        if !self.checkout(checkout_id)?.repo.rewritten_since(&state) {
+            return Ok(());
+        }
+        let family = &self.families[&family_id];
+        let spans = silt_log::GitMade::persons_edits_since(family.log(), thread, &family.graph().version_vector(&since));
+        if spans.is_empty() {
+            return Ok(());
+        }
+        let head = family.thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Git(GitOp::Made { spans })).await?;
+        Ok(())
     }
 
     /// Records changes under `paths` (absolute; directories are scanned).

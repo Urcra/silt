@@ -370,6 +370,16 @@ fn a_checkout_stash_or_reset_rewrites_the_worktree_and_a_commit_does_not() {
     git(root, &["stash", "pop", "-q"]);
     assert!(repo.rewritten_since(&before), "a stash pop");
 
+    fs::write(root.join("src/main.rs"), "fn main() { kept() }\n").expect("write");
+    git(root, &["stash", "-q"]);
+    let before = repo.git_state();
+    git(root, &["stash", "apply", "-q"]);
+    assert!(!repo.rewritten_since(&before), "an apply moves no ref");
+    assert!(repo.applied_from_stash(&["src/main.rs".to_owned()]), "but writes what the stash has");
+    fs::write(root.join("src/main.rs"), "fn main() { mine() }\n").expect("write");
+    assert!(!repo.applied_from_stash(&["src/main.rs".to_owned()]), "an edit of the agent's own");
+    git(root, &["checkout", "-q", "--", "src/main.rs"]);
+
     let before = repo.git_state();
     fs::write(root.join("run.sh"), "#!/bin/sh\necho\n").expect("write");
     assert!(!repo.rewritten_since(&before), "an edit");

@@ -969,6 +969,45 @@ impl Store {
         Ok(())
     }
 
+    /// The git state `checkout` was in when `thread` last looked, and the
+    /// thread's head then (ADR 0066).
+    pub async fn checkout_git_state(
+        &self,
+        checkout: CheckoutId,
+        thread: ThreadId,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        let thread = id_bytes(thread.0);
+        let row = sqlx::query!(
+            "SELECT state, head FROM checkout_git_states WHERE checkout_id = ? AND thread_id = ?",
+            checkout.0,
+            thread,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| (row.state, row.head)))
+    }
+
+    pub async fn put_checkout_git_state(
+        &self,
+        checkout: CheckoutId,
+        thread: ThreadId,
+        state: &str,
+        head: &str,
+    ) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!(
+            "INSERT INTO checkout_git_states (checkout_id, thread_id, state, head) VALUES (?, ?, ?, ?)
+             ON CONFLICT (checkout_id, thread_id) DO UPDATE SET state = excluded.state, head = excluded.head",
+            checkout.0,
+            thread,
+            state,
+            head,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Keeps the git state a tool call started at (ADR 0066).
     pub async fn put_tool_git_state(
         &self,

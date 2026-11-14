@@ -258,6 +258,9 @@ enum Command {
         /// thread deleted
         #[arg(long, requires = "lines")]
         base: Option<String>,
+        /// Number --lines as `silt diff --hide-git` shows them
+        #[arg(long, requires = "lines")]
+        hide_git: bool,
         /// Answer this comment, by its id as `silt comments` shows it
         #[arg(long, conflicts_with_all = ["file", "entry"])]
         reply: Option<String>,
@@ -272,6 +275,9 @@ enum Command {
         /// Also say where comments on code are at this diff base
         #[arg(long, conflicts_with = "resolve")]
         base: Option<String>,
+        /// Number lines as `silt diff --hide-git` shows them
+        #[arg(long, conflicts_with = "resolve")]
+        hide_git: bool,
     },
     /// Other threads changing a file or directory of this repository
     InFlight {
@@ -847,15 +853,15 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Blame { file, notes } => commands::blame(&file, notes),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment { thread, file, lines, entry, base: _, reply: Some(comment), text }
+        Command::Comment { thread, file, lines, entry, base: _, hide_git: _, reply: Some(comment), text }
             if file.is_none() && lines.is_none() && entry.is_none() =>
         {
             commands::reply(&thread, &comment, &text.join(" "))
         }
-        Command::Comment { thread, file, lines, entry, base, reply: _, text } => {
-            commands::comment(&thread, file, lines, entry, base, &text.join(" "))
+        Command::Comment { thread, file, lines, entry, base, hide_git, reply: _, text } => {
+            commands::comment(&thread, file, lines, entry, (base, hide_git), &text.join(" "))
         }
-        Command::Comments { thread, resolve, base } => commands::comments(&thread, resolve.as_deref(), base),
+        Command::Comments { thread, resolve, base, hide_git } => commands::comments(&thread, resolve.as_deref(), base, hide_git),
         Command::Server { command } => match command {
             ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {
                 admin::server_init(admin::InitOptions {

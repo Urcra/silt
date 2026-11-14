@@ -17,7 +17,10 @@
 //! reports back while the turn goes on; with `FAKE_UNFINISHED`, the
 //! subagent runs on in the background and the command never reports;
 //! `git`, one turn with an edit of `src/main.rs`, then a command running
-//! `git merge --ff-only -q upstream`.
+//! `git merge --ff-only -q upstream`, or `git FAKE_GIT`, then an edit of
+//! `lib.rs`;
+//! `git-by-hand`, the same with the merge run between two turns, outside
+//! any tool call, as a person would.
 
 use std::env;
 use std::fs;
@@ -97,6 +100,7 @@ fn run() -> Step {
         (false, Ok("tools")) => tools(&run),
         (false, Ok("beside")) => beside(&run),
         (false, Ok("git")) => with_git(&run),
+        (false, Ok("git-by-hand")) => with_git_by_hand(&run),
         (false, _) => first(&run),
     }
 }
@@ -329,15 +333,49 @@ fn with_git(run: &Run) -> Step {
     run.start("toolu_1", "Edit", &main)?;
     append(&run.cwd.join("src").join("main.rs"), "fn mine() {}\n")?;
     run.finish("toolu_1", "Edit", &main)?;
-    let merge = json!({"command": "git merge --ff-only -q upstream"});
+    let merge = json!({"command": format!("git {}", git_args().join(" "))});
     run.start("toolu_2", "Bash", &merge)?;
-    let merged = Command::new("git").args(["merge", "--ff-only", "-q", "upstream"]).current_dir(&run.cwd).status().map_err(io)?;
-    if !merged.success() {
-        return Err(Failed(4, "git merge failed".into()));
-    }
+    merge_upstream(&run.cwd)?;
     run.finish("toolu_2", "Bash", &merge)?;
+    let lib = json!({"file_path": "lib.rs"});
+    run.start("toolu_3", "Edit", &lib)?;
+    append(&run.cwd.join("lib.rs"), "fn after() {}\n")?;
+    run.finish("toolu_3", "Edit", &lib)?;
     run.reply("Added mine and merged upstream.")?;
     run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None)
+}
+
+/// The same edits as `with_git` in two turns, and between them a merge that
+/// isn't the agent's.
+fn with_git_by_hand(run: &Run) -> Step {
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    let stop = || run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None);
+    let main = json!({"file_path": "src/main.rs"});
+    run.prompt("Add a helper")?;
+    run.start("toolu_1", "Edit", &main)?;
+    append(&run.cwd.join("src").join("main.rs"), "fn mine() {}\n")?;
+    run.finish("toolu_1", "Edit", &main)?;
+    run.reply("Added mine.")?;
+    stop()?;
+    merge_upstream(&run.cwd)?;
+    run.prompt("Now one after lib")?;
+    let lib = json!({"file_path": "lib.rs"});
+    run.start("toolu_2", "Edit", &lib)?;
+    append(&run.cwd.join("lib.rs"), "fn after() {}\n")?;
+    run.finish("toolu_2", "Edit", &lib)?;
+    run.reply("Added after.")?;
+    stop()
+}
+
+/// `FAKE_GIT`'s words, by default a merge of `upstream`.
+fn git_args() -> Vec<String> {
+    env::var("FAKE_GIT").unwrap_or_else(|_| "merge --ff-only -q upstream".into()).split_whitespace().map(str::to_owned).collect()
+}
+
+fn merge_upstream(cwd: &Path) -> Step {
+    let args = git_args();
+    let ran = Command::new("git").args(&args).current_dir(cwd).status().map_err(io)?;
+    if ran.success() { Ok(()) } else { Err(Failed(4, format!("git {args:?} failed"))) }
 }
 
 /// A subagent, its transcript in `subagents/agent-a1.jsonl`, and a command

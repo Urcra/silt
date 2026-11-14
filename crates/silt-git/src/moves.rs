@@ -24,6 +24,12 @@ pub struct GitState {
 
 const PENDING: [&str; 3] = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"];
 
+impl GitState {
+    pub fn has_stash(&self) -> bool {
+        self.stash.is_some()
+    }
+}
+
 impl Repo {
     pub fn git_state(&self) -> GitState {
         let read_oid = |path: std::path::PathBuf| -> Option<GitOid> {
@@ -58,6 +64,35 @@ impl Repo {
         rewritten(before, &after, appended.as_deref(), committed_onto)
     }
 
+    /// Whether `paths` (relative, `/`-separated), as the worktree has them
+    /// now, are as a stash entry has them and not as HEAD does: a `git stash
+    /// apply`, which moves no ref, wrote them.
+    pub fn applied_from_stash(&self, paths: &[String]) -> bool {
+        let Ok(listed) = self.git(&["stash", "list", "--format=%H"], None) else {
+            return false;
+        };
+        let stashes: Vec<GitOid> = String::from_utf8_lossy(&listed).lines().filter_map(|line| line.trim().parse().ok()).collect();
+        let present: Vec<&String> = paths.iter().filter(|path| self.root().join(path).is_file()).collect();
+        if stashes.is_empty() || present.is_empty() {
+            return false;
+        }
+        let input: String = present.iter().map(|path| format!("{path}\n")).collect();
+        let Ok(hashed) = self.git(&["hash-object", "--stdin-paths"], Some(input.as_bytes())) else {
+            return false;
+        };
+        let now: Vec<(&str, GitOid)> = present
+            .iter()
+            .zip(String::from_utf8_lossy(&hashed).lines())
+            .filter_map(|(path, oid)| Some((path.as_str(), oid.trim().parse().ok()?)))
+            .collect();
+        let in_tree = |commit: GitOid| -> std::collections::HashMap<String, GitOid> {
+            self.files_at(commit).map(|files| files.into_iter().map(|file| (file.path, file.oid)).collect()).unwrap_or_default()
+        };
+        let head = self.head_commit().ok().flatten().map(in_tree).unwrap_or_default();
+        let stashed: Vec<_> = stashes.into_iter().map(in_tree).collect();
+        applied(&now, &head, &stashed)
+    }
+
     fn head_reflog(&self) -> std::path::PathBuf {
         self.git_dir().join("logs").join("HEAD")
     }
@@ -88,6 +123,17 @@ fn rewritten(before: &GitState, after: &GitState, appended: Option<&str>, parent
         // No reflog to say what moved HEAD: a commit has the old HEAD as its parent.
         _ => after.head.is_none_or(|head| before.head.is_none() || parent_of(head) != before.head),
     }
+}
+
+/// The functional core of [`Repo::applied_from_stash`]: every file in
+/// `now` has a stash's content for its path, which HEAD's isn't.
+fn applied(
+    now: &[(&str, GitOid)],
+    head: &std::collections::HashMap<String, GitOid>,
+    stashed: &[std::collections::HashMap<String, GitOid>],
+) -> bool {
+    !now.is_empty()
+        && now.iter().all(|(path, oid)| head.get(*path) != Some(oid) && stashed.iter().any(|stash| stash.get(*path) == Some(oid)))
 }
 
 /// The message of a reflog line: `<old> <new> <who> <time> <tz>\t<message>`.
@@ -192,6 +238,18 @@ mod tests {
         let (before, after) = (GitState { reflog_len: None, ..at(1) }, GitState { reflog_len: None, ..at(2) });
         assert!(!rewritten(&before, &after, None, |_| Some(oid(1))));
         assert!(rewritten(&before, &after, None, |_| Some(oid(5))));
+    }
+
+    #[test]
+    fn files_as_a_stash_has_them_and_head_doesnt_were_applied_from_it() {
+        let map = |pairs: &[(&str, u8)]| pairs.iter().map(|(path, n)| ((*path).to_owned(), oid(*n))).collect();
+        let head = map(&[("a.rs", 1), ("b.rs", 2)]);
+        let stashed = vec![map(&[("a.rs", 3), ("b.rs", 2)]), map(&[("c.rs", 4)])];
+        assert!(applied(&[("a.rs", oid(3))], &head, &stashed));
+        assert!(applied(&[("a.rs", oid(3)), ("c.rs", oid(4))], &head, &stashed));
+        assert!(!applied(&[("a.rs", oid(3)), ("d.rs", oid(5))], &head, &stashed), "d.rs is an edit of the agent's own");
+        assert!(!applied(&[("b.rs", oid(2))], &head, &stashed), "b.rs is as HEAD has it");
+        assert!(!applied(&[], &head, &stashed));
     }
 
     #[test]

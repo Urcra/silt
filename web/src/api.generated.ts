@@ -255,7 +255,12 @@ before: LineSpan | null, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, };
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, 
+/**
+ * The lines are numbered as a diff with git's rewrites left out
+ * shows them (ADR 0066).
+ */
+hide_git?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**

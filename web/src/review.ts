@@ -39,6 +39,8 @@ export interface Draft {
   quote: string[]
   /** The diff base deleted lines are numbered in. */
   base?: string
+  /** Numbered as the diff showed them with git's rewrites left out (ADR 0066). */
+  hideGit?: boolean
 }
 
 export interface Review {
@@ -65,10 +67,10 @@ export function useReview(thread: string) {
   )
   return {
     review,
-    add: (at: Lines, text: string, quote: string[], base?: string) =>
+    add: (at: Lines, text: string, quote: string[], base?: string, hideGit?: boolean) =>
       update((before) => ({
         ...before,
-        drafts: [...before.drafts, { id: `${Date.now()}-${before.drafts.length}`, at, text, quote, base }],
+        drafts: [...before.drafts, { id: `${Date.now()}-${before.drafts.length}`, at, text, quote, base, ...(hideGit ? { hideGit } : {}) }],
       })),
     edit: (id: string, text: string) =>
       update((before) => ({ ...before, drafts: before.drafts.map((draft) => (draft.id === id ? { ...draft, text } : draft)) })),

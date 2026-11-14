@@ -292,6 +292,10 @@ pub enum Request {
         /// A diff base to place code comments in too, such as `last-turn`.
         #[serde(default)]
         base: Option<String>,
+        /// Place code comments as a diff with git's rewrites left out shows
+        /// the lines (ADR 0066).
+        #[serde(default)]
+        hide_git: bool,
         cwd: PathBuf,
     },
     /// Marks comments as sent to the thread's agent (ADR 0055).

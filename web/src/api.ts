@@ -165,8 +165,13 @@ export const api = {
   diffStats: (id: string, options: DiffOptions = {}) =>
     request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string) =>
-    request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  comments: (id: string, base?: string, hideGit = false) => {
+    const params = new URLSearchParams()
+    if (base) params.set('base', base)
+    if (hideGit) params.set('git', 'hide')
+    const query = params.toString()
+    return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
+  },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),

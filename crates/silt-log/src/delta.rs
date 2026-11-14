@@ -327,4 +327,10 @@ pub enum GitOp {
         session: SessionRef,
         tool_use_id: String,
     },
+    /// Edits recorded as the person's that git made: git moved the
+    /// checkout's refs between two looks, as a `git pull` run by hand
+    /// between turns does (ADR 0066).
+    Made {
+        spans: Vec<DeltaSpan>,
+    },
 }

@@ -79,14 +79,24 @@ export const DiffPanel = memo(function DiffPanel({
     getNextPageParam: (last, pages) => (filesIn(last) < FILES_PAGE ? undefined : pages.length * FILES_PAGE),
     enabled: whole === true,
   })
-  const comments = useQuery({ queryKey: [...keys.comments(thread), commentBase ?? ''], queryFn: () => api.comments(thread, commentBase) })
+  // Placed as this diff numbers the lines, with git's rewrites or without.
+  const comments = useQuery({
+    queryKey: [...keys.comments(thread), commentBase ?? '', hideGit],
+    queryFn: () => api.comments(thread, commentBase, hideGit),
+  })
   const changed = () => Promise.all([queries.invalidateQueries({ queryKey: keys.comments(thread) }), onCommented()])
   const review = useReview(thread)
-  // The review as this diff shows it: a draft on deleted lines is numbered in the base it was made against.
+  // The review as this diff shows it: a draft on deleted lines is numbered in the base it was made against, and
+  // every draft with git's rewrites or without, as the diff was when it was made.
   const here: ReviewState = {
     ...review,
-    review: { ...review.review, drafts: review.review.drafts.filter((draft) => sideOf(draft.at) === 'new' || draft.base === commentBase) },
-    add: (at, text, quote) => review.add(at, text, quote, sideOf(at) === 'old' ? commentBase : undefined),
+    review: {
+      ...review.review,
+      drafts: review.review.drafts.filter(
+        (draft) => (sideOf(draft.at) === 'new' || draft.base === commentBase) && Boolean(draft.hideGit) === hideGit,
+      ),
+    },
+    add: (at, text, quote) => review.add(at, text, quote, sideOf(at) === 'old' ? commentBase : undefined, hideGit),
   }
   const text = diff.data?.pages.join('')
   const files = useMemo(() => (text === undefined ? [] : parseFiles(text)), [text])
@@ -99,7 +109,7 @@ export const DiffPanel = memo(function DiffPanel({
     onChanged: changed,
     onComment: async (at, comment) => {
       const base = sideOf(at) === 'old' ? commentBase : undefined
-      await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base }, comment)
+      await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base, hide_git: hideGit }, comment)
       await changed()
     },
   }
@@ -139,11 +149,11 @@ export const DiffPanel = memo(function DiffPanel({
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
       {hideGit && (
         <p role="note" className="text-xs text-fg-2">
-          Without what git rewrote in the agent's tool calls, as a checkout, pull or stash does; what's on disk may differ. Show git's changes to comment.
+          Without what git rewrote, as a checkout, pull or stash does; what's on disk may differ.
         </p>
       )}
-      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={hideGit ? undefined : commenting} />}
-      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={hideGit ? undefined : commenting} />}
+      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={commenting} />}
+      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} />}
       {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
           More files
@@ -153,7 +163,7 @@ export const DiffPanel = memo(function DiffPanel({
   )
 })
 
-/** Leaves out of the diffs what git itself rewrote in a tool call: their line numbers then aren't the file's, so comments wait until it's off. */
+/** Leaves out of the diffs what git itself rewrote, as a checkout, pull or stash does (ADR 0066). */
 export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
   return (
     <label
@@ -213,7 +223,8 @@ function ReviewBar({
       // Each draft becomes a comment first, and leaves the review once it is one, so a failure halfway repeats none.
       for (const draft of drafts) {
         const { at } = draft
-        const made = await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base: draft.base }, draft.text)
+        const on = { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base, hide_git: draft.hideGit ?? false }
+        const made = await api.addComment(thread, on, draft.text)
         review.remove(draft.id)
         ids.push(made.id)
       }

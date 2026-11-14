@@ -1,9 +1,11 @@
-//! The edits git made rather than the agent: those credited to a tool call
-//! a `GitOp::Rewrote` names, which a diff may leave out (ADR 0066).
+//! The edits git made rather than the agent or the person: those credited
+//! to a tool call a `GitOp::Rewrote` names, and those a `GitOp::Made` lists,
+//! which a diff may leave out (ADR 0066).
 
 use std::collections::{BTreeMap, HashSet};
 
-use silt_types::{ActorId, DeltaId, Lamport};
+use silt_crdt::VersionVector;
+use silt_types::{ActorId, DeltaId, DeltaSpan, Lamport, ThreadId};
 
 use crate::delta::{Author, Delta, GitOp, Op};
 
@@ -23,19 +25,39 @@ impl GitMade {
                 _ => None,
             })
             .collect();
-        if rewrote.is_empty() {
-            return Self::default();
-        }
-        let spans = log
+        let mut spans: BTreeMap<(ActorId, Lamport), Lamport> = log
             .iter()
-            .filter(|delta| is_file_edit(&delta.op))
-            .filter(|delta| match &delta.author {
-                Author::Agent { session, tool_use_id: Some(tool), .. } => rewrote.contains(&(session.as_str(), tool.as_str())),
-                _ => false,
+            .flat_map(|delta| match &delta.op {
+                Op::Git(GitOp::Made { spans }) => spans.as_slice(),
+                _ => &[],
             })
-            .map(|delta| ((delta.span.actor, delta.span.start), delta.span.last().lamport))
+            .filter(|span| span.len > 0)
+            .map(|span| ((span.actor, span.start), span.last().lamport))
             .collect();
+        if !rewrote.is_empty() {
+            spans.extend(
+                log.iter()
+                    .filter(|delta| is_file_edit(&delta.op))
+                    .filter(|delta| match &delta.author {
+                        Author::Agent { session, tool_use_id: Some(tool), .. } => {
+                            rewrote.contains(&(session.as_str(), tool.as_str()))
+                        }
+                        _ => false,
+                    })
+                    .map(|delta| ((delta.span.actor, delta.span.start), delta.span.last().lamport)),
+            );
+        }
         Self { spans }
+    }
+
+    /// The edits of `thread` recorded as the person's after `since`: those
+    /// git made when it moved the refs between two looks.
+    pub fn persons_edits_since(log: &[Delta], thread: ThreadId, since: &VersionVector) -> Vec<DeltaSpan> {
+        log.iter()
+            .filter(|delta| delta.thread == thread && delta.author == Author::User && is_file_edit(&delta.op))
+            .filter(|delta| !since.contains(delta.span.first()))
+            .map(|delta| delta.span)
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -101,5 +123,22 @@ mod tests {
         assert!(!made.contains(id(26)) && !made.contains(id(30)));
         assert!(!made.contains(DeltaId::new(ActorId(2), Lamport(21))));
         assert!(GitMade::of(&log[..2]).is_empty());
+    }
+
+    #[test]
+    fn the_persons_edits_since_a_look_can_be_marked_as_gits() {
+        let log = [
+            delta(10, Author::User, typed("before")),
+            delta(20, Author::User, typed("pulled")),
+            delta(30, by_tool("edit"), typed("mine")),
+            delta(40, Author::User, Op::Conv(ConvOp::Title("t".into()))),
+        ];
+        let since = VersionVector::default();
+        let spans = GitMade::persons_edits_since(&log, ThreadId(1), &since);
+        assert_eq!(spans, vec![log[0].span, log[1].span]);
+        let marked = [delta(50, Author::User, Op::Git(GitOp::Made { spans: vec![log[1].span] }))];
+        let made = GitMade::of(&[log.as_slice(), &marked].concat());
+        assert!(made.contains(DeltaId::new(ACTOR, Lamport(22))));
+        assert!(!made.contains(DeltaId::new(ACTOR, Lamport(12))) && !made.contains(DeltaId::new(ACTOR, Lamport(30))));
     }
 }

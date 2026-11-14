@@ -1136,11 +1136,11 @@ pub fn comment(
     file: Option<String>,
     lines: Option<(usize, usize)>,
     entry: Option<usize>,
-    base: Option<String>,
+    (base, hide_git): (Option<String>, bool),
     text: &str,
 ) -> Result<(), Exn<CliError>> {
     let on = match (file, lines, entry) {
-        (Some(path), Some((start, end)), None) => CommentOn::Lines { path, start, end, base },
+        (Some(path), Some((start, end)), None) => CommentOn::Lines { path, start, end, base, hide_git },
         (None, None, Some(index)) => CommentOn::Entry { index },
         _ => return Err(fail("comment on either --file with --lines, or --entry")),
     };
@@ -1158,7 +1158,7 @@ pub fn reply(thread: &str, comment: &str, text: &str) -> Result<(), Exn<CliError
     Ok(())
 }
 
-pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>) -> Result<(), Exn<CliError>> {
+pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide_git: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     if let Some(comment) = resolve {
         let resolved: CommentView =
@@ -1166,7 +1166,7 @@ pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>) -> Re
         println!("resolved {}", resolved.id);
         return Ok(());
     }
-    let comments: Vec<CommentView> = call(&Request::Comments { thread: thread.into(), base, cwd: current_dir()? })?;
+    let comments: Vec<CommentView> = call(&Request::Comments { thread: thread.into(), base, hide_git, cwd: current_dir()? })?;
     print!("{}", render::safe(&render::comments(&comments)));
     Ok(())
 }
