@@ -1845,7 +1845,7 @@ function ThreadBody({
           ) : (
             <div className="px-4 py-4">
               <Unwritten thread={thread} />
-              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} wide controlsIn={diffControls} />
+              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} working={busy} wide controlsIn={diffControls} />
             </div>
           )}
         </div>

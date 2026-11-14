@@ -1033,11 +1033,13 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
   await page.getByRole('button', { name: 'Add review comment' }).click()
   await expect(changes.getByRole('group', { name: 'pending comment' })).toHaveCount(2)
 
-  const review = changes.getByRole('region', { name: 'review' })
+  const review = changes.getByRole('group', { name: 'review' })
   await expect(review).toContainText('2 pending')
   await review.getByRole('button', { name: 'Finish review' }).click()
-  await review.getByLabel('review note').fill('Nearly there.')
-  await review.getByRole('button', { name: /^Send 2 comments to / }).click()
+  const finish = page.getByRole('dialog', { name: 'finish review' })
+  await finish.getByLabel('review note').fill('Nearly there.')
+  await expect(finish.getByRole('radio', { name: 'Request changes' })).toBeChecked()
+  await finish.getByRole('button', { name: 'Request changes', exact: true }).click()
   await expect(review).toBeHidden()
   await expect(
     page.getByTestId('entry').filter({

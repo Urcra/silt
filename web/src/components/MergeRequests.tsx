@@ -16,6 +16,7 @@ import { CopyLink } from './CopyLink'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { ListColumn, Page } from './Page'
+import { SeenFiles } from './SeenFiles'
 
 /** The messages a conversation holds: its prompts and the agent's answers. */
 function messageCount(lines: ShowLine[]): number {
@@ -525,15 +526,6 @@ export function MergeRequest({ id }: { id: string }) {
     setTicked((before) => ({ ...before, [path]: seen }))
     void act(api.markSeen(id, path, seen))
   }
-  const seenBox = (file: MrFile) => open && (
-    <input
-      type="checkbox"
-      aria-label={`seen ${file.path}`}
-      checked={seenNow(file)}
-      onChange={(event) => markSeen(file.path, event.target.checked)}
-      className="accent-[var(--accent)] max-md:h-5 max-md:w-5"
-    />
-  )
   return (
     <Page
       flush
@@ -664,37 +656,21 @@ export function MergeRequest({ id }: { id: string }) {
       {tab === 'changes' && !(phone && files.length > 0) && (
         <div className="flex flex-col md:flex-row">
           {files.length > 0 && (
-            <nav aria-label="files" className="flex shrink-0 flex-col gap-0.5 border-b border-line p-3 md:w-64 md:border-r md:border-b-0">
-              {open && (
-                <div className="flex items-center gap-2 px-2 pb-2 text-xs text-fg-2">
-                  <span className="h-1 flex-1 overflow-hidden rounded-sm bg-surface-2" aria-hidden="true">
-                    <span className="block h-full bg-accent" style={{ width: `${(100 * seenCount) / files.length}%` }} />
-                  </span>
-                  <span data-testid="seen-count" className="font-mono text-2xs">
-                    {seenCount}/{files.length} seen
-                  </span>
-                </div>
-              )}
-              {files.map((file) => {
+            <SeenFiles
+              className="border-b border-line p-3 md:w-64 md:border-r md:border-b-0"
+              files={files.map((file) => {
                 const stats = counts.get(file.path)
-                return (
-                  <div
-                    key={file.path}
-                    className={cx(
-                      'flex items-center gap-2 rounded-sm px-2 py-1 font-mono text-2xs hover:bg-surface-2 max-md:min-h-11',
-                      file.path === picked ? 'bg-surface-2 text-fg-1' : 'text-fg-2',
-                    )}
-                  >
-                    {seenBox(file)}
-                    <Link to="/mr/$id" params={{ id }} hash={`file-${file.path}`} className="min-w-0 flex-1 truncate text-inherit hover:text-fg-1" title={file.path}>
-                      {file.path}
-                    </Link>
-                    {stats && <Counts added={stats.added} removed={stats.removed} binary={stats.binary} />}
-                  </div>
-                )
+                return { path: file.path, added: stats?.added, removed: stats?.removed, binary: stats?.binary, seen: seenNow(file) ? 'yes' : 'no' }
               })}
-              {open && <p className="px-2 pt-2 text-2xs leading-normal text-fg-2">A file you marked seen comes back if the fork changes it again.</p>}
-            </nav>
+              picked={picked}
+              onSeen={open ? markSeen : undefined}
+              hint="A file you marked seen comes back if the fork changes it again."
+              link={(path) => (
+                <Link to="/mr/$id" params={{ id }} hash={`file-${path}`} className="min-w-0 flex-1 truncate text-inherit hover:text-fg-1" title={path}>
+                  {path}
+                </Link>
+              )}
+            />
           )}
           <div className="min-w-0 flex-1 px-4 py-4 md:px-6">
             <DiffView
