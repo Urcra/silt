@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, created_ms, expires_ms, frozen_at, revoked_ms FROM thread_links WHERE thread_id = ? ORDER BY created_ms DESC",
+  "query": "SELECT id, created_ms, expires_ms, frozen_at, revoked_ms, artifact_id, artifact_version FROM thread_links\n         WHERE thread_id = ? ORDER BY created_ms DESC",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,28 @@
             "name": "revoked_ms"
           }
         }
+      },
+      {
+        "name": "artifact_id",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "artifact_id"
+          }
+        }
+      },
+      {
+        "name": "artifact_version",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "artifact_version"
+          }
+        }
       }
     ],
     "parameters": {
@@ -67,8 +89,10 @@
       false,
       false,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "31d91637a9a0b9cded77681603ffc56843c383d011119b12745b1e2d234dc9bd"
+  "hash": "2279ac9ddb4e03ca84e2fe6193192bb9394a20a641817b7c599fed1079eb31d2"
 }

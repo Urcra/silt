@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v2::{
     self, AuthCapabilities, CancelSessionNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest,
-    CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, Implementation, InitializeRequest,
-    LoginAuthRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, EnvVariable, Implementation,
+    InitializeRequest, LoginAuthRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, RequestPermissionSubject, ResumeSessionRequest,
     SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionMessage, SessionUpdate, SetSessionConfigOptionRequest,
     StateUpdate, SubagentUpdate, TerminalAuthCapabilities, ToolCallContent, ToolCallStatus, ToolCallUpdate,
@@ -45,7 +45,10 @@ impl ConnectTo<Agent> for V2 {
         let mcp_servers: Vec<McpServer> = start
             .mcp
             .iter()
-            .map(|(command, args)| McpServer::Stdio(McpServerStdio::new("silt", command.clone()).args(args.clone())))
+            .map(|mcp| {
+                let env = mcp.env.iter().map(|(name, value)| EnvVariable::new(name, value)).collect();
+                McpServer::Stdio(McpServerStdio::new("silt", mcp.command.clone()).args(mcp.args.clone()).env(env))
+            })
             .collect();
 
         let updates = events.clone();

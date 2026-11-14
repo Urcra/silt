@@ -15,6 +15,8 @@ export const keys = {
   cloudLaunches: ['threads', 'cloud'] as const,
   thread: (id: string) => ['thread', id] as const,
   history: (id: string) => ['thread', id, 'history'] as const,
+  // Not under the thread: what a blob holds never changes, so a thread event needn't fetch it again.
+  artifact: (id: string, blob: string) => ['artifact', id, blob] as const,
   turns: (id: string) => ['thread', id, 'turns'] as const,
   commits: (id: string) => ['thread', id, 'commits'] as const,
   unwritten: (id: string) => ['thread', id, 'unwritten'] as const,

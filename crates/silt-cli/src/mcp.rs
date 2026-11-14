@@ -9,7 +9,9 @@ use exn::{Exn, ResultExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_agents::conventions::{self, Skill};
-use silt_daemon::protocol::{FileTouch, HistoryHit, HistoryPage, InFlight, Request, Response, SearchResult, TaskView};
+use silt_daemon::protocol::{
+    ArtifactPut, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request, Response, SearchResult, TaskView,
+};
 use silt_daemon::{client, paths};
 
 use crate::CliError;
@@ -26,12 +28,15 @@ struct DaemonTools {
     checkout: PathBuf,
     /// The run's token, which scopes every answer to its workspace (ADR 0065).
     token: Option<String>,
+    /// A person watches the run in the web UI (ADR 0066).
+    shows: bool,
 }
 
-pub fn serve(thread: &str, checkout: Option<PathBuf>, token: Option<String>) -> Result<(), Exn<CliError>> {
+pub fn serve(thread: &str, checkout: Option<PathBuf>, token: Option<String>, shows: bool) -> Result<(), Exn<CliError>> {
     let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
     let token = token.or_else(|| env::var("SILT_RUN_TOKEN").ok()).filter(|token| !token.is_empty());
-    let mut tools = DaemonTools { thread: thread.to_owned(), checkout: checkout.unwrap_or_else(|| cwd.clone()), cwd, token };
+    let mut tools =
+        DaemonTools { thread: thread.to_owned(), checkout: checkout.unwrap_or_else(|| cwd.clone()), cwd, token, shows };
     silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools).or_raise(|| CliError("the MCP connection failed".into()))
 }
 
@@ -41,6 +46,12 @@ fn ask_daemon<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
         Ok(Response::Error { message }) => Err(message),
         Err(error) => Err(format!("the Silt daemon is not answering: {error}")),
     }
+}
+
+/// A file's name without its extension, as a title for an image shown
+/// without a caption.
+fn file_title(path: &str) -> String {
+    std::path::Path::new(path).file_stem().map_or_else(|| "Image".to_owned(), |stem| stem.to_string_lossy().into_owned())
 }
 
 fn text_arg(arguments: &Value, name: &str) -> Result<String, String> {
@@ -59,6 +70,18 @@ impl DaemonTools {
         }
     }
 
+    /// Asks the daemon to keep what `silt_show` or `silt_artifact` shows.
+    fn show(&self, artifact: NewArtifact) -> Result<ArtifactPut, String> {
+        let token = self.token.clone().ok_or("only an agent the web UI runs can show the person something")?;
+        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact }) })
+    }
+
+    /// `path` as the agent meant it: relative to where it runs.
+    fn path_arg(&self, arguments: &Value) -> Option<String> {
+        let path = arguments.get("path").and_then(Value::as_str)?;
+        Some(self.cwd.join(path).to_string_lossy().into_owned())
+    }
+
     fn skills(&self) -> Vec<Skill> {
         let home = silt_os::home_dir();
         conventions::discover_skills(&self.checkout, home.as_deref())
@@ -73,6 +96,10 @@ impl DaemonTools {
 }
 
 impl silt_mcp::Backend for DaemonTools {
+    fn shows(&self) -> bool {
+        self.shows
+    }
+
     fn prompts(&mut self) -> Vec<silt_mcp::Prompt> {
         self.skills()
             .into_iter()
@@ -119,6 +146,31 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 let _ = write!(out, "\n\n{body}");
                 return Ok(out);
+            }
+            "silt_show" => {
+                let path = self.path_arg(arguments).ok_or("missing argument path")?;
+                let caption = arguments.get("caption").and_then(Value::as_str).map(str::to_owned);
+                let title = caption.clone().unwrap_or_else(|| file_title(&path));
+                let artifact =
+                    NewArtifact { title, kind: "image".into(), content: None, path: Some(path), id: None, caption, inline: true };
+                self.show(artifact)?;
+                return Ok("Shown to the person in the conversation.".into());
+            }
+            "silt_artifact" => {
+                let artifact = NewArtifact {
+                    title: text_arg(arguments, "title")?,
+                    kind: text_arg(arguments, "kind")?,
+                    content: arguments.get("content").and_then(Value::as_str).map(str::to_owned),
+                    path: self.path_arg(arguments),
+                    id: arguments.get("id").and_then(Value::as_str).map(str::to_owned),
+                    caption: None,
+                    inline: false,
+                };
+                let kept = self.show(artifact)?;
+                return Ok(format!(
+                    "Artifact {} version {} is beside the conversation. For a new version, call silt_artifact again with id {}.",
+                    kept.id, kept.version, kept.id
+                ));
             }
             _ => {}
         }

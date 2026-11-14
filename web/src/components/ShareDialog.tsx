@@ -6,8 +6,11 @@ import { keys, message } from '../query'
 import { Button, Dialog, Input, Select, cx, toast } from '../ui'
 import { Mock } from './Mock'
 
-/** A read-only link to the thread, for anyone holding one (ADR 0027); only its owner has them. */
-function Links({ thread }: { thread: string }) {
+/**
+ * A read-only link to the thread, for anyone holding one (ADR 0027); only its owner has them. With `artifact`, links to
+ * that artifact alone (ADR 0066), at the version shown or following new ones.
+ */
+export function Links({ thread, artifact }: { thread: string; artifact?: { id: string; version: number } }) {
   const links = useQuery({ queryKey: keys.links(thread), queryFn: () => api.links(thread), retry: false })
   const queries = useQueryClient()
   const [days, setDays] = useState(7)
@@ -15,12 +18,20 @@ function Links({ thread }: { thread: string }) {
   const [made, setMade] = useState<string>()
   const [error, setError] = useState<string>()
   const now = useNow()
-  if (links.error) return null
+  if (links.error)
+    return artifact ? (
+      <p className="text-sm text-fg-2">
+        Read-only links need a server this thread syncs with. Download the artifact as one HTML file to send it instead.
+      </p>
+    ) : null
   const refresh = () => queries.invalidateQueries({ queryKey: keys.links(thread) })
-  const active = (links.data ?? []).filter((link) => !link.revoked && Number(link.expires_ms) > now)
+  const active = (links.data ?? []).filter(
+    (link) => !link.revoked && Number(link.expires_ms) > now && (artifact ? link.artifact?.id === artifact.id : !link.artifact),
+  )
   const make = () => {
     setError(undefined)
-    void api.makeLink(thread, { days, frozen: !follow }).then(
+    const linked = artifact && { id: artifact.id, version: follow ? null : artifact.version }
+    void api.makeLink(thread, { days, frozen: artifact ? false : !follow, artifact: linked ?? null }).then(
       (link) => {
         setMade(link.url ?? undefined)
         return refresh()
@@ -32,7 +43,9 @@ function Links({ thread }: { thread: string }) {
     <section aria-label="read-only links" className="flex flex-col gap-2.5 rounded-md border border-line bg-bg p-3">
       <h3 className="text-sm font-medium">Read-only link</h3>
       <p className="text-xs leading-normal text-fg-2">
-        Anyone with the link reads the conversation and the code without an account. They can’t comment or fork.
+        {artifact
+          ? 'Anyone with the link sees this artifact without an account, and nothing else of the thread. Its page runs sandboxed.'
+          : 'Anyone with the link reads the conversation and the code without an account. They can’t comment or fork.'}
       </p>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-fg-2">
@@ -45,7 +58,7 @@ function Links({ thread }: { thread: string }) {
         </label>
         <label className="flex items-center gap-1.5 text-xs max-md:min-h-11">
           <input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} className="accent-[var(--accent)]" />
-          Follow new turns
+          {artifact ? 'Follow new versions' : 'Follow new turns'}
         </label>
         <Button className="ml-auto" onClick={make}>
           Make a link
@@ -77,7 +90,14 @@ function Links({ thread }: { thread: string }) {
           {active.map((link) => (
             <li key={link.id} className="flex items-center gap-2 text-xs">
               <span className="text-fg-2">
-                {link.frozen ? 'As it was' : 'Following new turns'}, until {new Date(Number(link.expires_ms)).toLocaleDateString()}
+                {link.artifact
+                  ? link.artifact.version === null || link.artifact.version === undefined
+                    ? 'Following new versions'
+                    : `Version ${link.artifact.version}`
+                  : link.frozen
+                    ? 'As it was'
+                    : 'Following new turns'}
+                , until {new Date(Number(link.expires_ms)).toLocaleDateString()}
                 <Mock id="share.link-opens"> · opened 3 times</Mock>
               </span>
               <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void api.revokeLink(thread, link.id).then(refresh)}>

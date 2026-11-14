@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT l.thread_id, l.created_ms, l.expires_ms, l.frozen_at, l.revoked_ms,\n             t.family_id, t.deleted_ms, t.visibility, u.name AS owner\n         FROM thread_links l JOIN threads t ON t.id = l.thread_id JOIN users u ON u.id = l.owner_id\n         WHERE l.token_hash = ?",
+  "query": "SELECT l.thread_id, l.created_ms, l.expires_ms, l.frozen_at, l.revoked_ms, l.artifact_id, l.artifact_version,\n             t.family_id, t.deleted_ms, t.visibility, u.name AS owner\n         FROM thread_links l JOIN threads t ON t.id = l.thread_id JOIN users u ON u.id = l.owner_id\n         WHERE l.token_hash = ?",
   "describe": {
     "columns": [
       {
@@ -59,8 +59,30 @@
         }
       },
       {
-        "name": "family_id",
+        "name": "artifact_id",
         "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "artifact_id"
+          }
+        }
+      },
+      {
+        "name": "artifact_version",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_links",
+            "name": "artifact_version"
+          }
+        }
+      },
+      {
+        "name": "family_id",
+        "ordinal": 7,
         "type_info": "Blob",
         "origin": {
           "Table": {
@@ -71,7 +93,7 @@
       },
       {
         "name": "deleted_ms",
-        "ordinal": 6,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +104,7 @@
       },
       {
         "name": "visibility",
-        "ordinal": 7,
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -93,7 +115,7 @@
       },
       {
         "name": "owner",
-        "ordinal": 8,
+        "ordinal": 10,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -112,11 +134,13 @@
       false,
       true,
       true,
+      true,
+      true,
       false,
       true,
       true,
       false
     ]
   },
-  "hash": "857b3aae97808859ef921ee92bd201134b2d9a7431247daa7ae53012f389d10a"
+  "hash": "f19c3f7e6bb948d11beaa57a4d9705ddc079b4fb91861e8b9830377e39b8e8bd"
 }

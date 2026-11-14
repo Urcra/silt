@@ -1360,6 +1360,89 @@ fn a_file_gone_and_back_elsewhere_moments_later_is_a_rename() {
     assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
 }
 
+/// The artifacts of a thread's history, in order.
+fn artifacts_of(api: &Api, thread: &str) -> Vec<serde_json::Value> {
+    let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+    history["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter(|entry| entry["kind"] == "artifact")
+        .map(|entry| entry["artifact"].clone())
+        .collect()
+}
+
+/// An artifact's content, as the web UI reads it.
+fn artifact_text(api: &Api, thread: &str, artifact: &serde_json::Value) -> String {
+    use base64::Engine as _;
+    let blob = artifact["blob"].as_str().expect("blob");
+    let content = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{blob}"), None);
+    let bytes = base64::engine::general_purpose::STANDARD.decode(content["data"].as_str().expect("data")).expect("base64");
+    String::from_utf8(bytes).expect("utf-8")
+}
+
+/// An agent the web UI runs shows the person what it made through Silt's
+/// own tools (ADR 0066): an artifact, a new version of it under the same
+/// id, and an image in the conversation. Each is kept in the thread's
+/// history, redacted, and served only by the blob an artifact names; a
+/// fork inherits them.
+#[test]
+fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let html = format!("<h1>Rescan benchmark</h1><p>{secret}</p>");
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake, "env": {"FAKE_ACP_ARTIFACT": html}}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact please"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let said = settled_history(&api, &thread, "Done: Artifact please");
+
+    let first = artifacts_of(&api, &thread);
+    assert_eq!(first.len(), 1, "{said:?}");
+    assert_eq!(
+        (&first[0]["title"], &first[0]["kind"], &first[0]["version"]),
+        (&"Rescan benchmark".into(), &"html".into(), &1.into())
+    );
+    assert_eq!(first[0]["inline"], false);
+    let text = artifact_text(&api, &thread, &first[0]);
+    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && !text.contains(secret), "kept redacted: {text}");
+    let (served, _) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{}", "ab".repeat(32)), None);
+    assert!(!served, "a blob no artifact of the thread names isn't served");
+
+    let sent =
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "Artifact again"})));
+    assert!(sent == "sent" || sent == "queued", "{sent}");
+    settled_history(&api, &thread, "Done: Artifact again");
+    let api_prompt = |text: &str| {
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+        settled_history(&api, &thread, &format!("Done: {text}"));
+    };
+    api_prompt("Show me the pixel");
+    let all = artifacts_of(&api, &thread);
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert_eq!((&all[1]["id"], &all[1]["version"]), (&first[0]["id"], &2.into()), "a version of the same artifact");
+    assert_eq!(
+        (&all[2]["inline"], &all[2]["media_type"], &all[2]["caption"]),
+        (&true.into(), &"image/png".into(), &"One pixel".into())
+    );
+    assert_ne!(all[2]["id"], first[0]["id"], "an image shown is its own");
+
+    let found = api.ok("GET", "/api/search?q=Rescan", None);
+    assert!(found.to_string().contains(&thread[..12]) || found.to_string().contains(&thread), "found by its title: {found}");
+
+    let forked = api.ok("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
+    let fork = forked.as_str().map(str::to_owned).unwrap_or_else(|| forked["thread"].as_str().expect("fork").to_owned());
+    let inherited = artifacts_of(&api, &fork);
+    assert_eq!(inherited.len(), 3, "a fork inherits what was shown: {inherited:?}");
+    assert!(artifact_text(&api, &fork, &inherited[0]).starts_with("<h1>Rescan benchmark</h1>"));
+}
+
 /// Talks to the MCP server Silt configured for the session, the way
 /// Claude Code would.
 struct McpClient {
@@ -1437,6 +1520,14 @@ fn an_agent_reads_what_was_decided_before_compaction() {
     let decision = whole.find("Decision:").expect("decision listed");
     let compaction = whole.find("compaction").expect("compaction listed");
     assert!(decision < compaction, "the decision came before the compaction: {whole}");
+
+    let listed = mcp.request("tools/list", serde_json::json!({}));
+    let names: Vec<&str> =
+        listed["result"]["tools"].as_array().expect("tools").iter().filter_map(|tool| tool["name"].as_str()).collect();
+    assert!(
+        names.contains(&"silt_history_read") && !names.contains(&"silt_show") && !names.contains(&"silt_artifact"),
+        "{names:?}"
+    );
 
     let history = mcp.tool("silt_file_history", serde_json::json!({"path": "src/main.rs"}));
     assert!(history.contains("tool call toolu_1") && history.contains("Please add a farewell line"), "{history}");

@@ -19,6 +19,7 @@ use crate::{ApiError, Caller, Server, UserId, bad_request, id_bytes, id_from, no
 pub(crate) fn routes() -> Router<Server> {
     Router::new()
         .route("/app/api/threads/{id}/comments", post(add_comment))
+        .route("/app/api/threads/{id}/comments/sent", post(comments_sent))
         .route("/app/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/app/api/threads/{id}/comments/{comment}/resolve", post(resolve))
         .route("/app/api/mrs/{id}/approve", post(approve))
@@ -138,6 +139,40 @@ async fn resolve(
     let comment = seen.comments.iter().find(|candidate| short(candidate.id) == comment).ok_or_else(not_found)?.id;
     write_as(&server, browser, seen.family, seen.thread, None, Op::Comment(CommentOp::Resolved { comment })).await?;
     comment_view(&server, browser, seen.thread, comment).await
+}
+
+#[derive(Deserialize)]
+struct SentComments {
+    comments: Vec<String>,
+}
+
+/// Records that comments went to the thread's agent in a prompt, as a
+/// machine does once a review or an artifact's comments are sent (ADR 0055,
+/// ADR 0066).
+async fn comments_sent(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+    Json(body): Json<SentComments>,
+) -> Result<Json<Vec<CommentView>>, ApiError> {
+    let seen = browse::seen_thread(&server, browser.user, &id).await?;
+    let comments = body
+        .comments
+        .iter()
+        .map(|wanted| {
+            seen.comments.iter().find(|candidate| short(candidate.id) == *wanted).map(|found| found.id).ok_or_else(not_found)
+        })
+        .collect::<Result<Vec<DeltaId>, ApiError>>()?;
+    if comments.is_empty() {
+        return Err(bad_request("name the comments that were sent"));
+    }
+    write_as(&server, browser, seen.family, seen.thread, None, Op::Comment(CommentOp::Sent { comments: comments.clone() }))
+        .await?;
+    let mut views = Vec::new();
+    for comment in comments {
+        views.push(comment_view(&server, browser, seen.thread, comment).await?.0);
+    }
+    Ok(Json(views))
 }
 
 async fn summary(server: &Server, browser: Browser, id: DeltaId) -> Result<Json<MrSummary>, ApiError> {

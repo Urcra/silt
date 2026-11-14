@@ -347,6 +347,9 @@ pub struct HistoryEntry {
     /// On an `image`: the picture the entry before it carried.
     #[serde(default)]
     pub image: Option<ImageView>,
+    /// On an `artifact`: what the agent showed the person (ADR 0066).
+    #[serde(default)]
+    pub artifact: Option<ArtifactView>,
     /// On a `usage`: what one of the agent's messages cost.
     #[serde(default)]
     pub usage: Option<UsageView>,
@@ -389,6 +392,40 @@ pub struct PlanStepView {
     pub text: String,
     /// `pending`, `in_progress` or `completed`.
     pub status: String,
+}
+
+/// One version of what an agent showed the person: an image in the
+/// conversation, or an artifact beside it (ADR 0066).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactView {
+    /// The same for every version of one artifact.
+    pub id: String,
+    /// Counts up from 1 along the thread's lineage.
+    pub version: u32,
+    pub title: String,
+    /// `html`, `svg`, `markdown`, `mermaid` or `image`.
+    pub kind: String,
+    pub media_type: String,
+    /// The blob holding the content, read with the thread's artifact route.
+    pub blob: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
+    /// Shown in the conversation (`silt_show`) rather than as a card.
+    #[serde(default)]
+    pub inline: bool,
+    /// Words under an image shown in the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+/// An artifact's content, as its route answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactContent {
+    pub media_type: String,
+    /// Base64.
+    pub data: String,
 }
 
 /// A picture a prompt or a tool's result carried, as its agent recorded it.
@@ -781,6 +818,19 @@ pub struct ThreadLink {
     /// Only when just made: the server keeps no copy of the token.
     #[serde(default)]
     pub url: Option<String>,
+    /// The one artifact it shows, rather than the conversation (ADR 0066).
+    #[serde(default)]
+    pub artifact: Option<LinkedArtifact>,
+}
+
+/// An artifact a read-only link shows: one version, or with none the
+/// latest when it's opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LinkedArtifact {
+    pub id: String,
+    #[serde(default)]
+    pub version: Option<u32>,
 }
 
 /// What a new link is: for how many days (1, 7 or 30), and whether frozen.
@@ -790,6 +840,9 @@ pub struct NewLink {
     pub days: u32,
     #[serde(default)]
     pub frozen: bool,
+    /// A link to one artifact of the thread rather than its conversation.
+    #[serde(default)]
+    pub artifact: Option<LinkedArtifact>,
 }
 
 /// A one-time code that signs a phone in (ADR 0028), to show as a QR code.

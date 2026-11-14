@@ -53,6 +53,9 @@ import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
+import { ArtifactCard, ArtifactList, ArtifactViewer, ShownImage } from './Artifacts'
+import { ArtifactActions, type Opened } from '../artifactActions'
+import { artifactsOf, shownImagesOf } from '../artifacts'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
 import { unrecorded } from '../unrecorded'
@@ -282,6 +285,7 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
   if (entry.kind === 'user')
     return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
+  if (entry.kind === 'artifact' && entry.artifact) return <ShownArtifact entry={entry} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
     // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.
     const [, said, summary] = /^([^:]*?from fork \S+): ([\s\S]+)$/.exec(entry.text) ?? [null, entry.text, null]
@@ -694,9 +698,17 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
   )
 }
 
-/** What the person decided, a question they answered or a plan put to them, stays out of the fold. */
+/** What the person decided, a question they answered or a plan put to them, stays out of the fold, as does what the agent showed them. */
 function decided(piece: Piece): boolean {
+  if (piece.kind === 'entry') return piece.entry.kind === 'artifact'
   return piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
+}
+
+/** What an agent showed the person where it showed it: an image, or a card opening an artifact beside the conversation. */
+function ShownArtifact({ entry }: { entry: HistoryEntry }) {
+  const actions = useContext(ArtifactActions)
+  if (entry.artifact?.inline) return actions ? <ShownImage thread={actions.thread} entry={entry} /> : null
+  return <ArtifactCard entry={entry} />
 }
 
 /**
@@ -1586,7 +1598,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'changes' | 'details' | 'lineage'
+type InspectorTab = 'changes' | 'artifacts' | 'details' | 'lineage'
 
 function ThreadBody({
   thread,
@@ -1614,6 +1626,9 @@ function ThreadBody({
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
   const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
+  // The artifact the panel shows (ADR 0066), and whether it takes the conversation's space too.
+  const [opened, setOpened] = useState<Opened | null>(null)
+  const [full, setFull] = useState(false)
   const [draft, setDraft] = useDraft(threadDraft(thread))
   const [detail, setDetail] = useDetailChoice()
   const [grouping, setGrouping] = useGroupingChoice()
@@ -1661,7 +1676,43 @@ function ThreadBody({
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
     ...GROUPINGS.filter((choice) => choice.id !== grouping).map((choice) => ({ id: `grouping:${choice.id}`, label: `Group the work ${choice.label.toLowerCase()}`, run: () => setGrouping(choice.id) })),
     { id: 'thoughts', label: thoughts.open ? 'Close every thought' : 'Open every thought', keys: 'shift+t', run: toggleThoughts },
+    ...(opened && desktop ? [{ id: 'artifact-full', label: full ? 'Leave the full view' : 'Full view of the artifact', keys: 'f', run: () => setFull(!full) }] : []),
   ])
+  const groups = useMemo(() => artifactsOf(entries), [entries])
+  const images = useMemo(() => shownImagesOf(entries), [entries])
+  const openArtifact = useCallback(
+    (id: string, version: number | null = null) => {
+      const group = groups.find((candidate) => candidate.id === id)
+      const newest = group?.versions[group.versions.length - 1]?.artifact.version
+      setOpened({ id, version: version === newest ? null : version })
+      setTab('artifacts')
+      if (window.matchMedia('(max-width: 1023px)').matches) setSheet(true)
+      else setPanel(true)
+    },
+    [groups],
+  )
+  const closeArtifact = () => {
+    setOpened(null)
+    setFull(false)
+    setSheet(false)
+  }
+  const artifactActions = useMemo(() => ({ thread, open: openArtifact, opened }), [thread, openArtifact, opened])
+  // A link to an artifact opens it; one made while the person watches opens by itself on a desktop, unless another is open.
+  const seenArtifacts = useRef<number | null>(null)
+  useEffect(() => {
+    if (entries.length < total) return
+    const newest = groups[0] && groups[0].versions[groups[0].versions.length - 1].entry.index
+    const before = seenArtifacts.current
+    seenArtifacts.current = newest ?? -1
+    if (before === null) {
+      const linked = /^#?artifact-([0-9a-f]{12})$/.exec(hash)
+      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1])
+      return
+    }
+    if (newest === undefined || newest <= before || !desktop) return
+    if (opened && opened.id !== groups[0].id) return
+    openArtifact(groups[0].id)
+  }, [entries.length, total, groups, hash, desktop, opened, openArtifact])
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
@@ -1771,6 +1822,7 @@ function ThreadBody({
   const thoughtCarded = agent?.state === 'working' && grouping === 'turn' && lastRow?.kind === 'turn' && sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
 
   return (
+    <ArtifactActions.Provider value={artifactActions}>
     <TasksContext.Provider value={tasks}>
     <StoppableTasks.Provider value={stoppable}>
     <SessionLive.Provider value={live}>
@@ -1792,9 +1844,31 @@ function ThreadBody({
       inspectorLabel="thread details"
       inspectorWidth={480}
       columnRef={column}
-      sheet={{ open: sheet, onClose: () => setSheet(false) }}
+      sheet={{ open: sheet, onClose: () => setSheet(false), bare: tab === 'artifacts' && opened !== null }}
+      full={full && tab === 'artifacts' && opened !== null}
       inspector={
-        (panel || sheet) && (
+        (panel || sheet) &&
+        (tab === 'artifacts' && opened ? (
+          <ArtifactViewer
+            thread={thread}
+            groups={groups}
+            opened={opened}
+            onOpen={openArtifact}
+            onBack={() => {
+              setOpened(null)
+              setFull(false)
+            }}
+            onClose={() => {
+              closeArtifact()
+              setPanel(false)
+            }}
+            full={full}
+            onFull={() => setFull(!full)}
+            comments={comments.data ?? []}
+            onCommentsChanged={reloadComments}
+            phone={!desktop}
+          />
+        ) : (
         <div className="flex flex-col">
           <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
             <Tabs
@@ -1808,6 +1882,9 @@ function ThreadBody({
                     </>
                   ),
                 },
+                ...(groups.length > 0 || images.length > 0
+                  ? [{ id: 'artifacts' as const, label: <>Artifacts <span className="font-mono text-2xs text-accent-fg">{groups.length + images.length}</span></> }]
+                  : []),
                 { id: 'details', label: 'Details' },
                 { id: 'lineage', label: 'Lineage' },
               ]}
@@ -1816,7 +1893,9 @@ function ThreadBody({
             />
             {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
           </div>
-          {tab === 'lineage' ? (
+          {tab === 'artifacts' ? (
+            <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
+          ) : tab === 'lineage' ? (
             <div className="flex flex-col gap-6 px-5 py-5">
               {summary && (
                 <InspectorSection
@@ -1849,7 +1928,7 @@ function ThreadBody({
             </div>
           )}
         </div>
-        )
+        ))
       }
     >
       <ThreadHeader
@@ -1947,6 +2026,7 @@ function ThreadBody({
     </SessionLive.Provider>
     </StoppableTasks.Provider>
     </TasksContext.Provider>
+    </ArtifactActions.Provider>
   )
 }
 

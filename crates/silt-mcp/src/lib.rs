@@ -25,6 +25,12 @@ pub trait Backend {
     fn prompt(&mut self, name: &str) -> Result<String, String> {
         Err(format!("unknown prompt {name}"))
     }
+
+    /// Whether a person watches this run in the web UI, so the tools that
+    /// show them something are offered (ADR 0066).
+    fn shows(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,8 +45,62 @@ context compaction, and the history of the threads it was forked from. Use silt_
 silt_history_read to look back, silt_file_history to see which prompts changed a file, and silt_in_flight \
 to see who else is changing a path. silt_skills lists the repository's skills and silt_use_skill loads one.";
 
-/// The tools' names, descriptions and input schemas.
-pub fn tools() -> Value {
+/// Added to [`INSTRUCTIONS`] when the run is watched in the web UI.
+pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image, call \
+silt_show; to give them a page, chart, diagram or document they can open beside the conversation, call silt_artifact, \
+and call it again with the same id for a new version.";
+
+/// The tools only a run watched in the web UI gets.
+pub const SHOW_TOOLS: [&str; 2] = ["silt_show", "silt_artifact"];
+
+/// What the server says it's for, with the showing tools when offered.
+pub fn instructions(shows: bool) -> String {
+    if shows { format!("{INSTRUCTIONS}{SHOW_INSTRUCTIONS}") } else { INSTRUCTIONS.to_owned() }
+}
+
+/// The tools' names, descriptions and input schemas; `shows` adds the tools
+/// that show the person something.
+pub fn tools(shows: bool) -> Value {
+    let mut tools = history_tools();
+    if shows && let Some(list) = tools.as_array_mut() {
+        list.extend(show_tools());
+    }
+    tools
+}
+
+fn show_tools() -> [Value; 2] {
+    [
+        json!({
+            "name": "silt_show",
+            "description": "Show the person an image (PNG, JPEG, GIF, WebP or SVG) in the conversation, such as a screenshot or a chart you rendered. Write the file first, then pass its path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The image file, absolute or relative to the working directory"},
+                    "caption": {"type": "string", "description": "A few words under the image"}
+                },
+                "required": ["path"]
+            }
+        }),
+        json!({
+            "name": "silt_artifact",
+            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed with no network, so inline its scripts, styles and images.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "A short name, such as \"Rescan benchmark\""},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the content is"},
+                    "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
+                    "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
+                    "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact"}
+                },
+                "required": ["title", "kind"]
+            }
+        }),
+    ]
+}
+
+fn history_tools() -> Value {
     let thread =
         json!({"type": "string", "description": "Thread id or its last 12 characters; defaults to this session's thread"});
     let page = |required: &[&str]| {
@@ -146,8 +206,11 @@ fn protocol_version(requested: Option<&str>) -> &'static str {
 }
 
 /// Checks a call's integer arguments against the bounds its tool declares.
-fn check_arguments(tool: &str, arguments: &Value) -> Result<(), String> {
-    let tools = tools();
+fn check_arguments(tool: &str, arguments: &Value, shows: bool) -> Result<(), String> {
+    if !shows && SHOW_TOOLS.contains(&tool) {
+        return Err(format!("unknown tool {tool}"));
+    }
+    let tools = tools(shows);
     let Some(properties) = tools
         .as_array()
         .and_then(|tools| tools.iter().find(|candidate| candidate["name"] == tool))
@@ -197,10 +260,10 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
             "protocolVersion": protocol_version(params.get("protocolVersion").and_then(Value::as_str)),
             "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "silt", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": INSTRUCTIONS
+            "instructions": instructions(backend.shows())
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": tools(backend.shows()) }),
         "prompts/list" => {
             let prompts: Vec<Value> = backend
                 .prompts()
@@ -219,7 +282,7 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            match check_arguments(name, &arguments).and_then(|()| backend.call(name, &arguments)) {
+            match check_arguments(name, &arguments, backend.shows()).and_then(|()| backend.call(name, &arguments)) {
                 Ok(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": false}),
                 Err(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": true}),
             }
@@ -237,9 +300,16 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 mod tests {
     use super::*;
 
-    struct Echo;
+    #[derive(Default)]
+    struct Echo {
+        shows: bool,
+    }
 
     impl Backend for Echo {
+        fn shows(&self) -> bool {
+            self.shows
+        }
+
         fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String> {
             match tool {
                 "silt_history_search" => Ok(format!("searched {}", arguments["query"])),
@@ -258,7 +328,7 @@ mod tests {
 
     fn exchange(lines: &[&str]) -> Vec<Value> {
         let mut output = Vec::new();
-        serve(lines.join("\n").as_bytes(), &mut output, &mut Echo).expect("serves");
+        serve(lines.join("\n").as_bytes(), &mut output, &mut Echo::default()).expect("serves");
         String::from_utf8(output).expect("utf-8").lines().map(|line| serde_json::from_str(line).expect("json")).collect()
     }
 
@@ -301,11 +371,40 @@ mod tests {
         let mut input = b"\xff\xfe\n".to_vec();
         input.extend_from_slice(br#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
         let mut output = Vec::new();
-        serve(input.as_slice(), &mut output, &mut Echo).expect("serves");
+        serve(input.as_slice(), &mut output, &mut Echo::default()).expect("serves");
         let replies: Vec<Value> =
             String::from_utf8(output).expect("utf-8").lines().map(|line| serde_json::from_str(line).expect("json")).collect();
         assert_eq!(replies[0]["error"]["code"], -32700);
         assert_eq!(replies[1]["id"], 2);
+    }
+
+    #[test]
+    fn the_showing_tools_are_offered_only_to_a_watched_run() {
+        let lines = [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"silt_show","arguments":{"path":"a.png"}}}"#,
+        ];
+        let names = |reply: &Value| -> Vec<String> {
+            reply["result"]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap_or_default().to_owned())
+                .collect()
+        };
+        let quiet = exchange(&lines);
+        assert!(!names(&quiet[1]).iter().any(|name| SHOW_TOOLS.contains(&name.as_str())));
+        assert!(!quiet[0]["result"]["instructions"].as_str().unwrap_or_default().contains("silt_show"));
+        assert_eq!(quiet[2]["result"]["content"][0]["text"], "unknown tool silt_show");
+
+        let mut output = Vec::new();
+        serve(lines.join("\n").as_bytes(), &mut output, &mut Echo { shows: true }).expect("serves");
+        let watched: Vec<Value> =
+            String::from_utf8(output).expect("utf-8").lines().map(|line| serde_json::from_str(line).expect("json")).collect();
+        assert!(SHOW_TOOLS.iter().all(|tool| names(&watched[1]).iter().any(|name| name == tool)));
+        assert!(watched[0]["result"]["instructions"].as_str().unwrap_or_default().contains("silt_artifact"));
+        assert_eq!(watched[2]["result"]["content"][0]["text"], "no silt_show", "the backend answers it");
     }
 
     #[test]

@@ -780,6 +780,45 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await expect(createPr).toHaveAttribute('title', /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)
 })
 
+test('what an agent shows opens beside the thread: an artifact in a sandbox, its versions, full view, comments to the agent, and images', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact please')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact please')).toBeVisible()
+  // Made while the person watches, it opens by itself, in a frame that can reach nothing.
+  const viewer = page.getByTestId('artifact-viewer')
+  await expect(viewer).toBeVisible()
+  await expect(viewer.getByTestId('artifact-frame')).toHaveAttribute('sandbox', 'allow-scripts')
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' })).toBeVisible()
+  await expect(page.getByTestId('artifact-card')).toBeVisible()
+
+  await viewer.getByRole('button', { name: 'Full view (F)' }).click()
+  await expect(page.getByLabel('draft')).toBeHidden()
+  await viewer.getByRole('button', { name: 'Leave the full view (F)' }).click()
+  await expect(page.getByLabel('draft')).toBeVisible()
+
+  await page.getByLabel('draft').fill('Artifact again')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact again')).toBeVisible()
+  await expect(viewer.getByRole('button', { name: 'Versions' })).toHaveText(/v2/)
+  await viewer.getByRole('button', { name: 'Versions' }).click()
+  await page.getByRole('menuitem', { name: /^v1/ }).click()
+  await expect(viewer.getByRole('button', { name: 'Versions' })).toHaveText(/v1/)
+
+  await viewer.getByRole('button', { name: 'Comments' }).click()
+  await page.getByLabel('comment on the artifact').fill('Make the bars blue')
+  await page.getByRole('button', { name: /^Send to the agent/ }).click()
+  await expect(page.getByText(/Done: Comments on the artifact "Rescan benchmark"/)).toBeVisible()
+
+  await page.getByLabel('draft').fill('Show me the pixel')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByTestId('shown-image').first()).toBeVisible()
+  await viewer.getByRole('button', { name: 'Artifacts', exact: true }).click()
+  const list = page.getByTestId('artifact-list')
+  await expect(list).toContainText('2 versions')
+  await expect(list.getByTestId('shown-image')).toBeVisible()
+})
+
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')

@@ -966,7 +966,7 @@ pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
 pub fn thread_link(thread: String, days: u32, frozen: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let link: silt_daemon::protocol::ThreadLink =
-        call(&Request::ThreadLink { thread, link: silt_daemon::protocol::NewLink { days, frozen } })?;
+        call(&Request::ThreadLink { thread, link: silt_daemon::protocol::NewLink { days, frozen, artifact: None } })?;
     println!("{}", link.url.unwrap_or_default());
     eprintln!("anyone with this link reads the thread for {days} days, until revoked from its Share dialog");
     Ok(())

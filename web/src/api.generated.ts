@@ -435,7 +435,11 @@ url: string,
  */
 qr_svg: string, expires_ms: number, };
 
-export type NewLink = { days: number, frozen: boolean, };
+export type NewLink = { days: number, frozen: boolean, 
+/**
+ * A link to one artifact of the thread rather than its conversation.
+ */
+artifact: LinkedArtifact | null, };
 
 export type ThreadLink = { id: number, created_ms: number, expires_ms: number, 
 /**
@@ -445,7 +449,11 @@ frozen: boolean, revoked: boolean,
 /**
  * Only when just made: the server keeps no copy of the token.
  */
-url: string | null, };
+url: string | null, 
+/**
+ * The one artifact it shows, rather than the conversation (ADR 0066).
+ */
+artifact: LinkedArtifact | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 
@@ -490,6 +498,10 @@ outcome: ToolOutcome | null,
  * On an `image`: the picture the entry before it carried.
  */
 image: ImageView | null, 
+/**
+ * On an `artifact`: what the agent showed the person (ADR 0066).
+ */
+artifact: ArtifactView | null, 
 /**
  * On a `usage`: what one of the agent's messages cost.
  */
@@ -541,6 +553,40 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type ArtifactView = { 
+/**
+ * The same for every version of one artifact.
+ */
+id: string, 
+/**
+ * Counts up from 1 along the thread's lineage.
+ */
+version: number, title: string, 
+/**
+ * `html`, `svg`, `markdown`, `mermaid` or `image`.
+ */
+kind: string, media_type: string, 
+/**
+ * The blob holding the content, read with the thread's artifact route.
+ */
+blob: string, size: number, 
+/**
+ * Shown in the conversation (`silt_show`) rather than as a card.
+ */
+inline: boolean, 
+/**
+ * Words under an image shown in the conversation.
+ */
+caption?: string | null, };
+
+export type ArtifactContent = { media_type: string, 
+/**
+ * Base64.
+ */
+data: string, };
+
+export type LinkedArtifact = { id: string, version: number | null, };
 
 export type UsageView = { 
 /**

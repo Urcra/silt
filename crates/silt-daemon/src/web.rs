@@ -108,6 +108,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/search", get(search))
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
+        .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -516,6 +517,10 @@ async fn browser_deltas(State(web): State<Web>, Path(thread): Path<String>, Json
 
 async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, String)>) -> HttpResponse {
     ask(&web, Request::GitText { thread, oid }).await
+}
+
+async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactContent { thread, blob }).await
 }
 
 #[derive(Deserialize, Default)]
