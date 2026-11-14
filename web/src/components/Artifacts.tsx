@@ -1,4 +1,4 @@
-// What agents showed the person (ADR 0067): images in the conversation,
+// What agents showed the person (ADR 0068): images in the conversation,
 // artifact cards there, and the panel that shows an artifact beside it.
 
 import { useQuery } from '@tanstack/react-query'
@@ -95,7 +95,7 @@ const ZOOMS = [50, 75, 100, 125, 150, 200]
 const PILL = 'inline-flex h-8 items-center rounded-lg border border-line bg-elevated shadow-overlay max-md:h-11'
 
 /**
- * An open artifact (ADR 0067): its header takes the panel's top row, its page fills the rest edge to edge, and its
+ * An open artifact (ADR 0068): its header takes the panel's top row, its page fills the rest edge to edge, and its
  * version and view float over the page's top.
  */
 export function ArtifactViewer({

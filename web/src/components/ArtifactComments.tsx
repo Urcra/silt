@@ -1,4 +1,4 @@
-// Comments on an artifact (ADR 0067), each on the version it was made on,
+// Comments on an artifact (ADR 0068), each on the version it was made on,
 // sent to the agent as one prompt as a review is (ADR 0055).
 
 import { useState } from 'react'

@@ -315,7 +315,7 @@ pub enum Request {
         server: String,
         asking: Box<Request>,
     },
-    /// What an agent's run shows the person (ADR 0067); only inside
+    /// What an agent's run shows the person (ADR 0068); only inside
     /// [`Request::Scoped`], for the thread its token was made for.
     PutArtifact {
         artifact: NewArtifact,

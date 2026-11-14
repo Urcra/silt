@@ -130,7 +130,7 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let forged = mcp_answer(&laptop, work_id, "not-a-token", "silt_history_read", serde_json::json!({}));
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
 
-    // A terminal run's token can't show the person anything, even through a server offering the tools (ADR 0067).
+    // A terminal run's token can't show the person anything, even through a server offering the tools (ADR 0068).
     let page = serde_json::json!({"title": "Page", "kind": "html", "content": "<p>hi</p>"});
     let shown = mcp_answer_with(&laptop, &["mcp", "--thread", work_id, "--token", &token, "--ui"], "silt_artifact", page.clone());
     assert!(shown.contains("only an agent the web UI runs"), "{shown}");

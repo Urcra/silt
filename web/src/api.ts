@@ -129,7 +129,7 @@ export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
-  /** An artifact's content, by the blob a version of it names (ADR 0067). */
+  /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>

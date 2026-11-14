@@ -1,4 +1,4 @@
-// What agents showed the person in the conversation (ADR 0067): images,
+// What agents showed the person in the conversation (ADR 0068): images,
 // and cards that open an artifact beside it. Kept apart from the panel's
 // viewer, which loads only once an artifact opens.
 

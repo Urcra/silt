@@ -1,5 +1,5 @@
 //! What an agent the web UI runs shows the person: an image in the
-//! conversation, or a versioned artifact beside it (ADR 0067).
+//! conversation, or a versioned artifact beside it (ADR 0068).
 
 use std::path::{Path, PathBuf};
 

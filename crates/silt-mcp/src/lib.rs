@@ -27,7 +27,7 @@ pub trait Backend {
     }
 
     /// Whether a person watches this run in the web UI, so the tools that
-    /// show them something are offered (ADR 0067).
+    /// show them something are offered (ADR 0068).
     fn shows(&self) -> bool {
         false
     }

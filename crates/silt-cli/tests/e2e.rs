@@ -1382,7 +1382,7 @@ fn artifact_text(api: &Api, thread: &str, artifact: &serde_json::Value) -> Strin
 }
 
 /// An agent the web UI runs shows the person what it made through Silt's
-/// own tools (ADR 0067): an artifact, a new version of it under the same
+/// own tools (ADR 0068): an artifact, a new version of it under the same
 /// id, and an image in the conversation. Each is kept in the thread's
 /// history, redacted, and served only by the blob an artifact names; a
 /// fork inherits them.

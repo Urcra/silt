@@ -1630,7 +1630,7 @@ function ThreadBody({
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
   const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
-  // The artifact the panel shows (ADR 0067), and whether it takes the conversation's space too.
+  // The artifact the panel shows (ADR 0068), and whether it takes the conversation's space too.
   const [opened, setOpened] = useState<Opened | null>(null)
   const [full, setFull] = useState(false)
   const [draft, setDraft] = useDraft(threadDraft(thread))
