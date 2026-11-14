@@ -969,6 +969,53 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps the git state a tool call started at (ADR 0066).
+    pub async fn put_tool_git_state(
+        &self,
+        agent: &str,
+        session_id: &str,
+        tool_use_id: &str,
+        state: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO tool_git_states (agent, session_id, tool_use_id, state) VALUES (?, ?, ?, ?)
+             ON CONFLICT (agent, session_id, tool_use_id) DO UPDATE SET state = excluded.state",
+            agent,
+            session_id,
+            tool_use_id,
+            state,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The git state the tool call started at, forgotten as it's read.
+    pub async fn take_tool_git_state(
+        &self,
+        agent: &str,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query_scalar!(
+            "DELETE FROM tool_git_states WHERE agent = ? AND session_id = ? AND tool_use_id = ? RETURNING state",
+            agent,
+            session_id,
+            tool_use_id,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Forgets the states of the session's tool calls that never said they ended.
+    pub async fn forget_tool_git_states(&self, agent: &str, session_id: &str) -> Result<(), StoreError> {
+        sqlx::query!("DELETE FROM tool_git_states WHERE agent = ? AND session_id = ?", agent, session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Keeps a message for the agent in `thread`, for its next prompt.
     pub async fn add_notice(&self, thread: ThreadId, message: &str, now_ms: i64) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);

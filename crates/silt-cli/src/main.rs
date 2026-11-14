@@ -197,6 +197,10 @@ enum Command {
         /// Or against a branch as git has it now: main or branch:<name>
         #[arg(long)]
         base: Option<String>,
+        /// Leave out what git itself rewrote in a tool call, as a checkout,
+        /// pull, merge, rebase, reset or stash does; not against a branch
+        #[arg(long)]
+        hide_git: bool,
     },
     /// Search conversations: your team's through the server when connected
     Search {
@@ -357,7 +361,12 @@ enum MrCommand {
     /// List merge requests, all or those of one thread
     List { thread: Option<String> },
     /// Show a merge request: summary, conflict hints, diff and the fork's conversation
-    Show { mr: String },
+    Show {
+        mr: String,
+        /// Leave out what git itself rewrote in the fork's tool calls
+        #[arg(long)]
+        hide_git: bool,
+    },
     /// Merge it into its target (on the device working on the target)
     Approve { mr: String },
     /// Decline it; both threads carry on
@@ -750,7 +759,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Mr { command } => match command {
             MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
             MrCommand::List { thread } => commands::mr_list(thread),
-            MrCommand::Show { mr } => commands::mr_show(&mr),
+            MrCommand::Show { mr, hide_git } => commands::mr_show(&mr, hide_git),
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
             MrCommand::RequestChanges { mr, reason } => commands::mr_request_changes(&mr, &reason.join(" ")),
@@ -830,7 +839,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Log { commit: None } => commands::log(),
         Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
-        Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
+        Command::Diff { thread, turn, base, hide_git } => commands::diff(&thread, turn, base, hide_git),
         Command::Search { query, repo, author, status, branch, file, since, until } => {
             commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
         }

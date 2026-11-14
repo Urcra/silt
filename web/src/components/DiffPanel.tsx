@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, type CommentView } from '../api'
 import { parseFiles, readWhole } from '../diffParse'
+import { useHideGit } from '../hideGit'
 import { keys, message } from '../query'
 import { type ReviewItem, type ReviewState, itemOf, linesOf, reviewPrompt, sideOf, spanOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
@@ -64,12 +65,16 @@ export const DiffPanel = memo(function DiffPanel({
     view === 'thread' ? '' : view === 'other' ? (other === 'commit' ? (commit ? `commit:${commit}` : '') : other) : view
   // Lines the change deleted are a version of the thread's, which a commit of main isn't.
   const commentBase = base === '' ? 'start' : base === 'main' ? undefined : base
+  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0066).
+  const [hideGitSetting, setHideGit] = useHideGit()
+  const hideGit = hideGitSetting && view !== 'main'
   // Its files first: one too large to read whole is read a file at a time.
-  const stats = useQuery({ queryKey: keys.diffStats(thread, { base }), queryFn: () => api.diffStats(thread, { base }) })
+  const of = { base, hideGit }
+  const stats = useQuery({ queryKey: keys.diffStats(thread, of), queryFn: () => api.diffStats(thread, of) })
   const whole = stats.data === undefined ? undefined : readWhole(stats.data)
   const diff = useInfiniteQuery({
-    queryKey: keys.diffPages(thread, base),
-    queryFn: ({ pageParam }) => api.diff(thread, { base, offset: pageParam, limit: FILES_PAGE }),
+    queryKey: keys.diffPages(thread, base, hideGit),
+    queryFn: ({ pageParam }) => api.diff(thread, { ...of, offset: pageParam, limit: FILES_PAGE }),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => (filesIn(last) < FILES_PAGE ? undefined : pages.length * FILES_PAGE),
     enabled: whole === true,
@@ -108,6 +113,7 @@ export const DiffPanel = memo(function DiffPanel({
   const controls = (
     <>
       <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
+      <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
       <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
     </>
   )
@@ -131,8 +137,13 @@ export const DiffPanel = memo(function DiffPanel({
       )}
       {(stats.error ?? diff.error) && <p className="text-sm text-danger">{message(stats.error ?? diff.error)}</p>}
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
-      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={{ base }} commenting={commenting} />}
-      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} />}
+      {hideGit && (
+        <p role="note" className="text-xs text-fg-2">
+          Without what git rewrote in the agent's tool calls, as a checkout, pull or stash does; what's on disk may differ. Show git's changes to comment.
+        </p>
+      )}
+      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={hideGit ? undefined : commenting} />}
+      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={hideGit ? undefined : commenting} />}
       {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
           More files
@@ -141,6 +152,25 @@ export const DiffPanel = memo(function DiffPanel({
     </section>
   )
 })
+
+/** Leaves out of the diffs what git itself rewrote in a tool call: their line numbers then aren't the file's, so comments wait until it's off. */
+export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
+  return (
+    <label
+      className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11"
+      title={disabled ? 'Against main, the diff is git’s own' : 'A checkout, pull, merge, rebase, reset or stash the agent ran'}
+    >
+      <input
+        type="checkbox"
+        checked={on && !disabled}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="accent-[var(--accent)] max-md:h-5 max-md:w-5"
+      />
+      Hide git’s changes
+    </label>
+  )
+}
 
 /** The review in progress: what it holds, and finishing it with a note, which sends it all to the agent as one prompt. */
 /** How a review leaves: as a prompt to the agent running here, copied for one in a terminal, or kept as comments for later. */

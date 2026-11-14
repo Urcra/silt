@@ -3,6 +3,7 @@ import { Link, useParams, useRouterState } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { api, short, type CommentView, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
 import { useTopic } from '../bus'
+import { useHideGit } from '../hideGit'
 import { parseFiles } from '../diffParse'
 import { WIDE, useMedia } from '../media'
 import { useNow } from '../now'
@@ -13,6 +14,7 @@ import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Skeleton, 
 import { CommentThread } from './CommentThread'
 import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
+import { HideGitBox } from './DiffPanel'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { ListColumn, Page } from './Page'
@@ -378,7 +380,7 @@ function PhoneFiles({
   onSeen: ((path: string, seen: boolean) => void) | undefined
   diff: string
   counts: Map<string, { added: number; removed: number; binary: boolean }>
-  commenting: Commenting
+  commenting?: Commenting
   target: string
 }) {
   const file = files[at]
@@ -448,7 +450,8 @@ export function MergeRequestRoute() {
 export function MergeRequest({ id }: { id: string }) {
   useTopic('mrs')
   const now = useNow()
-  const details = useQuery({ queryKey: keys.mr(id), queryFn: () => api.mergeRequest(id) })
+  const [hideGit, setHideGit] = useHideGit()
+  const details = useQuery({ queryKey: keys.mrShown(id, hideGit), queryFn: () => api.mergeRequest(id, hideGit) })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const queries = useQueryClient()
   const [error, setError] = useState<string>()
@@ -521,6 +524,20 @@ export function MergeRequest({ id }: { id: string }) {
       })
       .catch((failure: unknown) => toast(message(failure), 'danger'))
   const unsent = reviewComments.filter((comment) => !comment.resolved && !comment.sent)
+  // Without git's rewrites the diff's line numbers aren't the files', so comments wait until they show.
+  const commenting: Commenting | undefined = hideGit
+    ? undefined
+    : {
+        thread: mr.fork,
+        comments: comments.data ?? [],
+        agent: "the fork's agent",
+        onChanged: reloadComments,
+        onComment: async (at, text, send) => {
+          const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
+          await reloadComments()
+          if (send) await toFork([made])
+        },
+      }
   const markSeen = (path: string, seen: boolean) => {
     setTicked((before) => ({ ...before, [path]: seen }))
     void act(api.markSeen(id, path, seen))
@@ -624,7 +641,12 @@ export function MergeRequest({ id }: { id: string }) {
           ]}
         />
         {tab === 'changes' && (
-          <span className="ml-auto max-md:hidden">
+          <span className="ml-auto">
+            <HideGitBox on={hideGit} onChange={setHideGit} />
+          </span>
+        )}
+        {tab === 'changes' && (
+          <span className="max-md:hidden">
             <Tabs
               label="layout"
               value={layout}
@@ -647,17 +669,7 @@ export function MergeRequest({ id }: { id: string }) {
           onSeen={open ? markSeen : undefined}
           diff={diff}
           counts={counts}
-          commenting={{
-            thread: mr.fork,
-            comments: comments.data ?? [],
-            agent: "the fork's agent",
-            onChanged: reloadComments,
-            onComment: async (at, text, send) => {
-              const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
-              await reloadComments()
-              if (send) await toFork([made])
-            },
-          }}
+          commenting={commenting}
           target={mr.target}
         />
       )}
@@ -712,17 +724,7 @@ export function MergeRequest({ id }: { id: string }) {
                   className="font-sans text-accent-fg hover:text-fg-1 max-md:min-h-11"
                 />
               )}
-              commenting={{
-                thread: mr.fork,
-                comments: comments.data ?? [],
-                agent: "the fork's agent",
-                onChanged: reloadComments,
-                onComment: async (at, text, send) => {
-                  const made = await api.addComment(mr.fork, { on: 'lines', ...at }, text)
-                  await reloadComments()
-                  if (send) await toFork([made])
-                },
-              }}
+              commenting={commenting}
             />
           </div>
         </div>

@@ -631,12 +631,12 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, base, files, path } => {
+            Request::Diff { thread, turn, base, files, path, hide_git } => {
                 let only = Only { files, path: path.as_deref() };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), only)))
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), only, hide_git)))
             }
-            Request::DiffStats { thread, turn, base } => {
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref())))
+            Request::DiffStats { thread, turn, base, hide_git } => {
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref(), hide_git)))
             }
             Request::Search { query, limit, filters } => {
                 to_response(self.search(&query, limit, &filters).await.map(|results| self.scoped_results(results)))
@@ -695,7 +695,7 @@ impl Core {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
-            Request::MrShow { mr } => to_response(self.mr_show(&mr)),
+            Request::MrShow { mr, hide_git } => to_response(self.mr_show(&mr, hide_git)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),

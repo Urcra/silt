@@ -345,3 +345,33 @@ fn directory(dir: &Path) -> fs::File {
     options.read(true);
     options.open(dir).expect("opens")
 }
+
+#[test]
+fn a_checkout_stash_or_reset_rewrites_the_worktree_and_a_commit_does_not() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let repo = Repo::discover(root).expect("discovers");
+    git(root, &["branch", "topic"]);
+
+    let before = repo.git_state();
+    fs::write(root.join("src/main.rs"), "fn main() { run() }\n").expect("write");
+    git(root, &["commit", "-q", "-am", "run"]);
+    assert!(!repo.rewritten_since(&before), "a commit of the agent's own edit");
+
+    let before = repo.git_state();
+    git(root, &["checkout", "-q", "topic"]);
+    assert!(repo.rewritten_since(&before), "a checkout");
+
+    fs::write(root.join("src/main.rs"), "fn main() { wip() }\n").expect("write");
+    let before = repo.git_state();
+    git(root, &["stash", "-q"]);
+    assert!(repo.rewritten_since(&before), "a stash");
+    let before = repo.git_state();
+    git(root, &["stash", "pop", "-q"]);
+    assert!(repo.rewritten_since(&before), "a stash pop");
+
+    let before = repo.git_state();
+    fs::write(root.join("run.sh"), "#!/bin/sh\necho\n").expect("write");
+    assert!(!repo.rewritten_since(&before), "an edit");
+    assert_eq!(repo.git_state().to_string().parse::<silt_git::GitState>().expect("parses"), repo.git_state());
+}

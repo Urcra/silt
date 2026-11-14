@@ -417,6 +417,34 @@ fn a_session_recorded_without_the_daemon_projects_as_one_recorded_by_it() {
 }
 
 #[test]
+fn what_git_rewrote_in_a_tool_call_can_be_left_out_of_the_diff() {
+    for daemonless in [false, true] {
+        let env = Env::with_claude("git");
+        git(&env.repo, &["checkout", "-q", "-b", "upstream"]);
+        fs::write(env.repo.join("pulled.rs"), "fn theirs() {}\n").expect("write");
+        git(&env.repo, &["add", "."]);
+        git(&env.repo, &["commit", "-q", "-m", "upstream"]);
+        git(&env.repo, &["checkout", "-q", "main"]);
+        let capture: &[(&str, &str)] = if daemonless { &[("SILT_DAEMONLESS_CAPTURE", "1")] } else { &[] };
+        let ran = env.run_with(&["claude"], capture);
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        let thread = env.thread();
+        assert!(
+            eventually(|| {
+                let diff = env.stdout(&["diff", &thread]);
+                diff.contains("+fn mine() {}") && diff.contains("+fn theirs() {}")
+            }),
+            "the diff has both the agent's edit and git's:\n{}",
+            env.stdout(&["diff", &thread])
+        );
+        let mine = env.stdout(&["diff", &thread, "--hide-git"]);
+        assert!(mine.contains("+fn mine() {}") && !mine.contains("pulled.rs"), "daemonless: {daemonless}\n{mine}");
+        let turn = env.stdout(&["diff", &thread, "--turn", "1", "--hide-git"]);
+        assert!(turn.contains("+fn mine() {}") && !turn.contains("pulled.rs"), "daemonless: {daemonless}\n{turn}");
+    }
+}
+
+#[test]
 fn the_agent_starts_without_waiting_for_the_daemon_which_takes_over_once_it_answers() {
     let env = Env::new();
     let ran = env.run_with(&["claude"], &[("FAKE_PAUSE", "5")]);

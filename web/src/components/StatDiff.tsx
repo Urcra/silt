@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { type DiffStat, api } from '../api'
+import { type DiffOptions, type DiffStat, api } from '../api'
 import { bytes } from '../diffParse'
 import { appHref, filePath } from '../permalink'
 import { keys, message } from '../query'
@@ -8,10 +8,7 @@ import { Button, Counts, Icon, Skeleton, cx } from '../ui'
 import { type Commenting, DiffView } from './DiffView'
 
 /** Which diff: one turn's, or the thread's since a base. */
-export interface DiffOf {
-  turn?: number
-  base?: string
-}
+export type DiffOf = DiffOptions
 
 /** How many files are listed before More files. */
 const LISTED = 200

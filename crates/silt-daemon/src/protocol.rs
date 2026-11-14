@@ -82,6 +82,10 @@ pub enum Request {
         /// Only the file at this path, new or old.
         #[serde(default)]
         path: Option<String>,
+        /// Leave out what git itself rewrote, as a checkout, pull or stash
+        /// does (ADR 0066); not against a branch, which is git's already.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -90,6 +94,8 @@ pub enum Request {
         turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
+        #[serde(default)]
+        hide_git: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -180,6 +186,9 @@ pub enum Request {
     },
     MrShow {
         mr: String,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     MrApprove {
         mr: String,

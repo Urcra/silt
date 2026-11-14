@@ -739,6 +739,20 @@ pub struct FileQuery {
     pub at: Option<String>,
 }
 
+/// A diff's query: `git=hide` leaves out what git itself rewrote, as a
+/// checkout, pull or stash does (ADR 0066).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitQuery {
+    #[serde(default)]
+    pub git: Option<String>,
+}
+
+impl GitQuery {
+    pub fn hide_git(&self) -> bool {
+        self.git.as_deref() == Some("hide")
+    }
+}
+
 /// One file of a diff, without the diff: what a page lists before it asks
 /// for a file's lines, as a diff of thousands of files is too large to read
 /// whole.

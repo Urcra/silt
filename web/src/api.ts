@@ -109,10 +109,17 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-const diffParams = (options: { turn?: number; base?: string }) => {
+/** Which diff: one turn's or since a base, with what git itself rewrote left out or not (ADR 0066). */
+export interface DiffOptions {
+  turn?: number
+  base?: string
+  hideGit?: boolean
+}
+const diffParams = (options: DiffOptions) => {
   const params = new URLSearchParams()
   if (options.turn !== undefined) params.set('turn', String(options.turn))
   if (options.base) params.set('base', options.base)
+  if (options.hideGit) params.set('git', 'hide')
   return params
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
@@ -145,7 +152,7 @@ export const api = {
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
   /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order; with `path`, only that file. */
-  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number; path?: string } = {}) => {
+  diff: (id: string, options: DiffOptions & { offset?: number; limit?: number; path?: string } = {}) => {
     const params = diffParams(options)
     if (options.limit !== undefined) {
       params.set('offset', String(options.offset ?? 0))
@@ -155,7 +162,7 @@ export const api = {
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
   /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
-  diffStats: (id: string, options: { turn?: number; base?: string } = {}) =>
+  diffStats: (id: string, options: DiffOptions = {}) =>
     request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
   comments: (id: string, base?: string) =>
@@ -269,7 +276,8 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string) => request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}`),
+  mergeRequest: (id: string, hideGit = false) =>
+    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),

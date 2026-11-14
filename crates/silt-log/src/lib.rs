@@ -2,6 +2,7 @@ mod blame;
 mod commits;
 mod delta;
 mod family;
+mod git_made;
 mod graph;
 mod notes;
 mod purge;
@@ -17,6 +18,7 @@ pub use family::{
     ReadCovered, Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, merge_requests_in, rewound_in,
     thread_head_in, turn_end_by, turn_point, turn_point_by,
 };
+pub use git_made::GitMade;
 pub use graph::{GraphEvent, GraphItem, graph_of};
 pub use notes::{NOTE_FORMAT, Note, NoteAuthor, NoteError, NoteFile, Run, runs_of};
 pub use purge::kept_after_purge;

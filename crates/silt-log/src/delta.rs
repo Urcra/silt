@@ -320,4 +320,11 @@ pub enum GitOp {
         commits: Vec<GitOid>,
         blob: BlobHash,
     },
+    /// The session's tool call ran git, which rewrote files: a checkout,
+    /// pull, merge, rebase, reset or stash. The edits credited to that call
+    /// are git's, which a diff may leave out (ADR 0066).
+    Rewrote {
+        session: SessionRef,
+        tool_use_id: String,
+    },
 }

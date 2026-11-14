@@ -410,17 +410,29 @@ struct DiffQuery {
     limit: Option<usize>,
     /// One file, as a diff too large to read whole is read.
     path: Option<String>,
+    /// `hide` leaves out what git itself rewrote (ADR 0066).
+    #[serde(default)]
+    git: Option<String>,
+}
+
+impl DiffQuery {
+    fn hide_git(&self) -> bool {
+        silt_proto::view::GitQuery { git: self.git.clone() }.hide_git()
+    }
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let hide_git = query.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
-    let request = Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()) };
+    let request =
+        Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()), hide_git };
     ask(&web, request).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) }).await
+    let hide_git = query.hide_git();
+    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()), hide_git }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -928,8 +940,12 @@ async fn merge_requests(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::MrList { thread: None }).await
 }
 
-async fn merge_request(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {
-    ask(&web, Request::MrShow { mr }).await
+async fn merge_request(
+    State(web): State<Web>,
+    Path(mr): Path<String>,
+    Query(query): Query<silt_proto::view::GitQuery>,
+) -> HttpResponse {
+    ask(&web, Request::MrShow { mr, hide_git: query.hide_git() }).await
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {

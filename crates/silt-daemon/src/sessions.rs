@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use silt_agents::{Agent, Capture, Found, Mark, Reader, complete_lines_ending};
 use silt_checkout::{ImportFile, import};
 use silt_git::{FileMode, Repo};
-use silt_log::{Author, ConvOp, Delta, Family, Op, SessionFile, SessionRef, TurnMark};
+use silt_log::{Author, ConvOp, Delta, Family, GitOp, Op, SessionFile, SessionRef, TurnMark};
 use silt_store::{CheckoutId, SearchRow, SessionFileOffset, SessionRead, SessionRecord, ThreadRecord};
 use silt_types::{ActorId, CloudSessionId, FamilyId, ThreadId};
 use tracing::warn;
@@ -1291,8 +1291,53 @@ impl Core {
         if self.families().get(&family).is_some_and(|loaded| loaded.has_turn_mark(&reference, &mark)) {
             return Ok(());
         }
+        self.note_git(session_id, &mark).await?;
         let author = agent_author(&reference);
         self.append_conv(family, thread, author, ConvOp::Turn { session: reference, mark }).await?;
+        Ok(())
+    }
+
+    /// Keeps the git state a tool call starts at, and records when it ends
+    /// whether git rewrote the worktree meanwhile, so the edits credited to
+    /// it read as git's (ADR 0066). In the shared step, as a hook's process
+    /// may see the start and another the end (ADR 0018).
+    async fn note_git(&mut self, session_id: &str, mark: &TurnMark) -> Result<(), CoreError> {
+        let Some(session) = self.session(session_id) else {
+            return Ok(());
+        };
+        let (reference, family, thread, checkout) =
+            (session.reference(), session.family, session.record.thread, session.record.checkout_id);
+        let Some(repo) = self.checkouts.get(&checkout).map(|checkout| &checkout.repo) else {
+            return Ok(());
+        };
+        let ended = match mark {
+            TurnMark::ToolStarted { tool_use_id, .. } => {
+                let state = repo.git_state().to_string();
+                self.store.put_tool_git_state(&reference.agent, &reference.id, tool_use_id, &state).await?;
+                return Ok(());
+            }
+            TurnMark::ToolFinished { tool_use_id } => Some(tool_use_id.clone()),
+            TurnMark::Stopped => self.open_tool(session_id).map(str::to_owned),
+            TurnMark::PromptSubmitted => return Ok(()),
+        };
+        let started = match &ended {
+            Some(tool) => self.store.take_tool_git_state(&reference.agent, &reference.id, tool).await?,
+            None => None,
+        };
+        if matches!(mark, TurnMark::Stopped) {
+            self.store.forget_tool_git_states(&reference.agent, &reference.id).await?;
+        }
+        let (Some(tool_use_id), Some(started)) = (ended, started) else {
+            return Ok(());
+        };
+        let Ok(started) = started.parse::<silt_git::GitState>() else {
+            return Ok(());
+        };
+        if !self.checkouts[&checkout].repo.rewritten_since(&started) {
+            return Ok(());
+        }
+        let head = self.families()[&family].thread_head(thread);
+        self.append_op(family, thread, head, Op::Git(GitOp::Rewrote { session: reference, tool_use_id })).await?;
         Ok(())
     }
 

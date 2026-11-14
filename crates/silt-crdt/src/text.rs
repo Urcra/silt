@@ -402,6 +402,28 @@ impl TextDoc {
         text
     }
 
+    /// The text as of the version holding exactly the ids `contains` takes,
+    /// which needn't be causally closed: with some edits left out, such as
+    /// those git made (ADR 0066), the others still read in place.
+    pub fn text_where(&self, contains: impl Fn(DeltaId) -> bool) -> String {
+        let mut text = String::with_capacity(self.len());
+        for fragment in self.fragments.iter() {
+            let first = fragment.first_char();
+            for (offset, ch) in (0..).zip(self.chars_of(fragment)) {
+                let inserted = match first.offset(offset) {
+                    CharId::Base { source, .. } => contains(source),
+                    CharId::Delta(id) => contains(id),
+                };
+                let deleted =
+                    fragment.deleted_by.iter().any(|by| contains(DeltaId::new(by.actor, by.lamport.offset(u64::from(offset)))));
+                if inserted && !deleted {
+                    text.push(*ch);
+                }
+            }
+        }
+        text
+    }
+
     /// An anchor at `pos` in the current text.
     pub fn anchor(&self, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
         let len = self.len();

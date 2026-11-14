@@ -7,6 +7,7 @@ import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
+import { useHideGit } from '../hideGit'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -559,17 +560,19 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
+  const [hideGit] = useHideGit()
+  const of = { turn: turn.number, hideGit }
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
-    queryKey: keys.diffStats(thread, { turn: turn.number }),
-    queryFn: () => api.diffStats(thread, { turn: turn.number }),
+    queryKey: keys.diffStats(thread, of),
+    queryFn: () => api.diffStats(thread, of),
     staleTime: Infinity,
   })
   const files = stats.data ?? null
   const whole = files !== null && readWhole(files)
   const diff = useQuery({
-    queryKey: keys.diff(thread, { turn: turn.number }),
-    queryFn: () => api.diff(thread, { turn: turn.number }),
+    queryKey: keys.diff(thread, of),
+    queryFn: () => api.diff(thread, of),
     staleTime: Infinity,
     enabled: open && whole,
   })
@@ -658,7 +661,7 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
         </span>
       </div>
       {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
-      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={{ turn: turn.number }} />}
+      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={of} />}
     </div>
   )
 }

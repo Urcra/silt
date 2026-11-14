@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tool_git_states (agent, session_id, tool_use_id, state) VALUES (?, ?, ?, ?)\n             ON CONFLICT (agent, session_id, tool_use_id) DO UPDATE SET state = excluded.state",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "586cb5a847d4fa2c55d2427485ae684fd80ecf4d9801602d2860d23eca8ba273"
+}

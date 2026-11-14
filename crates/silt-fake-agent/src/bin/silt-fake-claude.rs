@@ -15,7 +15,9 @@
 //! edit by hand between them; `beside`, one turn with a subagent, whose
 //! transcript is its own file, and a command left in the background that
 //! reports back while the turn goes on; with `FAKE_UNFINISHED`, the
-//! subagent runs on in the background and the command never reports.
+//! subagent runs on in the background and the command never reports;
+//! `git`, one turn with an edit of `src/main.rs`, then a command running
+//! `git merge --ff-only -q upstream`.
 
 use std::env;
 use std::fs;
@@ -94,6 +96,7 @@ fn run() -> Step {
         (false, Ok("short")) => short(&run),
         (false, Ok("tools")) => tools(&run),
         (false, Ok("beside")) => beside(&run),
+        (false, Ok("git")) => with_git(&run),
         (false, _) => first(&run),
     }
 }
@@ -316,6 +319,25 @@ fn tools(run: &Run) -> Step {
     run.finish("toolu_4", "Write", &notes)?;
     run.reply("Noted.")?;
     stop()
+}
+
+/// An edit of the agent's own, then a merge that git makes of `upstream`.
+fn with_git(run: &Run) -> Step {
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    let main = json!({"file_path": "src/main.rs"});
+    run.prompt("Add a helper, then bring in upstream")?;
+    run.start("toolu_1", "Edit", &main)?;
+    append(&run.cwd.join("src").join("main.rs"), "fn mine() {}\n")?;
+    run.finish("toolu_1", "Edit", &main)?;
+    let merge = json!({"command": "git merge --ff-only -q upstream"});
+    run.start("toolu_2", "Bash", &merge)?;
+    let merged = Command::new("git").args(["merge", "--ff-only", "-q", "upstream"]).current_dir(&run.cwd).status().map_err(io)?;
+    if !merged.success() {
+        return Err(Failed(4, "git merge failed".into()));
+    }
+    run.finish("toolu_2", "Bash", &merge)?;
+    run.reply("Added mine and merged upstream.")?;
+    run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None)
 }
 
 /// A subagent, its transcript in `subagents/agent-a1.jsonl`, and a command

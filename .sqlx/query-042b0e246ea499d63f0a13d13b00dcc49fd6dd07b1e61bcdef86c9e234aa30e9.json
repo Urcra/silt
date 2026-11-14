@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM tool_git_states WHERE agent = ? AND session_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "042b0e246ea499d63f0a13d13b00dcc49fd6dd07b1e61bcdef86c9e234aa30e9"
+}

@@ -911,9 +911,9 @@ pub fn mr_list(thread: Option<String>) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn mr_show(mr: &str) -> Result<(), Exn<CliError>> {
+pub fn mr_show(mr: &str, hide_git: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let details: MrDetails = call(&Request::MrShow { mr: mr.into() })?;
+    let details: MrDetails = call(&Request::MrShow { mr: mr.into(), hide_git })?;
     print!("{}", render::safe(&render::merge_request(&details)));
     Ok(())
 }
@@ -1029,9 +1029,9 @@ pub fn show(thread: &str) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn diff(thread: &str, turn: Option<usize>, base: Option<String>) -> Result<(), Exn<CliError>> {
+pub fn diff(thread: &str, turn: Option<usize>, base: Option<String>, hide_git: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let diff: String = call(&Request::Diff { thread: thread.into(), turn, base, files: None, path: None })?;
+    let diff: String = call(&Request::Diff { thread: thread.into(), turn, base, files: None, path: None, hide_git })?;
     print!("{}", render::safe(&diff));
     Ok(())
 }
