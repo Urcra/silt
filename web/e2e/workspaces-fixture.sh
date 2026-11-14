@@ -40,7 +40,9 @@ export SILT_HOME="$work/ada/silt"
 export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/ada/claude"
 # Agent sessions on the machine running the tests would show in the import
-# offer, so each machine here has a home of its own.
+# offer, and agent CLIs installed in its home would count as installed here,
+# so each machine here has a home of its own.
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$HOME/" | paste -sd:)
 export HOME="$work/ada/home"
 unset CODEX_HOME GEMINI_CLI_HOME COPILOT_HOME XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"

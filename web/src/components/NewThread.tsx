@@ -17,6 +17,7 @@ import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '..
 import { AgentSettings } from './AgentSettings'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
+import { useHeldSend } from '../heldSend'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { CloudLaunches } from './Cloud'
@@ -596,6 +597,9 @@ export function NewThread() {
       .finally(() => setStarting(false))
   }
 
+  const ready = !starting && Boolean(project) && (chosenWhere === 'cloud' ? Boolean(prompt.trim()) : Boolean(agent))
+  const send = useHeldSend(choices.isPending, ready, () => start(false))
+
   if (choices.isSuccess && clones.length === 0) {
     return (
       <Page title="New thread" meta="first open" label="new thread">
@@ -604,7 +608,6 @@ export function NewThread() {
     )
   }
 
-  const ready = !starting && Boolean(project) && (chosenWhere === 'cloud' ? Boolean(prompt.trim()) : Boolean(agent))
   return (
     <Page title="New thread" flush label="new thread">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
@@ -622,7 +625,7 @@ export function NewThread() {
           className="flex flex-col"
           onSubmit={(event) => {
             event.preventDefault()
-            start(false)
+            send()
           }}
         >
           <ComposerBox
@@ -631,7 +634,7 @@ export function NewThread() {
             rows={4}
             value={prompt}
             onChange={setPrompt}
-            onSend={() => ready && start(false)}
+            onSend={send}
             onCycle={() => {
               if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)

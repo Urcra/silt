@@ -178,7 +178,13 @@ export function WorkspacesSettings() {
       </Section>
 
       <Section title="Which projects belong here">
-        {workspace.rules.length === 0 && <p className="px-4 py-3 text-sm text-fg-2">No rules yet: only projects you put here yourself.</p>}
+        {workspace.rules.length === 0 && (
+          <p className="px-4 py-3 text-sm text-fg-2">
+            {workspace.id === file.default
+              ? 'No rules needed: as the default, it has every project no other workspace’s rules match, and those you put here yourself.'
+              : 'No rules yet: only projects you put here yourself.'}
+          </p>
+        )}
         {workspace.rules.map((rule, index) => (
           <div key={`${rule.kind}${rule.pattern}`} className="flex items-center gap-2 border-b border-line-subtle px-4 py-2.5 last:border-b-0">
             <span className="rounded-sm border border-line px-1.5 font-mono text-2xs text-fg-2">{rule.kind}</span>
@@ -192,7 +198,8 @@ export function WorkspacesSettings() {
         <AddRule onAdd={(rule) => change({ rules: [...workspace.rules, rule] })} />
       </Section>
       <p className={cx(SUB, '-mt-3')}>
-        The most specific rule wins: a remote beats a folder, a longer match beats a shorter one. A project you put in a workspace yourself ignores rules. Projects
+        A remote's <code className="font-mono">*</code> is one part of its path, and a trailing <code className="font-mono">**</code> any number of them; a folder
+        covers everything under it. The most specific rule wins: a remote beats a folder, a longer match beats a shorter one. A project you put in a workspace yourself ignores rules. Projects
         nothing matches go to <strong>{file.workspaces.find((candidate) => candidate.id === file.default)?.name}</strong>, the default.
       </p>
 

@@ -7,6 +7,7 @@ import { agentRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
+import { useHeldSend } from '../heldSend'
 import { useMedia } from '../media'
 import { keys, message } from '../query'
 import { addSending } from '../sending'
@@ -102,6 +103,7 @@ export function NewChat() {
   }
 
   const ready = !starting && Boolean(agent)
+  const send = useHeldSend(choices.isPending, ready, () => start(false))
   return (
     <Page title="New chat" flush label="new chat">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
@@ -111,7 +113,7 @@ export function NewChat() {
           className="flex flex-col"
           onSubmit={(event) => {
             event.preventDefault()
-            start(false)
+            send()
           }}
         >
           <ComposerBox
@@ -120,7 +122,7 @@ export function NewChat() {
             rows={4}
             value={prompt}
             onChange={setPrompt}
-            onSend={() => ready && start(false)}
+            onSend={send}
             onCycle={() => {
               if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
