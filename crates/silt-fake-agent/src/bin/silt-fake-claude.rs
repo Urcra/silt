@@ -50,7 +50,13 @@ fn run() -> Step {
                 session = args.next().unwrap_or_default();
                 resume = true;
             }
-            "--settings" => settings = args.next().and_then(|text| serde_json::from_str(&text).ok()),
+            "--settings" => {
+                let text = args.next().unwrap_or_default();
+                if let Some(logs) = &log_dir {
+                    write(&logs.join("claude-settings"), text.as_bytes())?;
+                }
+                settings = serde_json::from_str(&text).ok();
+            }
             "--mcp-config" => {
                 let config = env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_default();
                 write(&config.join("mcp-config.json"), args.next().unwrap_or_default().as_bytes())?;

@@ -40,6 +40,8 @@ export const keys = {
   notificationSettings: ['notification-settings'] as const,
   status: ['status'] as const,
   chatSettings: ['chat-settings'] as const,
+  // Under `threads`, which the bus refreshes when workspaces or org policies change.
+  workspaces: ['threads', 'workspaces'] as const,
 }
 
 export function message(error: unknown): string {

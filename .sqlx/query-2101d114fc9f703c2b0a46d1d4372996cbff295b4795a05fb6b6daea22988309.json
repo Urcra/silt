@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo, workspace FROM project_workspaces",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_workspaces",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "workspace",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_workspaces",
+            "name": "workspace"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2101d114fc9f703c2b0a46d1d4372996cbff295b4795a05fb6b6daea22988309"
+}

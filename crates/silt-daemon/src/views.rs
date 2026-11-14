@@ -90,6 +90,7 @@ impl Core {
                     visibility: self.visibility.get(&record.id).cloned(),
                     server: self.remote_of(record.family).map(|remote| remote.config.url.clone()),
                     local_only: self.homes.get(&record.family) == Some(&crate::homes::Home::Local),
+                    workspace: Some(self.family_workspace(record.family).id.to_string()),
                     cloud: logged.cloud,
                 }
             })

@@ -282,6 +282,7 @@ fn summary(
         visibility: row.visibility.clone(),
         server: None,
         local_only: false,
+        workspace: None,
         cloud: silt_proto::view::cloud_session(own.iter().copied()),
     }
 }
@@ -810,6 +811,8 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
                     clone: None,
                     home: None,
                     server: None,
+                    workspace: None,
+                    workspace_why: None,
                 }
             })
             .collect(),

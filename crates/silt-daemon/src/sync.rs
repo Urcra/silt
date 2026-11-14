@@ -60,9 +60,15 @@ impl Core {
                 let requested = Instant::now();
                 self.last_listings.insert(server.clone(), requested);
                 let events = self.events.clone();
+                let bound = self.binds_an_org(&server);
                 tokio::spawn(async move {
                     let listing = remote.listing().await.map_err(|error| error.to_string());
-                    let _ = events.send(Event::Listed { server, listing, requested });
+                    let _ = events.send(Event::Listed { server: server.clone(), listing, requested });
+                    // The policies of orgs a workspace is bound to, with each listing (ADR 0065).
+                    if bound && let Ok(orgs) = remote.orgs().await {
+                        let policies = orgs.orgs.into_iter().map(|org| (org.name, org.policy)).collect();
+                        let _ = events.send(Event::OrgPolicies { server, policies });
+                    }
                 });
             }
         }

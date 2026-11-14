@@ -315,6 +315,12 @@ pub enum Request {
         server: String,
         asking: Box<Request>,
     },
+    /// A request of an agent's history tools, answered only for the
+    /// workspace its run's token was made for (ADR 0065).
+    Scoped {
+        token: String,
+        asking: Box<Request>,
+    },
     /// The server's notifications for this user (ADR 0013).
     Inbox {
         #[serde(default)]
@@ -464,6 +470,28 @@ pub enum Request {
     /// (ADR 0053).
     NewProject {
         path: PathBuf,
+    },
+    /// Every workspace, the projects each holds and its rules (ADR 0065).
+    Workspaces,
+    /// Whether a terminal may run `agent` (its adapter's id) with `args`,
+    /// and the locks, variables and token it runs with: asked before the
+    /// session starts, so a refusal leaves nothing behind.
+    RunRules {
+        /// The thread a resume or fork continues; a new run names its folder.
+        thread: Option<String>,
+        cwd: Option<PathBuf>,
+        agent: String,
+        args: Vec<String>,
+    },
+    /// Replaces the workspaces with these, as `workspaces.json` keeps them.
+    SetWorkspaces {
+        workspaces: silt_workspace::Workspaces,
+    },
+    /// Puts the project `repo` in a workspace, or back under the match rules
+    /// with none.
+    AssignProject {
+        repo: String,
+        workspace: Option<String>,
     },
     /// Where the project `repo`'s new threads go (ADR 0032): a server's
     /// URL, or `local` for this machine only.
@@ -909,38 +937,7 @@ pub struct LiveState {
     pub preset: Preset,
 }
 
-/// Which permission requests the daemon answers for the person (ADR 0022).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum Preset {
-    /// Edits, reads and searches go through; anything else asks.
-    #[default]
-    AskBeforeCommands,
-    AskForEverything,
-    /// Nothing asks.
-    FullAccess,
-    /// Every prompt asks for a plan first; reads and searches go through,
-    /// and anything else asks (ADR 0044).
-    Plan,
-}
-
-impl Preset {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AskBeforeCommands => "ask_before_commands",
-            Self::AskForEverything => "ask_for_everything",
-            Self::FullAccess => "full_access",
-            Self::Plan => "plan",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        [Self::AskBeforeCommands, Self::AskForEverything, Self::FullAccess, Self::Plan]
-            .into_iter()
-            .find(|preset| preset.as_str() == name)
-    }
-}
+pub use silt_workspace::Preset;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -1023,6 +1020,41 @@ pub struct StartOptions {
     /// Where in the new thread's checkout the chat's files are copied, a
     /// relative path; nowhere when unset.
     pub copy_to: Option<String>,
+    /// The workspace a new chat is in, by id; the default when unset
+    /// (ADR 0065).
+    pub workspace: Option<String>,
+}
+
+/// The workspaces on this machine (ADR 0065).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct WorkspacesView {
+    pub default: silt_workspace::WorkspaceId,
+    /// Whether the person made any; until then there's the one Default,
+    /// syncing with the default server.
+    pub saved: bool,
+    pub workspaces: Vec<WorkspaceView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct WorkspaceView {
+    pub workspace: silt_workspace::Workspace,
+    /// Its org's policy, as last fetched.
+    pub org_policy: Option<silt_workspace::OrgPolicy>,
+    /// It's bound to an org whose policy hasn't been fetched yet, so no agent
+    /// starts in it.
+    pub waiting_for_policy: bool,
+    /// Its own rules and its org's, together.
+    pub effective: silt_workspace::Policy,
+    pub projects: Vec<WorkspaceProject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct WorkspaceProject {
+    pub repo: String,
+    pub why: silt_workspace::Why,
 }
 
 /// This machine's settings for chats.
@@ -1392,6 +1424,19 @@ mod tests {
             silt_proto::Snooze::decl(&config),
             StartOptions::decl(&config),
             ChatSettings::decl(&config),
+            WorkspacesView::decl(&config),
+            WorkspaceView::decl(&config),
+            WorkspaceProject::decl(&config),
+            silt_workspace::Workspace::decl(&config),
+            silt_workspace::Workspaces::decl(&config),
+            silt_workspace::ServerBinding::decl(&config),
+            silt_workspace::MatchRule::decl(&config),
+            silt_workspace::Defaults::decl(&config),
+            silt_workspace::Policy::decl(&config),
+            silt_workspace::OrgPolicy::decl(&config),
+            silt_workspace::Why::decl(&config),
+            silt_workspace::WorkspaceId::decl(&config),
+            silt_workspace::AgentKey::decl(&config),
             StateChange::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),

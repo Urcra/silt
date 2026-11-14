@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO org_policies (server, org, policy, fetched_ms) VALUES (?, ?, ?, ?) ON CONFLICT (server, org) DO UPDATE SET policy = excluded.policy, fetched_ms = excluded.fetched_ms",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "92a5e1858b90fc8931fa3643377d34b16edb08d7205ac6e7ec7dfdef4693a6da"
+}

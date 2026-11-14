@@ -23,6 +23,11 @@ pub fn home() -> Option<PathBuf> {
     crate::agent_home("COPILOT_HOME", ".copilot")
 }
 
+/// [`home`] for a session in `cwd`, whose workspace may set its own (ADR 0065).
+fn home_in(cwd: &Path) -> Option<PathBuf> {
+    crate::agent_home_in("COPILOT_HOME", ".copilot", cwd)
+}
+
 fn session_dir(home: &Path, id: &str) -> PathBuf {
     home.join("session-state").join(id)
 }
@@ -332,8 +337,8 @@ impl Agent for Copilot {
         SessionIds::Chosen
     }
 
-    fn transcript(&self, _cwd: &Path, id: &str) -> Option<PathBuf> {
-        Some(session_dir(&home()?, id).join("events.jsonl"))
+    fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
+        Some(session_dir(&home_in(cwd)?, id).join("events.jsonl"))
     }
 
     fn session_dir(&self, transcript: &Path) -> Option<PathBuf> {
@@ -357,20 +362,24 @@ impl Agent for Copilot {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        discover_in(&home()?, cwd, since_ms, known)
+        discover_in(&home_in(cwd)?, cwd, since_ms, known)
     }
 
     fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
-        home().map(|home| on_disk_in(&home)).unwrap_or_default()
+        crate::agent_homes("COPILOT_HOME", ".copilot").iter().flat_map(|home| on_disk_in(home)).collect()
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
-        let home = home().ok_or(AgentError::NoHome)?;
+        let home = home_in(cwd).ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
         Some(event_lines(&translated_text(entries), cwd, id))
+    }
+
+    fn bypass_flag(&self, args: &[String]) -> Option<String> {
+        crate::flag_in(args, &["--allow-all-tools", "--allow-all", "--yolo", "--allow-all-paths"], &[])
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {

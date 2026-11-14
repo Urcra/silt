@@ -5,7 +5,7 @@ import { inWorkspace, orgsOf, workspaceOf, workspaceValue } from './workspace'
 const WORK = 'https://work.example'
 const OSS = 'https://oss.example'
 
-function thread(id: string, server: string | null, repo: string, local_only = false): ThreadSummary {
+function thread(id: string, server: string | null, repo: string, local_only = false, workspace: string | null = null): ThreadSummary {
   return {
     id,
     repo,
@@ -28,6 +28,7 @@ function thread(id: string, server: string | null, repo: string, local_only = fa
     visibility: null,
     server,
     local_only,
+    workspace,
     cloud: null,
   }
 }
@@ -48,6 +49,8 @@ function project(server: string, repo: string, org: string | null): Project {
     clone: null,
     home: null,
     server,
+    workspace: null,
+    workspace_why: null,
   }
 }
 
@@ -72,7 +75,16 @@ test('a workspace reads back from its select value', () => {
     { kind: 'local' } as const,
     { kind: 'server', server: WORK, org: null } as const,
     { kind: 'server', server: WORK, org: 'acme' } as const,
+    { kind: 'workspace', id: 'work', server: WORK } as const,
+    { kind: 'workspace', id: 'experiments', server: null } as const,
   ]) {
     expect(workspaceOf(workspaceValue(workspace))).toEqual(workspace)
   }
+})
+
+test("one of this machine's workspaces holds the threads made in it (ADR 0065)", () => {
+  const work = thread('w', WORK, 'acme/app', false, 'work')
+  const mine = thread('p', OSS, 'me/silt', false, 'personal')
+  const shown = [work, mine].filter((each) => inWorkspace(each, { kind: 'workspace', id: 'work', server: WORK }, new Map())).map((each) => each.id)
+  expect(shown).toEqual(['w'])
 })

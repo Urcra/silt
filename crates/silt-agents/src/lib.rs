@@ -193,6 +193,60 @@ pub struct LaunchPlan {
     /// Skill directories to hand the agent natively, where it can load them.
     pub skills: Vec<PathBuf>,
     pub args: Vec<String>,
+    /// What its workspace's rules hold the agent to (ADR 0065).
+    pub locks: Locks,
+    /// Variables its workspace gives every agent, such as its own
+    /// `CLAUDE_CONFIG_DIR`.
+    pub env: Vec<(String, String)>,
+}
+
+/// What a workspace's rules hold an agent to, passed as the agent's own
+/// settings where it has them (ADR 0065).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Locks {
+    /// It may not skip asking, nor switch to a mode that does.
+    pub no_bypass: bool,
+    /// It runs in its own sandbox, failing rather than running without it.
+    pub sandbox: bool,
+    /// What its sandbox and file tools may not read or write.
+    pub deny: Vec<PathBuf>,
+}
+
+/// Which of a workspace's sandbox rules Silt can hold an agent to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SandboxSupport {
+    None,
+    /// Its own sandbox, turned on per run.
+    Sandbox,
+    /// Its sandbox, and paths it denies reading.
+    Isolate,
+}
+
+/// The first of `args` that is one of `flags`, alone or as `--flag=value`,
+/// or one of `valued`'s flags with one of its values, as `--flag value` or
+/// `--flag=value`.
+pub fn flag_in(args: &[String], flags: &[&str], valued: &[(&str, &[&str])]) -> Option<String> {
+    for (index, arg) in args.iter().enumerate() {
+        if arg == "--" {
+            return None;
+        }
+        let (name, inline) = match arg.split_once('=') {
+            Some((name, value)) if name.starts_with('-') => (name, Some(value)),
+            _ => (arg.as_str(), None),
+        };
+        if flags.contains(&name) {
+            return Some(arg.clone());
+        }
+        for (flag, values) in valued {
+            if name == *flag {
+                let value = inline.or_else(|| args.get(index + 1).map(String::as_str));
+                if let Some(value) = value.filter(|value| values.contains(value)) {
+                    return Some(format!("{flag} {value}"));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The process to run.
@@ -303,6 +357,15 @@ pub trait Agent: Send + Sync {
         None
     }
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError>;
+    /// The first of `args` that stops the agent asking before it acts, such
+    /// as Claude Code's `--dangerously-skip-permissions`.
+    fn bypass_flag(&self, _args: &[String]) -> Option<String> {
+        None
+    }
+    /// Whether Silt can start it in its own sandbox, and deny it paths there.
+    fn sandbox_support(&self) -> SandboxSupport {
+        SandboxSupport::None
+    }
 }
 
 /// The environment variables that say where agents keep their sessions.
@@ -391,6 +454,40 @@ impl Transcripts {
 /// An agent's home: `$variable` when set, else `dir` in the user's home.
 pub(crate) fn agent_home(variable: &str, dir: &str) -> Option<PathBuf> {
     std::env::var_os(variable).map(PathBuf::from).or_else(|| home().map(|home| home.join(dir)))
+}
+
+/// Agent homes that differ by folder, as each workspace sets them for the
+/// clones in it (ADR 0065): folder, variable, home.
+static WORKSPACE_HOMES: std::sync::RwLock<Vec<(PathBuf, String, PathBuf)>> = std::sync::RwLock::new(Vec::new());
+
+/// Sets the agent homes of the folders workspaces hold, replacing those set
+/// before.
+pub fn set_workspace_homes(homes: Vec<(PathBuf, String, PathBuf)>) {
+    *WORKSPACE_HOMES.write().unwrap_or_else(std::sync::PoisonError::into_inner) = homes;
+}
+
+/// `variable`'s home for an agent run in `cwd`: the one its folder's
+/// workspace sets, else this process's.
+pub(crate) fn agent_home_in(variable: &str, dir: &str, cwd: &Path) -> Option<PathBuf> {
+    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    homes
+        .iter()
+        .filter(|(folder, name, _)| name == variable && cwd.starts_with(folder))
+        .max_by_key(|(folder, _, _)| folder.components().count())
+        .map(|(_, _, home)| home.clone())
+        .or_else(|| agent_home(variable, dir))
+}
+
+/// Every home `variable` names: this process's, then each workspace's.
+pub(crate) fn agent_homes(variable: &str, dir: &str) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = agent_home(variable, dir).into_iter().collect();
+    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (_, name, home) in homes.iter() {
+        if name == variable && !found.contains(home) {
+            found.push(home.clone());
+        }
+    }
+    found
 }
 
 pub(crate) fn home() -> Option<PathBuf> {

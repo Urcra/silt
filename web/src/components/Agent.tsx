@@ -9,6 +9,7 @@ import { hosted } from '../served'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
+import { agentRefused, modeRefused, presetRefused, workspaceOf } from '../rules'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
@@ -450,7 +451,12 @@ export function AgentDock({
   const [chosenAgent, setAgent] = useState<string>()
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
   const agents = choices.data?.agents ?? []
-  const agent = chosenAgent ?? agents[0]?.id ?? ''
+  // The thread's workspace, whose rules grey out what the daemon would refuse (ADR 0065).
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads, enabled: !hosted() })
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const summary = threads.data?.find((candidate) => candidate.id === thread)
+  const workspace = summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
+  const agent = (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ?? agents.find((choice) => !agentRefused(workspace, choice.id))?.id ?? ''
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
@@ -642,6 +648,7 @@ export function AgentDock({
           modes={status.modes?.available}
           mode={status.modes?.current}
           onMode={(mode) => act(api.setMode(thread, mode))}
+          refusedMode={(mode) => modeRefused(workspace, status.agent_id, mode)}
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
           more={
@@ -673,9 +680,12 @@ export function AgentDock({
           value={preset}
           onChange={(chosen) => {
             const picked = chosen as Preset
-            void api.setPreset(thread, picked).then(() => onPreset(picked))
+            void api.setPreset(thread, picked).then(
+              () => onPreset(picked),
+              (failure: unknown) => setError(message(failure)),
+            )
           }}
-          options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+          options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
         />
       )}
     </>

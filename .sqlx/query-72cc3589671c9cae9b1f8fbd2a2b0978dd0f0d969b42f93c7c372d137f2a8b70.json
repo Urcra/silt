@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO family_workspaces (family_id, workspace) VALUES (?, ?) ON CONFLICT (family_id) DO UPDATE SET workspace = excluded.workspace",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "72cc3589671c9cae9b1f8fbd2a2b0978dd0f0d969b42f93c7c372d137f2a8b70"
+}

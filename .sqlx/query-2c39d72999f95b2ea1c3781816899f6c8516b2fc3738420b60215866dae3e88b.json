@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, created_ms) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2c39d72999f95b2ea1c3781816899f6c8516b2fc3738420b60215866dae3e88b"
+}

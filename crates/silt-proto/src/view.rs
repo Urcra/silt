@@ -58,6 +58,9 @@ pub struct ThreadSummary {
     /// It stays on this machine only, by its project's choice.
     #[serde(default)]
     pub local_only: bool,
+    /// The workspace it's in on this machine (ADR 0065); none from a server.
+    #[serde(default)]
+    pub workspace: Option<String>,
     /// The Claude Code cloud session it records, as claude.ai names it
     /// (ADR 0040). A fork doesn't inherit it.
     #[serde(default)]
@@ -593,6 +596,12 @@ pub struct Project {
     /// The server this record is from; none for a clone no server knows.
     #[serde(default)]
     pub server: Option<String>,
+    /// The workspace it's in on this machine, and why (ADR 0065); none from
+    /// a server.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub workspace_why: Option<String>,
 }
 
 /// Where a new comment goes.

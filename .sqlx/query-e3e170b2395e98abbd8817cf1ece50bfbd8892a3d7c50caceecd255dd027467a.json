@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM project_workspaces WHERE repo = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e3e170b2395e98abbd8817cf1ece50bfbd8892a3d7c50caceecd255dd027467a"
+}

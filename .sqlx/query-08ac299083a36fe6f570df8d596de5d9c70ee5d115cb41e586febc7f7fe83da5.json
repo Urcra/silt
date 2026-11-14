@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO project_workspaces (repo, workspace) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET workspace = excluded.workspace",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "08ac299083a36fe6f570df8d596de5d9c70ee5d115cb41e586febc7f7fe83da5"
+}

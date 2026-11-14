@@ -111,21 +111,27 @@ impl Core {
     }
 
     /// Where a new family of the project `repo` goes: the project's home,
-    /// else the default server. `None` with neither, so the family syncs
-    /// with the first server signed in to later.
+    /// unless its workspace locks it, else its workspace's server (ADR 0065).
+    /// `None` before any workspace or sign-in, so the family syncs with the
+    /// first server signed in to later.
     pub(crate) fn new_home(&self, repo: &str) -> Option<Home> {
-        self.project_homes
-            .get(repo)
-            .cloned()
-            .or_else(|| self.default_remote().map(|remote| Home::Server(remote.config.url.clone())))
+        let (workspace, _) = self.project_workspace(repo, None);
+        let locked = self.effective_policy(&workspace).home_locked;
+        self.project_homes.get(repo).filter(|_| !locked).cloned().or_else(|| self.workspace_home(&workspace))
     }
 
     /// [`Self::new_home`] for a family started in `clone`: this machine
     /// only for a repository without a remote, which no other machine can
     /// clone from, unless its project was given a home (ADR 0053).
     pub(crate) fn new_home_in(&self, clone: &silt_git::Repo, project: &str) -> Result<Option<Home>, CoreError> {
-        // A chat follows its person to their default server, as every
-        // machine can make its folder (ADR 0059).
+        // A chat follows its person to its workspace's server, as every
+        // machine can make its folder (ADR 0059, ADR 0065).
+        if silt_types::is_chat(project) {
+            let id = self.new_family_workspace(clone, project);
+            if let Some(workspace) = self.workspaces().get(&id) {
+                return Ok(self.workspace_home(workspace));
+            }
+        }
         if !silt_types::is_chat(project) && !self.project_homes.contains_key(project) && clone.remote_url("origin")?.is_none() {
             return Ok(Some(Home::Local));
         }
@@ -147,6 +153,8 @@ impl Core {
     /// to a new server home, and from then on sync there; threads already
     /// on a server stay where they are, as others may hold them there.
     pub(crate) async fn set_project_home(&mut self, repo: &str, home: &str) -> Result<String, CoreError> {
+        let (workspace, _) = self.project_workspace(repo, None);
+        self.rules(&workspace).check_home().map_err(|refusal| CoreError::Invalid(refusal.to_string()))?;
         let home = if home == "local" {
             Home::Local
         } else {

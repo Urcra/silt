@@ -1,10 +1,15 @@
-// Which workspace this tab looks at (ADR 0032): an org on a server, a whole
-// server, this machine's own threads, or everything.
+// Which workspace this tab looks at: one of this machine's workspaces
+// (ADR 0065), or in the hosted app an org on its server or the whole server
+// (ADR 0032), this machine's own threads, or everything.
 
 import { useSyncExternalStore } from 'react'
 import type { Project, ThreadSummary } from './api'
 
-export type Workspace = { kind: 'all' } | { kind: 'local' } | { kind: 'server'; server: string; org: string | null }
+export type Workspace =
+  | { kind: 'all' }
+  | { kind: 'local' }
+  | { kind: 'server'; server: string; org: string | null }
+  | { kind: 'workspace'; id: string; server: string | null }
 
 const STORED = 'silt-workspace'
 const listeners = new Set<() => void>()
@@ -41,7 +46,7 @@ export function useWorkspace(): Workspace {
 
 /** The server what belongs to no thread is asked of: the workspace's, or the default. */
 export function askedServer(): string | null {
-  return current.kind === 'server' ? current.server : null
+  return current.kind === 'server' || current.kind === 'workspace' ? current.server : null
 }
 
 /** The org each project is in, by its server and repository. */
@@ -60,16 +65,20 @@ export function inWorkspace(thread: ThreadSummary, workspace: Workspace, orgs: M
         thread.server === workspace.server &&
         (workspace.org === null || orgs.get(`${thread.server}\n${thread.repo}`) === workspace.org)
       )
+    case 'workspace':
+      return thread.workspace === workspace.id
   }
 }
 
 /** A workspace as a `<select>` value, and back. */
 export function workspaceValue(workspace: Workspace): string {
+  if (workspace.kind === 'workspace') return `workspace\n${workspace.id}\n${workspace.server ?? ''}`
   return workspace.kind === 'server' ? `server\n${workspace.server}\n${workspace.org ?? ''}` : workspace.kind
 }
 
 export function workspaceOf(value: string): Workspace {
   const [kind, server, org] = value.split('\n')
+  if (kind === 'workspace' && server) return { kind: 'workspace', id: server, server: org || null }
   if (kind === 'server' && server) return { kind: 'server', server, org: org || null }
   return kind === 'local' ? { kind: 'local' } : { kind: 'all' }
 }

@@ -467,6 +467,17 @@ impl Core {
         if options.prompt.is_none() && !options.attachments.is_empty() {
             return Err(CoreError::Invalid("attached files go with the first prompt".into()));
         }
+        let workspace = self.start_workspace(thread, clone, options.workspace.as_deref())?;
+        let chosen = options.preset.is_some();
+        let asked = options.preset.or_else(|| match (thread, options.chat) {
+            (Some(selector), _) => self.find_thread(selector).ok().map(|thread| self.preset(thread)),
+            (None, true) => Some(crate::chats::settings(&self.data_dir).preset),
+            (None, false) => Some(Preset::default()),
+        });
+        let allowed = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref())?;
+        if allowed != asked {
+            options.preset = allowed;
+        }
         let attachments = decode(std::mem::take(&mut options.attachments))?;
         let seen_accepts = read_seen(&self.data_dir).remove(&info.id).and_then(|seen| seen.takes).map(Accepts::from);
         if let Some(refused) = seen_accepts.and_then(|accepts| attachments.iter().find(|attachment| !accepts.takes(attachment))) {
@@ -511,7 +522,11 @@ impl Core {
                 (created.thread, created.checkout_id, created.checkout)
             }
             (None, None) if options.chat => {
-                let folder = crate::chats::new_folder(&self.data_dir, options.prompt.as_deref().unwrap_or_default())?;
+                let folder = crate::chats::new_folder_in(
+                    &self.data_dir,
+                    options.prompt.as_deref().unwrap_or_default(),
+                    Some(workspace.id.as_str()),
+                )?;
                 let created = self.create_thread(&folder, false, false, None).await?;
                 if options.preset.is_none() {
                     options.preset = Some(crate::chats::settings(&self.data_dir).preset);
@@ -546,7 +561,12 @@ impl Core {
         self.next_token += 1;
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
-        let start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
+        let token = self.mint_run_token(thread, &workspace.id).await?;
+        let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
+        if let Some((_, args)) = &mut start.mcp {
+            args.extend(["--token".to_owned(), token]);
+        }
+        start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
@@ -931,7 +951,7 @@ impl Core {
     /// Answers a permission request by the thread's preset when it can, and
     /// leaves it for the person otherwise (ADR 0022).
     fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
-        let preset = self.preset(thread);
+        let preset = self.capped_preset(thread, self.preset(thread));
         let run = self.acp.get_mut(&thread).expect("caller checked");
         if !run.presents_plans && plan_put(run, &permission.tool_call_id).is_some() {
             run.presents_plans = true;
@@ -998,6 +1018,7 @@ impl Core {
     }
 
     pub(crate) async fn set_preset(&mut self, thread: ThreadId, preset: Preset) -> Result<&'static str, CoreError> {
+        self.check_thread_change(thread, |rules| rules.check_preset(preset))?;
         self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
         if let Some(run) = self.acp.get_mut(&thread) {
             follow_preset_in_settings(run, preset);
@@ -1029,6 +1050,8 @@ impl Core {
         if !run.modes.as_ref().is_some_and(|modes| modes.available.iter().any(|offered| offered.id == mode)) {
             return Err(CoreError::Invalid(format!("the agent has no mode called {mode}")));
         }
+        let meaning = mode_meaning(&run.info.id, mode, run.plan_mode() == Some(mode));
+        self.check_thread_change(thread, |rules| rules.check_mode(mode, meaning))?;
         let run = self.acp.get_mut(&thread).expect("checked above");
         run.back_to = None;
         send(run, Command::SetMode(mode.to_owned()));
@@ -2025,6 +2048,20 @@ fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
 
 /// A mode's id as Silt knows it: Copilot's are links to the protocol's
 /// page on modes, ending in `#agent`, `#plan` and `#autopilot`.
+/// What a mode means for the workspace's cap on what an agent does without
+/// asking (ADR 0065): Copilot's say how it works, except Autopilot (ADR 0049).
+pub(crate) fn mode_meaning(agent: &str, mode: &str, planning: bool) -> silt_workspace::ModeMeaning {
+    use silt_workspace::ModeMeaning;
+    if planning || mode_key(mode) == "plan" {
+        return ModeMeaning::Preset(Preset::Plan);
+    }
+    match preset_for_mode(mode) {
+        Some(preset) => ModeMeaning::Preset(preset),
+        None if silt_workspace::agent_key(agent).as_str() == "copilot" => ModeMeaning::NotPermissions,
+        None => ModeMeaning::Unknown,
+    }
+}
+
 fn mode_key(mode: &str) -> &str {
     mode.rsplit_once('#').map_or(mode, |(_, key)| key)
 }
@@ -2139,7 +2176,8 @@ fn spawn_agent(
         };
         start.program = program;
         start.args = args;
-        start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).collect();
+        let workspace_env = std::mem::take(&mut start.env);
+        start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let handle = silt_acp::start(start, sender);
         let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });

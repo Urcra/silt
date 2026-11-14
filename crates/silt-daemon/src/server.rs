@@ -160,6 +160,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 core.pulled(family, epoch, generation, outcome, error).await
             }
             Event::Listed { server, listing, requested } => core.listed(&server, listing, requested).await,
+            Event::OrgPolicies { server, policies } => core.org_policies_fetched(&server, policies).await,
             Event::Personal(synced) => core.personal_synced(*synced).await,
             Event::NotesSettings { server, projects } => core.notes_settings_read(&server, projects),
             Event::Control(event) => core.control_event(event).await,
