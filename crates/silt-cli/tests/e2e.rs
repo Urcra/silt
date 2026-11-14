@@ -521,19 +521,22 @@ fn start_fake_acp_in(env: &Env, api: &Api, start: &serde_json::Value) -> String 
 /// takes the code from its page, and the agent goes on with what it was
 /// asked, the prompt recorded once. Over v1 the agent refuses its session,
 /// as Copilot does; over v2 it refuses the prompt, as Claude's adapter does.
+/// An agent that answers v2 in v1 and lists its sign-in only to a v1 client
+/// asking for one, as Antigravity's does, is asked again in v1.
 #[test]
 fn an_agent_whose_sign_in_expired_is_signed_in_from_the_web_ui_and_goes_on() {
     let env = Env::new();
     let api = Api::open(&env);
     let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
     let markers = tempfile::tempdir().expect("temp dir");
-    let (v1, v2) = (markers.path().join("v1"), markers.path().join("v2"));
+    let (v1, v2, asked) = (markers.path().join("v1"), markers.path().join("v2"), markers.path().join("asked"));
     let agents = serde_json::json!([
         {"id": "v1", "name": "Fake v1", "command": fake, "env": {"FAKE_ACP_SIGN_IN": v1}},
-        {"id": "v2", "name": "Fake v2", "command": fake, "env": {"FAKE_ACP_SIGN_IN": v2, "FAKE_ACP_V2": "1"}}
+        {"id": "v2", "name": "Fake v2", "command": fake, "env": {"FAKE_ACP_SIGN_IN": v2, "FAKE_ACP_V2": "1"}},
+        {"id": "asked", "name": "Fake asked", "command": fake, "env": {"FAKE_ACP_SIGN_IN": asked, "FAKE_ACP_SIGN_IN_IF_ASKED": "1"}}
     ]);
     fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
-    for (agent, marker) in [("v1", &v1), ("v2", &v2)] {
+    for (agent, marker) in [("v1", &v1), ("v2", &v2), ("asked", &asked)] {
         let started =
             api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": agent, "prompt": "hello"})));
         let thread =

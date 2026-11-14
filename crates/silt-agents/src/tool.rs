@@ -63,16 +63,16 @@ pub fn describe(name: &str, kind: Option<&str>, input: &Value) -> ToolUse {
     };
     let text = |keys: &[&str]| keys.iter().find_map(|key| input.get(*key).and_then(string_of));
     let (subject, detail) = match kind {
-        ToolKind::Execute => (text(&["command", "cmd"]), text(&["description"])),
+        ToolKind::Execute => (text(&["command", "cmd", "CommandLine"]), text(&["description", "toolSummary"])),
         ToolKind::Read | ToolKind::Edit => {
-            (text(&["file_path", "path", "filePath", "absolute_path", "notebook_path", "dir_path"]), None)
+            (text(&["file_path", "path", "filePath", "absolute_path", "notebook_path", "dir_path", "Path"]), None)
         }
         ToolKind::Search => (text(&["pattern", "query", "glob", "regex"]), text(&["path", "dir_path", "include"])),
         ToolKind::Question => (question(input), None),
         ToolKind::Fetch => (text(&["url", "query"]), None),
         ToolKind::Subagent => (
-            text(&["description", "title", "prompt", "task", "message", "query"]),
-            text(&["subagent_type", "agent_type", "agent", "agent_name", "name"]),
+            text(&["description", "title", "prompt", "task", "message", "query", "Role", "Prompt"]),
+            text(&["subagent_type", "agent_type", "agent", "agent_name", "name", "TypeName"]),
         ),
         ToolKind::Other => (None, None),
     };
@@ -91,20 +91,19 @@ fn acp_kind(kind: &str) -> Option<ToolKind> {
     })
 }
 
-/// The kind of a tool by its name, as Claude Code, Codex, Gemini, Copilot
-/// and opencode name theirs.
+/// The kind of a tool by its name, as Claude Code, Codex, Gemini,
+/// Antigravity, Copilot and opencode name theirs.
 fn kind_of(name: &str) -> ToolKind {
     match name.to_ascii_lowercase().as_str() {
-        "bash" | "shell" | "local_shell" | "exec_command" | "run_shell_command" | "terminal" | "run_in_terminal" => {
-            ToolKind::Execute
-        }
+        "bash" | "shell" | "local_shell" | "exec_command" | "run_shell_command" | "terminal" | "run_in_terminal"
+        | "run_command" => ToolKind::Execute,
         "read" | "read_file" | "read_many_files" | "view" | "notebookread" | "ls" | "list" | "list_directory" => ToolKind::Read,
         "grep" | "glob" | "search" | "find" | "search_file_content" | "codebase_search" => ToolKind::Search,
         "edit" | "multiedit" | "write" | "write_file" | "replace" | "apply_patch" | "notebookedit" | "str_replace_editor"
-        | "create" | "patch" => ToolKind::Edit,
-        "askuserquestion" | "request_user_input" => ToolKind::Question,
-        "webfetch" | "websearch" | "web_fetch" | "google_web_search" | "fetch" => ToolKind::Fetch,
-        "task" | "agent" | "invoke_agent" | "spawn_agent" | "subagent" => ToolKind::Subagent,
+        | "create" | "patch" | "edit_file" => ToolKind::Edit,
+        "askuserquestion" | "request_user_input" | "ask_question" => ToolKind::Question,
+        "webfetch" | "websearch" | "web_fetch" | "google_web_search" | "fetch" | "search_web" => ToolKind::Fetch,
+        "task" | "agent" | "invoke_agent" | "spawn_agent" | "subagent" | "invoke_subagent" => ToolKind::Subagent,
         _ => ToolKind::Other,
     }
 }

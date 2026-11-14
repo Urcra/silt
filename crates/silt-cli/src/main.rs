@@ -22,7 +22,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run an agent CLI (claude, codex, gemini, opencode, copilot) with Silt
+    /// Run an agent CLI (claude, codex, gemini, agy, opencode, copilot) with Silt
     /// recording the session and every file edit
     Run {
         agent: String,
@@ -31,7 +31,7 @@ enum Command {
     },
     /// Start a chat: an agent CLI in a new folder of its own rather than a project, recorded as a private thread
     Chat {
-        /// The agent CLI to run (claude, codex, gemini, opencode, copilot)
+        /// The agent CLI to run (claude, codex, gemini, agy, opencode, copilot)
         #[arg(default_value = "claude")]
         agent: String,
         /// What the chat is about, naming its folder
@@ -47,6 +47,8 @@ enum Command {
     Codex(AgentRun),
     /// Run Gemini CLI with Silt recording the session and every file edit
     Gemini(AgentRun),
+    /// Run Antigravity CLI with Silt recording the session and every file edit
+    Agy(AgentRun),
     /// Run OpenCode with Silt recording the session and every file edit
     Opencode(AgentRun),
     /// Run GitHub Copilot CLI with Silt recording the session and every file edit
@@ -684,6 +686,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
+        Command::Agy(run) => commands::run_agent("agy", run.isolated, &run.args),
         Command::Opencode(run) => commands::run_agent("opencode", run.isolated, &run.args),
         Command::Copilot(run) => commands::run_agent("copilot", run.isolated, &run.args),
         Command::Track { agent, session, from_hook } => {

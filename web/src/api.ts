@@ -278,4 +278,4 @@ export function short(id: string): string {
 }
 
 /** Agent CLIs Silt can continue a thread with. */
-export const AGENTS = ['claude', 'codex', 'gemini', 'opencode', 'copilot'] as const
+export const AGENTS = ['claude', 'codex', 'gemini', 'agy', 'opencode', 'copilot'] as const

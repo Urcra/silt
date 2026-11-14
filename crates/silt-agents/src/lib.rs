@@ -5,6 +5,7 @@
 //! into another's.
 
 pub mod acp;
+pub mod antigravity;
 pub mod claude;
 pub mod cloud;
 pub mod codex;
@@ -287,6 +288,12 @@ pub trait Agent: Send + Sync {
     fn fork_id(&self, _from: &str) -> String {
         uuid::Uuid::new_v4().to_string()
     }
+    /// Whether [`Agent::restore`] can bring `session` back, or the agent
+    /// must start primed with the conversation instead, as an agent that
+    /// resumes only from a store of its own which Silt can't write.
+    fn can_restore(&self, _session: &CheckedSession) -> bool {
+        true
+    }
     /// Writes a recorded session so the agent continues it in `cwd`.
     /// Returns the main transcript to keep tailing.
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError>;
@@ -301,7 +308,8 @@ pub trait Agent: Send + Sync {
 /// The environment variables that say where agents keep their sessions.
 pub const HOME_VARIABLES: [&str; 5] = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
 
-pub const AGENTS: [&dyn Agent; 5] = [&claude::ClaudeCode, &codex::Codex, &gemini::Gemini, &opencode::OpenCode, &copilot::Copilot];
+pub const AGENTS: [&dyn Agent; 6] =
+    [&claude::ClaudeCode, &codex::Codex, &gemini::Gemini, &antigravity::Antigravity, &opencode::OpenCode, &copilot::Copilot];
 
 /// The agent recorded as `name`, or run as the command `name`, including
 /// the sessions Silt records itself for agents the web UI starts.

@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
 use crate::modes::{commands_of, modes_of, settings_of};
 use crate::prompt::{Accepts, blocks};
+use crate::sign_in::{SignInHow, SignInMethod};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
 /// Questions waiting on the person, with which of their fields take several choices.
@@ -39,6 +40,29 @@ pub(crate) fn initialize() -> Result<InitializeRequest, serde_json::Error> {
     Ok(InitializeRequest::new(ProtocolVersion::V1)
         .client_info(Implementation::new(crate::host::NAME, env!("CARGO_PKG_VERSION")))
         .client_capabilities(capabilities))
+}
+
+/// The ways to sign the agent in once it needs one. An agent that answered
+/// Silt's v2 `initialize` in v1 may have read none of its v2 capabilities,
+/// as Antigravity's `agy acp` and Claude's adapter 0.94 don't, and so listed
+/// no method run in a terminal, which it lists only to a client that says it
+/// runs them; such an agent is asked again with Silt's own v1 `initialize`.
+async fn sign_in_methods(connection: &ConnectionTo<Agent>, listed: Vec<SignInMethod>) -> Vec<SignInMethod> {
+    if listed.iter().any(|method| method.how != SignInHow::Agent) {
+        return listed;
+    }
+    let Ok(request) = initialize() else {
+        return listed;
+    };
+    match connection.send_request(request).block_task().await {
+        Ok(again) => {
+            let again = crate::sign_in::methods(&serde_json::to_value(&again.auth_methods).unwrap_or_default());
+            let added: Vec<SignInMethod> =
+                again.into_iter().filter(|method| listed.iter().all(|known| known.id != method.id)).collect();
+            listed.into_iter().chain(added).collect()
+        }
+        Err(_) => listed,
+    }
 }
 
 pub(crate) struct V1(pub(crate) Shared);
@@ -135,7 +159,7 @@ impl ConnectTo<Agent> for V1 {
                     && let Err(error) = connection.send_request(AuthenticateRequest::new(method)).block_task().await
                 {
                     if crate::sign_in::needed(&error) {
-                        let _ = events.send(Event::SignIn(methods));
+                        let _ = events.send(Event::SignIn(sign_in_methods(&connection, methods).await));
                         return Ok(());
                     }
                     return Err(error);
@@ -155,7 +179,7 @@ impl ConnectTo<Agent> for V1 {
                         replaying.store(false, Ordering::SeqCst);
                         match loaded {
                             Err(error) if crate::sign_in::needed(&error) => {
-                                let _ = events.send(Event::SignIn(methods));
+                                let _ = events.send(Event::SignIn(sign_in_methods(&connection, methods).await));
                                 return Ok(());
                             }
                             // A session made on another machine can't be loaded
@@ -185,7 +209,7 @@ impl ConnectTo<Agent> for V1 {
                             .await
                         {
                             Err(error) if crate::sign_in::needed(&error) => {
-                                let _ = events.send(Event::SignIn(methods));
+                                let _ = events.send(Event::SignIn(sign_in_methods(&connection, methods).await));
                                 return Ok(());
                             }
                             created => created?,
@@ -211,6 +235,7 @@ impl ConnectTo<Agent> for V1 {
                             let request = PromptRequest::new(session.clone(), blocks(&text, &attachments, accepts));
                             let ended = events.clone();
                             let methods = methods.clone();
+                            let asking = connection.clone();
                             // Sent here rather than in the task, so a mode set
                             // just before reaches the agent first.
                             let sent = connection.send_request(request);
@@ -226,7 +251,7 @@ impl ConnectTo<Agent> for V1 {
                                         let _ = ended.send(Event::TurnEnded { reason: stop_reason(response.stop_reason) });
                                     }
                                     Err(error) if crate::sign_in::needed(&error) => {
-                                        let _ = ended.send(Event::SignIn(methods));
+                                        let _ = ended.send(Event::SignIn(sign_in_methods(&asking, methods).await));
                                         let _ = ended.send(Event::TurnEnded { reason: StopReason::Error });
                                     }
                                     Err(error) => {

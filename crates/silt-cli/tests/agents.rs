@@ -141,6 +141,36 @@ fn gemini_and_copilot_sessions_continue_natively_elsewhere() {
 }
 
 #[test]
+fn antigravity_sessions_resume_where_agy_keeps_them_and_start_primed_elsewhere() {
+    let world = world();
+    let thread = recorded(&world, "agy", "Antigravity says done.");
+    let kept = world.laptop.agents.parent().expect("the laptop's home").join(".gemini/antigravity-cli/conversations");
+    assert!(fs::read_dir(&kept).is_ok_and(|mut kept| kept.next().is_some()), "agy's store is the real one, not the run's");
+
+    // The laptop keeps the conversation, so agy resumes it.
+    let resumed = world.laptop.silt_with(&["resume", &thread], &[("FAKE_EXPECT", "Please-add-a-farewell-line")]);
+    let checkout = checkout_from(&resumed.stderr);
+    assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").ends_with("fn agy() {}\n"));
+    assert!(world.laptop.stdout(&["show", &thread]).contains("> Continuing in agy"), "the resumed conversation is recorded");
+    assert!(!world.laptop.agents.join("logs/agy-prompt").exists(), "resumed, not primed");
+
+    // The home machine keeps none of it, so agy starts with the conversation.
+    assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains("> Continuing in agy")));
+    let checkout = resume_on_home(&world, &[&thread], &[("FAKE_EXPECT", "Please-add-a-farewell-line Continuing-in-agy")]);
+    let prompt = fs::read_to_string(world.home.agents.join("logs/agy-prompt")).expect("primed");
+    assert!(prompt.contains("Antigravity says done."), "{prompt}");
+    assert!(fs::read_to_string(checkout.join("src/main.rs")).expect("read").ends_with("fn agy() {}\n"));
+    let primed = |show: &str| {
+        show.contains("> You are continuing a conversation that was recorded with Antigravity CLI")
+            && show.rsplit("> You are continuing").next().is_some_and(|after| after.contains("    ✎ src/main.rs"))
+    };
+    assert!(
+        eventually(|| primed(&world.home.stdout(&["show", &thread]))),
+        "the primed conversation is recorded in the same thread"
+    );
+}
+
+#[test]
 fn opencode_sessions_are_read_from_its_store_and_imported_elsewhere() {
     let world = world();
     let thread = recorded(&world, "opencode", "OpenCode says done.");
