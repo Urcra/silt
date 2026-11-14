@@ -439,7 +439,7 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
   )
 }
 
-/** The workspace a new thread starts in, and its rules, under the composer (ADR 0064). */
+/** The workspace a new thread starts in, and its rules, under the composer (ADR 0065). */
 export function WorkspaceLine({ view }: { view: WorkspaceView }) {
   const rules = rulesLine(view.effective)
   return (
@@ -483,7 +483,7 @@ export function NewThread() {
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const agents = choices.data?.agents ?? []
-  // The project's workspace, whose rules grey out what the daemon would refuse (ADR 0064).
+  // The project's workspace, whose rules grey out what the daemon would refuse (ADR 0065).
   const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const workspace = workspaceOf(workspacesQuery.data, repo, defaults?.workspace)
   const allowed = (id: string | undefined | null) => (id && !agentRefused(workspace, id) ? id : undefined)

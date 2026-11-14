@@ -638,7 +638,7 @@ pub struct OrgInfo {
     #[serde(default)]
     pub links: bool,
     /// What agents started in its projects may do, on every member's
-    /// machine (ADR 0064).
+    /// machine (ADR 0065).
     #[serde(default)]
     pub policy: silt_workspace::Policy,
 }
@@ -852,7 +852,7 @@ pub enum OrgChange {
         org: String,
         on: bool,
     },
-    /// What agents started in the org's projects may do (ADR 0064).
+    /// What agents started in the org's projects may do (ADR 0065).
     Policy {
         org: String,
         policy: silt_workspace::Policy,

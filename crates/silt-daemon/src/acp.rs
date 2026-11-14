@@ -2049,7 +2049,7 @@ fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
 /// A mode's id as Silt knows it: Copilot's are links to the protocol's
 /// page on modes, ending in `#agent`, `#plan` and `#autopilot`.
 /// What a mode means for the workspace's cap on what an agent does without
-/// asking (ADR 0064): Copilot's say how it works, except Autopilot (ADR 0049).
+/// asking (ADR 0065): Copilot's say how it works, except Autopilot (ADR 0049).
 pub(crate) fn mode_meaning(agent: &str, mode: &str, planning: bool) -> silt_workspace::ModeMeaning {
     use silt_workspace::ModeMeaning;
     if planning || mode_key(mode) == "plan" {

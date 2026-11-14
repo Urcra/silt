@@ -456,7 +456,7 @@ impl Core {
     }
 
     /// The server an imported family is sent to: the one named, else its
-    /// workspace's (ADR 0064). A workspace that locks its home takes no other.
+    /// workspace's (ADR 0065). A workspace that locks its home takes no other.
     fn send_target(&self, family: FamilyId, named: Option<&Remote>) -> Result<Remote, CoreError> {
         let workspace = self.family_workspace(family);
         let home = self.workspace_home(&workspace);

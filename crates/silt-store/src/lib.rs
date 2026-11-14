@@ -772,7 +772,7 @@ impl Store {
         Ok(())
     }
 
-    /// The workspace each project was put in by the person (ADR 0064).
+    /// The workspace each project was put in by the person (ADR 0065).
     pub async fn project_workspaces(&self) -> Result<Vec<(String, String)>, StoreError> {
         Ok(sqlx::query!("SELECT repo, workspace FROM project_workspaces")
             .fetch_all(&self.pool)

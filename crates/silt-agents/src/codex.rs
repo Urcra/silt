@@ -25,7 +25,7 @@ pub fn home() -> Option<PathBuf> {
     crate::agent_home("CODEX_HOME", ".codex")
 }
 
-/// [`home`] for a session in `cwd`, whose workspace may set its own (ADR 0064).
+/// [`home`] for a session in `cwd`, whose workspace may set its own (ADR 0065).
 fn home_in(cwd: &Path) -> Option<PathBuf> {
     crate::agent_home_in("CODEX_HOME", ".codex", cwd)
 }

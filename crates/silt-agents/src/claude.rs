@@ -28,7 +28,7 @@ pub fn config_dir() -> Option<PathBuf> {
 }
 
 /// [`config_dir`] for a session in `cwd`, whose workspace may give Claude
-/// Code a directory of its own (ADR 0064).
+/// Code a directory of its own (ADR 0065).
 fn config_dir_in(cwd: &Path) -> Option<PathBuf> {
     crate::agent_home_in("CLAUDE_CONFIG_DIR", ".claude", cwd)
 }
@@ -686,7 +686,7 @@ pub struct HookInput {
 }
 
 /// `settings` with the workspace's locks in Claude Code's own keys, which
-/// it honors from `--settings` (ADR 0064).
+/// it honors from `--settings` (ADR 0065).
 pub fn locked_settings(settings: &str, locks: &crate::Locks) -> String {
     let mut settings: Value = serde_json::from_str(settings).unwrap_or_else(|_| json!({}));
     if locks.no_bypass {

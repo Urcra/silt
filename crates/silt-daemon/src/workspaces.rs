@@ -1,4 +1,4 @@
-//! Workspaces on this machine (ADR 0064): which one a project and a family
+//! Workspaces on this machine (ADR 0065): which one a project and a family
 //! are in, the server that decides their home, and the rules for the agents
 //! started in them.
 
@@ -52,16 +52,16 @@ fn invalid(error: InvalidWorkspaces) -> CoreError {
 /// `~` for their home.
 pub fn folder_rule(folder: &str) -> Result<MatchRule, CoreError> {
     let expanded = match folder.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
             let home = silt_os::home_dir().ok_or_else(|| CoreError::Invalid("no home folder to expand ~ in".into()))?;
             format!("{}{rest}", home.to_string_lossy().trim_end_matches('/'))
         }
         _ => folder.to_owned(),
     };
-    let expanded = expanded.replace('\\', "/");
-    if !expanded.starts_with('/') {
+    if !Path::new(&expanded).is_absolute() && !expanded.starts_with('/') {
         return Err(CoreError::Invalid(format!("the folder {folder} must be absolute or start with ~")));
     }
+    let expanded = expanded.replace('\\', "/");
     Ok(MatchRule::Folder(expanded.trim_end_matches('/').to_owned()))
 }
 
@@ -451,7 +451,7 @@ impl Core {
     }
 
     /// Whether the web UI may start `agent` in `workspace` with `preset`
-    /// and `mode` (ADR 0064). A preset nobody chose that the rules don't
+    /// and `mode` (ADR 0065). A preset nobody chose that the rules don't
     /// allow comes down to the most they do.
     pub(crate) fn check_acp_start(
         &self,
@@ -520,7 +520,7 @@ fn others_folders(all: &Workspaces, workspace: &WorkspaceId) -> Vec<PathBuf> {
                 folders.push(PathBuf::from(folder));
             }
         }
-        folders.extend(other.env.values().filter(|value| value.starts_with('/')).map(PathBuf::from));
+        folders.extend(other.env.values().map(PathBuf::from).filter(|value| value.is_absolute()));
     }
     folders
 }
@@ -547,7 +547,7 @@ pub(crate) fn can_sandbox(support: silt_agents::SandboxSupport, policy: &Policy)
     }
 }
 
-/// What an agent run from a terminal is held to (ADR 0064).
+/// What an agent run from a terminal is held to (ADR 0065).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunRules {
     pub workspace: Workspace,

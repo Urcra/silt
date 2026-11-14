@@ -108,7 +108,7 @@ async function shoot(page: Page, name: string, height = 720) {
   await page.setViewportSize({ width: 1280, height: 720 })
 }
 
-test("workspaces keep work and personal apart, with the org's rules on work (ADR 0064)", async ({ page }) => {
+test("workspaces keep work and personal apart, with the org's rules on work (ADR 0065)", async ({ page }) => {
   // acme on the work server, whose policy caps what agents do and keeps its projects there.
   execFileSync(SILT, ['server', 'user', 'admin', 'ada', '--data', join(fixture.dir, 'work')])
   ada(['org', 'create', 'acme'])

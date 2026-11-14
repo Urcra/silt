@@ -423,7 +423,7 @@ impl Run<'_> {
     }
 }
 
-/// The rules of the thread's workspace for this run (ADR 0064): refused
+/// The rules of the thread's workspace for this run (ADR 0065): refused
 /// with the rule that forbids it, else the locks and variables to pass.
 fn workspace_rules(
     thread: Option<&str>,

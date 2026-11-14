@@ -451,7 +451,7 @@ export function AgentDock({
   const [chosenAgent, setAgent] = useState<string>()
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
   const agents = choices.data?.agents ?? []
-  // The thread's workspace, whose rules grey out what the daemon would refuse (ADR 0064).
+  // The thread's workspace, whose rules grey out what the daemon would refuse (ADR 0065).
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads, enabled: !hosted() })
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const summary = threads.data?.find((candidate) => candidate.id === thread)

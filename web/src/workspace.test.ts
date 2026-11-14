@@ -82,7 +82,7 @@ test('a workspace reads back from its select value', () => {
   }
 })
 
-test("one of this machine's workspaces holds the threads made in it (ADR 0064)", () => {
+test("one of this machine's workspaces holds the threads made in it (ADR 0065)", () => {
   const work = thread('w', WORK, 'acme/app', false, 'work')
   const mine = thread('p', OSS, 'me/silt', false, 'personal')
   const shown = [work, mine].filter((each) => inWorkspace(each, { kind: 'workspace', id: 'work', server: WORK }, new Map())).map((each) => each.id)

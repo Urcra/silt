@@ -41,7 +41,7 @@ pub fn new_folder(data_dir: &Path, words: &str) -> Result<PathBuf, CoreError> {
     new_folder_in(data_dir, words, None)
 }
 
-/// [`new_folder`] for a chat in `workspace` (ADR 0064), else in the default.
+/// [`new_folder`] for a chat in `workspace` (ADR 0065), else in the default.
 pub fn new_folder_in(data_dir: &Path, words: &str, workspace: Option<&str>) -> Result<PathBuf, CoreError> {
     if let Some(workspace) = workspace {
         silt_workspace::WorkspaceId::new(workspace).map_err(|error| CoreError::Invalid(error.to_string()))?;

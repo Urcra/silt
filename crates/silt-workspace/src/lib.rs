@@ -1,4 +1,4 @@
-//! Workspaces (ADR 0064): which projects belong to one, the server their
+//! Workspaces (ADR 0065): which projects belong to one, the server their
 //! threads sync with, and the rules for agents started in it. Pure: the
 //! daemon and the CLI read the files and enforce what this decides.
 
@@ -12,4 +12,5 @@ pub use policy::{
 pub use preset::Preset;
 pub use workspace::{
     BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId, Workspaces,
+    is_absolute,
 };

@@ -25,7 +25,7 @@ function editable(view: { default: string; workspaces: WorkspaceView[] }): Works
 const SUB = 'text-xs text-fg-2'
 const ROW = 'grid grid-cols-1 gap-2 border-b border-line-subtle px-4 py-3 last:border-b-0 md:grid-cols-[200px_minmax(0,1fr)]'
 
-/** Settings › Workspaces (ADR 0064): each workspace's server, projects, defaults, agent accounts and rules. */
+/** Settings › Workspaces (ADR 0065): each workspace's server, projects, defaults, agent accounts and rules. */
 export function WorkspacesSettings() {
   const queries = useQueryClient()
   const view = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces })

@@ -59,7 +59,7 @@ pub enum Event {
         listing: Result<Listing, String>,
         requested: Instant,
     },
-    /// The policies of a server's orgs, as it answered (ADR 0064).
+    /// The policies of a server's orgs, as it answered (ADR 0065).
     OrgPolicies {
         server: String,
         policies: Vec<(String, silt_workspace::Policy)>,
@@ -231,7 +231,7 @@ pub struct Core {
     pub(crate) homes: HashMap<FamilyId, Home>,
     /// Where each project's new families go, by repository.
     pub(crate) project_homes: HashMap<String, Home>,
-    /// The workspaces the person made; `None` for the one Default (ADR 0064).
+    /// The workspaces the person made; `None` for the one Default (ADR 0065).
     pub(crate) workspaces: Option<silt_workspace::Workspaces>,
     /// Projects the person put in a workspace, by repository.
     pub(crate) project_workspaces: HashMap<String, silt_workspace::WorkspaceId>,
@@ -243,7 +243,7 @@ pub struct Core {
     /// thread; see [`Core::asked_remote`].
     pub(crate) asked_server: Option<String>,
     /// The workspace the request being handled may read, for an agent's
-    /// history tools (ADR 0064).
+    /// history tools (ADR 0065).
     pub(crate) scope: Option<silt_workspace::WorkspaceId>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests

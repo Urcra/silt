@@ -19,7 +19,7 @@ interface Choice {
   long: string
   workspace: Workspace
   offline?: boolean
-  /** Its rules, as short chips under its name (ADR 0064). */
+  /** Its rules, as short chips under its name (ADR 0065). */
   chips?: string[]
 }
 
@@ -115,7 +115,7 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
   ]
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   if (!hosted() && workspaces.data?.saved) {
-    // Once the person made workspaces, they stand in for the servers and orgs (ADR 0064).
+    // Once the person made workspaces, they stand in for the servers and orgs (ADR 0065).
     const own: Group = {
       label: 'Workspaces',
       choices: workspaces.data.workspaces.map((view) => {

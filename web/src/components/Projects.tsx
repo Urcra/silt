@@ -74,7 +74,7 @@ function ProjectHome({ project }: { project: Project }) {
   )
 }
 
-/** Which workspace the project is in, and why: by rule, set by the person, or matched nothing (ADR 0064). */
+/** Which workspace the project is in, and why: by rule, set by the person, or matched nothing (ADR 0065). */
 function ProjectWorkspace({ project, views }: { project: Project; views: WorkspaceView[] }) {
   const queries = useQueryClient()
   const [refused, setRefused] = useState<string>()
@@ -416,7 +416,7 @@ export function Projects() {
   // The first project whose defaults this machine sets opens to them; the rest stay folded until asked.
   const first = all.find(settable)
   const [opened, setOpened] = useState<Record<string, boolean>>({})
-  // Grouped by this machine's workspaces once the person made some (ADR 0064).
+  // Grouped by this machine's workspaces once the person made some (ADR 0065).
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const groups: { view?: WorkspaceView; projects: Project[] }[] =
     !hosted() && workspaces.data?.saved

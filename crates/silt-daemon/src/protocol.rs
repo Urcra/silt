@@ -316,7 +316,7 @@ pub enum Request {
         asking: Box<Request>,
     },
     /// A request of an agent's history tools, answered only for the
-    /// workspace its run's token was made for (ADR 0064).
+    /// workspace its run's token was made for (ADR 0065).
     Scoped {
         token: String,
         asking: Box<Request>,
@@ -471,7 +471,7 @@ pub enum Request {
     NewProject {
         path: PathBuf,
     },
-    /// Every workspace, the projects each holds and its rules (ADR 0064).
+    /// Every workspace, the projects each holds and its rules (ADR 0065).
     Workspaces,
     /// Whether a terminal may run `agent` (its adapter's id) with `args`,
     /// and the locks, variables and token it runs with: asked before the
@@ -1021,11 +1021,11 @@ pub struct StartOptions {
     /// relative path; nowhere when unset.
     pub copy_to: Option<String>,
     /// The workspace a new chat is in, by id; the default when unset
-    /// (ADR 0064).
+    /// (ADR 0065).
     pub workspace: Option<String>,
 }
 
-/// The workspaces on this machine (ADR 0064).
+/// The workspaces on this machine (ADR 0065).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct WorkspacesView {

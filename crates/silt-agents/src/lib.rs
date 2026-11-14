@@ -193,7 +193,7 @@ pub struct LaunchPlan {
     /// Skill directories to hand the agent natively, where it can load them.
     pub skills: Vec<PathBuf>,
     pub args: Vec<String>,
-    /// What its workspace's rules hold the agent to (ADR 0064).
+    /// What its workspace's rules hold the agent to (ADR 0065).
     pub locks: Locks,
     /// Variables its workspace gives every agent, such as its own
     /// `CLAUDE_CONFIG_DIR`.
@@ -201,7 +201,7 @@ pub struct LaunchPlan {
 }
 
 /// What a workspace's rules hold an agent to, passed as the agent's own
-/// settings where it has them (ADR 0064).
+/// settings where it has them (ADR 0065).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Locks {
     /// It may not skip asking, nor switch to a mode that does.
@@ -457,7 +457,7 @@ pub(crate) fn agent_home(variable: &str, dir: &str) -> Option<PathBuf> {
 }
 
 /// Agent homes that differ by folder, as each workspace sets them for the
-/// clones in it (ADR 0064): folder, variable, home.
+/// clones in it (ADR 0065): folder, variable, home.
 static WORKSPACE_HOMES: std::sync::RwLock<Vec<(PathBuf, String, PathBuf)>> = std::sync::RwLock::new(Vec::new());
 
 /// Sets the agent homes of the folders workspaces hold, replacing those set

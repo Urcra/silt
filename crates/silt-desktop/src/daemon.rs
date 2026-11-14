@@ -53,19 +53,31 @@ pub fn web_url(stdout: &str) -> Result<Url, DesktopError> {
 /// Runs `command`, which attaches to a daemon, starting it if none runs,
 /// and returns its web UI's address. The daemon runs in its own process
 /// group, so it outlives this app.
-pub fn open_web(mut command: Command) -> Result<Url, Exn<DesktopError>> {
+pub fn open_web(command: Command) -> Result<Url, Exn<DesktopError>> {
+    let shown = command.get_program().to_string_lossy().into_owned();
+    let stdout = silt_output(command)?;
+    web_url(&stdout).or_raise(|| DesktopError::Run(shown))
+}
+
+/// Runs `command`, a `silt` command such as `daemon start`, for its effect.
+pub fn run(command: Command) -> Result<(), Exn<DesktopError>> {
+    silt_output(command).map(drop)
+}
+
+/// What a `silt` command printed, or the reason it gave for failing.
+fn silt_output(mut command: Command) -> Result<String, Exn<DesktopError>> {
     let shown = command.get_program().to_string_lossy().into_owned();
     hide_console(&mut command);
     let output = command.stdin(Stdio::null()).output().map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => Exn::new(DesktopError::NoSilt),
-        _ => Exn::from(error).raise(DesktopError::Run(shown.clone())),
+        _ => Exn::from(error).raise(DesktopError::Run(shown)),
     })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let reason = stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it failed");
         return Err(Exn::new(DesktopError::Silt(reason.strip_prefix("silt: ").unwrap_or(reason).to_owned())));
     }
-    web_url(&String::from_utf8_lossy(&output.stdout)).or_raise(|| DesktopError::Run(shown))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// A window app's console programs would each open a console window.

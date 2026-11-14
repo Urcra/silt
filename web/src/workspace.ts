@@ -1,5 +1,5 @@
 // Which workspace this tab looks at: one of this machine's workspaces
-// (ADR 0064), or in the hosted app an org on its server or the whole server
+// (ADR 0065), or in the hosted app an org on its server or the whole server
 // (ADR 0032), this machine's own threads, or everything.
 
 import { useSyncExternalStore } from 'react'

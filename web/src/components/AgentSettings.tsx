@@ -43,7 +43,7 @@ export function AgentSettings({
   /** Anything else of the agent's for the menu, such as stopping it. */
   more?: ReactNode
   narrow: boolean
-  /** Why the workspace's rules refuse a mode, which is then greyed out (ADR 0064). */
+  /** Why the workspace's rules refuse a mode, which is then greyed out (ADR 0065). */
   refusedMode?: (mode: string) => string | undefined
 }) {
   const roomless = useContext(ComposerFolded)

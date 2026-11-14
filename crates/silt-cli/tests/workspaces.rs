@@ -1,4 +1,4 @@
-//! Workspaces (ADR 0064): a work workspace's rules hold the agents started
+//! Workspaces (ADR 0065): a work workspace's rules hold the agents started
 //! in it, its threads keep to its own server, and its agents' history tools
 //! don't read another workspace's threads.
 
@@ -97,7 +97,8 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
     assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
     let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
-    assert!(denied.contains(&*laptop.silt_home.to_string_lossy()), "Silt's data is out of the sandbox's reach: {denied}");
+    let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
+    assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
     assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
 
     let work_thread = thread_in(&laptop, "work");

@@ -217,7 +217,7 @@ export const api = {
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
   newProject: (path: string) => request<string>('POST', '/api/projects/new', { path }),
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
-  // This machine's workspaces (ADR 0064).
+  // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
   /** Puts a project in a workspace, or with none back under the match rules. */

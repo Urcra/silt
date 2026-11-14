@@ -23,7 +23,7 @@ export function ChipSelect({
   icon?: IconName
   value: string
   onChange: (value: string) => void
-  /** An option `refused` is shown greyed out, its reason after its name (ADR 0064). */
+  /** An option `refused` is shown greyed out, its reason after its name (ADR 0065). */
   options: { id: string; name: string; description?: string | null; refused?: string }[]
   mono?: boolean
   ghost?: boolean

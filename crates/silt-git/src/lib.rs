@@ -230,7 +230,7 @@ impl Repo {
         Self::discover(path)
     }
 
-    /// The workspace a chat was started in (ADR 0064), from its local
+    /// The workspace a chat was started in (ADR 0065), from its local
     /// config, which no delta ever writes.
     pub fn chat_workspace(&self) -> Option<String> {
         self.repo.config_snapshot().string(WORKSPACE_KEY).map(|id| id.to_string())

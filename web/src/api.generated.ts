@@ -32,7 +32,7 @@ may_change: boolean, default_visibility: Visibility, members: Array<OrgMember>, 
 links: boolean, 
 /**
  * What agents started in its projects may do, on every member's
- * machine (ADR 0064).
+ * machine (ADR 0065).
  */
 policy: Policy, };
 
@@ -726,7 +726,7 @@ home: string | null,
  */
 server: string | null, 
 /**
- * The workspace it's in on this machine, and why (ADR 0064); none from
+ * The workspace it's in on this machine, and why (ADR 0065); none from
  * a server.
  */
 workspace: string | null, workspace_why: string | null, };
@@ -854,7 +854,7 @@ continues: string | null,
 copy_to: string | null, 
 /**
  * The workspace a new chat is in, by id; the default when unset
- * (ADR 0064).
+ * (ADR 0065).
  */
 workspace: string | null, };
 
@@ -1008,7 +1008,7 @@ server: string | null,
  */
 local_only: boolean, 
 /**
- * The workspace it's in on this machine (ADR 0064); none from a server.
+ * The workspace it's in on this machine (ADR 0065); none from a server.
  */
 workspace: string | null, 
 /**

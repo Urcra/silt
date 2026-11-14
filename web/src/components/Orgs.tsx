@@ -41,7 +41,7 @@ function AddForm({ label, button, onAdd }: { label: string; button: string; onAd
 }
 
 /**
- * What agents started in the org's projects may do, on every member's machine (ADR 0064). Members' own rules can
+ * What agents started in the org's projects may do, on every member's machine (ADR 0065). Members' own rules can
  * add to it, never loosen it.
  */
 function OrgPolicyForm({ org }: { org: OrgInfo }) {

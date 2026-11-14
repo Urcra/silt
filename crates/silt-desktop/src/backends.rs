@@ -140,21 +140,34 @@ exec "$shell" -lic 'exec "$0" "$@"' "$0" "$@""#;
 /// runs, and prints its web UI's address: in the project's directory, or
 /// in `/`, not a clone of any repository.
 pub fn open_web(target: &Target, native: &Path, wsl_silt: &str) -> Command {
-    let mut command = match &target.backend {
+    let mut command = silt_in(target, native, wsl_silt);
+    command.args(["open", "--no-browser"]);
+    command
+}
+
+/// The command that starts the backend's daemon unless one runs, outside
+/// any repository, so its watchers and sync run before it's shown.
+pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Command {
+    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt);
+    command.args(["daemon", "start"]);
+    command
+}
+
+fn silt_in(target: &Target, native: &Path, wsl_silt: &str) -> Command {
+    let dir = target.project.as_deref().unwrap_or("/");
+    match &target.backend {
         Backend::Native => {
             let mut command = Command::new(native);
-            command.current_dir(target.project.as_deref().unwrap_or("/"));
+            command.current_dir(dir);
             command
         }
         Backend::Wsl(distribution) => {
             let mut command = Command::new("wsl.exe");
-            command.args(["-d", distribution, "--cd", target.project.as_deref().unwrap_or("/"), "--exec", "sh", "-c"]);
+            command.args(["-d", distribution, "--cd", dir, "--exec", "sh", "-c"]);
             command.args([IN_THEIR_SHELL, wsl_silt]);
             command
         }
-    };
-    command.args(["open", "--no-browser"]);
-    command
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +254,21 @@ mod tests {
         );
         let native = open_web(&Target::default(), Path::new("/opt/silt"), "silt");
         assert_eq!(native.get_program(), "/opt/silt");
+        assert_eq!(native.get_current_dir(), Some(Path::new("/")));
+    }
+
+    #[test]
+    fn a_daemon_starts_outside_any_repository_in_the_person_s_shell() {
+        let command = start_daemon(&Backend::Wsl("Ubuntu".into()), Path::new("silt"), "/usr/local/bin/silt");
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(command.get_program(), "wsl.exe");
+        assert_eq!(
+            args,
+            ["-d", "Ubuntu", "--cd", "/", "--exec", "sh", "-c", IN_THEIR_SHELL, "/usr/local/bin/silt", "daemon", "start"]
+        );
+        let native = start_daemon(&Backend::Native, Path::new("/opt/silt"), "");
+        assert_eq!(native.get_program(), "/opt/silt");
+        assert!(native.get_args().eq(["daemon", "start"]));
         assert_eq!(native.get_current_dir(), Some(Path::new("/")));
     }
 

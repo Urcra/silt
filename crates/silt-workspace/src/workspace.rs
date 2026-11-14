@@ -125,9 +125,22 @@ fn remote_matches(pattern: &str, project: &str) -> Option<Specificity> {
     Some(Specificity { remote: true, literal_segments, exact: !open && literal_segments == fixed.len() })
 }
 
+/// Whether `path`, `/`-separated, is absolute: from the root, or from a
+/// Windows drive (`C:/work`).
+pub fn is_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/') || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/')
+}
+
 fn folder_matches(folder: &str, clone: &str) -> Option<Specificity> {
     let folder = folder.trim_end_matches('/');
-    let rest = clone.strip_prefix(folder)?;
+    // A drive's paths don't tell case apart.
+    let rest = if folder.starts_with('/') {
+        clone.strip_prefix(folder)?
+    } else {
+        let head = clone.get(..folder.len()).filter(|head| head.eq_ignore_ascii_case(folder))?;
+        &clone[head.len()..]
+    };
     if !(rest.is_empty() || rest.starts_with('/')) || folder.is_empty() {
         return None;
     }
@@ -246,7 +259,7 @@ impl Workspaces {
                     MatchRule::Remote(pattern) if pattern.trim_matches('/').is_empty() => {
                         return Err(InvalidWorkspaces::EmptyRule(workspace.id.clone()));
                     }
-                    MatchRule::Folder(folder) if !folder.starts_with('/') => {
+                    MatchRule::Folder(folder) if !is_absolute(folder) => {
                         return Err(InvalidWorkspaces::RelativeFolder {
                             workspace: workspace.id.clone(),
                             folder: folder.clone(),
@@ -310,6 +323,7 @@ mod tests {
             MatchRule::Remote("github.com/acme/*".into()),
             MatchRule::Remote("gitlab.acme.dev/**".into()),
             MatchRule::Folder("/home/me/work".into()),
+            MatchRule::Folder("C:/Users/me/work".into()),
         ];
         let mut billing = Workspace::new(id("billing"), "Billing");
         billing.rules = vec![MatchRule::Remote("github.com/acme/billing".into())];
@@ -343,6 +357,12 @@ mod tests {
                 Why::Rule(MatchRule::Folder("/home/me/work".into())),
             ),
             ("silt:chats", None, "personal", Why::Default),
+            (
+                "github.com/other/thing",
+                Some("c:/Users/me/Work/thing"),
+                "work",
+                Why::Rule(MatchRule::Folder("C:/Users/me/work".into())),
+            ),
         ];
         for (project, clone, want, why) in cases {
             let resolved = all.resolve(project, *clone, None);

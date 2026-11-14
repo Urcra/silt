@@ -1,4 +1,4 @@
-// A workspace's rules as the web UI shows them (ADR 0064). The daemon
+// A workspace's rules as the web UI shows them (ADR 0065). The daemon
 // enforces them; this only greys out what it would refuse, and says why.
 
 import type { Policy, Preset, WorkspaceView, WorkspacesView } from './api'

@@ -1,5 +1,5 @@
 //! `silt workspace`: workspaces, the projects in them and their rules
-//! (ADR 0064).
+//! (ADR 0065).
 
 use std::collections::BTreeSet;
 use std::env;

@@ -37,7 +37,7 @@ export function NewChat() {
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const agents = choices.data?.agents ?? []
-  // In the workspace the sidebar shows, else the default, under its rules (ADR 0064).
+  // In the workspace the sidebar shows, else the default, under its rules (ADR 0065).
   const shownWorkspace = useWorkspace()
   const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const workspaceId = shownWorkspace.kind === 'workspace' ? shownWorkspace.id : workspacesQuery.data?.default

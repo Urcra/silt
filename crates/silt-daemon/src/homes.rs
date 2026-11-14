@@ -111,7 +111,7 @@ impl Core {
     }
 
     /// Where a new family of the project `repo` goes: the project's home,
-    /// unless its workspace locks it, else its workspace's server (ADR 0064).
+    /// unless its workspace locks it, else its workspace's server (ADR 0065).
     /// `None` before any workspace or sign-in, so the family syncs with the
     /// first server signed in to later.
     pub(crate) fn new_home(&self, repo: &str) -> Option<Home> {
@@ -125,7 +125,7 @@ impl Core {
     /// clone from, unless its project was given a home (ADR 0053).
     pub(crate) fn new_home_in(&self, clone: &silt_git::Repo, project: &str) -> Result<Option<Home>, CoreError> {
         // A chat follows its person to its workspace's server, as every
-        // machine can make its folder (ADR 0059, ADR 0064).
+        // machine can make its folder (ADR 0059, ADR 0065).
         if silt_types::is_chat(project) {
             let id = self.new_family_workspace(clone, project);
             if let Some(workspace) = self.workspaces().get(&id) {

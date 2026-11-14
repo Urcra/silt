@@ -24,7 +24,7 @@ struct DaemonTools {
     thread: String,
     cwd: PathBuf,
     checkout: PathBuf,
-    /// The run's token, which scopes every answer to its workspace (ADR 0064).
+    /// The run's token, which scopes every answer to its workspace (ADR 0065).
     token: Option<String>,
 }
 
