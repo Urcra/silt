@@ -2,10 +2,11 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { type View, VIEWS, baseOf } from '../diffSpec'
 import { message } from '../query'
+import { keptView } from '../reviewView'
 import { itemOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
 import { useThreadDiff } from '../threadDiff'
-import { Button, IconButton, Input, Select, Skeleton, Tabs } from '../ui'
+import { Button, Input, Select, Skeleton, Tabs } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { type DiffLayout, DiffView } from './DiffView'
 import { FinishReview } from './FinishReview'
@@ -25,7 +26,6 @@ export const DiffPanel = memo(function DiffPanel({
   working = false,
   wide = false,
   controlsIn,
-  onExpand,
 }: {
   thread: string
   /** After a comment is made or changes, for the thread's other views of them. */
@@ -38,8 +38,6 @@ export const DiffPanel = memo(function DiffPanel({
   wide?: boolean
   /** Where what it compares and how go, beside the inspector's tabs; above the diff without it. */
   controlsIn?: HTMLElement | null
-  /** Opens the review across the page, from the expand button beside the controls. */
-  onExpand?: () => void
 }) {
   const [view, setView] = useState<View>('thread')
   // Side by side only where both sides fit, until the person picks.
@@ -54,11 +52,16 @@ export const DiffPanel = memo(function DiffPanel({
     return () => observer.disconnect()
   }, [])
   const layout: DiffLayout = picked ?? (wide && width >= SPLIT_WIDTH ? 'split' : 'unified')
+  const [reviewed] = useState(() => keptView(thread).file)
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
   const base = baseOf(view, other, commit)
   const review = useReview(thread)
   const { stats, whole, diff, text, files, commenting, unsent, changed, error } = useThreadDiff(thread, base, review, onCommented, agent)
+  const shownReviewed = text !== undefined && reviewed !== undefined
+  useEffect(() => {
+    if (shownReviewed) document.getElementById(`file-${reviewed}`)?.scrollIntoView({ block: 'start' })
+  }, [shownReviewed, reviewed])
   useActions([
     { id: 'last-turn', label: 'Changes in the last turn', run: () => setView('last-turn') },
     { id: 'against-main', label: 'Changes against main', run: () => setView('main') },
@@ -69,7 +72,6 @@ export const DiffPanel = memo(function DiffPanel({
     <>
       <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
       <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
-      {onExpand && <IconButton icon="expand" label="Expand the review (Shift+D)" title="Expand the review (⇧D)" onClick={onExpand} />}
     </>
   )
   return (
@@ -95,7 +97,7 @@ export const DiffPanel = memo(function DiffPanel({
       {error && <p className="text-sm text-danger">{message(error)}</p>}
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
       {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={{ base }} commenting={commenting} />}
-      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} />}
+      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} anchors={reviewed !== undefined} />}
       {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
           More files

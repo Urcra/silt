@@ -32,6 +32,7 @@ import {
   Icon,
   type IconName,
   Input,
+  Kbd,
   KeyValue,
   Popover,
   Select,
@@ -1213,7 +1214,7 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
 }
 
 /** The thread's header (ADR 0044): its title and where it is, then Fork, Share, Changes, and the rest behind More. */
-function ThreadHeader({
+export function ThreadHeader({
   thread,
   summary,
   people,
@@ -1226,6 +1227,8 @@ function ThreadHeader({
   onDetail,
   grouping,
   onGrouping,
+  onConversation,
+  onExpand,
 }: {
   thread: string
   summary: ThreadSummary | undefined
@@ -1241,6 +1244,10 @@ function ThreadHeader({
   onChanges: () => void
   /** Opens the details, beside the conversation or as a sheet on a phone. */
   onDetails: () => void
+  /** Back to the conversation, from the expanded review, in place of the panel's toggle. */
+  onConversation?: () => void
+  /** Opens the review across the page, beside the panel's toggle. */
+  onExpand?: () => void
 }) {
   const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
   const branch = commits.data?.findLast((commit) => commit.branch)?.branch
@@ -1305,7 +1312,17 @@ function ThreadHeader({
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
-        {/* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */}
+        {onExpand && (
+          <Button variant="ghost" aria-label="Expand the review" onClick={onExpand} title="The changes across the page, to review (⇧D)">
+            <Icon name="expand" className="h-4 w-4" />
+          </Button>
+        )}
+        {onConversation ? (
+          <Button icon="collapse" onClick={onConversation} title="Back to the conversation (Esc)">
+            Conversation <Kbd>Esc</Kbd>
+          </Button>
+        ) : (
+        /* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */
         <Button
           variant="ghost"
           aria-label="Changes"
@@ -1317,6 +1334,7 @@ function ThreadHeader({
           <Icon name="panel" className="h-4 w-4" />
           {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
+        )}
       </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
@@ -1658,6 +1676,7 @@ function ThreadBody({
   }, [agentState, thread, waitingPrompts, setDraft])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
+    ...(desktop && !hosted() ? [{ id: 'review', label: 'Expand the review', keys: 'shift+d', run: () => openReview() }] : []),
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
     ...GROUPINGS.filter((choice) => choice.id !== grouping).map((choice) => ({ id: `grouping:${choice.id}`, label: `Group the work ${choice.label.toLowerCase()}`, run: () => setGrouping(choice.id) })),
     { id: 'thoughts', label: thoughts.open ? 'Close every thought' : 'Open every thought', keys: 'shift+t', run: toggleThoughts },
@@ -1749,6 +1768,9 @@ function ThreadBody({
     },
   }
 
+  // The review across the page, where there's room for it and a daemon to read the diff from.
+  const openReview = () => void navigate({ to: '/t/$id/review', params: { id: thread } })
+  const roomy = desktop && !hosted()
   // Where the changes panel puts what it compares and how, so the inspector keeps one row of tabs.
   const [diffControls, setDiffControls] = useState<HTMLElement | null>(null)
   const showChanges = () => {
@@ -1864,6 +1886,7 @@ function ThreadBody({
         grouping={grouping}
         onGrouping={setGrouping}
         onChanges={showChanges}
+        onExpand={roomy ? openReview : undefined}
         onDetails={() => {
           setTab('details')
           setPanel(true)
@@ -1931,7 +1954,7 @@ function ThreadBody({
               files &&
               files.length > 0 &&
               totals &&
-              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
+              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={roomy ? openReview : showChanges} />
             }
           />
         </div>

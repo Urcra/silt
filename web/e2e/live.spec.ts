@@ -161,7 +161,8 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByText('not now')).toHaveCount(0)
   await alice.unroute('**/agent/prompt')
   const asked = alice.getByRole('group', { name: 'permission' })
-  await expect(asked).toContainText('Edit src/main.rs')
+  // The prompt was held back 2 s above, and a loaded machine takes a while more to bring the agent's ask.
+  await expect(asked).toContainText('Edit src/main.rs', { timeout: 15000 })
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
   await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('asks to run')
   await asked.getByRole('button', { name: 'Allow' }).click()
@@ -1055,6 +1056,46 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
 
   await page.getByLabel('compare').selectOption({ label: 'Against main' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
+})
+
+test('the review expands across the page, split, and its keys move through the diff', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  const thread = new URL(page.url()).pathname.split('/')[2]
+  // Keys without a modifier are the composer's while it has the focus.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+
+  await page.keyboard.press('Shift+D')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}/review$`))
+  const changes = page.getByRole('region', { name: 'changes' })
+  await expect(changes.getByTestId('diff')).toContainText('fn acp() {}')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Split' })).toHaveAttribute('aria-selected', 'true')
+  // The conversation's composer isn't part of it.
+  await expect(page.getByLabel('draft')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'files' })).toContainText('src/main.rs')
+
+  // n puts the cursor on the first hunk, and c opens a comment on what it changed; Esc there only closes the box.
+  await page.keyboard.press('n')
+  await expect(changes.locator('[data-hunk="src/main.rs#0"]')).toHaveClass(/ring-accent/)
+  await page.keyboard.press('c')
+  await expect(page.getByLabel('code comment')).toBeFocused()
+  await page.getByLabel('code comment').fill('a better name')
+  await page.getByRole('button', { name: 'Start a review' }).click()
+  await expect(page.getByRole('group', { name: 'review' })).toContainText('1 pending')
+
+  // s switches the layout; Esc goes back to the conversation, the pending comment kept.
+  await page.keyboard.press('s')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Unified' })).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}$`))
+  await expect(page.getByLabel('draft')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' })).toHaveCount(1)
+  await page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' }).getByRole('button', { name: 'delete' }).click()
+  // Away from the review, n is New thread again.
+  await page.keyboard.press('n')
+  await expect(page).not.toHaveURL(/\/t\//)
 })
 
 /** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */

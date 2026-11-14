@@ -1,6 +1,6 @@
 // The small pieces every view is built of, in Nous.
 
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, Ref, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { type ButtonSize, type ButtonVariant, buttonClass } from './buttonClass'
 import { cx } from './cx'
 import { Icon, type IconName } from './icons'
@@ -46,7 +46,7 @@ export function IconButton({
 
 const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3 max-md:min-h-11 max-md:text-base'
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return <input className={cx(FIELD, className)} {...props} />
 }
 
