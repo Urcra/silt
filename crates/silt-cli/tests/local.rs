@@ -105,3 +105,45 @@ fn the_local_agent_without_a_model_says_how_to_get_one() {
             .contains("No local model is downloaded yet")
     }));
 }
+
+#[test]
+fn claude_code_runs_on_a_local_model_through_the_gateway() {
+    let root = common::temp_root("silt-local-claude");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+
+    laptop.silt(&["claude", "--model", "local:tiny"]);
+    let run: Value =
+        serde_json::from_slice(&fs::read(laptop.agents.join("logs/claude-run")).expect("the run's log")).expect("JSON");
+    let args: Vec<&str> = run["args"].as_array().expect("args").iter().filter_map(Value::as_str).collect();
+    assert!(
+        !args.iter().any(|arg| arg.contains("local:tiny") || *arg == "--model"),
+        "the flag goes in the environment: {args:?}"
+    );
+    let env = &run["env"];
+    assert_eq!(env["ANTHROPIC_MODEL"], "local:tiny");
+    assert_eq!(env["ANTHROPIC_SMALL_FAST_MODEL"], "local:tiny");
+    assert_eq!(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1");
+    let gateway = env["ANTHROPIC_BASE_URL"].as_str().expect("the gateway");
+    assert!(gateway.starts_with("http://127.0.0.1:"), "{gateway}");
+    let token = env["ANTHROPIC_AUTH_TOKEN"].as_str().expect("the run's token");
+
+    let models = |token: &str| {
+        let output = std::process::Command::new("curl")
+            .args(["-s", "-w", "\n%{http_code}", "-H", &format!("x-api-key: {token}"), &format!("{gateway}/v1/models")])
+            .output()
+            .expect("curl runs");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let listed = models(token);
+    assert!(listed.ends_with("200") && listed.contains("\"tiny\""), "{listed}");
+    assert!(models("not-a-run").ends_with("401"));
+
+    let refused = laptop.run(&["claude", "--model", "local:nope"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("there's no local model nope here"));
+}

@@ -555,6 +555,10 @@ pub struct RunRules {
     pub env: Vec<(String, String)>,
     /// For its history tools, which read its workspace only.
     pub token: String,
+    /// The arguments to run it with, when they differ from those given: a
+    /// local model's flag goes in its environment instead (ADR 0066).
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
 }
 
 async fn mint_run_token(
@@ -633,10 +637,13 @@ pub async fn run_rules(
         local: &workspace.policy,
         org: org.as_ref().map(|org| org.as_ref().map_err(Clone::clone)),
     };
+    if silt_workspace::agent_key(agent.id()).as_str() == "claude" && silt_llm::local_model_in_args(args).is_some() {
+        return Err(CoreError::Invalid("a local model runs through Silt's daemon; start it with `silt daemon start`".into()));
+    }
     let (locks, env) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
     let thread = record.as_ref().map_or(silt_types::ThreadId(0), |record| record.id);
     let token = mint_run_token(&store, thread, &workspace.id).await?;
-    Ok(RunRules { workspace, locks, env, token })
+    Ok(RunRules { workspace, locks, env, token, args: None })
 }
 
 /// Whether `agent` may run with `args` under `rules`, and if so the locks
@@ -695,9 +702,21 @@ impl Core {
             }
             (None, None) => return Err(CoreError::Invalid("name the thread or the folder the agent runs in".into())),
         };
-        let (locks, env) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let (locks, mut env) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let local =
+            match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
+                Some((model, rest)) => Some((self.models.installed(&model).await?.id, rest)),
+                None => None,
+            };
         let token = self.mint_run_token(thread, &workspace.id).await?;
-        Ok(RunRules { workspace, locks, env, token })
+        let args = match local {
+            Some((model, rest)) => {
+                env.extend(crate::models::claude_env(&self.models.gateway().await?, &token, &model));
+                Some(rest)
+            }
+            None => None,
+        };
+        Ok(RunRules { workspace, locks, env, token, args })
     }
 }
 

@@ -14,7 +14,10 @@ mod server;
 use std::path::PathBuf;
 
 pub use budget::{Budget, Device, Fit, fit, need, parse_devices};
-pub use catalog::{CATALOG, CatalogFile, Entry, ModelId, Remote, Repo, SplitPart, checked_file, entry, split_part};
+pub use catalog::{
+    CATALOG, CatalogFile, Entry, ModelId, Remote, Repo, SplitPart, checked_file, entry, local_model, local_model_in_args,
+    split_part,
+};
 pub use download::{Check, Wanted, fetch, part_path};
 pub use gguf::{GgufError, Meta, parse as parse_gguf};
 pub use hub::{Hub, PinnedFile};

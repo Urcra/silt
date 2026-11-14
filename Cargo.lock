@@ -5116,6 +5116,7 @@ dependencies = [
  "silt-agents",
  "silt-daemon",
  "silt-git",
+ "silt-llm",
  "silt-local",
  "silt-mcp",
  "silt-os",

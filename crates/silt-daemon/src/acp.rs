@@ -36,6 +36,8 @@ pub(crate) struct AcpRun {
     handle: Option<AgentHandle>,
     /// Commands given before the agent was up.
     queued: Vec<Command>,
+    /// The local model Claude Code runs on, chosen when it started (ADR 0066).
+    local_model: Option<silt_llm::ModelId>,
     session: Option<String>,
     /// An earlier session of the same agent to load, by its own id.
     load: Option<(String, String)>,
@@ -339,6 +341,30 @@ impl AcpRun {
     }
 }
 
+/// Takes a `local:<id>` model out of what Claude Code starts with: its
+/// adapter knows only Anthropic's, so the model goes in the run's
+/// environment instead (ADR 0066).
+fn take_local_model(agent: &str, settings: &mut Vec<(String, String)>) -> Option<silt_llm::ModelId> {
+    if silt_workspace::agent_key(agent).as_str() != "claude" {
+        return None;
+    }
+    let at = settings.iter().position(|(id, value)| id == "model" && silt_llm::local_model(value).is_some())?;
+    silt_llm::local_model(&settings.remove(at).1)
+}
+
+/// Adds the models here to Claude Code's model setting, as `local:<id>`.
+fn offer_local_models(settings: &mut [crate::protocol::AgentSetting], models: &[silt_llm::Installed]) {
+    let Some(setting) = settings.iter_mut().find(|setting| setting.category.as_deref() == Some("model")) else {
+        return;
+    };
+    setting.choices.retain(|choice| silt_llm::local_model(&choice.id).is_none());
+    setting.choices.extend(models.iter().map(|model| crate::protocol::AgentChoiceItem {
+        id: format!("local:{}", model.id),
+        name: format!("{} (local)", model.name),
+        description: Some("On this machine, through Silt".to_owned()),
+    }));
+}
+
 /// The agents this machine can start: those installed here, then Silt's
 /// own, last so it's never the one a new thread starts with unasked.
 pub(crate) fn agents_here(data_dir: &Path) -> Vec<AgentInfo> {
@@ -426,7 +452,7 @@ impl Core {
                 .map(|agent| {
                     let offered =
                         if agent.id == registry::LOCAL_AGENT { Some(self.local_offer()) } else { seen.remove(&agent.id) };
-                    let Seen { modes, settings, takes, commands, .. } = offered.unwrap_or_else(|| {
+                    let Seen { modes, mut settings, takes, commands, .. } = offered.unwrap_or_else(|| {
                         silt_acp::built_in(&agent.id).map_or_else(Seen::default, |(modes, settings)| Seen {
                             modes: Some((&modes).into()),
                             settings: settings.iter().map(Into::into).collect(),
@@ -436,6 +462,9 @@ impl Core {
                             commands: Vec::new(),
                         })
                     });
+                    if silt_workspace::agent_key(&agent.id).as_str() == "claude" {
+                        offer_local_models(&mut settings, &self.models.installed_now());
+                    }
                     AgentChoice {
                         id: agent.id,
                         name: agent.name,
@@ -617,6 +646,10 @@ impl Core {
         self.next_token += 1;
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
+        let local_model = match take_local_model(&info.id, &mut options.settings) {
+            Some(model) => Some(self.models.installed(&model).await?.id),
+            None => None,
+        };
         let token = self.mint_run_token(thread, &workspace.id).await?;
         let local_token = token.clone();
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
@@ -624,6 +657,9 @@ impl Core {
             args.extend(["--token".to_owned(), token]);
         }
         start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
+        if let Some(model) = &local_model {
+            start.env.extend(crate::models::claude_env(&self.models.gateway().await?, &local_token, model));
+        }
         if info.id == registry::LOCAL_AGENT {
             start.env.extend(self.local_env(&local_token).await?);
         }
@@ -639,6 +675,7 @@ impl Core {
                 checkout,
                 handle: None,
                 queued: Vec::new(),
+                local_model,
                 session: None,
                 load,
                 primer,
@@ -1133,6 +1170,9 @@ impl Core {
 
     pub(crate) async fn set_setting(&mut self, thread: ThreadId, id: String, value: String) -> Result<&'static str, CoreError> {
         let run = self.running(thread)?;
+        if let Some(model) = run.local_model.as_ref().filter(|_| id == "model") {
+            return Err(CoreError::Invalid(format!("it runs on the local model {model}; start it again to change its model")));
+        }
         let offered = run
             .settings
             .iter()
@@ -2256,6 +2296,43 @@ mod tests {
     use silt_types::{ActorId, FamilyId};
 
     use super::*;
+
+    #[test]
+    fn a_local_model_for_claude_goes_in_its_environment_not_its_settings() {
+        let mut settings = vec![("model".to_owned(), "local:tiny".to_owned()), ("effort".to_owned(), "high".to_owned())];
+        assert_eq!(take_local_model("claude-acp", &mut settings).map(String::from).as_deref(), Some("tiny"));
+        assert_eq!(settings, [("effort".to_owned(), "high".to_owned())]);
+        let mut other = vec![("model".to_owned(), "local:tiny".to_owned())];
+        assert_eq!(take_local_model("codex-acp", &mut other), None, "only Claude Code's model is taken");
+        let mut anthropic = vec![("model".to_owned(), "opus".to_owned())];
+        assert_eq!(take_local_model("claude-acp", &mut anthropic), None);
+    }
+
+    #[test]
+    fn claudes_model_setting_offers_the_models_here() {
+        let item = |id: &str| crate::protocol::AgentChoiceItem { id: id.to_owned(), name: id.to_owned(), description: None };
+        let mut settings = vec![crate::protocol::AgentSetting {
+            id: "model".to_owned(),
+            name: "Model".to_owned(),
+            category: Some("model".to_owned()),
+            current: "default".to_owned(),
+            choices: vec![item("default"), item("local:gone")],
+        }];
+        let tiny = silt_llm::Installed {
+            id: silt_llm::ModelId::new("tiny").expect("an id"),
+            name: "Tiny".to_owned(),
+            source: silt_llm::Source::Catalog,
+            files: Vec::new(),
+            size: 1,
+            context: 4096,
+            flags: Vec::new(),
+            meta: silt_llm::Meta::default(),
+        };
+        offer_local_models(&mut settings, &[tiny]);
+        let ids: Vec<&str> = settings[0].choices.iter().map(|choice| choice.id.as_str()).collect();
+        assert_eq!(ids, ["default", "local:tiny"]);
+        assert_eq!(settings[0].choices[1].name, "Tiny (local)");
+    }
 
     #[test]
     fn the_preset_follows_the_mode_the_agent_is_in() {

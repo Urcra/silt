@@ -71,6 +71,41 @@ impl fmt::Display for ModelId {
     }
 }
 
+/// The local model a value names: `local:<id>`.
+pub fn local_model(value: &str) -> Option<ModelId> {
+    ModelId::new(value.strip_prefix("local:")?).ok()
+}
+
+/// `--model local:<id>` or `--model=local:<id>` among an agent's arguments:
+/// the model, and the arguments without the flag.
+pub fn local_model_in_args(args: &[String]) -> Option<(ModelId, Vec<String>)> {
+    let mut found = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let value = match arg.strip_prefix("--model=") {
+            Some(value) => Some(value.to_owned()),
+            None if arg == "--model" => iter.next().cloned(),
+            None => {
+                rest.push(arg.clone());
+                continue;
+            }
+        };
+        match value.as_deref().and_then(local_model) {
+            Some(model) if found.is_none() => found = Some(model),
+            _ => {
+                rest.push(arg.clone());
+                if arg == "--model"
+                    && let Some(value) = value
+                {
+                    rest.push(value);
+                }
+            }
+        }
+    }
+    found.map(|model| (model, rest))
+}
+
 /// A Hugging Face repository, `owner/name`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -276,6 +311,18 @@ mod tests {
         {
             assert!(Remote::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_local_model_flag_is_taken_out_of_the_arguments() {
+        let args = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let (model, rest) = local_model_in_args(&args(&["-p", "hi", "--model", "local:tiny"])).expect("named");
+        assert_eq!((model.as_str(), rest), ("tiny", args(&["-p", "hi"])));
+        let (model, rest) = local_model_in_args(&args(&["--model=local:gpt-oss-20b", "--verbose"])).expect("named");
+        assert_eq!((model.as_str(), rest), ("gpt-oss-20b", args(&["--verbose"])));
+        assert_eq!(local_model_in_args(&args(&["--model", "sonnet"])), None);
+        assert_eq!(local_model_in_args(&args(&["--model", "local:Bad Name"])), None);
+        assert_eq!(local_model("local:tiny").map(String::from).as_deref(), Some("tiny"));
     }
 
     #[test]

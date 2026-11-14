@@ -223,6 +223,39 @@ impl LocalModelsHere {
     }
 }
 
+/// What Claude Code needs to run on the local model `model`: the gateway as
+/// its API, the run's token as its key, the model for every tier, and no
+/// traffic of its own besides (ADR 0066).
+pub(crate) fn claude_env(gateway: &str, token: &str, model: &ModelId) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("ANTHROPIC_BASE_URL".to_owned(), gateway.to_owned()),
+        ("ANTHROPIC_AUTH_TOKEN".to_owned(), token.to_owned()),
+        ("ANTHROPIC_API_KEY".to_owned(), token.to_owned()),
+        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(), "1".to_owned()),
+    ];
+    for tier in [
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    ] {
+        env.push((tier.to_owned(), format!("local:{model}")));
+    }
+    env
+}
+
+impl LocalModelsHere {
+    /// The installed model `model`, or why it can't be run.
+    pub(crate) async fn installed(&self, model: &ModelId) -> Result<Installed, CoreError> {
+        self.models.get(model).await.ok_or_else(|| {
+            CoreError::Invalid(format!(
+                "there's no local model {model} here; download it with `silt model pull` or in Settings › Local models"
+            ))
+        })
+    }
+}
+
 fn source_text(model: &Installed) -> String {
     match &model.source {
         Source::Catalog => "Silt's catalog".to_owned(),
