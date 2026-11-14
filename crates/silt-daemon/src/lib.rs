@@ -1,4 +1,5 @@
 mod acp;
+mod artifacts;
 mod attribution;
 mod blame;
 mod bus;

@@ -15,8 +15,8 @@ use silt_log::{
     CommentTarget, ConvOp, Delta, GraphEvent, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in,
 };
 use silt_proto::view::{
-    CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails, MrGuide,
-    MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo, opens_turn,
+    ArtifactContent, CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails,
+    MrGuide, MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo, opens_turn,
 };
 use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
@@ -29,6 +29,7 @@ pub(crate) fn routes() -> Router<Server> {
     Router::new()
         .route("/app/api/threads", get(threads))
         .route("/app/api/threads/{id}/history", get(history))
+        .route("/app/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -341,6 +342,33 @@ async fn history(
         .map(|(index, (delta, entry))| HistoryEntry { index, rewound: history.rewound.contains(delta), ..entry.clone() })
         .collect();
     Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
+}
+
+/// An artifact's content, if an artifact of the thread names the blob
+/// (ADR 0068).
+async fn artifact_content(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, blob)): Path<(String, String)>,
+) -> Result<Json<ArtifactContent>, ApiError> {
+    use base64::Engine as _;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let row = readable.row(&id)?;
+    let media_type = server
+        .shared
+        .index
+        .lock()
+        .await
+        .history(row.id)
+        .and_then(|history| {
+            history.entries.iter().find_map(|(_, entry)| entry.artifact.as_ref().filter(|artifact| artifact.blob == blob))
+        })
+        .map(|artifact| artifact.media_type.clone())
+        .ok_or_else(not_found)?;
+    let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
+    let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;
+    Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
 }
 
 async fn turns(

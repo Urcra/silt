@@ -326,6 +326,10 @@ enum Command {
         /// The run's token, which limits answers to its workspace
         #[arg(long)]
         token: Option<String>,
+        /// A person watches the run in the web UI: offer the tools that show
+        /// them images and artifacts
+        #[arg(long)]
+        ui: bool,
     },
 }
 
@@ -887,7 +891,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
             DaemonCommand::Compact => commands::daemon_compact(),
         },
-        Command::Mcp { thread, checkout, token } => mcp::serve(&thread, checkout, token),
+        Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())
