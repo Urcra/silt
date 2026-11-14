@@ -48,6 +48,18 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
+    /// The local models here, the catalog's others, and what this machine
+    /// can run (ADR 0066).
+    Models,
+    /// Starts downloading a model, one at a time: a catalog name,
+    /// `owner/repo:file.gguf` on Hugging Face, or the absolute path of a GGUF
+    /// file, which is used where it is. Answers with the model's name.
+    ModelPull {
+        source: String,
+    },
+    ModelRemove {
+        model: String,
+    },
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -690,6 +702,95 @@ pub struct ImportCandidate {
     pub transcript: PathBuf,
     pub cwd: Option<PathBuf>,
     pub started_ms: Option<i64>,
+}
+
+/// The local models on this machine and what it can run (ADR 0066).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct LocalModels {
+    /// The `llama-server` models run with, if one was found.
+    pub server: Option<String>,
+    pub devices: Vec<ModelDevice>,
+    /// Bytes a model may use here: the devices', else the machine's memory.
+    pub room: u64,
+    pub models: Vec<LocalModel>,
+    /// The catalog's models not downloaded yet.
+    pub catalog: Vec<CatalogModel>,
+    pub pull: Option<ModelPull>,
+    /// Why the last download failed.
+    pub failed: Option<ModelFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelDevice {
+    pub name: String,
+    pub description: String,
+    pub total: u64,
+    pub free: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct LocalModel {
+    pub id: String,
+    pub name: String,
+    /// Where it came from: the catalog, `owner/repo:file` or a file here.
+    pub source: String,
+    pub size: u64,
+    pub context: u32,
+    pub fit: ModelFit,
+    /// The file `llama-server` loads.
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct CatalogModel {
+    pub id: String,
+    pub name: String,
+    pub about: String,
+    pub size: u64,
+    pub context: u32,
+    /// Whether it was tried with Claude Code and `local` on real hardware.
+    pub tested: bool,
+    pub fit: ModelFit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFit {
+    Fits,
+    /// It may load, with less context or nothing else running.
+    Tight,
+    TooBig,
+}
+
+impl From<silt_llm::Fit> for ModelFit {
+    fn from(fit: silt_llm::Fit) -> Self {
+        match fit {
+            silt_llm::Fit::Fits => Self::Fits,
+            silt_llm::Fit::Tight => Self::Tight,
+            silt_llm::Fit::TooBig => Self::TooBig,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelPull {
+    pub id: String,
+    pub done: u64,
+    /// Zero until the files' sizes are known.
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelFailure {
+    pub id: String,
+    pub reason: String,
 }
 
 /// What the web UI's voice button can do on this machine.
@@ -1446,6 +1547,13 @@ mod tests {
             VoiceDownload::decl(&config),
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
+            LocalModels::decl(&config),
+            ModelDevice::decl(&config),
+            LocalModel::decl(&config),
+            CatalogModel::decl(&config),
+            ModelFit::decl(&config),
+            ModelPull::decl(&config),
+            ModelFailure::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

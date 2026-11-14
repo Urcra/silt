@@ -1066,3 +1066,49 @@ model: boolean, download: VoiceDownload | null,
  * Why the last download failed.
  */
 failed: string | null, };
+
+export type LocalModels = { 
+/**
+ * The `llama-server` models run with, if one was found.
+ */
+server: string | null, devices: Array<ModelDevice>, 
+/**
+ * Bytes a model may use here: the devices', else the machine's memory.
+ */
+room: number, models: Array<LocalModel>, 
+/**
+ * The catalog's models not downloaded yet.
+ */
+catalog: Array<CatalogModel>, pull: ModelPull | null, 
+/**
+ * Why the last download failed.
+ */
+failed: ModelFailure | null, };
+
+export type ModelDevice = { name: string, description: string, total: number, free: number, };
+
+export type LocalModel = { id: string, name: string, 
+/**
+ * Where it came from: the catalog, `owner/repo:file` or a file here.
+ */
+source: string, size: number, context: number, fit: ModelFit, 
+/**
+ * The file `llama-server` loads.
+ */
+path: string, };
+
+export type CatalogModel = { id: string, name: string, about: string, size: number, context: number, 
+/**
+ * Whether it was tried with Claude Code and `local` on real hardware.
+ */
+tested: boolean, fit: ModelFit, };
+
+export type ModelFit = "fits" | "tight" | "too_big";
+
+export type ModelPull = { id: string, done: number, 
+/**
+ * Zero until the files' sizes are known.
+ */
+total: number, };
+
+export type ModelFailure = { id: string, reason: string, };

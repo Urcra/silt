@@ -147,6 +147,8 @@ pub enum CoreError {
     },
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Llm(#[from] silt_llm::LlmError),
 }
 
 /// A working directory with its symlinks resolved, as checkout paths are
@@ -256,6 +258,8 @@ pub struct Core {
     /// When each server's listing was last asked for, by URL.
     pub(crate) last_listings: HashMap<String, Instant>,
     pub(crate) notes_settings: crate::notes::NotesSettings,
+    /// The local models here and their downloads (ADR 0066).
+    pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -514,6 +518,7 @@ impl Core {
             known_secrets: HashSet::new(),
             last_listings: HashMap::new(),
             notes_settings: crate::notes::NotesSettings::default(),
+            models: std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir)),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -620,6 +625,15 @@ impl Core {
                 Err(error) => Response::error(error),
             },
             Request::CloneOf { thread } => to_response(self.find_thread(&thread).and_then(|thread| self.clone_of(thread))),
+            Request::Models => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { Ok::<_, CoreError>(models.view().await) }));
+            }
+            Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
+            Request::ModelRemove { model } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.remove(&model).await }));
+            }
             Request::ChatSettings => to_response(Ok::<_, CoreError>(crate::chats::settings(&self.data_dir))),
             Request::SetChatSettings { settings } => {
                 to_response(crate::chats::save_settings(&self.data_dir, &settings).map(|()| "chat settings saved"))

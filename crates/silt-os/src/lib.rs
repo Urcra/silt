@@ -232,6 +232,13 @@ pub fn home_dir() -> Option<PathBuf> {
     home.filter(|home| !home.is_empty()).map(PathBuf::from)
 }
 
+/// The machine's memory in bytes, which a CPU-only model runs in.
+pub fn total_memory() -> io::Result<u64> {
+    let mut system = sysinfo::System::new().map_err(io::Error::other)?;
+    system.refresh_memory();
+    Ok(system.total_memory())
+}
+
 /// Whether this process runs as the superuser.
 pub fn is_root() -> bool {
     imp::is_root()

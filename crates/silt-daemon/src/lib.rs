@@ -19,6 +19,7 @@ mod import;
 mod lifecycle;
 mod live;
 mod load;
+mod models;
 mod notes;
 pub mod paths;
 mod personal;

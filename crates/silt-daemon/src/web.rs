@@ -132,6 +132,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
+        .route("/api/models", get(models))
+        .route("/api/models/pull", post(model_pull))
+        .route("/api/models/{id}", delete(model_remove))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
         .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
@@ -553,6 +556,23 @@ struct AgentStart {
     agent: String,
     #[serde(default, flatten)]
     options: crate::protocol::StartOptions,
+}
+
+async fn models(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Models).await
+}
+
+#[derive(Deserialize)]
+struct ModelSource {
+    source: String,
+}
+
+async fn model_pull(State(web): State<Web>, Json(body): Json<ModelSource>) -> HttpResponse {
+    ask(&web, Request::ModelPull { source: body.source }).await
+}
+
+async fn model_remove(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::ModelRemove { model: id }).await
 }
 
 async fn chat_settings(State(web): State<Web>) -> HttpResponse {

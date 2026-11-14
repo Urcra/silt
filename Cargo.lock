@@ -5164,6 +5164,7 @@ dependencies = [
  "silt-checkout",
  "silt-crdt",
  "silt-git",
+ "silt-llm",
  "silt-log",
  "silt-mcp",
  "silt-os",
@@ -5188,7 +5189,9 @@ name = "silt-fake-agent"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "axum",
  "base64 0.23.1",
+ "futures-util",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5208,6 +5211,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "silt-llm"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "silt-os",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

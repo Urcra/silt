@@ -2,6 +2,7 @@ mod admin;
 mod commands;
 mod desktop;
 mod mcp;
+mod model;
 mod recording;
 mod reference;
 mod render;
@@ -171,6 +172,12 @@ enum Command {
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
+    },
+    /// Local models this machine runs with llama.cpp, for Silt's own agent
+    /// and for Claude Code
+    Model {
+        #[command(subcommand)]
+        command: model::ModelCommand,
     },
     /// Workspaces: which projects belong together, the server their threads
     /// sync with, and the rules for agents started in them
@@ -720,6 +727,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
+        Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
