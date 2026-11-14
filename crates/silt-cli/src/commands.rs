@@ -279,9 +279,9 @@ pub fn run_agent(name: &str, isolated: bool, args: &[String]) -> Result<(), Exn<
 
 /// Starts a chat (ADR 0059): `name`'s agent in a new folder of its own,
 /// named after what it's `about`, recorded as `silt <agent>` records.
-pub fn chat(name: &str, about: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
+pub fn chat(name: &str, about: Option<&str>, workspace: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
     find_agent(name)?;
-    let folder = silt_daemon::chats::new_folder(&paths::data_dir(), about.unwrap_or_default())
+    let folder = silt_daemon::chats::new_folder_in(&paths::data_dir(), about.unwrap_or_default(), workspace)
         .or_raise(|| CliError("could not make the chat's folder".into()))?;
     eprintln!("silt: chatting in {}", folder.display());
     run_agent_in(name, folder, false, args)
@@ -289,6 +289,8 @@ pub fn chat(name: &str, about: Option<&str>, args: &[String]) -> Result<(), Exn<
 
 fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Result<(), Exn<CliError>> {
     let agent = find_agent(name)?;
+    // Before the session starts, so a refused run leaves no thread behind.
+    let held = workspace_rules(None, Some(&cwd), agent, args)?;
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
     let (started, mut recording) = if daemonless_capture() {
         Recording::here(agent, &cwd, session_id.as_deref(), isolated, false)?
@@ -317,7 +319,7 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
     if let Some(mount) = &started.mount {
         mount_checkout(mount, &started.checkout, &started.thread);
     }
-    let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd };
+    let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd, held: &held };
     let status = run.launch(Start::New { id: session_id }, args, &mut recording)?;
     recording.end()?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
@@ -357,6 +359,8 @@ struct Run<'a> {
     thread: &'a str,
     checkout: &'a Path,
     cwd: &'a Path,
+    /// What its workspace's rules hold it to, checked before it started.
+    held: &'a silt_daemon::workspaces::RunRules,
 }
 
 impl Run<'_> {
@@ -368,6 +372,7 @@ impl Run<'_> {
         args: &[String],
         recording: &mut Recording,
     ) -> Result<std::process::ExitStatus, Exn<CliError>> {
+        let held = self.held;
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
@@ -387,7 +392,10 @@ impl Run<'_> {
                     self.thread.to_owned(),
                     "--checkout".into(),
                     self.checkout.to_string_lossy().into_owned(),
-                ],
+                ]
+                .into_iter()
+                .chain((!held.token.is_empty()).then(|| ["--token".to_owned(), held.token.clone()]).into_iter().flatten())
+                .collect(),
             },
             hook_command: format!("{} hook", silt_agents::shell_quote(&exe.to_string_lossy())),
             hook_program: exe.clone(),
@@ -398,12 +406,62 @@ impl Run<'_> {
                 .collect(),
             scratch: scratch.clone(),
             args: args.to_vec(),
+            locks: held.locks.clone(),
+            env: held.env.clone(),
         };
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = Command::new(&launch.program);
-        command.args(&launch.args).envs(launch.envs.iter().map(|(key, value)| (key, value))).current_dir(self.cwd);
+        command
+            .args(&launch.args)
+            .envs(held.env.iter().map(|(key, value)| (key, value)))
+            .envs(launch.envs.iter().map(|(key, value)| (key, value)))
+            .current_dir(self.cwd);
+        if held.locks.no_bypass {
+            command.env_remove("COPILOT_ALLOW_ALL");
+        }
         recording.run(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
     }
+}
+
+/// The rules of the thread's workspace for this run (ADR 0064): refused
+/// with the rule that forbids it, else the locks and variables to pass.
+fn workspace_rules(
+    thread: Option<&str>,
+    cwd: Option<&Path>,
+    agent: &'static dyn Agent,
+    args: &[String],
+) -> Result<silt_daemon::workspaces::RunRules, Exn<CliError>> {
+    // A daemon running holds the store; opening it beside one slows its capture.
+    let rules = if !daemonless_capture() && is_running() {
+        call::<silt_daemon::workspaces::RunRules>(&Request::RunRules {
+            thread: thread.map(str::to_owned),
+            cwd: cwd.map(Path::to_owned),
+            agent: agent.id().to_owned(),
+            args: args.to_vec(),
+        })?
+    } else {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .or_raise(|| CliError("cannot start the async runtime".into()))?;
+        runtime
+            .block_on(silt_daemon::workspaces::run_rules(&paths::data_dir(), thread, cwd, agent, args))
+            .map_err(|error| fail(error.to_string()))?
+    };
+    if rules.locks != silt_agents::Locks::default() || !rules.env.is_empty() {
+        let mut held = Vec::new();
+        if rules.locks.sandbox {
+            held.push("sandboxed");
+        }
+        if !rules.locks.deny.is_empty() {
+            held.push("history: this workspace only");
+        }
+        if rules.locks.no_bypass {
+            held.push("asks before it acts");
+        }
+        eprintln!("silt: {} · {}", rules.workspace.name, held.join(" · "));
+    }
+    Ok(rules)
 }
 
 pub fn resume(thread: &str, here: bool, agent: Option<&str>, args: &[String]) -> Result<(), Exn<CliError>> {
@@ -550,7 +608,8 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
             Start::Primed { id, prompt }
         }
     };
-    let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd };
+    let held = workspace_rules(Some(&resumed.thread), None, agent, args)?;
+    let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd, held: &held };
     let mut recording = Recording::by_daemon(&resumed.thread)?;
     let status = run.launch(start, args, &mut recording)?;
     recording.end()?;

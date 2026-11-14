@@ -5119,6 +5119,7 @@ dependencies = [
  "silt-redact",
  "silt-server",
  "silt-types",
+ "silt-workspace",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5250,6 +5251,7 @@ dependencies = [
  "serde_json",
  "silt-log",
  "silt-types",
+ "silt-workspace",
  "ts-rs",
 ]
 

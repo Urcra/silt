@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, workspace FROM family_workspaces",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_workspaces",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "workspace",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "family_workspaces",
+            "name": "workspace"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9046ed162e2b75dfa6f1c0ccd239519985e2cf94d2c756cf89f713daf09a9009"
+}

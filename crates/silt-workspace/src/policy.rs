@@ -40,6 +40,23 @@ impl fmt::Display for AgentKey {
     }
 }
 
+/// The agents rules know by name, each with its CLI's and its ACP
+/// adapter's ids, and how people call it.
+pub const KNOWN_AGENTS: [(&str, &[&str], &str); 6] = [
+    ("claude", &["claude-code", "claude-acp"], "Claude Code"),
+    ("codex", &["codex", "codex-acp"], "Codex"),
+    ("copilot", &["copilot-cli", "github-copilot-cli"], "GitHub Copilot"),
+    ("gemini", &["gemini-cli", "gemini"], "Gemini CLI"),
+    ("agy", &["antigravity-cli", "antigravity-acp"], "Antigravity"),
+    ("opencode", &["opencode", "opencode-v2"], "OpenCode"),
+];
+
+/// The key rules name an agent by, from its CLI adapter's or ACP registry
+/// id; any other registry agent goes by its id.
+pub fn agent_key(id: &str) -> AgentKey {
+    KNOWN_AGENTS.iter().find(|(_, ids, _)| ids.contains(&id)).map_or_else(|| AgentKey::new(id), |(key, _, _)| AgentKey::new(*key))
+}
+
 /// The agent a start asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentChoice {
@@ -292,9 +309,12 @@ impl Rules<'_> {
                 .as_ref()
                 .filter(|allowed| !allowed.contains(key))
                 .map(|allowed| Broken::Agent { agent: name.clone(), allowed: allowed.iter().cloned().collect() }),
-            AgentChoice::Custom { name } => {
-                (policy.custom_agents == Some(false)).then(|| Broken::CustomAgent { agent: name.clone() })
-            }
+            // A custom agent is never one of those a list allows.
+            AgentChoice::Custom { name } => match (&policy.agents, policy.custom_agents) {
+                (_, Some(false)) => Some(Broken::CustomAgent { agent: name.clone() }),
+                (Some(allowed), _) => Some(Broken::Agent { agent: name.clone(), allowed: allowed.iter().cloned().collect() }),
+                (None, _) => None,
+            },
         })?;
         self.check(|policy| {
             (policy.sandbox_required() && !can_sandbox).then(|| Broken::Sandbox { agent: agent.name().to_owned() })
@@ -443,6 +463,14 @@ mod tests {
         let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, true).unwrap_err();
         assert_eq!(refusal.to_string(), "My agent isn't allowed in Work: your rules allow no custom agents");
         assert_eq!(rules.check_home().unwrap_err().to_string(), "Work's projects sync with its server only (your rules)");
+        let listed = Policy { agents: keys(&["copilot"]), ..Policy::default() };
+        let rules = Rules { workspace: "Work", local: &listed, org: None };
+        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, true).unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "My agent isn't allowed in Work: your rules allow copilot",
+            "a list names no custom agent"
+        );
     }
 
     #[test]
@@ -466,6 +494,13 @@ mod tests {
             "silt can't move to Work: its threads sync with silt.example.dev, and Work syncs with silt.acme.dev; threads never move between servers"
         );
         assert!(check_move("silt", &["https://silt.example.dev".into()], "Experiments", None).is_err());
+    }
+
+    #[test]
+    fn cli_and_acp_ids_share_a_key() {
+        assert_eq!(agent_key("claude-code"), agent_key("claude-acp"));
+        assert_eq!(agent_key("github-copilot-cli").as_str(), "copilot");
+        assert_eq!(agent_key("goose").as_str(), "goose");
     }
 
     #[test]

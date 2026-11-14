@@ -21,6 +21,8 @@ impl Core {
         let remotes = self.asked_remotes().unwrap_or_default();
         let homes: BTreeMap<String, String> =
             self.project_homes.iter().map(|(repo, home)| (repo.clone(), home.shown().to_owned())).collect();
+        let workspaces = self.workspaces();
+        let chosen = self.project_workspaces.clone();
         async move {
             let mut listed = Vec::new();
             for remote in remotes {
@@ -32,6 +34,10 @@ impl Core {
             let mut projects = merged(listed, local);
             projects.retain(|project| !silt_types::is_chat(&project.repo));
             for project in &mut projects {
+                let clone = project.clone.as_ref().map(|path| path.to_string_lossy().replace('\\', "/"));
+                let resolved = workspaces.resolve(&project.repo, clone.as_deref(), chosen.get(&project.repo));
+                project.workspace = Some(resolved.workspace.id.to_string());
+                project.workspace_why = Some(crate::workspaces::why_text(&resolved.why));
                 project.home = homes
                     .get(&project.repo)
                     .cloned()
@@ -351,6 +357,8 @@ fn project(repo: &str) -> Project {
         clone: None,
         home: None,
         server: None,
+        workspace: None,
+        workspace_why: None,
     }
 }
 
@@ -409,6 +417,8 @@ fn merged(servers: Vec<(String, Vec<ProjectInfo>)>, local: Vec<Project>) -> Vec<
                 threads: info.threads,
                 home: None,
                 server: Some(server.clone()),
+                workspace: None,
+                workspace_why: None,
             });
         }
     }

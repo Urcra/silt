@@ -365,6 +365,8 @@ impl Core {
         if let Some(home) = self.new_home_in(&repo, &project)? {
             self.set_home(family_id, home).await?;
         }
+        let workspace = self.new_family_workspace(&repo, &project);
+        self.pin_workspace(family_id, &workspace).await?;
         let record = ThreadRecord {
             id: thread,
             family: family_id,

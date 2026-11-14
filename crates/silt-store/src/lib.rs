@@ -772,6 +772,105 @@ impl Store {
         Ok(())
     }
 
+    /// The workspace each project was put in by the person (ADR 0064).
+    pub async fn project_workspaces(&self) -> Result<Vec<(String, String)>, StoreError> {
+        Ok(sqlx::query!("SELECT repo, workspace FROM project_workspaces")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| (row.repo, row.workspace))
+            .collect())
+    }
+
+    /// Puts a project in a workspace, or with `None` back to the rules.
+    pub async fn set_project_workspace(&self, repo: &str, workspace: Option<&str>) -> Result<(), StoreError> {
+        match workspace {
+            Some(workspace) => {
+                sqlx::query!(
+                    "INSERT INTO project_workspaces (repo, workspace) VALUES (?, ?) ON CONFLICT (repo) DO UPDATE SET workspace = excluded.workspace",
+                    repo,
+                    workspace
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query!("DELETE FROM project_workspaces WHERE repo = ?", repo).execute(&self.pool).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The workspace each family was made in.
+    pub async fn family_workspaces(&self) -> Result<Vec<(FamilyId, String)>, StoreError> {
+        sqlx::query!("SELECT family_id, workspace FROM family_workspaces")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| Ok((FamilyId(id_from(&row.family_id)?), row.workspace)))
+            .collect()
+    }
+
+    pub async fn set_family_workspace(&self, family: FamilyId, workspace: &str) -> Result<(), StoreError> {
+        let id = id_bytes(family.0);
+        sqlx::query!(
+            "INSERT INTO family_workspaces (family_id, workspace) VALUES (?, ?) ON CONFLICT (family_id) DO UPDATE SET workspace = excluded.workspace",
+            id,
+            workspace
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Remembers a run's token by its hash, for what its history tools may
+    /// read.
+    pub async fn add_run_token(&self, hash: &[u8], thread: ThreadId, workspace: &str, now_ms: i64) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!(
+            "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, created_ms) VALUES (?, ?, ?, ?)",
+            hash,
+            thread,
+            workspace,
+            now_ms
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The thread and workspace a run token was made for.
+    pub async fn run_token(&self, hash: &[u8]) -> Result<Option<(ThreadId, String)>, StoreError> {
+        sqlx::query!("SELECT thread_id, workspace FROM run_tokens WHERE hash = ?", hash)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| Ok((ThreadId(id_from(&row.thread_id)?), row.workspace)))
+            .transpose()
+    }
+
+    /// Each org policy as last fetched: server, org, the policy's JSON.
+    pub async fn org_policies(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+        Ok(sqlx::query!("SELECT server, org, policy FROM org_policies")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| (row.server, row.org, row.policy))
+            .collect())
+    }
+
+    pub async fn set_org_policy(&self, server: &str, org: &str, policy: &str, now_ms: i64) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO org_policies (server, org, policy, fetched_ms) VALUES (?, ?, ?, ?) ON CONFLICT (server, org) DO UPDATE SET policy = excluded.policy, fetched_ms = excluded.fetched_ms",
+            server,
+            org,
+            policy,
+            now_ms
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn deleted_threads(&self) -> Result<Vec<ThreadId>, StoreError> {
         sqlx::query_scalar!("SELECT id FROM threads WHERE deleted_ms IS NOT NULL")
             .fetch_all(&self.pool)

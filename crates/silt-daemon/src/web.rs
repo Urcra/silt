@@ -132,6 +132,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
+        .route("/api/workspaces", get(workspaces).put(set_workspaces))
+        .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/cancel", post(agent_cancel))
@@ -559,6 +561,24 @@ async fn chat_settings(State(web): State<Web>) -> HttpResponse {
 
 async fn set_chat_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ChatSettings>) -> HttpResponse {
     ask(&web, Request::SetChatSettings { settings }).await
+}
+
+async fn workspaces(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Workspaces).await
+}
+
+async fn set_workspaces(State(web): State<Web>, Json(workspaces): Json<silt_workspace::Workspaces>) -> HttpResponse {
+    ask(&web, Request::SetWorkspaces { workspaces }).await
+}
+
+#[derive(Deserialize)]
+struct AssignProject {
+    repo: String,
+    workspace: Option<String>,
+}
+
+async fn assign_project(State(web): State<Web>, Json(body): Json<AssignProject>) -> HttpResponse {
+    ask(&web, Request::AssignProject { repo: body.repo, workspace: body.workspace }).await
 }
 
 async fn make_project(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

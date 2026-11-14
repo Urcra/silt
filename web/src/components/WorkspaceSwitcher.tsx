@@ -2,10 +2,11 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, type OrgInfo } from '../api'
+import { KNOWN_AGENTS, serverLine } from '../rules'
 import { useNow } from '../now'
 import { keys } from '../query'
 import { sections } from '../sections'
-import { serverName } from '../served'
+import { hosted, serverName } from '../served'
 import { formatKeys, useActions } from '../shortcuts'
 import { Button, Dialog, Icon, Kbd, Popover, cx } from '../ui'
 import { type Workspace, inWorkspace, orgsOf, setWorkspace, useWorkspace, workspaceValue } from '../workspace'
@@ -18,6 +19,8 @@ interface Choice {
   long: string
   workspace: Workspace
   offline?: boolean
+  /** Its rules, as short chips under its name (ADR 0064). */
+  chips?: string[]
 }
 
 interface Group {
@@ -26,7 +29,7 @@ interface Group {
 }
 
 /** A workspace's letter on a tile of its own colour, as the boards draw it. */
-function Badge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
+export function WorkspaceBadge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
   const shades = ['bg-[var(--tobacco-500)]', 'bg-[var(--slate-600)]', 'bg-[var(--olive-600)]', 'bg-[var(--amber-700)]', 'bg-[var(--rust-600)]']
   // Not by port, which a server started for a test or a tunnel picks anew.
   const shade = shades[[...name.replace(/:\d+$/, '')].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % shades.length]
@@ -110,6 +113,32 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
       ],
     },
   ]
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  if (!hosted() && workspaces.data?.saved) {
+    // Once the person made workspaces, they stand in for the servers and orgs (ADR 0064).
+    const own: Group = {
+      label: 'Workspaces',
+      choices: workspaces.data.workspaces.map((view) => {
+        const policy = view.effective
+        const chips = [
+          ...(view.org_policy ? [`${view.org_policy.org}'s rules`] : []),
+          ...(policy.agents ? [policy.agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ') + ' only'] : []),
+          ...(policy.max_preset && policy.max_preset !== 'full_access' ? ['asks first'] : []),
+          ...(policy.isolated ? ['isolated'] : policy.sandbox ? ['sandboxed'] : []),
+        ]
+        const isDefault = view.workspace.id === workspaces.data.default
+        return {
+          name: view.workspace.name,
+          sub: `${serverLine(view)} · ${counted(view.projects.length, 'project', 'projects')}${isDefault ? ' · default' : ''}`,
+          long: `the ${view.workspace.name} workspace`,
+          workspace: { kind: 'workspace', id: view.workspace.id, server: view.workspace.server?.url ?? null } as Workspace,
+          offline: view.workspace.server ? servers.some((server) => server.url === view.workspace.server?.url && server.sync_error !== null) : false,
+          chips,
+        }
+      }),
+    }
+    groups.splice(0, groups.length, { label: 'Everywhere', choices: [{ ...groups[0]!.choices[0]!, name: 'All workspaces', sub: 'for you only: agents never see across workspaces' }] }, own)
+  }
   const all = groups.flatMap((group) => group.choices)
   const current = all.find((choice) => workspaceValue(choice.workspace) === workspaceValue(workspace)) ?? all[0]
   return { groups, waiting, current }
@@ -138,7 +167,8 @@ export function WorkspaceSwitcher() {
     })),
   )
   const host = current.workspace.kind === 'server' ? serverName(current.workspace.server) : current.sub
-  const orgServer = current.workspace.kind === 'server' ? host : groups[1]?.label.replace(/^On /, '')
+  const workspaceServer = current.workspace.kind === 'workspace' && current.workspace.server ? serverName(current.workspace.server) : undefined
+  const orgServer = current.workspace.kind === 'server' ? host : (workspaceServer ?? groups[1]?.label.match(/^On (.*)/)?.[1])
   return (
     <>
       <Popover
@@ -178,10 +208,19 @@ export function WorkspaceSwitcher() {
                         chosen && 'bg-accent-tint',
                       )}
                     >
-                      <Badge name={choice.name} local={choice.workspace.kind === 'local'} />
+                      <WorkspaceBadge name={choice.name} local={choice.workspace.kind === 'local'} />
                       <span className="flex min-w-0 flex-col">
                         <b className="truncate font-medium">{choice.name}</b>
                         <span className="truncate font-mono text-2xs text-fg-2">{choice.sub}</span>
+                        {choice.chips && choice.chips.length > 0 && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {choice.chips.map((chip) => (
+                              <span key={chip} className="rounded-sm border border-line px-1.5 text-2xs text-fg-1">
+                                {chip}
+                              </span>
+                            ))}
+                          </span>
+                        )}
                       </span>
                       <span className="flex items-center gap-1.5">
                         {chosen && <Icon name="check" className="text-accent-fg" />}
@@ -198,6 +237,19 @@ export function WorkspaceSwitcher() {
               </section>
             ))}
             <div className="mt-1 flex flex-col border-t border-line-subtle pt-1">
+              {!hosted() && (
+                <Button
+                  variant="ghost"
+                  icon="settings"
+                  className="justify-start px-2.5 py-1.5"
+                  onClick={() => {
+                    close()
+                    void navigate({ to: '/settings/$section', params: { section: 'workspaces' } })
+                  }}
+                >
+                  New or manage workspaces
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 icon="plus"

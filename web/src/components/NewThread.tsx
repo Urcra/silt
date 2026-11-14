@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
 import { PRESETS, permissionModes, startSettings } from '../agentState'
-import { api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary } from '../api'
+import { api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary, type WorkspaceView } from '../api'
+import { agentRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
 import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -438,6 +439,23 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
   )
 }
 
+/** The workspace a new thread starts in, and its rules, under the composer (ADR 0064). */
+export function WorkspaceLine({ view }: { view: WorkspaceView }) {
+  const rules = rulesLine(view.effective)
+  return (
+    <p aria-label="workspace" className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs">
+      <Icon name="lock" className="h-3.5 w-3.5 text-fg-2" />
+      <span className="min-w-0 flex-1">
+        In <b className="font-medium">{view.workspace.name}</b> · syncs {view.workspace.server ? `with ${serverLine(view)}` : 'nowhere: this machine only'}
+        {rules && ` · ${rules}`} · sees only {view.workspace.name}'s history
+      </span>
+      <Link to="/settings/$section" params={{ section: 'workspaces' }} className="text-accent-fg hover:underline">
+        {view.workspace.name}'s rules
+      </Link>
+    </p>
+  )
+}
+
 /** An empty thread: what to work on, in which project, and how (ADR 0044). `/` on a machine. */
 export function NewThread() {
   const queries = useQueryClient()
@@ -465,8 +483,20 @@ export function NewThread() {
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const agents = choices.data?.agents ?? []
-  const agent = chosenAgent ?? agents.find((candidate) => candidate.id === defaults?.default_agent)?.id ?? agents[0]?.id ?? ''
-  const preset: Preset = chosenPreset ?? PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ?? 'ask_before_commands'
+  // The project's workspace, whose rules grey out what the daemon would refuse (ADR 0064).
+  const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const workspace = workspaceOf(workspacesQuery.data, repo, defaults?.workspace)
+  const allowed = (id: string | undefined | null) => (id && !agentRefused(workspace, id) ? id : undefined)
+  const agent =
+    allowed(chosenAgent) ??
+    allowed(agents.find((candidate) => candidate.id === defaults?.default_agent)?.id) ??
+    allowed(agents.find((candidate) => candidate.id === workspace?.workspace.defaults.agent)?.id) ??
+    agents.find((candidate) => !agentRefused(workspace, candidate.id))?.id ??
+    ''
+  const wanted: Preset =
+    chosenPreset ?? PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ?? workspace?.workspace.defaults.preset ?? 'ask_before_commands'
+  const cap = workspace?.effective.max_preset
+  const preset: Preset = within(wanted, cap) ? wanted : cap!
   const branches = useQuery({ queryKey: keys.branches(project), queryFn: () => api.branches(project), enabled: project !== '' && chosenWhere === 'worktree' })
   const agentName = agents.find((candidate) => candidate.id === agent)?.name ?? ''
   // As this browser last saw the agent run; its mode is the permissions chip's to say.
@@ -614,7 +644,9 @@ export function NewThread() {
             tools={
               chosenWhere !== 'cloud' && (
                 <>
-                  {agents.length > 0 ? (
+                  {agents.length > 0 && !agent && workspace ? (
+                    <span className="px-2 text-xs text-warn">No agent installed here is allowed in {workspace.workspace.name}</span>
+                  ) : agents.length > 0 ? (
                     <ChipSelect
                       ghost
                       label="agent to start"
@@ -624,7 +656,7 @@ export function NewThread() {
                         setMode(undefined)
                         setChosenSettings({})
                       }}
-                      options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+                      options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: agentRefused(workspace, choice.id) }))}
                     />
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
@@ -645,7 +677,7 @@ export function NewThread() {
                       icon="lock"
                       value={preset}
                       onChange={(chosen) => setPreset(chosen as Preset)}
-                      options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+                      options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
                     />
                   )}
                 </>
@@ -692,6 +724,7 @@ export function NewThread() {
             )}
           </div>
           <p className="mt-2 px-0.5 text-xs text-fg-2">{whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}</p>
+          {workspace && (workspacesQuery.data?.saved || rulesLine(workspace.effective)) && <WorkspaceLine view={workspace} />}
           {choices.isSuccess && agents.length === 0 && chosenWhere !== 'cloud' && (
             <p className="mt-1 px-0.5 text-xs text-warn">
               No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}

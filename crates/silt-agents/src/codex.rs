@@ -25,6 +25,11 @@ pub fn home() -> Option<PathBuf> {
     crate::agent_home("CODEX_HOME", ".codex")
 }
 
+/// [`home`] for a session in `cwd`, whose workspace may set its own (ADR 0064).
+fn home_in(cwd: &Path) -> Option<PathBuf> {
+    crate::agent_home_in("CODEX_HOME", ".codex", cwd)
+}
+
 /// Every rollout under `sessions/`, newest day first.
 fn rollouts(home: &Path) -> Vec<PathBuf> {
     rollouts_from(home, &[])
@@ -481,8 +486,8 @@ impl Agent for Codex {
         SessionIds::Discovered
     }
 
-    fn transcript(&self, _cwd: &Path, id: &str) -> Option<PathBuf> {
-        rollouts(&home()?).into_iter().find(|path| rollout_id(path).as_deref() == Some(id))
+    fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
+        rollouts(&home_in(cwd)?).into_iter().find(|path| rollout_id(path).as_deref() == Some(id))
     }
 
     fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
@@ -490,20 +495,37 @@ impl Agent for Codex {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        discover_in(&home()?, cwd, since_ms, known)
+        discover_in(&home_in(cwd)?, cwd, since_ms, known)
     }
 
     fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
-        home().map(|home| on_disk_in(&home)).unwrap_or_default()
+        crate::agent_homes("CODEX_HOME", ".codex").iter().flat_map(|home| on_disk_in(home)).collect()
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
-        let home = home().ok_or(AgentError::NoHome)?;
+        let home = home_in(cwd).ok_or(AgentError::NoHome)?;
         restore_into(&home, root, cwd, session)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
         Some(rollout_lines(&translated_text(entries), cwd, id))
+    }
+
+    fn bypass_flag(&self, args: &[String]) -> Option<String> {
+        crate::flag_in(
+            args,
+            &["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"],
+            &[
+                ("--sandbox", &["danger-full-access"]),
+                ("-s", &["danger-full-access"]),
+                ("--ask-for-approval", &["never"]),
+                ("-a", &["never"]),
+            ],
+        )
+    }
+
+    fn sandbox_support(&self) -> crate::SandboxSupport {
+        crate::SandboxSupport::Sandbox
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
@@ -522,6 +544,12 @@ impl Agent for Codex {
         launch.arg("-c").arg(format!("mcp_servers.silt.args={}", toml(&json!(plan.mcp.args))));
         if let Some(instructions) = &plan.instructions {
             launch.arg("-c").arg(format!("developer_instructions={}", toml(&json!(instructions))));
+        }
+        if plan.locks.sandbox {
+            launch.arg("-c").arg("sandbox_mode=\"workspace-write\"");
+        }
+        if plan.locks.no_bypass {
+            launch.arg("-c").arg("approval_policy=\"on-request\"");
         }
         for arg in &plan.args {
             launch.arg(arg);

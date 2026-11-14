@@ -19,7 +19,7 @@ export type Startable = { id: string, name: string, };
 
 export type InboxRead = { ids: Array<number>, all: boolean, };
 
-export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "links", org: string, on: boolean, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, git_notes: GitNotes | null, forge_comments: boolean | null, };
+export type OrgChange = { "change": "create", org: string, } | { "change": "add_member", org: string, user: string, owner: boolean, } | { "change": "remove_member", org: string, user: string, } | { "change": "create_team", org: string, team: string, } | { "change": "remove_team", org: string, team: string, } | { "change": "add_to_team", org: string, team: string, user: string, } | { "change": "remove_from_team", org: string, team: string, user: string, } | { "change": "default_visibility", org: string, visibility: Visibility, } | { "change": "links", org: string, on: boolean, } | { "change": "policy", org: string, policy: Policy, } | { "change": "move_project", repo: string, org: string, } | { "change": "project_settings", repo: string, name: string | null, default_agent: string | null, default_preset: string | null, git_notes: GitNotes | null, forge_comments: boolean | null, };
 
 export type OrgInfo = { name: string, role: OrgRole, 
 /**
@@ -29,7 +29,12 @@ may_change: boolean, default_visibility: Visibility, members: Array<OrgMember>, 
 /**
  * Its threads may have read-only links.
  */
-links: boolean, };
+links: boolean, 
+/**
+ * What agents started in its projects may do, on every member's
+ * machine (ADR 0064).
+ */
+policy: Policy, };
 
 export type OrgMember = { user: string, role: OrgRole, };
 
@@ -719,7 +724,12 @@ home: string | null,
 /**
  * The server this record is from; none for a clone no server knows.
  */
-server: string | null, };
+server: string | null, 
+/**
+ * The workspace it's in on this machine, and why (ADR 0064); none from
+ * a server.
+ */
+workspace: string | null, workspace_why: string | null, };
 
 export type PromptAttachment = { name: string, mime: string, 
 /**
@@ -841,7 +851,12 @@ continues: string | null,
  * Where in the new thread's checkout the chat's files are copied, a
  * relative path; nowhere when unset.
  */
-copy_to: string | null, };
+copy_to: string | null, 
+/**
+ * The workspace a new chat is in, by id; the default when unset
+ * (ADR 0064).
+ */
+workspace: string | null, };
 
 export type ChatSettings = { 
 /**
@@ -853,6 +868,89 @@ dir: string | null,
  * folder holds only what its agent wrote there.
  */
 preset: Preset, };
+
+export type WorkspacesView = { default: WorkspaceId, 
+/**
+ * Whether the person made any; until then there's the one Default,
+ * syncing with the default server.
+ */
+saved: boolean, workspaces: Array<WorkspaceView>, };
+
+export type WorkspaceView = { workspace: Workspace, 
+/**
+ * Its org's policy, as last fetched.
+ */
+org_policy: OrgPolicy | null, 
+/**
+ * It's bound to an org whose policy hasn't been fetched yet, so no agent
+ * starts in it.
+ */
+waiting_for_policy: boolean, 
+/**
+ * Its own rules and its org's, together.
+ */
+effective: Policy, projects: Array<WorkspaceProject>, };
+
+export type WorkspaceProject = { repo: string, why: Why, };
+
+export type Workspace = { id: WorkspaceId, name: string, 
+/**
+ * `None` keeps its threads on this machine.
+ */
+server: ServerBinding | null, rules: Array<MatchRule>, defaults: Defaults, 
+/**
+ * Given to every agent started in it, such as its own
+ * `CLAUDE_CONFIG_DIR`.
+ */
+env: { [key in string]: string }, policy: Policy, };
+
+export type Workspaces = { 
+/**
+ * Where projects no rule matches go.
+ */
+default: WorkspaceId, workspaces: Array<Workspace>, };
+
+export type ServerBinding = { url: string, org?: string | null, };
+
+export type MatchRule = { "kind": "remote", "pattern": string } | { "kind": "folder", "pattern": string };
+
+export type Defaults = { agent?: string | null, preset?: Preset | null, chats_preset?: Preset | null, };
+
+export type Policy = { 
+/**
+ * The agents allowed; any when unset.
+ */
+agents?: Array<AgentKey> | null, 
+/**
+ * Whether `agents.json`'s agents are allowed; they are when unset.
+ */
+custom_agents?: boolean | null, 
+/**
+ * The most an agent may do without asking.
+ */
+max_preset?: Preset | null, 
+/**
+ * The agent runs only with its own sandbox on.
+ */
+sandbox?: boolean, 
+/**
+ * The sandbox also hides Silt's data and other workspaces; implies
+ * `sandbox`.
+ */
+isolated?: boolean, 
+/**
+ * Projects keep the workspace's server: no other, and not this machine
+ * only.
+ */
+home_locked?: boolean, };
+
+export type OrgPolicy = { org: string, server: string, policy: Policy, };
+
+export type Why = { "kind": "chosen" } | { "kind": "rule", "rule": MatchRule } | { "kind": "default" };
+
+export type WorkspaceId = string;
+
+export type AgentKey = string;
 
 export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
 
@@ -909,6 +1007,10 @@ server: string | null,
  * It stays on this machine only, by its project's choice.
  */
 local_only: boolean, 
+/**
+ * The workspace it's in on this machine (ADR 0064); none from a server.
+ */
+workspace: string | null, 
 /**
  * The Claude Code cloud session it records, as claude.ai names it
  * (ADR 0040). A fork doesn't inherit it.

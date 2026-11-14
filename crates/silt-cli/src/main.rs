@@ -5,6 +5,7 @@ mod mcp;
 mod recording;
 mod reference;
 mod render;
+mod workspace;
 
 use std::path::PathBuf;
 
@@ -37,6 +38,9 @@ enum Command {
         /// What the chat is about, naming its folder
         #[arg(long)]
         about: Option<String>,
+        /// The workspace it's in, by id; the default workspace otherwise
+        #[arg(long)]
+        workspace: Option<String>,
         /// Arguments passed on to the agent, after `--`
         #[arg(last = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -167,6 +171,12 @@ enum Command {
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
+    },
+    /// Workspaces: which projects belong together, the server their threads
+    /// sync with, and the rules for agents started in them
+    Workspace {
+        #[command(subcommand)]
+        command: workspace::WorkspaceCommand,
     },
     /// List recorded threads, or with --commit the threads and turns that
     /// made a commit
@@ -310,6 +320,9 @@ enum Command {
         /// The checkout whose skills to offer; defaults to the current directory
         #[arg(long)]
         checkout: Option<PathBuf>,
+        /// The run's token, which limits answers to its workspace
+        #[arg(long)]
+        token: Option<String>,
     },
 }
 
@@ -459,6 +472,29 @@ enum OrgCommand {
         org: String,
         #[arg(value_parser = admin::parse_visibility)]
         visibility: silt_proto::Visibility,
+    },
+    /// Set the org's policy for agents started in its projects on members'
+    /// machines (owners); rules not given restrict nothing
+    Policy {
+        org: String,
+        /// The agents allowed, comma-separated (claude, codex, copilot, gemini, agy, opencode)
+        #[arg(long)]
+        agents: Option<String>,
+        /// Refuse the agents of a machine's agents.json
+        #[arg(long)]
+        no_custom_agents: bool,
+        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands or full_access
+        #[arg(long)]
+        max_preset: Option<String>,
+        /// Agents run only with their own sandbox on
+        #[arg(long)]
+        sandbox: bool,
+        /// The sandbox also hides Silt's data and other workspaces
+        #[arg(long)]
+        isolated: bool,
+        /// Projects keep this server: no other, and not one machine only
+        #[arg(long)]
+        home_locked: bool,
     },
 }
 
@@ -682,7 +718,8 @@ fn run() -> Result<(), Exn<CliError>> {
     }
     match cli.command {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
-        Command::Chat { agent, about, args } => commands::chat(&agent, about.as_deref(), &args),
+        Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
+        Command::Workspace { command } => workspace::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
@@ -747,6 +784,24 @@ fn run() -> Result<(), Exn<CliError>> {
             OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
             OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
             OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
+            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked } => {
+                let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
+                    Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
+                    Some(Ok(preset)) => Some(preset),
+                    None => None,
+                };
+                let policy = silt_workspace::Policy {
+                    agents: agents.map(|list| {
+                        list.split(',').map(str::trim).filter(|key| !key.is_empty()).map(silt_workspace::AgentKey::new).collect()
+                    }),
+                    custom_agents: no_custom_agents.then_some(false),
+                    max_preset,
+                    sandbox,
+                    isolated,
+                    home_locked,
+                };
+                admin::org_change(OrgChange::Policy { org, policy })
+            }
         },
         Command::Team { command } => admin::org_change(match command {
             TeamCommand::Create { org, team } => OrgChange::CreateTeam { org, team },
@@ -829,7 +884,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
             DaemonCommand::Compact => commands::daemon_compact(),
         },
-        Command::Mcp { thread, checkout } => mcp::serve(&thread, checkout),
+        Command::Mcp { thread, checkout, token } => mcp::serve(&thread, checkout, token),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

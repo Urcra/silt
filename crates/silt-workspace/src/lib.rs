@@ -6,7 +6,9 @@ mod policy;
 mod preset;
 mod workspace;
 
-pub use policy::{AgentChoice, AgentKey, Broken, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, Source, check_move};
+pub use policy::{
+    AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, Source, agent_key, check_move,
+};
 pub use preset::Preset;
 pub use workspace::{
     BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId, Workspaces,

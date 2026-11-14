@@ -47,6 +47,8 @@ import type {
   ThreadSummary,
   TurnInfo,
   VoiceStatus,
+  Workspaces,
+  WorkspacesView,
 } from './api.generated'
 
 export type * from './api.generated'
@@ -215,6 +217,12 @@ export const api = {
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
   newProject: (path: string) => request<string>('POST', '/api/projects/new', { path }),
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
+  // This machine's workspaces (ADR 0064).
+  workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
+  setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
+  /** Puts a project in a workspace, or with none back under the match rules. */
+  assignProject: (repo: string, workspace: string | null) =>
+    request<string>('POST', '/api/workspaces/assign', { repo, workspace }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
     request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),

@@ -59,6 +59,11 @@ pub enum Event {
         listing: Result<Listing, String>,
         requested: Instant,
     },
+    /// The policies of a server's orgs, as it answered (ADR 0064).
+    OrgPolicies {
+        server: String,
+        policies: Vec<(String, silt_workspace::Policy)>,
+    },
     /// What the server took of this person's thread states and seen marks,
     /// and all it holds of them (ADR 0024).
     Personal(Box<crate::personal::Synced>),
@@ -226,9 +231,20 @@ pub struct Core {
     pub(crate) homes: HashMap<FamilyId, Home>,
     /// Where each project's new families go, by repository.
     pub(crate) project_homes: HashMap<String, Home>,
+    /// The workspaces the person made; `None` for the one Default (ADR 0064).
+    pub(crate) workspaces: Option<silt_workspace::Workspaces>,
+    /// Projects the person put in a workspace, by repository.
+    pub(crate) project_workspaces: HashMap<String, silt_workspace::WorkspaceId>,
+    /// The workspace each family was made in.
+    pub(crate) family_workspaces: HashMap<FamilyId, silt_workspace::WorkspaceId>,
+    /// Org policies as last fetched, by server and org.
+    pub(crate) org_policies: HashMap<(String, String), silt_workspace::OrgPolicy>,
     /// The server the request being handled asks, for what belongs to no
     /// thread; see [`Core::asked_remote`].
     pub(crate) asked_server: Option<String>,
+    /// The workspace the request being handled may read, for an agent's
+    /// history tools (ADR 0064).
+    pub(crate) scope: Option<silt_workspace::WorkspaceId>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests
     /// made before aren't taken as answers to new ones.
@@ -345,8 +361,10 @@ impl Core {
             core.store.family_homes().await?.into_iter().map(|(family, home)| (family, Home::from_stored(home))).collect();
         core.project_homes =
             core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
+        core.load_workspaces().await?;
         core.follow_clones_to_their_projects().await;
         core.remember_clones_threads_ran_in().await;
+        core.share_workspace_homes();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
         for family_id in families {
             let repo = core
@@ -484,7 +502,12 @@ impl Core {
             remotes: remote::load_sign_ins(data_dir).into_iter().map(Remote::new).collect(),
             homes: HashMap::new(),
             project_homes: HashMap::new(),
+            workspaces: None,
+            project_workspaces: HashMap::new(),
+            family_workspaces: HashMap::new(),
+            org_policies: HashMap::new(),
             asked_server: None,
+            scope: None,
             syncs: HashMap::new(),
             sync_epochs: HashMap::new(),
             redactor: redactor(data_dir),
@@ -542,6 +565,19 @@ impl Core {
             self.asked_server = None;
             return;
         }
+        if let Request::Scoped { token, asking } = request {
+            let workspace = match self.scope_of(&token, &asking).await {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    let _ = reply.send(Response::error(error));
+                    return;
+                }
+            };
+            self.scope = Some(workspace);
+            Box::pin(self.request(*asking, reply)).await;
+            self.scope = None;
+            return;
+        }
         match self.elsewhere(&request) {
             Some(crate::control::Elsewhere::PassOn(thread, command)) => {
                 return answer_later(reply, self.pass_on(thread, command));
@@ -554,6 +590,7 @@ impl Core {
         }
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
+            Request::Scoped { .. } => Response::error("a request carries one token"),
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
@@ -601,7 +638,9 @@ impl Core {
             Request::DiffStats { thread, turn, base } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref())))
             }
-            Request::Search { query, limit, filters } => to_response(self.search(&query, limit, &filters).await),
+            Request::Search { query, limit, filters } => {
+                to_response(self.search(&query, limit, &filters).await.map(|results| self.scoped_results(results)))
+            }
             Request::Reload => {
                 self.remotes = remote::load_sign_ins(&self.data_dir).into_iter().map(Remote::new).collect();
                 let fresh = redactor(&self.data_dir);
@@ -691,7 +730,10 @@ impl Core {
             Request::FileAt { thread, query } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_for_link(thread, &query)))
             }
-            Request::InFlight { cwd, path } => to_response(self.in_flight_anywhere(&cwd, &path).await),
+            Request::InFlight { cwd, path } => match self.scope_allows_clone(&cwd) {
+                true => to_response(self.in_flight_anywhere(&cwd, &path).await),
+                false => Response::ok(Vec::<crate::protocol::InFlight>::new()),
+            },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
             Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
@@ -746,6 +788,15 @@ impl Core {
             Request::NewProject { path } => to_response(self.new_project(&path).await),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),
+            Request::Workspaces => to_response(Ok::<_, CoreError>(self.workspaces_view())),
+            Request::RunRules { thread, cwd, agent, args } => {
+                to_response(self.run_rules_here(thread.as_deref(), cwd.as_deref(), &agent, &args).await)
+            }
+            Request::SetWorkspaces { workspaces } => to_response(self.set_workspaces(workspaces).map(|()| "workspaces saved")),
+            Request::AssignProject { repo, workspace } => match workspace.map(silt_workspace::WorkspaceId::new).transpose() {
+                Ok(workspace) => to_response(self.assign_project(&repo, workspace).await),
+                Err(error) => Response::error(error),
+            },
             Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
                 Ok(attachments) => to_response(self.acp_prompt_with(&thread, &text, plan, attachments).await),
                 Err(error) => Response::error(error),
@@ -1678,12 +1729,12 @@ impl Core {
     pub(crate) fn find_thread(&self, prefix: &str) -> Result<ThreadId, CoreError> {
         let matches: Vec<ThreadId> = self
             .threads
-            .keys()
-            .filter(|thread| {
+            .iter()
+            .filter(|(thread, record)| {
                 let id = thread.to_string();
-                id.starts_with(prefix) || id.ends_with(prefix)
+                (id.starts_with(prefix) || id.ends_with(prefix)) && self.in_scope(record.family)
             })
-            .copied()
+            .map(|(thread, _)| *thread)
             .collect();
         match matches.as_slice() {
             [thread] => Ok(*thread),
@@ -2026,6 +2077,7 @@ impl Core {
         }
         self.clones.insert(identity.clone(), repo.root().to_owned());
         self.follow_clone_to(repo.root(), &identity).await;
+        self.share_workspace_homes();
     }
 
     /// Remembers a clone for each project a thread was recorded in that has

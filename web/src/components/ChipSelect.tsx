@@ -23,7 +23,8 @@ export function ChipSelect({
   icon?: IconName
   value: string
   onChange: (value: string) => void
-  options: { id: string; name: string; description?: string | null }[]
+  /** An option `refused` is shown greyed out, its reason after its name (ADR 0064). */
+  options: { id: string; name: string; description?: string | null; refused?: string }[]
   mono?: boolean
   ghost?: boolean
 }) {
@@ -38,8 +39,8 @@ export function ChipSelect({
         className={cx('field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none', mono && 'font-mono')}
       >
         {options.map((option) => (
-          <option key={option.id} value={option.id} title={option.description ?? undefined}>
-            {option.name}
+          <option key={option.id} value={option.id} title={option.refused ?? option.description ?? undefined} disabled={Boolean(option.refused)}>
+            {option.refused ? `${option.name} · ${option.refused}` : option.name}
           </option>
         ))}
       </select>

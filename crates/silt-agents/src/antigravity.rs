@@ -526,6 +526,10 @@ impl Agent for Antigravity {
         Ok(transcript_in(&app, &session.id))
     }
 
+    fn bypass_flag(&self, args: &[String]) -> Option<String> {
+        crate::flag_in(args, &["--yolo", "-y", "--dangerously-skip-permissions"], &[("--approval-mode", &["yolo"])])
+    }
+
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         launch.arg("--gemini_dir").arg(overlay(plan)?);

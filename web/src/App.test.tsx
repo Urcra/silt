@@ -121,6 +121,7 @@ test('threads are grouped by project, newest first', () => {
     visibility: null,
     server: null,
     local_only: false,
+    workspace: null,
     cloud: null,
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])

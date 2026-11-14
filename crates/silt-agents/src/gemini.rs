@@ -546,6 +546,14 @@ impl Agent for Gemini {
         Some(session_lines(&translated_text(entries), cwd, id))
     }
 
+    fn bypass_flag(&self, args: &[String]) -> Option<String> {
+        crate::flag_in(args, &["--yolo", "-y"], &[("--approval-mode", &["yolo"])])
+    }
+
+    fn sandbox_support(&self) -> crate::SandboxSupport {
+        crate::SandboxSupport::Sandbox
+    }
+
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         let mut prompt = None;
@@ -569,6 +577,9 @@ impl Agent for Gemini {
         claim_chats_dir(&gemini_dir().ok_or(AgentError::NoHome)?, &plan.cwd)?;
         let overlay = overlay_home(plan)?;
         launch.env("GEMINI_CLI_HOME", overlay);
+        if plan.locks.sandbox {
+            launch.arg("--sandbox");
+        }
         for arg in &plan.args {
             launch.arg(arg);
         }

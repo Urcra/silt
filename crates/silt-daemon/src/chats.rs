@@ -38,11 +38,22 @@ pub fn chats_dir(data_dir: &Path) -> PathBuf {
 /// Makes a new chat's folder, named from the day and the first `words` of
 /// what it's about, and returns it.
 pub fn new_folder(data_dir: &Path, words: &str) -> Result<PathBuf, CoreError> {
+    new_folder_in(data_dir, words, None)
+}
+
+/// [`new_folder`] for a chat in `workspace` (ADR 0064), else in the default.
+pub fn new_folder_in(data_dir: &Path, words: &str, workspace: Option<&str>) -> Result<PathBuf, CoreError> {
+    if let Some(workspace) = workspace {
+        silt_workspace::WorkspaceId::new(workspace).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    }
     let dir = chats_dir(data_dir);
     check_dir(&dir)?;
     let suffix = format!("{:06x}", uuid::Uuid::new_v4().as_u128() & 0xff_ffff);
     let path = dir.join(folder_name(words, now_ms(), &suffix));
     let repo = silt_git::Repo::init_chat(&path)?;
+    if let Some(workspace) = workspace {
+        repo.set_chat_workspace(workspace)?;
+    }
     Ok(repo.root().to_owned())
 }
 

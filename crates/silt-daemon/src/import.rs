@@ -18,6 +18,7 @@ use tokio::sync::oneshot;
 use crate::core::{Core, CoreError, Event, now_ms};
 use crate::homes::Home;
 use crate::protocol::{BusEvent, FoundFolder, FoundSessions, ImportCandidate, ImportedThread, Response, Sent, error_chain};
+use crate::remote::Remote;
 use crate::sessions::{Session, resolve_agent};
 
 /// An import from the web UI under way: the sessions still to import, how
@@ -240,6 +241,8 @@ impl Core {
         let thread = ThreadId(uuid::Uuid::now_v7().as_u128());
         let family_id = FamilyId(uuid::Uuid::now_v7().as_u128());
         self.set_home(family_id, Home::Local).await?;
+        let (workspace, _) = self.project_workspace(&project, repo.as_ref().map(|repo| repo.root()));
+        self.pin_workspace(family_id, &workspace.id).await?;
         let record = ThreadRecord {
             id: thread,
             family: family_id,
@@ -394,17 +397,14 @@ impl Core {
         project: Option<&str>,
         server: Option<&str>,
     ) -> Result<Sent, CoreError> {
-        let remote = match server {
+        let named = match server {
             Some(url) => {
                 let url = url.trim_end_matches('/');
-                self.remotes.iter().find(|remote| remote.config.url == url).cloned().ok_or_else(|| {
+                Some(self.remotes.iter().find(|remote| remote.config.url == url).cloned().ok_or_else(|| {
                     CoreError::Invalid(format!("not signed in to {url}; run `silt auth login --server {url}` first"))
-                })?
+                })?)
             }
-            None => self
-                .default_remote()
-                .cloned()
-                .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into()))?,
+            None => None,
         };
         let held: HashMap<ThreadId, FamilyId> = self
             .store
@@ -436,8 +436,11 @@ impl Core {
         self.redactor = self.redactor.clone().with(added.iter().cloned());
         self.learn_secrets(added);
         let mut secrets = BTreeSet::new();
+        let mut sent_to = BTreeSet::new();
         for thread in &chosen {
             let family = held[thread];
+            let remote = self.send_target(family, named.as_ref())?;
+            sent_to.insert(remote.config.url.clone());
             for delta in self.local_log(family) {
                 secrets.extend(self.redactor.redact_delta(delta).found);
             }
@@ -448,7 +451,35 @@ impl Core {
         }
         self.drive_sync();
         self.announce(BusEvent::Threads);
-        Ok(Sent { threads: chosen.len(), server: remote.config.url.clone(), redacted: secrets.len() })
+        let server = sent_to.into_iter().collect::<Vec<_>>().join(", ");
+        Ok(Sent { threads: chosen.len(), server, redacted: secrets.len() })
+    }
+
+    /// The server an imported family is sent to: the one named, else its
+    /// workspace's (ADR 0064). A workspace that locks its home takes no other.
+    fn send_target(&self, family: FamilyId, named: Option<&Remote>) -> Result<Remote, CoreError> {
+        let workspace = self.family_workspace(family);
+        let home = self.workspace_home(&workspace);
+        let own = match &home {
+            Some(Home::Server(url)) => self.remotes.iter().find(|remote| remote.config.url == *url),
+            _ => None,
+        };
+        if let Some(named) = named {
+            if own.is_none_or(|own| own.config.url != named.config.url) {
+                self.rules(&workspace).check_home().map_err(|refusal| CoreError::Invalid(refusal.to_string()))?;
+            }
+            return Ok(named.clone());
+        }
+        match home {
+            Some(Home::Local) => Err(CoreError::Invalid(format!(
+                "{} keeps its threads on this machine; name a server with --server to send them anyway",
+                workspace.name
+            ))),
+            _ => own
+                .or_else(|| self.default_remote())
+                .cloned()
+                .ok_or_else(|| CoreError::Invalid("not connected to a server; use `silt auth login`".into())),
+        }
     }
 
     /// Imported families kept on this machine until sent, which a project's

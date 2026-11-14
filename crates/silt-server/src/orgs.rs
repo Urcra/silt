@@ -123,7 +123,7 @@ pub(crate) async fn list(
     let db = server.db();
     let admin = is_admin(db, caller.user).await?;
     let rows = sqlx::query!(
-        r#"SELECT o.id AS "id!", o.name, o.default_visibility, o.links AS "links: bool", m.role AS "role?" FROM orgs o
+        r#"SELECT o.id AS "id!", o.name, o.default_visibility, o.links AS "links: bool", o.policy, m.role AS "role?" FROM orgs o
          LEFT JOIN org_members m ON m.org_id = o.id AND m.user_id = ?
          ORDER BY o.name"#,
         caller.user,
@@ -169,6 +169,7 @@ pub(crate) async fn list(
             teams,
             projects,
             links: row.links,
+            policy: serde_json::from_str(&row.policy).unwrap_or_default(),
         });
     }
     Ok(Json(OrgsReply { orgs }))
@@ -286,6 +287,12 @@ pub(crate) async fn change(
             )
             .execute(db)
             .await?;
+        }
+        OrgChange::Policy { org, policy } => {
+            let org_id = org_id(db, &org).await?;
+            require_owner(db, org_id, caller.user).await?;
+            let policy = serde_json::to_string(&policy).map_err(|error| bad_request(error.to_string()))?;
+            sqlx::query!("UPDATE orgs SET policy = ? WHERE id = ?", policy, org_id).execute(db).await?;
         }
         OrgChange::MoveProject { repo, .. } | OrgChange::ProjectSettings { repo, .. } if silt_types::is_chat(&repo) => {
             return Err(bad_request("chats belong to no org and have no settings of a project"));

@@ -30,6 +30,7 @@ export function AgentSettings({
   onSetting,
   more,
   narrow,
+  refusedMode,
 }: {
   modes?: AgentChoiceItem[] | null
   /** The mode chosen, of `modes`. */
@@ -42,6 +43,8 @@ export function AgentSettings({
   /** Anything else of the agent's for the menu, such as stopping it. */
   more?: ReactNode
   narrow: boolean
+  /** Why the workspace's rules refuse a mode, which is then greyed out (ADR 0064). */
+  refusedMode?: (mode: string) => string | undefined
 }) {
   const roomless = useContext(ComposerFolded)
   const folded = narrow || roomless
@@ -70,7 +73,7 @@ export function AgentSettings({
       prefix="Mode"
       value={mode}
       onChange={onMode}
-      options={modes.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+      options={modes.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: refusedMode?.(choice.id) }))}
     />
   )
   const inMenu = folded ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]

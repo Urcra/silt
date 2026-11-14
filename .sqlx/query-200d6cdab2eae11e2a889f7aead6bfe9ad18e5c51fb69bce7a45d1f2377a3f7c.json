@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT server, org, policy FROM org_policies",
+  "describe": {
+    "columns": [
+      {
+        "name": "server",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_policies",
+            "name": "server"
+          }
+        }
+      },
+      {
+        "name": "org",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_policies",
+            "name": "org"
+          }
+        }
+      },
+      {
+        "name": "policy",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_policies",
+            "name": "policy"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "200d6cdab2eae11e2a889f7aead6bfe9ad18e5c51fb69bce7a45d1f2377a3f7c"
+}

@@ -24,15 +24,18 @@ struct DaemonTools {
     thread: String,
     cwd: PathBuf,
     checkout: PathBuf,
+    /// The run's token, which scopes every answer to its workspace (ADR 0064).
+    token: Option<String>,
 }
 
-pub fn serve(thread: &str, checkout: Option<PathBuf>) -> Result<(), Exn<CliError>> {
+pub fn serve(thread: &str, checkout: Option<PathBuf>, token: Option<String>) -> Result<(), Exn<CliError>> {
     let cwd = env::current_dir().or_raise(|| CliError("cannot read the current directory".into()))?;
-    let mut tools = DaemonTools { thread: thread.to_owned(), checkout: checkout.unwrap_or_else(|| cwd.clone()), cwd };
+    let token = token.or_else(|| env::var("SILT_RUN_TOKEN").ok()).filter(|token| !token.is_empty());
+    let mut tools = DaemonTools { thread: thread.to_owned(), checkout: checkout.unwrap_or_else(|| cwd.clone()), cwd, token };
     silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools).or_raise(|| CliError("the MCP connection failed".into()))
 }
 
-fn ask<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
+fn ask_daemon<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
     match client::send(&paths::socket_path(), request, Some(REQUEST_TIMEOUT)) {
         Ok(Response::Ok { data }) => serde_json::from_value(data).map_err(|error| error.to_string()),
         Ok(Response::Error { message }) => Err(message),
@@ -49,6 +52,13 @@ fn number_arg(arguments: &Value, name: &str) -> Option<usize> {
 }
 
 impl DaemonTools {
+    fn ask<T: DeserializeOwned>(&self, request: Request) -> Result<T, String> {
+        match &self.token {
+            Some(token) => ask_daemon(&Request::Scoped { token: token.clone(), asking: Box::new(request) }),
+            None => ask_daemon(&request),
+        }
+    }
+
     fn skills(&self) -> Vec<Skill> {
         let home = silt_os::home_dir();
         conventions::discover_skills(&self.checkout, home.as_deref())
@@ -115,7 +125,7 @@ impl silt_mcp::Backend for DaemonTools {
         let thread = arguments.get("thread").and_then(Value::as_str).map_or_else(|| self.thread.clone(), str::to_owned);
         match tool {
             "silt_history_read" | "silt_fork_read" => {
-                let page: HistoryPage = ask(&Request::HistoryRead {
+                let page: HistoryPage = self.ask(Request::HistoryRead {
                     thread,
                     offset: number_arg(arguments, "offset").unwrap_or(0),
                     limit: number_arg(arguments, "limit").unwrap_or(DEFAULT_LIMIT),
@@ -123,7 +133,7 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(render_page(&page))
             }
             "silt_history_search" => {
-                let hits: Vec<HistoryHit> = ask(&Request::HistorySearch {
+                let hits: Vec<HistoryHit> = self.ask(Request::HistorySearch {
                     thread,
                     query: text_arg(arguments, "query")?,
                     limit: u32::try_from(number_arg(arguments, "limit").unwrap_or(10)).unwrap_or(10),
@@ -138,7 +148,7 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(out)
             }
             "silt_file_history" => {
-                let touches: Vec<FileTouch> = ask(&Request::FileHistory { thread, path: text_arg(arguments, "path")? })?;
+                let touches: Vec<FileTouch> = self.ask(Request::FileHistory { thread, path: text_arg(arguments, "path")? })?;
                 if touches.is_empty() {
                     return Ok("No recorded changes to this file in this thread.".into());
                 }
@@ -161,7 +171,7 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(out)
             }
             "silt_thread_search" => {
-                let hits: Vec<SearchResult> = ask(&Request::Search {
+                let hits: Vec<SearchResult> = self.ask(Request::Search {
                     query: text_arg(arguments, "query")?,
                     limit: u32::try_from(number_arg(arguments, "limit").unwrap_or(20)).unwrap_or(20),
                     filters: Default::default(),
@@ -176,7 +186,8 @@ impl silt_mcp::Backend for DaemonTools {
                 Ok(out)
             }
             "silt_in_flight" => {
-                let found: Vec<InFlight> = ask(&Request::InFlight { cwd: self.cwd.clone(), path: text_arg(arguments, "path")? })?;
+                let found: Vec<InFlight> =
+                    self.ask(Request::InFlight { cwd: self.cwd.clone(), path: text_arg(arguments, "path")? })?;
                 if found.is_empty() {
                     return Ok("No other thread is changing this path.".into());
                 }

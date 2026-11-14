@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE orgs SET policy = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7dbdd2193d87ed7e3182e2788360c1f1529574baacf8a5574be30e5368e8532b"
+}

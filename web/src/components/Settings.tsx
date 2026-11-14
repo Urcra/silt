@@ -14,11 +14,13 @@ import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 import { AddProjectPage, Projects } from './Projects'
+import { WorkspacesSettings } from './Workspaces'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
   {
     label: 'Workspace',
     sections: [
+      ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
     ],
@@ -180,6 +182,7 @@ export function Settings() {
     orgs: <Orgs />,
     notifications: <Notifications />,
     chats: <Chats />,
+    workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
   }
   return (

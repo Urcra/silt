@@ -3,6 +3,8 @@ import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { PRESETS, modeForPreset, permissionModes, startSettings } from '../agentState'
 import { api, type Preset } from '../api'
+import { agentRefused, presetRefused, within } from '../rules'
+import { useWorkspace } from '../workspace'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
 import { useMedia } from '../media'
@@ -14,6 +16,7 @@ import { AgentSettings } from './AgentSettings'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { ComposerBox } from './Composer'
+import { WorkspaceLine } from './NewThread'
 import { Page } from './Page'
 
 /**
@@ -34,10 +37,19 @@ export function NewChat() {
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const agents = choices.data?.agents ?? []
-  const agent = chosenAgent ?? agents[0]?.id ?? ''
+  // In the workspace the sidebar shows, else the default, under its rules (ADR 0064).
+  const shownWorkspace = useWorkspace()
+  const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const workspaceId = shownWorkspace.kind === 'workspace' ? shownWorkspace.id : workspacesQuery.data?.default
+  const workspace = workspacesQuery.data?.workspaces?.find((view) => view.workspace.id === workspaceId)
+  const agent =
+    (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ??
+    agents.find((candidate) => !agentRefused(workspace, candidate.id))?.id ??
+    ''
   const seen = agents.find((candidate) => candidate.id === agent)
   const agentName = seen?.name ?? ''
-  const preset: Preset = chosenPreset ?? chatSettings.data?.preset ?? 'full_access'
+  const wanted: Preset = chosenPreset ?? workspace?.workspace.defaults.chats_preset ?? chatSettings.data?.preset ?? 'full_access'
+  const preset: Preset = within(wanted, workspace?.effective.max_preset) ? wanted : workspace!.effective.max_preset!
   const modes = seen?.modes?.available
   // Claude's modes are its permissions (ADR 0048): the chat's preset picks one until the person does.
   const modesArePermissions = permissionModes(modes)
@@ -63,6 +75,7 @@ export function NewChat() {
         {},
         {
           chat: true,
+          workspace: workspaceId ?? null,
           mode: modesArePermissions ? (mode ?? null) : null,
           settings: settings.map((setting) => [setting.id, chosenSettings[setting.id] ?? setting.current]),
           preset,
@@ -128,7 +141,7 @@ export function NewChat() {
                       setMode(undefined)
                       setChosenSettings({})
                     }}
-                    options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+                    options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: agentRefused(workspace, choice.id) }))}
                   />
                 ) : choices.isPending ? (
                   <Skeleton className="h-6 w-20" />
@@ -151,7 +164,7 @@ export function NewChat() {
                     icon="lock"
                     value={preset}
                     onChange={(chosen) => setPreset(chosen as Preset)}
-                    options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+                    options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
                   />
                 )}
               </>
@@ -165,6 +178,7 @@ export function NewChat() {
           <p className="mt-2.5 px-0.5 text-xs text-fg-2">
             {`On ${device}, in a folder of its own. Private to you${synced ? ', and on your other devices too' : ''}.`}
           </p>
+          {workspace && workspacesQuery.data?.saved && <WorkspaceLine view={workspace} />}
           {choices.isSuccess && agents.length === 0 && (
             <p className="mt-1 px-0.5 text-xs text-warn">
               No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}

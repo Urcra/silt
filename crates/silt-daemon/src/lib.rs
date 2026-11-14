@@ -42,6 +42,7 @@ mod views;
 mod voice;
 mod watch;
 mod web;
+pub mod workspaces;
 
 pub use blame::blame_from_notes;
 pub use capture::{Captured, capture_here};

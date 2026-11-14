@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useId, useState } from 'react'
 import { DEFAULT_PRESETS, PRESETS } from '../agentState'
-import { api, type GitNotes, type Project } from '../api'
+import { api, type GitNotes, type Project, type WorkspaceView } from '../api'
+import { serverLine, workspaceOf } from '../rules'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
@@ -11,6 +12,7 @@ import { useWorkspace } from '../workspace'
 import { ImportOffer } from './ImportOffer'
 import { Mock } from './Mock'
 import { Page } from './Page'
+import { WorkspaceBadge } from './WorkspaceSwitcher'
 
 /** Where a clone of `project` might go: next to this machine's other clones. */
 function suggestedPath(project: Project, projects: Project[]): string {
@@ -35,6 +37,8 @@ const CHANGING = "Changing a project's defaults takes an owner of its org or the
 function ProjectHome({ project }: { project: Project }) {
   const queries = useQueryClient()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const locked = workspaceOf(workspaces.data, project.repo, project.workspace)?.effective.home_locked
   const servers = status.data?.servers ?? []
   if (servers.length === 0) return null
   const chosen = project.home ?? servers[0].url
@@ -50,7 +54,14 @@ function ProjectHome({ project }: { project: Project }) {
   return (
     <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
       New threads sync with
-      <Select aria-label={`where ${project.name} syncs`} value={chosen} onChange={(event) => void choose(event.target.value)} className="text-xs">
+      <Select
+        aria-label={`where ${project.name} syncs`}
+        value={chosen}
+        disabled={Boolean(locked)}
+        title={locked ? "Its workspace's rules keep it on the workspace's server" : undefined}
+        onChange={(event) => void choose(event.target.value)}
+        className="text-xs"
+      >
         {servers.map((server, index) => (
           <option key={server.url} value={server.url}>
             {server.url}
@@ -60,6 +71,47 @@ function ProjectHome({ project }: { project: Project }) {
         <option value="local">This machine only</option>
       </Select>
     </label>
+  )
+}
+
+/** Which workspace the project is in, and why: by rule, set by the person, or matched nothing (ADR 0064). */
+function ProjectWorkspace({ project, views }: { project: Project; views: WorkspaceView[] }) {
+  const queries = useQueryClient()
+  const [refused, setRefused] = useState<string>()
+  const choose = (workspace: string) => {
+    setRefused(undefined)
+    api.assignProject(project.repo, workspace === '' ? null : workspace).then(
+      (said) => {
+        toast(said, 'ok')
+        for (const key of [keys.projects, keys.workspaces, keys.threads]) void queries.invalidateQueries({ queryKey: key })
+      },
+      (failure: unknown) => setRefused(message(failure)),
+    )
+  }
+  return (
+    <span className="flex flex-col gap-1">
+      <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
+        Workspace
+        <Select aria-label={`${project.name}'s workspace`} value={project.workspace ?? ''} onChange={(event) => choose(event.target.value)} className="text-xs">
+          {views.map((view) => (
+            <option key={view.workspace.id} value={view.workspace.id}>
+              {view.workspace.name}
+            </option>
+          ))}
+        </Select>
+        {project.workspace_why && <span className="font-mono text-2xs">{project.workspace_why}</span>}
+        {project.workspace_why === 'set by you' && (
+          <Button variant="ghost" size="sm" onClick={() => choose('')}>
+            Back to the rules
+          </Button>
+        )}
+      </label>
+      {refused && (
+        <span role="alert" className="rounded-sm bg-danger-tint px-2 py-1 text-xs text-fg-1">
+          {refused}
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -364,6 +416,14 @@ export function Projects() {
   // The first project whose defaults this machine sets opens to them; the rest stay folded until asked.
   const first = all.find(settable)
   const [opened, setOpened] = useState<Record<string, boolean>>({})
+  // Grouped by this machine's workspaces once the person made some (ADR 0064).
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const groups: { view?: WorkspaceView; projects: Project[] }[] =
+    !hosted() && workspaces.data?.saved
+      ? workspaces.data.workspaces
+          .map((view) => ({ view, projects: all.filter((project) => (project.workspace ?? workspaces.data.default) === view.workspace.id) }))
+          .filter((group) => group.projects.length > 0)
+      : [{ projects: all }]
   return (
     <Page
       title="Projects"
@@ -388,8 +448,20 @@ export function Projects() {
           From <Link to="/" search={{ pick: 'folder' }} className="text-accent-fg">New thread</Link>, or run <code>silt open</code> in one.
         </EmptyState>
       )}
+      {groups.map((group) => (
+        <section key={group.view?.workspace.id ?? 'all'} aria-label={group.view ? `${group.view.workspace.name} projects` : undefined} className="mb-5 flex flex-col gap-2 last:mb-0">
+          {group.view && (
+            <div className="flex flex-wrap items-center gap-2">
+              <WorkspaceBadge name={group.view.workspace.name} size={20} />
+              <h2 className="text-sm font-medium">{group.view.workspace.name}</h2>
+              <span className="font-mono text-2xs text-fg-2">
+                {serverLine(group.view)}
+                {group.view.workspace.id === workspaces.data?.default && ' · default'}
+              </span>
+            </div>
+          )}
       <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated empty:hidden">
-        {all.map((project) => {
+        {group.projects.map((project) => {
           const own = settable(project)
           const open = own && (opened[project.repo] ?? project === first)
           return (
@@ -431,6 +503,7 @@ export function Projects() {
                   !hosted() && <CloneHere project={project} projects={all} />
                 )}
                 {!hosted() && project.clone && <ProjectHome project={project} />}
+                {!hosted() && workspaces.data?.saved && <ProjectWorkspace project={project} views={workspaces.data.workspaces} />}
               </div>
               {open ? (
                 <div className="mt-1 md:pl-5">
@@ -453,6 +526,8 @@ export function Projects() {
           )
         })}
       </ul>
+        </section>
+      ))}
       {all.some(settable) && <p className="mt-2 text-2xs text-fg-2">{CHANGING}</p>}
     </Page>
   )

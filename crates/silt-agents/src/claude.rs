@@ -27,6 +27,12 @@ pub fn config_dir() -> Option<PathBuf> {
     silt_os::home_dir().map(|home| home.join(".claude"))
 }
 
+/// [`config_dir`] for a session in `cwd`, whose workspace may give Claude
+/// Code a directory of its own (ADR 0064).
+fn config_dir_in(cwd: &Path) -> Option<PathBuf> {
+    crate::agent_home_in("CLAUDE_CONFIG_DIR", ".claude", cwd)
+}
+
 /// The directory name Claude Code uses for sessions started in `cwd`.
 pub fn project_slug(cwd: &Path) -> String {
     cwd.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect()
@@ -197,7 +203,7 @@ impl Agent for ClaudeCode {
     }
 
     fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
-        Some(session_paths(&config_dir()?, cwd, id).transcript)
+        Some(session_paths(&config_dir_in(cwd)?, cwd, id).transcript)
     }
 
     fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
@@ -240,7 +246,7 @@ impl Agent for ClaudeCode {
     }
 
     fn discover(&self, cwd: &Path, since_ms: i64, known: &[String]) -> Option<Found> {
-        let project = config_dir()?.join("projects").join(project_slug(cwd));
+        let project = config_dir_in(cwd)?.join("projects").join(project_slug(cwd));
         fs::read_dir(project)
             .ok()?
             .flatten()
@@ -259,16 +265,28 @@ impl Agent for ClaudeCode {
     }
 
     fn on_disk(&self, _dirs: &[PathBuf]) -> Vec<OnDisk> {
-        config_dir().map(|config| on_disk_in(&config)).unwrap_or_default()
+        crate::agent_homes("CLAUDE_CONFIG_DIR", ".claude").iter().flat_map(|config| on_disk_in(config)).collect()
     }
 
     fn restore(&self, root: &Path, cwd: &Path, session: &CheckedSession) -> Result<PathBuf, AgentError> {
-        let config = config_dir().ok_or(AgentError::NoHome)?;
+        let config = config_dir_in(cwd).ok_or(AgentError::NoHome)?;
         Ok(restore_into(&config, root, cwd, session)?.transcript)
     }
 
     fn translate(&self, entries: &[Entry], cwd: &Path, id: &str) -> Option<Vec<String>> {
         Some(transcript_lines(&translated_text(entries), cwd, id))
+    }
+
+    fn bypass_flag(&self, args: &[String]) -> Option<String> {
+        crate::flag_in(
+            args,
+            &["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"],
+            &[("--permission-mode", &["bypassPermissions", "auto", "dontAsk"])],
+        )
+    }
+
+    fn sandbox_support(&self) -> crate::SandboxSupport {
+        crate::SandboxSupport::Isolate
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
@@ -293,7 +311,8 @@ impl Agent for ClaudeCode {
             "mcpServers": { "silt": { "command": plan.mcp.command.to_string_lossy(), "args": plan.mcp.args } }
         });
         launch.arg("--mcp-config").arg(mcp.to_string());
-        launch.arg("--settings").arg(hook_settings(&plan.hook_command, cfg!(windows).then_some(plan.hook_program.as_path())));
+        let hooks = hook_settings(&plan.hook_command, cfg!(windows).then_some(plan.hook_program.as_path()));
+        launch.arg("--settings").arg(locked_settings(&hooks, &plan.locks));
         if let Some(instructions) = &plan.instructions {
             launch.arg("--append-system-prompt").arg(instructions);
         }
@@ -664,6 +683,33 @@ pub struct HookInput {
     /// For `SessionStart`: `startup`, `resume`, `clear` or `compact`.
     #[serde(default)]
     pub source: Option<String>,
+}
+
+/// `settings` with the workspace's locks in Claude Code's own keys, which
+/// it honors from `--settings` (ADR 0064).
+pub fn locked_settings(settings: &str, locks: &crate::Locks) -> String {
+    let mut settings: Value = serde_json::from_str(settings).unwrap_or_else(|_| json!({}));
+    if locks.no_bypass {
+        settings["permissions"]["disableBypassPermissionsMode"] = json!("disable");
+        settings["disableAutoMode"] = json!("disable");
+    }
+    if locks.sandbox {
+        settings["sandbox"] = json!({ "enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false });
+    }
+    if !locks.deny.is_empty() {
+        let paths: Vec<String> = locks.deny.iter().map(|path| path.to_string_lossy().replace('\\', "/")).collect();
+        settings["sandbox"]["filesystem"]["denyRead"] = json!(paths);
+        settings["sandbox"]["filesystem"]["denyWrite"] = json!(paths);
+        let rules: Vec<String> = paths
+            .iter()
+            .flat_map(|path| {
+                let path = path.trim_end_matches('/');
+                ["Read", "Edit"].map(|tool| format!("{tool}(/{path}/**)"))
+            })
+            .collect();
+        settings["permissions"]["deny"] = json!(rules);
+    }
+    settings.to_string()
 }
 
 /// Hook events Silt listens to.
