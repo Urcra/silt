@@ -1,7 +1,7 @@
 //! Whether git itself rewrote the worktree while a tool ran: a checkout,
 //! pull, merge, rebase, reset or stash moves HEAD or the stash, or leaves a
 //! merge in progress. A commit moves HEAD too, but over files the agent
-//! already wrote, so it doesn't count (ADR 0066).
+//! already wrote, so it doesn't count (ADR 0069).
 
 use std::fmt;
 use std::str::FromStr;

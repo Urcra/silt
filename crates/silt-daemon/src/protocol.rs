@@ -83,7 +83,7 @@ pub enum Request {
         #[serde(default)]
         path: Option<String>,
         /// Leave out what git itself rewrote, as a checkout, pull or stash
-        /// does (ADR 0066); not against a branch, which is git's already.
+        /// does (ADR 0069); not against a branch, which is git's already.
         #[serde(default)]
         hide_git: bool,
     },
@@ -293,7 +293,7 @@ pub enum Request {
         #[serde(default)]
         base: Option<String>,
         /// Place code comments as a diff with git's rewrites left out shows
-        /// the lines (ADR 0066).
+        /// the lines (ADR 0069).
         #[serde(default)]
         hide_git: bool,
         cwd: PathBuf,

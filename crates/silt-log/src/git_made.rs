@@ -1,6 +1,6 @@
 //! The edits git made rather than the agent or the person: those credited
 //! to a tool call a `GitOp::Rewrote` names, and those a `GitOp::Made` lists,
-//! which a diff may leave out (ADR 0066).
+//! which a diff may leave out (ADR 0069).
 
 use std::collections::{BTreeMap, HashSet};
 

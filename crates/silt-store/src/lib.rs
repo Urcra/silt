@@ -970,7 +970,7 @@ impl Store {
     }
 
     /// The git state `checkout` was in when `thread` last looked, and the
-    /// thread's head then (ADR 0066).
+    /// thread's head then (ADR 0069).
     pub async fn checkout_git_state(
         &self,
         checkout: CheckoutId,
@@ -1008,7 +1008,7 @@ impl Store {
         Ok(())
     }
 
-    /// Keeps the git state a tool call started at (ADR 0066).
+    /// Keeps the git state a tool call started at (ADR 0069).
     pub async fn put_tool_git_state(
         &self,
         agent: &str,

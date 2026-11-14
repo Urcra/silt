@@ -410,7 +410,7 @@ struct DiffQuery {
     limit: Option<usize>,
     /// One file, as a diff too large to read whole is read.
     path: Option<String>,
-    /// `hide` leaves out what git itself rewrote (ADR 0066).
+    /// `hide` leaves out what git itself rewrote (ADR 0069).
     #[serde(default)]
     git: Option<String>,
 }

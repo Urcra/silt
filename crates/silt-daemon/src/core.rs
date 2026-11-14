@@ -996,7 +996,7 @@ impl Core {
     /// When git moved the checkout's refs since its thread last looked,
     /// other than by a commit, the edits recorded as the person's since
     /// then are git's, as a `git pull` run by hand between turns makes
-    /// (ADR 0066). A tool call that ran git is the tool's (`note_git`).
+    /// (ADR 0069). A tool call that ran git is the tool's (`note_git`).
     async fn note_git_since(&mut self, checkout_id: CheckoutId) -> Result<(), CoreError> {
         let checkout = self.checkout(checkout_id)?;
         let (family_id, thread, now) = (checkout.family, checkout.record.thread, checkout.repo.git_state());

@@ -65,7 +65,7 @@ export const DiffPanel = memo(function DiffPanel({
     view === 'thread' ? '' : view === 'other' ? (other === 'commit' ? (commit ? `commit:${commit}` : '') : other) : view
   // Lines the change deleted are a version of the thread's, which a commit of main isn't.
   const commentBase = base === '' ? 'start' : base === 'main' ? undefined : base
-  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0066).
+  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0069).
   const [hideGitSetting, setHideGit] = useHideGit()
   const hideGit = hideGitSetting && view !== 'main'
   // Its files first: one too large to read whole is read a file at a time.
@@ -163,7 +163,7 @@ export const DiffPanel = memo(function DiffPanel({
   )
 })
 
-/** Leaves out of the diffs what git itself rewrote, as a checkout, pull or stash does (ADR 0066). */
+/** Leaves out of the diffs what git itself rewrote, as a checkout, pull or stash does (ADR 0069). */
 export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
   return (
     <label

@@ -87,7 +87,7 @@ impl Core {
 
     /// Anchors for lines `start..=end` (1-based) of `path` as the thread
     /// sees it now, or as it was at the diff base `base`; with `hide_git`,
-    /// numbered without git's rewrites (ADR 0066).
+    /// numbered without git's rewrites (ADR 0069).
     fn code_target(
         &mut self,
         family_id: FamilyId,

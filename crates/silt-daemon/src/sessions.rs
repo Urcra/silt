@@ -1322,7 +1322,7 @@ impl Core {
 
     /// Keeps the git state a tool call starts at, and records when it ends
     /// whether git rewrote the worktree meanwhile, so the edits credited to
-    /// it read as git's (ADR 0066). In the shared step, as a hook's process
+    /// it read as git's (ADR 0069). In the shared step, as a hook's process
     /// may see the start and another the end (ADR 0018).
     async fn note_git(&mut self, session_id: &str, mark: &TurnMark) -> Result<(), CoreError> {
         let Some(session) = self.session(session_id) else {

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { store, stored } from './stored'
 
-/** Whether diffs leave out what git itself rewrote in a tool call, as a checkout, pull or stash does (ADR 0066). Off until the person ticks it, then kept in this browser. */
+/** Whether diffs leave out what git itself rewrote in a tool call, as a checkout, pull or stash does (ADR 0069). Off until the person ticks it, then kept in this browser. */
 const KEY = 'silt.hide-git'
 
 const listeners = new Set<() => void>()

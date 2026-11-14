@@ -39,7 +39,7 @@ export interface Draft {
   quote: string[]
   /** The diff base deleted lines are numbered in. */
   base?: string
-  /** Numbered as the diff showed them with git's rewrites left out (ADR 0066). */
+  /** Numbered as the diff showed them with git's rewrites left out (ADR 0069). */
   hideGit?: boolean
 }
 

@@ -94,7 +94,7 @@ async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, com
 }
 
 /// Whose view of which merge request, with git's rewrites left out or not
-/// (ADR 0066).
+/// (ADR 0069).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MrView {
     user: crate::UserId,

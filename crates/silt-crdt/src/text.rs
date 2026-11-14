@@ -404,7 +404,7 @@ impl TextDoc {
 
     /// The text as of the version holding exactly the ids `contains` takes,
     /// which needn't be causally closed: with some edits left out, such as
-    /// those git made (ADR 0066), the others still read in place.
+    /// those git made (ADR 0069), the others still read in place.
     pub fn text_where(&self, contains: impl Fn(DeltaId) -> bool) -> String {
         let mut text = String::with_capacity(self.len());
         for fragment in self.fragments.iter() {

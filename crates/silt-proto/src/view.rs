@@ -621,7 +621,7 @@ pub enum CommentOn {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
         /// The lines are numbered as a diff with git's rewrites left out
-        /// shows them (ADR 0066).
+        /// shows them (ADR 0069).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hide_git: bool,
     },
@@ -744,7 +744,7 @@ pub struct FileQuery {
 }
 
 /// A diff's query: `git=hide` leaves out what git itself rewrote, as a
-/// checkout, pull or stash does (ADR 0066).
+/// checkout, pull or stash does (ADR 0069).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitQuery {
     #[serde(default)]

@@ -413,7 +413,7 @@ impl Core {
     }
 
     /// [`Self::changes`] with the edits git made left out on both sides
-    /// (ADR 0066).
+    /// (ADR 0069).
     pub(crate) fn changes_without_git(
         &self,
         family_id: FamilyId,

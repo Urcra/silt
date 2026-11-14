@@ -109,7 +109,7 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-/** Which diff: one turn's or since a base, with what git itself rewrote left out or not (ADR 0066). */
+/** Which diff: one turn's or since a base, with what git itself rewrote left out or not (ADR 0069). */
 export interface DiffOptions {
   turn?: number
   base?: string

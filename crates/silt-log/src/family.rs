@@ -742,7 +742,7 @@ impl Family {
     }
 
     /// The file's content as of the version holding exactly the ids
-    /// `contains` takes, which needn't be causally closed (ADR 0066).
+    /// `contains` takes, which needn't be causally closed (ADR 0069).
     pub fn file_where(&self, inode: InodeId, contains: impl Fn(DeltaId) -> bool) -> Option<FileView> {
         let (_, content) = self.files.get(&inode)?.content_at(&contains)?;
         Some(match content {
