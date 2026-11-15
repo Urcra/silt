@@ -3,7 +3,7 @@
 //! answers it (`silt_proto::view`). Code comments and diffs need a checkout
 //! and stay with the daemons.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use axum::extract::{Extension, Path, Query, State};
@@ -159,12 +159,37 @@ impl Readable {
     }
 }
 
-/// A thread's own history entries, each with the delta it came from.
+/// A thread's history entries, each with the delta it came from: its own,
+/// and for a fork or a thread that pulled, what it inherited and what
+/// pulls brought in, as the daemon tells them.
 pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
+    let items: Vec<(&Delta, &'static str, bool)> = if silt_log::has_lineage_in(log, thread) {
+        let mut graph = silt_crdt::CausalGraph::new();
+        for delta in log {
+            // A delta whose parents this log lacks can't be in a lineage it tells.
+            let _ = graph.add(delta.span, &delta.parents);
+        }
+        silt_log::history_in(log, &graph, thread)
+            .into_iter()
+            .map(|item| {
+                let origin = match item.source {
+                    silt_log::HistorySource::Own => "own",
+                    silt_log::HistorySource::Inherited => "inherited",
+                    silt_log::HistorySource::Upstream => "upstream",
+                };
+                (item.delta, origin, item.rewound)
+            })
+            .collect()
+    } else {
+        let rewound = silt_log::rewound_in(log, thread);
+        log.iter()
+            .filter(|delta| delta.thread == thread)
+            .map(|delta| (delta, "own", rewound.contains(&delta.span.first())))
+            .collect()
+    };
     let mut reader = HistoryReader::default();
-    let rewound = silt_log::rewound_in(log, thread);
     let mut out = Vec::new();
-    for delta in log.iter().filter(|delta| delta.thread == thread) {
+    for (delta, origin, rewound) in items {
         let shown: Vec<silt_agents::tool::Shown> = match &delta.op {
             Op::Conv(ConvOp::Native { session, file, line }) => {
                 let side = match file {
@@ -178,10 +203,8 @@ pub(crate) fn entries(log: &[Delta], thread: ThreadId) -> Vec<(DeltaId, HistoryE
         };
         let time_ms = entry_time(delta);
         for shown in shown {
-            let mut entry = history_entry(shown, thread, time_ms);
-            entry.index = out.len();
-            entry.rewound = rewound.contains(&delta.span.first());
-            out.push((delta.span.first(), entry));
+            let index = out.len();
+            out.push((delta.span.first(), shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound)));
         }
     }
     out
@@ -228,7 +251,11 @@ pub(crate) fn title(own: &[&Delta], first_prompt: Option<&str>) -> Option<String
 
 /// The text of the first prompt among `history`'s entries.
 pub(crate) fn first_prompt(history: &[(DeltaId, HistoryEntry)]) -> Option<&str> {
-    history.iter().find(|(_, entry)| entry.kind == "user" && entry.side.is_none()).map(|(_, entry)| entry.text.as_str())
+    // A fork's inherited prompts are its source's, not its own.
+    history
+        .iter()
+        .find(|(_, entry)| entry.kind == "user" && entry.side.is_none() && entry.origin == "own")
+        .map(|(_, entry)| entry.text.as_str())
 }
 
 /// The titles of the threads the person sees, as their thread list shows them.
@@ -330,18 +357,41 @@ async fn history(
     let viewer = server.viewer(browser.user).await?;
     let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
+    let total_and_entries = |all: &[(DeltaId, HistoryEntry)], rewound: Option<&HashSet<DeltaId>>| {
+        let total = all.len();
+        let offset = page.offset.unwrap_or(0).min(total);
+        let limit = page.limit.unwrap_or(total);
+        let entries = (offset..)
+            .zip(all.iter().skip(offset).take(limit))
+            .map(|(index, (delta, entry))| HistoryEntry {
+                index,
+                rewound: rewound.map_or(entry.rewound, |rewound| rewound.contains(delta)),
+                ..entry.clone()
+            })
+            .collect();
+        (total, entries)
+    };
+    if let Some(entries) = lineage_entries(&server, &viewer, row).await {
+        let (total, entries) = total_and_entries(&entries, None);
+        return Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }));
+    }
     let index = server.shared.index.lock().await;
     let Some(history) = index.history(row.id) else {
         return Ok(Json(HistoryPage { thread: row.id.to_string(), total: 0, entries: Vec::new() }));
     };
-    let total = history.entries.len();
-    let offset = page.offset.unwrap_or(0).min(total);
-    let limit = page.limit.unwrap_or(total);
-    let entries = (offset..)
-        .zip(history.entries.iter().skip(offset).take(limit))
-        .map(|(index, (delta, entry))| HistoryEntry { index, rewound: history.rewound.contains(delta), ..entry.clone() })
-        .collect();
+    let (total, entries) = total_and_entries(&history.entries, Some(&history.rewound));
     Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
+}
+
+/// A fork's or a thread that pulled's whole history, worked out from what
+/// the person may read of its family; `None` for a thread whose own deltas
+/// are its history, which the index pages through faster.
+async fn lineage_entries(server: &Server, viewer: &Viewer, row: &Row) -> Option<ThreadEntries> {
+    if !server.shared.index.lock().await.has_lineage(row.id) {
+        return None;
+    }
+    let mut slot = server.room(row.family).await?;
+    Some(slot.browsed(row.family, viewer).entries(row.id))
 }
 
 /// An artifact's content, or the CSS its design system compiled to, if an
@@ -355,22 +405,20 @@ async fn artifact_content(
     let viewer = server.viewer(browser.user).await?;
     let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
-    let media_type = server
-        .shared
-        .index
-        .lock()
-        .await
-        .history(row.id)
-        .and_then(|history| {
-            history.entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
-                if artifact.blob == blob {
-                    Some(artifact.media_type.clone())
-                } else {
-                    (artifact.style.as_deref() == Some(blob.as_str())).then(|| "text/css".to_owned())
-                }
-            })
+    let named = |entries: &[(DeltaId, HistoryEntry)]| {
+        entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
+            if artifact.blob == blob {
+                Some(artifact.media_type.clone())
+            } else {
+                (artifact.style.as_deref() == Some(blob.as_str())).then(|| "text/css".to_owned())
+            }
         })
-        .ok_or_else(not_found)?;
+    };
+    let media_type = match lineage_entries(&server, &viewer, row).await {
+        Some(entries) => named(&entries),
+        None => server.shared.index.lock().await.history(row.id).and_then(|history| named(&history.entries)),
+    }
+    .ok_or_else(not_found)?;
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
     let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;
     Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))

@@ -398,16 +398,15 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     let Ok(mut bytes) = server.shared.blobs.get(hash).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if artifact.kind == "html"
-        && let Some(style) = artifact.style.as_deref().and_then(|style| style.parse().ok())
-        && let Ok(css) = server.shared.blobs.get(style).await
-    {
-        bytes = with_style(&bytes, &css);
-    }
     let vendor =
         (artifact.kind == "html" && server.config().artifact_proxy).then(|| format!("{}/vendor/", server.config().public_url()));
-    if let Some(vendor) = &vendor {
-        bytes = silt_design::frame::through_vendor(&String::from_utf8_lossy(&bytes), vendor).into_bytes();
+    if artifact.kind == "html" && (artifact.style.is_some() || vendor.is_some()) {
+        let css = match artifact.style.as_deref().and_then(|style| style.parse().ok()) {
+            Some(style) => server.shared.blobs.get(style).await.ok(),
+            None => None,
+        };
+        let css = css.map(|css| String::from_utf8_lossy(&css).into_owned());
+        bytes = framed(&String::from_utf8_lossy(&bytes), css.as_deref(), vendor.as_deref()).into_bytes();
     }
     let policy = format!("sandbox allow-scripts; {}", silt_design::frame::policy(vendor.as_deref()));
     let media_type = if artifact.media_type.starts_with("text/") {
@@ -430,22 +429,12 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     response
 }
 
-/// A page with its design system's CSS ahead of its own content, after its
-/// doctype, as the web UI gives it (ADR 0071).
-fn with_style(html: &[u8], css: &[u8]) -> Vec<u8> {
-    let text = String::from_utf8_lossy(html);
-    let trimmed = text.trim_start();
-    let doctype_end = trimmed
-        .get(..9)
-        .filter(|start| start.eq_ignore_ascii_case("<!doctype"))
-        .and_then(|_| trimmed.find('>'))
-        .map(|end| end + 1);
-    let (doctype, rest) = match doctype_end {
-        Some(end) => trimmed.split_at(end),
-        None => ("<!doctype html>", trimmed),
-    };
-    let css = String::from_utf8_lossy(css).replace("</", "<\\/");
-    format!("{doctype}<style data-silt=\"design-system\">{css}</style>{rest}").into_bytes()
+/// An HTML version as a link's frame gets it: its design system's CSS
+/// after its doctype, as every surface composes it, with the policy sent as
+/// a header rather than a `<meta>` (ADR 0071).
+fn framed(html: &str, css: Option<&str>, vendor: Option<&str>) -> String {
+    use silt_design::frame::{FrameParts, compose};
+    compose(html, &FrameParts { style: css, probe: false, vendor, policy_meta: false, ..FrameParts::default() })
 }
 
 /// A CDN file an artifact's frame loads through this server, when its
@@ -546,7 +535,7 @@ mod tests {
 
     #[test]
     fn a_design_systems_css_goes_after_the_doctype_and_cant_close_its_element() {
-        let styled = |html: &str| String::from_utf8(with_style(html.as_bytes(), b":root { --bg: #fff; }</style>")).expect("text");
+        let styled = |html: &str| framed(html, Some(":root { --bg: #fff; }</style>"), None);
         assert_eq!(
             styled("<!DOCTYPE html><p>hi</p>"),
             "<!DOCTYPE html><style data-silt=\"design-system\">:root { --bg: #fff; }<\\/style></style><p>hi</p>"

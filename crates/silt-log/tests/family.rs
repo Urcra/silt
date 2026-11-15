@@ -357,6 +357,15 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
     assert_eq!(view_text(&family, FORK, main), "// fork\n// a\n// a2\nfn main() {}\n");
     assert_eq!(view_text(&family, THREAD, main), "// a\n// a2\nfn main() {}\n", "the source never changes");
     assert_eq!(lines(&family, THREAD), vec![("source 1".into(), Own), ("source 2".into(), Own)]);
+    same_history_from_the_log(&family, &[THREAD, FORK]);
+}
+
+/// A server works histories out from the log alone; it must tell what the
+/// family's projection does.
+fn same_history_from_the_log(family: &Family, threads: &[ThreadId]) {
+    for &thread in threads {
+        assert_eq!(silt_log::history_in(family.log(), family.graph(), thread), family.history(thread), "thread {}", thread.0);
+    }
 }
 
 #[test]
@@ -420,6 +429,7 @@ fn repeated_pulls_both_ways_keep_each_line_once() {
             (merge(FORK), Own),
         ]
     );
+    same_history_from_the_log(&family, &[THREAD, FORK]);
 }
 
 #[test]

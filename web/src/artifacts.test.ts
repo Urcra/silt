@@ -16,6 +16,7 @@ import {
   throughVendor,
   versionOf,
 } from './artifacts'
+import { FRAME_FIXTURES } from './frame.generated'
 
 function artifact(index: number, id: string, version: number, extra: Partial<ArtifactView> = {}): HistoryEntry {
   return {
@@ -150,5 +151,21 @@ describe('artifacts', () => {
     expect(prompt).toContain('Comments on the artifact "Rescan benchmark" (id aaaaaaaaaaaa, version 2):')
     expect(prompt).toContain('- > the bars\n  \n  Make it blue')
     expect(prompt).toContain('Make a new version with silt_artifact and id aaaaaaaaaaaa.')
+  })
+})
+
+describe('the frame contract', () => {
+  it('composes every frame as silt_design::frame::compose does', () => {
+    for (const fixture of FRAME_FIXTURES) {
+      const composed = sandboxedDocument(fixture.html, {
+        style: fixture.style,
+        theme: fixture.theme,
+        probe: fixture.probe,
+        vendor: fixture.vendor,
+        parent: fixture.parent,
+        policyMeta: fixture.policyMeta,
+      })
+      expect(composed).toBe(fixture.out)
+    }
   })
 })

@@ -418,60 +418,9 @@ impl Family {
         self.history_within(thread, &mut Expansion::default()).0.to_vec()
     }
 
-    /// `history`, with what this call already worked out. The flag says
-    /// whether the history is whole rather than cut short where threads pull
-    /// from each other both ways; only whole ones are reused.
     fn history_within<'a>(&'a self, thread: ThreadId, expansion: &mut Expansion<'a>) -> (Rc<[HistoryItem<'a>]>, bool) {
-        if let Some(done) = expansion.done.get(&thread) {
-            return (Rc::clone(done), true);
-        }
-        let Some(state) = self.threads.get(&thread) else {
-            return (Rc::from([]), true);
-        };
-        if !expansion.open.insert(thread) {
-            return (Rc::from([]), false);
-        }
-        let mut whole = true;
-        let mut items = Vec::new();
-        if let (Some(source), Some(point)) = (state.forked_from, &state.fork_point) {
-            let before = self.graph.version_vector(point);
-            let (inherited, inherited_whole) = self.history_within(source, expansion);
-            whole &= inherited_whole;
-            items.extend(inherited.iter().filter(|item| before.contains(item.delta.span.first())).map(|item| HistoryItem {
-                // What the source pulled in stays upstream progress.
-                source: match item.source {
-                    HistorySource::Upstream => HistorySource::Upstream,
-                    HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
-                },
-                ..*item
-            }));
-        }
-        let mut seen: HashSet<DeltaId> = items.iter().map(|item| item.delta.span.first()).collect();
-        let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
-        own.sort_unstable();
-        for index in own {
-            let delta = &self.log.all()[index];
-            if let Op::Merge { from, mr: None } = delta.op {
-                let merged = self.graph.version_vector(&delta.parents);
-                let (upstream, upstream_whole) = self.history_within(from, expansion);
-                whole &= upstream_whole;
-                for item in upstream.iter() {
-                    let id = item.delta.span.first();
-                    if merged.contains(id) && seen.insert(id) {
-                        items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream, rewound: item.rewound });
-                    }
-                }
-            }
-            seen.insert(delta.span.first());
-            items.push(HistoryItem { delta, source: HistorySource::Own, rewound: false });
-        }
-        mark_rewound(&mut items);
-        expansion.open.remove(&thread);
-        let items: Rc<[HistoryItem<'a>]> = items.into();
-        if whole {
-            expansion.done.insert(thread, Rc::clone(&items));
-        }
-        (items, whole)
+        let source = FamilyThreads(self);
+        expand(&source, thread, expansion)
     }
 
     /// The comments on `thread`, oldest first by causal order, so every
@@ -492,6 +441,158 @@ impl Family {
     pub fn merge_requests(&self) -> Vec<MergeRequest> {
         merge_requests_in(self.log.all())
     }
+}
+
+/// Where one thread's history comes from: its fork and its own
+/// conversation deltas and merges, as indices into the family's log.
+struct ThreadLines {
+    forked_from: Option<ThreadId>,
+    fork_point: Option<Frontier>,
+    own: Vec<usize>,
+}
+
+/// What a history is worked out from: a family's projection, or its log
+/// alone as a server holds it.
+trait Threads<'a> {
+    fn lines(&self, thread: ThreadId) -> Option<ThreadLines>;
+    fn delta(&self, index: usize) -> &'a Delta;
+    fn graph(&self) -> &CausalGraph;
+}
+
+struct FamilyThreads<'a>(&'a Family);
+
+impl<'a> Threads<'a> for FamilyThreads<'a> {
+    fn lines(&self, thread: ThreadId) -> Option<ThreadLines> {
+        let state = self.0.threads.get(&thread)?;
+        let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
+        own.sort_unstable();
+        Some(ThreadLines { forked_from: state.forked_from, fork_point: state.fork_point.clone(), own })
+    }
+
+    fn delta(&self, index: usize) -> &'a Delta {
+        &self.0.log.all()[index]
+    }
+
+    fn graph(&self) -> &CausalGraph {
+        &self.0.graph
+    }
+}
+
+/// A family's threads read from its deltas alone.
+struct LogThreads<'a, 'g> {
+    log: &'a [Delta],
+    graph: &'g CausalGraph,
+    threads: HashMap<ThreadId, ThreadLines>,
+}
+
+impl<'a, 'g> LogThreads<'a, 'g> {
+    fn new(log: &'a [Delta], graph: &'g CausalGraph) -> Self {
+        let mut threads: HashMap<ThreadId, ThreadLines> = HashMap::new();
+        for (index, delta) in log.iter().enumerate() {
+            let lines = threads.entry(delta.thread).or_insert_with(|| ThreadLines {
+                forked_from: None,
+                fork_point: None,
+                own: Vec::new(),
+            });
+            match &delta.op {
+                Op::Fork { from } => {
+                    lines.forked_from = Some(*from);
+                    lines.fork_point = Some(delta.parents.clone());
+                }
+                Op::Conv(_) | Op::Merge { .. } => lines.own.push(index),
+                _ => {}
+            }
+        }
+        Self { log, graph, threads }
+    }
+}
+
+impl<'a> Threads<'a> for LogThreads<'a, '_> {
+    fn lines(&self, thread: ThreadId) -> Option<ThreadLines> {
+        self.threads.get(&thread).map(|lines| ThreadLines {
+            forked_from: lines.forked_from,
+            fork_point: lines.fork_point.clone(),
+            own: lines.own.clone(),
+        })
+    }
+
+    fn delta(&self, index: usize) -> &'a Delta {
+        &self.log[index]
+    }
+
+    fn graph(&self) -> &CausalGraph {
+        self.graph
+    }
+}
+
+/// A thread's history, with what this call already worked out: for a fork,
+/// the source chain's conversation up to the fork point, then its own, with
+/// what each pull brought in from upstream just before it. The flag says
+/// whether the history is whole rather than cut short where threads pull
+/// from each other both ways; only whole ones are reused.
+fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expansion<'a>) -> (Rc<[HistoryItem<'a>]>, bool) {
+    if let Some(done) = expansion.done.get(&thread) {
+        return (Rc::clone(done), true);
+    }
+    let Some(lines) = threads.lines(thread) else {
+        return (Rc::from([]), true);
+    };
+    if !expansion.open.insert(thread) {
+        return (Rc::from([]), false);
+    }
+    let mut whole = true;
+    let mut items = Vec::new();
+    if let (Some(source), Some(point)) = (lines.forked_from, &lines.fork_point) {
+        let before = threads.graph().version_vector(point);
+        let (inherited, inherited_whole) = expand(threads, source, expansion);
+        whole &= inherited_whole;
+        items.extend(inherited.iter().filter(|item| before.contains(item.delta.span.first())).map(|item| HistoryItem {
+            // What the source pulled in stays upstream progress.
+            source: match item.source {
+                HistorySource::Upstream => HistorySource::Upstream,
+                HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
+            },
+            ..*item
+        }));
+    }
+    let mut seen: HashSet<DeltaId> = items.iter().map(|item| item.delta.span.first()).collect();
+    for index in lines.own {
+        let delta = threads.delta(index);
+        if let Op::Merge { from, mr: None } = delta.op {
+            let merged = threads.graph().version_vector(&delta.parents);
+            let (upstream, upstream_whole) = expand(threads, from, expansion);
+            whole &= upstream_whole;
+            for item in upstream.iter() {
+                let id = item.delta.span.first();
+                if merged.contains(id) && seen.insert(id) {
+                    items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream, rewound: item.rewound });
+                }
+            }
+        }
+        seen.insert(delta.span.first());
+        items.push(HistoryItem { delta, source: HistorySource::Own, rewound: false });
+    }
+    mark_rewound(&mut items);
+    expansion.open.remove(&thread);
+    let items: Rc<[HistoryItem<'a>]> = items.into();
+    if whole {
+        expansion.done.insert(thread, Rc::clone(&items));
+    }
+    (items, whole)
+}
+
+/// [`Family::history`] from a family's deltas alone, in the order they were
+/// taken, with the graph that holds them, as a server sees them: what a
+/// fork inherited, what pulls brought in, and what reverts rewound.
+pub fn history_in<'a>(log: &'a [Delta], graph: &CausalGraph, thread: ThreadId) -> Vec<HistoryItem<'a>> {
+    let threads = LogThreads::new(log, graph);
+    expand(&threads, thread, &mut Expansion::default()).0.to_vec()
+}
+
+/// Whether `thread`'s history reaches past its own deltas: it's a fork or
+/// it pulled, so [`history_in`] tells more than its own deltas do.
+pub fn has_lineage_in(log: &[Delta], thread: ThreadId) -> bool {
+    log.iter().any(|delta| delta.thread == thread && matches!(delta.op, Op::Fork { .. } | Op::Merge { mr: None, .. }))
 }
 
 /// [`Family::comments`] over any deltas of a family, such as the ones a

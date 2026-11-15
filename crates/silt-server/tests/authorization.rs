@@ -1461,3 +1461,59 @@ async fn the_hosted_app_shows_a_subagent_inside_its_call_and_not_as_a_turn() {
     assert_eq!(turns.as_array().map(Vec::len), Some(1), "{turns}");
     assert_eq!(turns[0]["prompt"], "Look into the lexer", "the turn's prompt is the thread's own, not the subagent's");
 }
+
+/// The hosted app tells a fork's history as the daemon does: the source's
+/// conversation up to the fork point, then its own (ADR 0010, ADR 0068).
+#[tokio::test]
+async fn a_forks_history_in_the_hosted_app_includes_what_it_inherited() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    const FORK: ThreadId = ThreadId(304);
+    let mut world = world(Visibility::Org).await;
+    let alice = &world.alice;
+    let family = &mut world.family;
+    let line = |said: &str| {
+        Op::Conv(ConvOp::Native {
+            session: SessionRef { agent: "claude-code".into(), id: "s".into() },
+            file: SessionFile::Main,
+            line: format!(r#"{{"type":"user","message":{{"role":"user","content":"{said}"}}}}"#),
+        })
+    };
+    let before =
+        applied(family, family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), line("Tidy the parser")));
+    let info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 3,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    assert_eq!(alice.send(alice.request(Method::POST, "/v1/threads").json(&info)).await, StatusCode::NO_CONTENT);
+    let forked =
+        applied(family, family.delta(ActorId(2), FORK, Author::User, 6, family.thread_head(THREAD), Op::Fork { from: THREAD }));
+    let after =
+        applied(family, family.delta(ActorId(1), THREAD, Author::User, 7, family.thread_head(THREAD), line("After the fork")));
+    let own =
+        applied(family, family.delta(ActorId(2), FORK, Author::User, 8, family.thread_head(FORK), line("Only in the fork")));
+    assert_eq!(alice.push(vec![before, forked, after, own]).await, StatusCode::OK);
+
+    let browser = Browser::sign_in(alice, "alice").await;
+    let (status, page) = browser.get(&format!("/threads/{FORK}/history")).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let told: Vec<(String, String)> = page["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            (entry["text"].as_str().unwrap_or_default().to_owned(), entry["origin"].as_str().unwrap_or_default().to_owned())
+        })
+        .collect();
+    assert_eq!(
+        told,
+        vec![("Tidy the parser".to_owned(), "inherited".to_owned()), ("Only in the fork".to_owned(), "own".to_owned())],
+        "{page}"
+    );
+    let (_, source) = browser.get(&format!("/threads/{THREAD}/history")).await;
+    assert_eq!(source["total"], 2, "the source keeps its own: {source}");
+}

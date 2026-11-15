@@ -94,8 +94,8 @@ pub(crate) fn check(read: &ArtifactRead, checkout: &Path, dir: &Path) -> Result<
     let html = String::from_utf8_lossy(&bytes);
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let pages = serde_json::json!({
-        "light": silt_design::frame::checked_document(&html, read.style.as_deref(), "light"),
-        "dark": silt_design::frame::checked_document(&html, read.style.as_deref(), "dark"),
+        "light": silt_design::frame::checked_document(&html, read.style.as_deref(), silt_design::frame::Theme::Light),
+        "dark": silt_design::frame::checked_document(&html, read.style.as_deref(), silt_design::frame::Theme::Dark),
     });
     let job = dir.join("job.json");
     std::fs::write(&job, serde_json::json!({"pages": pages, "out": dir}).to_string()).map_err(|error| error.to_string())?;

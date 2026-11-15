@@ -15,8 +15,8 @@ pub use delta::{
 };
 pub use family::{
     Applied, BaseText, ChangesRequested, Comment, Family, FileView, HistoryItem, HistorySource, LogError, MergeRequest, MrStatus,
-    ReadCovered, Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, merge_requests_in, rewound_in,
-    thread_head_in, turn_end_by, turn_point, turn_point_by,
+    ReadCovered, Reply, SNAPSHOT_FORMAT, SnapshotError, ThreadState, ThreadView, comments_in, has_lineage_in, history_in,
+    merge_requests_in, rewound_in, thread_head_in, turn_end_by, turn_point, turn_point_by,
 };
 pub use git_made::GitMade;
 pub use graph::{GraphEvent, GraphItem, graph_of};

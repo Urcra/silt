@@ -61,6 +61,9 @@ pub(crate) struct History {
     conversation: Vec<DeltaId>,
     positions: HashMap<DeltaId, usize>,
     pub(crate) rewound: HashSet<DeltaId>,
+    /// It pulled from another thread, so its history reaches past its own
+    /// deltas.
+    pub(crate) pulled: bool,
 }
 
 impl History {
@@ -129,6 +132,9 @@ impl Index {
         let thread = delta.thread;
         if let Op::Conv(conv) = &delta.op {
             self.histories.entry(thread).or_default().take(delta, conv);
+        }
+        if let Op::Merge { mr: None, .. } = delta.op {
+            self.histories.entry(thread).or_default().pulled = true;
         }
         let time_ms = delta.time_ms;
         let mut rows = vec![Row::Activity { thread, time_ms, branch: None }];
@@ -228,6 +234,12 @@ impl Index {
 
     pub(crate) fn history(&self, thread: ThreadId) -> Option<&History> {
         self.histories.get(&thread)
+    }
+
+    /// Whether `thread`'s history reaches past its own deltas: it's a fork,
+    /// or it pulled.
+    pub(crate) fn has_lineage(&self, thread: ThreadId) -> bool {
+        self.forks.contains_key(&thread) || self.histories.get(&thread).is_some_and(|history| history.pulled)
     }
 
     pub(crate) fn conversation(&self, thread: ThreadId) -> Conversation {

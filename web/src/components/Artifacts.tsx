@@ -416,21 +416,28 @@ function ArtifactPage({
   const theme = useShownTheme()
   // The frame starts in the theme shown when it loads, and hears of each change after, so its page isn't reloaded.
   const [startTheme] = useState(theme)
-  const [framed] = useState(() => (artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor }) : ''))
+  const [framed] = useState(() =>
+    artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin }) : '',
+  )
   useEffect(() => {
     frame.current?.contentWindow?.postMessage({ silt: 'theme', theme }, '*')
   }, [theme])
-  // A frame's page says what's selected in it and what went wrong; only messages from that frame count.
+  // A frame's page says what's selected in it and what went wrong; only messages from that frame count. The listener
+  // is added once, reading the latest callbacks, so a render doesn't drop a message between removing and adding it.
+  const callbacks = useRef({ onSelect, onProblems })
+  useEffect(() => {
+    callbacks.current = { onSelect, onProblems }
+  })
   useEffect(() => {
     const heard = (event: MessageEvent) => {
       const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown } | null
-      if (event.source !== frame.current?.contentWindow) return
-      if (said?.silt === 'selection') onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
-      if (said?.silt === 'problems' && Array.isArray(said.problems)) onProblems(said.problems.filter(isProblem).slice(0, 20))
+      if (event.source === null || event.source !== frame.current?.contentWindow) return
+      if (said?.silt === 'selection') callbacks.current.onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
+      if (said?.silt === 'problems' && Array.isArray(said.problems)) callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
     }
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
-  }, [onSelect, onProblems])
+  }, [])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
