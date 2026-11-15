@@ -111,6 +111,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T
 }
 
+/** A file the API answers with, as bytes. */
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(apiUrl(path), {
+    headers: { Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ''}`, 'X-Silt-Request': '1' },
+  })
+  if (!response.ok) throw new ApiError(`request failed (${response.status})`)
+  return response.blob()
+}
+
+/** A sheet as its viewer shows it (ADR 0077). */
+export type SheetView = { rows: string[]; columns: string[]; raw: string[][]; values: string[][] }
+
 /** The search form's fields, as typed; `since` is a date. */
 export interface SearchForm {
   repo?: string
@@ -174,6 +186,12 @@ export const api = {
   /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
   archiveArtifact: (id: string, artifact: string, archived: boolean) =>
     request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/archive`, { archived }),
+  /** A doc's text, or edits of it (ADR 0077). */
+  docData: (id: string, artifact: string, asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[] }) =>
+    request<{ text: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
+  /** A sheet's cells and values, or changes to it (ADR 0077). */
+  sheetData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
+  sheetXlsx: (id: string, artifact: string) => requestBlob(`${thread(id)}/artifacts/${artifact}/sheet.xlsx`),
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
   /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */

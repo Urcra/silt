@@ -436,6 +436,18 @@ pub enum Request {
         artifact: String,
         asked: silt_proto::page::AssetRequest,
     },
+    /// A doc's text, or edits of it (ADR 0077).
+    DocData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::DocRequest,
+    },
+    /// A sheet's cells and values, or changes to it (ADR 0077).
+    SheetData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::SheetRequest,
+    },
     /// The thread's files, for a page that declares `files` (ADR 0078).
     PageFiles {
         thread: String,

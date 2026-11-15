@@ -1768,3 +1768,49 @@ async fn a_page_saves_itself_only_for_the_owner_over_the_latest_version() {
     assert_eq!((&latest["version"], &latest["by"]), (&2.into(), &"alice".into()), "{latest}");
     assert_eq!(latest["capabilities"], serde_json::json!({"artifact": {}}), "the declaration carries forward");
 }
+
+/// A doc and a sheet edited from the hosted app (ADR 0077): written as the
+/// person, read back folded, and refused for someone who can't read the
+/// thread or, where the version asks, isn't a collaborator.
+#[tokio::test]
+async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = |id: &str, kind: &str, edit: serde_json::Value| {
+        serde_json::json!({
+            "t": "artifact", "id": id, "version": 1, "title": kind, "kind": kind,
+            "media_type": "text/markdown", "blob": "ab".repeat(32), "size": 1, "inline": false,
+            "capabilities": {"edit": edit}
+        })
+    };
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let mut pushed = Vec::new();
+    for (lamport, line) in [
+        (5, record("0123456789ab", "doc", serde_json::json!({}))),
+        (6, record("ba9876543210", "sheet", serde_json::json!({"level": "collaborator"}))),
+    ] {
+        let family = &mut world.family;
+        let op = Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: line.to_string() });
+        pushed.push(applied(family, family.delta(ActorId(1), THREAD, Author::User, lamport, family.thread_head(THREAD), op)));
+    }
+    assert_eq!(world.alice.push(pushed).await, StatusCode::OK);
+
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let doc = format!("/threads/{THREAD}/artifacts/0123456789ab/doc");
+    let typed = serde_json::json!({"op": "edit", "edits": [{"pos": 0, "delete": 0, "insert": "# Plan\n"}]});
+    assert_eq!(erin.post(&doc, typed.clone()).await.0, StatusCode::NOT_FOUND, "erin can't read the thread");
+    let (status, after) = carol.post(&doc, typed).await;
+    assert_eq!((status, &after["text"]), (StatusCode::OK, &"# Plan\n".into()), "carol may comment, so she edits: {after}");
+    let (_, after) = alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "Plan", "new": "Launch plan"}]})).await;
+    assert_eq!(after["text"], "# Launch plan\n");
+
+    let sheet = format!("/threads/{THREAD}/artifacts/ba9876543210/sheet");
+    let set = serde_json::json!({"op": "set", "cells": {"A1": "2", "A2": "=A1*3"}});
+    assert_eq!(carol.post(&sheet, set.clone()).await.0, StatusCode::FORBIDDEN, "this sheet asks for a collaborator");
+    assert_eq!(alice.post(&sheet, set).await.0, StatusCode::OK);
+    let (_, view) = carol.post(&sheet, serde_json::json!({"op": "read"})).await;
+    assert_eq!(view["values"][1][0], "6", "{view}");
+}

@@ -26,6 +26,8 @@ fn text_media_type(kind: &str) -> Option<&'static str> {
         "markdown" => Some("text/markdown"),
         "mermaid" => Some("text/vnd.mermaid"),
         kind if silt_proto::artifact_types::is_type(kind) => Some("application/json"),
+        "doc" => Some("text/markdown"),
+        "sheet" => Some("application/json"),
         _ => None,
     }
 }
@@ -312,6 +314,50 @@ impl Core {
         Ok(silt_proto::view::ArtifactContent { media_type: file.media_type.clone(), data: BASE64.encode(bytes) })
     }
 
+    /// A doc's text or a sheet's typed cells as they stand, for a version.
+    async fn edited_snapshot(&mut self, thread: ThreadId, id: &str, kind: &str) -> Result<String, CoreError> {
+        let thread_id = thread.to_string();
+        if kind == "doc" {
+            let read = self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Read).await?;
+            return Ok(read["text"].as_str().unwrap_or_default().to_owned());
+        }
+        let read = self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Read { sheet: 0, range: None }).await?;
+        Ok(serde_json::json!({ "rows": read["raw"] }).to_string())
+    }
+
+    /// Seeds a new doc's text or a new sheet's cells from its first version.
+    async fn seed_edited(&mut self, thread: ThreadId, id: &str, kind: &str, content: &str) -> Result<(), CoreError> {
+        let thread_id = thread.to_string();
+        if kind == "doc" {
+            if !content.is_empty() {
+                let edit = silt_proto::edited::DocEdit::Splice { pos: 0, delete: 0, insert: content.to_owned() };
+                self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Edit { edits: vec![edit] }).await?;
+            }
+            return Ok(());
+        }
+        let rows: Vec<Vec<serde_json::Value>> = serde_json::from_str::<serde_json::Value>(content)
+            .ok()
+            .and_then(|seeded| serde_json::from_value(seeded["rows"].clone()).ok())
+            .unwrap_or_default();
+        let mut cells = std::collections::BTreeMap::new();
+        for (row, values) in rows.iter().enumerate() {
+            for (column, value) in values.iter().enumerate() {
+                let raw = match value {
+                    serde_json::Value::String(text) => text.clone(),
+                    serde_json::Value::Null => continue,
+                    other => other.to_string(),
+                };
+                if !raw.is_empty() {
+                    cells.insert(silt_sheet::address(row, column), raw);
+                }
+            }
+        }
+        // An empty sheet still has a grid to type in.
+        cells.entry(silt_sheet::address(9, 4)).or_default();
+        self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Set { sheet: 0, cells }).await?;
+        Ok(())
+    }
+
     /// The session whose record line names the artifact's latest version.
     fn artifact_session(&self, thread: ThreadId, id: &str) -> Option<SessionRef> {
         let family = self.threads.get(&thread)?.family;
@@ -458,6 +504,22 @@ impl Core {
             }
             None => None,
         };
+        // A doc's or a sheet's later version is a snapshot of it as it
+        // stands; content given for a doc replaces its text (ADR 0077).
+        let edited_id = new.id.as_deref().filter(|_| silt_proto::edited::is_edited(&kind)).map(str::to_owned);
+        if let Some(existing) = &edited_id {
+            if kind == "doc"
+                && let Some(text) = new.content.take()
+            {
+                let current = self.doc_data(&thread.to_string(), existing, silt_proto::edited::DocRequest::Read).await?;
+                let length = current["text"].as_str().unwrap_or_default().chars().count();
+                let edit = silt_proto::edited::DocEdit::Splice { pos: 0, delete: length, insert: text };
+                self.doc_data(&thread.to_string(), existing, silt_proto::edited::DocRequest::Edit { edits: vec![edit] }).await?;
+            }
+            if new.content.is_none() && new.path.is_none() {
+                new.content = Some(self.edited_snapshot(thread, existing, &kind).await?);
+            }
+        }
         let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
         let (id, version) = match new.id.as_deref() {
             Some(id) if !valid_id(id) => return Err(CoreError::Invalid(format!("{id} isn't an artifact id"))),
@@ -486,6 +548,17 @@ impl Core {
                 bytes.len() as u64,
             )
             .await?;
+        // A doc or a sheet is edited by anyone who may comment unless it says
+        // otherwise, which the server checks by its declaration.
+        let capabilities = match capabilities {
+            Some(declared) if declared.contains_key("edit") || !silt_proto::edited::is_edited(&kind) => Some(declared),
+            _ if silt_proto::edited::is_edited(&kind) => {
+                let mut declared = capabilities.unwrap_or_default();
+                declared.insert("edit".into(), serde_json::json!({}));
+                Some(declared)
+            }
+            other => other,
+        };
         let styled = if kind == "html" {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);
@@ -567,6 +640,9 @@ impl Core {
                 let op = ConvOp::Native { session: page_session, file: SessionFile::Main, line };
                 self.append_conv(family, thread, Author::User, op).await?;
             }
+        }
+        if version == 1 && silt_proto::edited::is_edited(&view.kind) {
+            self.seed_edited(thread, &id, &view.kind, std::str::from_utf8(&bytes).unwrap_or_default()).await?;
         }
         Ok(ArtifactPut { id, version, design_system, dropped })
     }

@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Doc edit") || prompt.contains("Sheet set") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -497,6 +497,15 @@ async fn show(
         ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
     } else if prompt.contains("Guide") {
         ("silt_artifact_guide", serde_json::json!({"kind": "html"}))
+    } else if prompt.contains("Doc edit")
+        && let Some(last) = last.clone()
+    {
+        // The agent edits a doc people may be typing in (ADR 0077).
+        ("silt_artifact_doc", serde_json::json!({"id": last, "edits": [{"old": "- ship", "new": "- ship on Friday"}]}))
+    } else if prompt.contains("Sheet set")
+        && let Some(last) = last.clone()
+    {
+        ("silt_artifact_sheet", serde_json::json!({"id": last, "set": {"B3": "=SUM(B1:B2)", "A3": "total"}, "read": "A1:B3"}))
     } else if prompt.contains("Read back")
         && let Some(last) = last.clone()
     {
@@ -552,6 +561,13 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
                 {"title": "Why", "html": "<h1>One walk</h1>"}
             ]});
             arguments = serde_json::json!({"title": "Rescan talk", "kind": "slides", "content": deck.to_string()});
+        }
+        if prompt.contains("Artifact doc") {
+            arguments = serde_json::json!({"title": "Launch plan", "kind": "doc", "content": "# Plan\n- ship\n"});
+        }
+        if prompt.contains("Artifact sheet") {
+            let rows = serde_json::json!({"rows": [["apples", 3], ["pears", 5]]});
+            arguments = serde_json::json!({"title": "Tracker", "kind": "sheet", "content": rows.to_string()});
         }
         if prompt.contains("Artifact numbers") {
             let page = serde_json::json!({"title": "Rescan benchmark", "sources": [

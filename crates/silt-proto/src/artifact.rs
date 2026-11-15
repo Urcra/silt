@@ -156,7 +156,7 @@ pub const DESCRIPTION_CHARS: usize = 300;
 
 /// The capabilities a page may declare (ADR 0072 and the ADRs after it).
 pub const CAPABILITIES: &[&str] =
-    &["artifact", "assets", "comments", "db", "dictation", "downloads", "files", "mcp", "room", "sample", "tts", "user"];
+    &["artifact", "assets", "comments", "db", "dictation", "downloads", "edit", "files", "mcp", "room", "sample", "tts", "user"];
 
 /// The capabilities a version declares, by name, each with its config.
 pub type Capabilities = std::collections::BTreeMap<String, serde_json::Value>;

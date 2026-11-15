@@ -432,6 +432,18 @@ impl Family {
         crate::page::documents(&items, artifact)
     }
 
+    /// A doc's text in `thread` (ADR 0077).
+    pub fn doc_text(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> String {
+        let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
+        crate::page::doc_text(&items, &self.graph, artifact)
+    }
+
+    /// One sheet of a sheet artifact in `thread` (ADR 0077).
+    pub fn sheet_cells(&self, thread: ThreadId, artifact: silt_types::ArtifactId, sheet: u16) -> crate::page::SheetCells {
+        let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
+        crate::page::sheet_cells(&items, &self.graph, artifact, sheet)
+    }
+
     /// The comments on `thread`, oldest first by causal order, so every
     /// replica lists them alike whatever order the deltas arrived in.
     pub fn comments(&self, thread: ThreadId) -> Vec<Comment> {
@@ -628,6 +640,26 @@ pub fn page_documents_in(
     let threads = LogThreads::new(log, graph);
     let items = expand(&threads, thread, true, &mut Expansion::default()).0;
     crate::page::documents(&items, artifact)
+}
+
+/// [`Family::doc_text`] over any deltas of a family.
+pub fn doc_text_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId, artifact: silt_types::ArtifactId) -> String {
+    let threads = LogThreads::new(log, graph);
+    let items = expand(&threads, thread, true, &mut Expansion::default()).0;
+    crate::page::doc_text(&items, graph, artifact)
+}
+
+/// [`Family::sheet_cells`] over any deltas of a family.
+pub fn sheet_cells_in(
+    log: &[Delta],
+    graph: &CausalGraph,
+    thread: ThreadId,
+    artifact: silt_types::ArtifactId,
+    sheet: u16,
+) -> crate::page::SheetCells {
+    let threads = LogThreads::new(log, graph);
+    let items = expand(&threads, thread, true, &mut Expansion::default()).0;
+    crate::page::sheet_cells(&items, graph, artifact, sheet)
 }
 
 /// Whether `thread`'s history reaches past its own deltas: it's a fork or

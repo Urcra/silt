@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartTable, csvOf, layout, parsed, partDocument, shown, slideFromHash } from './typed'
+import { chartTable, columnName, csvOf, layout, parsed, partDocument, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -31,5 +31,17 @@ describe('the artifact types', () => {
     expect(doc).toContain("setAttribute('data-theme','dark')")
     expect(doc).toContain('<h1>One</h1>')
     expect(parsed('{bad')).toBeNull()
+  })
+})
+
+describe('docs and sheets', () => {
+  it("sends one splice for what was typed, counting characters as the doc's text does", () => {
+    expect(splice('# Plan\nship', '# Plan\n- ship')).toEqual({ pos: 7, delete: 0, insert: '- ' })
+    expect(splice('abcdef', 'abXYef')).toEqual({ pos: 2, delete: 2, insert: 'XY' })
+    expect(splice('é😀a', 'é😀')).toEqual({ pos: 2, delete: 1, insert: '' })
+    expect(splice('same', 'same')).toBeNull()
+  })
+  it('names columns as spreadsheets do', () => {
+    expect([0, 25, 26, 701].map(columnName)).toEqual(['A', 'Z', 'AA', 'ZZ'])
   })
 })

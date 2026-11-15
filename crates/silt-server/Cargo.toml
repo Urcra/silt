@@ -24,11 +24,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 silt-agents = { path = "../silt-agents" }
+silt-sheet = { path = "../silt-sheet" }
 silt-crdt = { path = "../silt-crdt" }
 silt-design = { path = "../silt-design" }
 silt-log = { path = "../silt-log" }
 silt-os = { path = "../silt-os" }
-silt-proto = { path = "../silt-proto" }
+silt-proto = { path = "../silt-proto", features = ["xlsx"] }
 silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
 silt-sync = { path = "../silt-sync" }

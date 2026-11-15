@@ -75,3 +75,23 @@ export function chartTable(series: Series[]): { columns: string[]; rows: unknown
     rows: xs.map((x) => [x, ...series.map((one) => one.points.find(([px]) => px === x)?.[1] ?? null)]),
   }
 }
+
+/** A column's letters: 0 is `A`, 26 is `AA`. */
+export function columnName(column: number): string {
+  let name = ''
+  for (let at = column + 1; at > 0; at = Math.floor((at - 1) / 26)) name = String.fromCharCode(65 + ((at - 1) % 26)) + name
+  return name
+}
+
+/** The one splice that turns `before` into `after`: where they first differ, what goes, and what comes in. Positions
+ * count characters, as the doc's text does. */
+export function splice(before: string, after: string): { pos: number; delete: number; insert: string } | null {
+  const a = [...before]
+  const b = [...after]
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let end = 0
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++
+  if (start === a.length && start === b.length) return null
+  return { pos: start, delete: a.length - start - end, insert: b.slice(start, b.length - end).join('') }
+}

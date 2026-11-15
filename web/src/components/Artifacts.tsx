@@ -36,6 +36,7 @@ import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 import { Broker, callOf } from '../bridge/broker'
 import { handlersFor, type Holder } from '../bridge/capabilities'
+import { DocEditor, SheetGrid } from './Edited'
 import { CanvasView, DataView, SlidesView } from './TypedArtifact'
 import { lastSnapshot, rememberSnapshot } from '../bridge/hot'
 import { keep, keptFor } from '../bridge/storage'
@@ -641,6 +642,9 @@ function ArtifactPage({
   if (artifact.kind === 'slides') return <SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />
   if (artifact.kind === 'canvas') return <CanvasView text={textOf(content)} style={style} theme={startTheme} />
   if (artifact.kind === 'data') return <DataView text={textOf(content)} theme={theme} />
+  // Docs and sheets show as they stand now, edited in place (ADR 0077).
+  if (artifact.kind === 'doc') return <DocEditor thread={thread} artifact={artifact.id} />
+  if (artifact.kind === 'sheet') return <SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />
   // A kind this UI doesn't know shows as its source rather than failing as an image.
   if (!artifact.media_type.startsWith('image/'))
     return (

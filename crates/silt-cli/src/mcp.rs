@@ -222,6 +222,45 @@ impl silt_mcp::Backend for DaemonTools {
                 })?;
                 return Ok(serde_json::to_string_pretty(&answer).unwrap_or_default());
             }
+            "silt_artifact_doc" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs edits its docs")?;
+                let artifact = text_arg(arguments, "id")?;
+                let asked = match arguments.get("edits") {
+                    None | Some(Value::Null) => silt_proto::edited::DocRequest::Read,
+                    Some(edits) => silt_proto::edited::DocRequest::Edit {
+                        edits: serde_json::from_value(edits.clone())
+                            .map_err(|error| format!("edits are {{old, new}}: {error}"))?,
+                    },
+                };
+                let answer: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::DocData { thread: String::new(), artifact, asked }),
+                })?;
+                return Ok(answer["text"].as_str().unwrap_or_default().to_owned());
+            }
+            "silt_artifact_sheet" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs edits its sheets")?;
+                let artifact = text_arg(arguments, "id")?;
+                let ask = |asked| {
+                    ask_daemon::<Value>(&Request::Scoped {
+                        token: token.clone(),
+                        asking: Box::new(Request::SheetData { thread: String::new(), artifact: artifact.clone(), asked }),
+                    })
+                };
+                if let Some(set) = arguments.get("set").and_then(Value::as_object) {
+                    let cells = set
+                        .iter()
+                        .map(|(address, raw)| (address.clone(), raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)))
+                        .collect();
+                    ask(silt_proto::edited::SheetRequest::Set { sheet: 0, cells })?;
+                }
+                let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
+                let read = ask(silt_proto::edited::SheetRequest::Read { sheet: 0, range: range.clone() })?;
+                return Ok(match range {
+                    Some(_) => serde_json::to_string(&read["values"]).unwrap_or_default(),
+                    None => sheet_text(&read),
+                });
+            }
             "silt_artifact_read" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
                 let id = text_arg(arguments, "id")?;
@@ -413,6 +452,18 @@ with why. Revise one with `patch`, an RFC 6902 JSON Patch, rather than resending
                 );
             }
         }
+        "doc" => out.push_str(
+            "A doc is Markdown that people edit with you, in place. Give its first text as `content`; after that, change \
+it with silt_artifact_doc's edits, which merge with what people type at the same moment, never with a new version. \
+Read it first, since people may have changed it. Lead with the point, use headings a reader can scan, and keep raw \
+HTML out: it shows as text.\n",
+        ),
+        "sheet" => out.push_str(
+            "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
+{\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
+silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
+change it, and keep one table per sheet with one header row.\n",
+        ),
         _ => out.push_str("An image shows as it is; give it a short title.\n"),
     }
     if !matches!(kind, "html" | "slides" | "canvas") {
@@ -562,6 +613,29 @@ impl DaemonTools {
             })
             .collect()
     }
+}
+
+/// A sheet as the agent reads it: each non-empty cell by address, what it
+/// holds and, for a formula, its value.
+fn sheet_text(view: &Value) -> String {
+    let mut out = String::new();
+    let rows = view["raw"].as_array().cloned().unwrap_or_default();
+    for (row, cells) in rows.iter().enumerate() {
+        for (column, raw) in cells.as_array().into_iter().flatten().enumerate() {
+            let raw = raw.as_str().unwrap_or_default();
+            if raw.is_empty() {
+                continue;
+            }
+            let value = view["values"][row][column].as_str().unwrap_or_default();
+            let address = silt_sheet::address(row, column);
+            if raw.starts_with('=') {
+                let _ = writeln!(out, "{address}: {raw} → {value}");
+            } else {
+                let _ = writeln!(out, "{address}: {raw}");
+            }
+        }
+    }
+    if out.is_empty() { "The sheet is empty.".into() } else { out }
 }
 
 /// `edits`, checked here as the MCP server checks only numbers: a list of

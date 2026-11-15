@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 
 use silt_types::ArtifactId;
 
-use silt_crdt::Stamp;
+use silt_crdt::{CausalGraph, CharId, Stamp, TextDoc, TextEvent, TextOp};
 
-use crate::delta::{Op, PageOp};
+use crate::delta::{Axis, Op, PageOp};
 use crate::family::HistoryItem;
 
 /// The longest document, as JSON.
@@ -106,6 +106,67 @@ pub fn documents(items: &[HistoryItem<'_>], artifact: ArtifactId) -> Documents {
         }
     }
     docs
+}
+
+/// The text CRDT of a doc's text, or of one axis of one sheet, folded from
+/// `items`: the operations that change it, in the history's order, each at
+/// the version its delta was made at (ADR 0077).
+fn sequence<'a>(items: &[HistoryItem<'a>], graph: &CausalGraph, wanted: impl Fn(&PageOp) -> Option<&TextOp>) -> TextDoc {
+    let mut doc = TextDoc::new();
+    for item in items.iter().filter(|item| !item.rewound) {
+        let Op::Page(op) = &item.delta.op else { continue };
+        let Some(text_op) = wanted(op) else { continue };
+        let event = TextEvent { span: item.delta.span, parents: item.delta.parents.clone(), op: text_op.clone() };
+        // An operation that doesn't fit is a peer's mistake, left out on every replica alike.
+        let _ = doc.apply(graph, &event);
+    }
+    doc
+}
+
+/// A doc's text as it stands along `items`.
+pub fn doc_text(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: ArtifactId) -> String {
+    sequence(items, graph, |op| match op {
+        PageOp::Text { artifact: of, op } if *of == artifact => Some(op),
+        _ => None,
+    })
+    .text()
+}
+
+/// A sheet as it stands: its rows' and columns' ids in order, and each
+/// cell's typed text by its row's and column's ids.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SheetCells {
+    pub rows: Vec<CharId>,
+    pub columns: Vec<CharId>,
+    pub cells: BTreeMap<(CharId, CharId), String>,
+}
+
+/// Sheet `sheet` of `artifact` along `items`: rows and columns from their
+/// sequences, and each cell's last write in stamp order.
+pub fn sheet_cells(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: ArtifactId, sheet: u16) -> SheetCells {
+    let axis = |wanted: Axis| {
+        sequence(items, graph, |op| match op {
+            PageOp::Lines { artifact: of, sheet: on, axis, op } if *of == artifact && *on == sheet && *axis == wanted => Some(op),
+            _ => None,
+        })
+        .attribution()
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect::<Vec<_>>()
+    };
+    let mut cells = BTreeMap::new();
+    for (_, op) in page_ops(items, artifact) {
+        if let PageOp::Cell { sheet: on, row, column, raw, .. } = op
+            && *on == sheet
+        {
+            if raw.is_empty() {
+                cells.remove(&(*row, *column));
+            } else {
+                cells.insert((*row, *column), raw.clone());
+            }
+        }
+    }
+    SheetCells { rows: axis(Axis::Rows), columns: axis(Axis::Columns), cells }
 }
 
 /// How large `docs` are together, as JSON.

@@ -47,6 +47,9 @@ pub(crate) fn routes() -> Router<Server> {
         )
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/artifacts", get(artifact_listing))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/doc", post(doc_data))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
         .route("/app/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
         .route("/app/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/app/api/threads/{id}/turns", get(turns))
@@ -627,6 +630,161 @@ async fn publish_artifact(
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
     crate::writes::write_as_with(&server, browser, row.family, row.id, None, native).await?;
     Ok(Json(serde_json::json!({ "id": artifact, "version": version })))
+}
+
+/// A doc's text and a sheet's cells as the person reads them, folded from
+/// the deltas they may read (ADR 0077).
+async fn edited_log(server: &Server, user: UserId, page: &PageOf) -> Result<(Vec<Delta>, silt_crdt::CausalGraph), ApiError> {
+    let viewer = server.viewer(user).await?;
+    let mut slot = server.room(page.family).await.ok_or_else(not_found)?;
+    let browsed = slot.browsed(page.family, &viewer);
+    let mut graph = silt_crdt::CausalGraph::new();
+    for delta in &browsed.log {
+        let _ = graph.add(delta.span, &delta.parents);
+    }
+    Ok((browsed.log.clone(), graph))
+}
+
+/// Whether the person may edit a doc or a sheet: anyone who may comment,
+/// unless its version asks for a collaborator; the push checks it again.
+fn may_edit(page: &PageOf) -> Result<(), ApiError> {
+    use silt_proto::page::Level;
+    let needs = match page.declared.get("edit").and_then(|edit| edit.get("level")).and_then(serde_json::Value::as_str) {
+        Some("collaborator") => Level::Collaborator,
+        _ => Level::Comment,
+    };
+    if page.level < needs { Err(crate::forbidden("you may not edit this")) } else { Ok(()) }
+}
+
+/// A doc's text, or the person's edits of it, from the hosted app (ADR 0077).
+async fn doc_data(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::DocRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    let text = |log: &[Delta], graph: &silt_crdt::CausalGraph| silt_log::doc_text_in(log, graph, page.thread, artifact);
+    let (log, graph) = edited_log(&server, browser.user, &page).await?;
+    match asked {
+        silt_proto::edited::DocRequest::Read => Ok(Json(serde_json::json!({ "text": text(&log, &graph) }))),
+        silt_proto::edited::DocRequest::Edit { edits } => {
+            may_edit(&page)?;
+            let ops = silt_proto::edited::doc_ops(&text(&log, &graph), &edits).map_err(bad_request)?;
+            for op in ops {
+                let op = Op::Page(silt_log::PageOp::Text { artifact, op });
+                crate::writes::write_as_with(&server, browser, page.family, page.thread, None, op).await?;
+            }
+            let (log, graph) = edited_log(&server, browser.user, &page).await?;
+            Ok(Json(serde_json::json!({ "text": text(&log, &graph) })))
+        }
+    }
+}
+
+/// A sheet's cells and values, or the person's changes to it, from the
+/// hosted app (ADR 0077).
+async fn sheet_data(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::SheetRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use silt_crdt::TextOp;
+    use silt_proto::edited::{AxisName, SheetRequest};
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    let cells = |server: Server, sheet: u16| {
+        let page = &page;
+        async move {
+            let (log, graph) = edited_log(&server, browser.user, page).await?;
+            Ok::<_, ApiError>(silt_log::sheet_cells_in(&log, &graph, page.thread, artifact, sheet))
+        }
+    };
+    let write =
+        |op: silt_log::PageOp| crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op));
+    let lines = |sheet, axis: AxisName, op| silt_log::PageOp::Lines { artifact, sheet, axis: axis.into(), op };
+    let today = (crate::now_ms() as f64 / 86_400_000.0).floor() + 25_569.0;
+    match asked {
+        SheetRequest::Read { sheet, range } => {
+            let view = silt_proto::edited::sheet_view(&cells(server.clone(), sheet).await?, today);
+            match range {
+                Some(range) => {
+                    Ok(Json(serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(bad_request)? })))
+                }
+                None => Ok(Json(serde_json::to_value(view).unwrap_or_default())),
+            }
+        }
+        SheetRequest::Set { sheet, cells: set } => {
+            may_edit(&page)?;
+            let (rows, columns) =
+                silt_proto::edited::sheet_growth(&cells(server.clone(), sheet).await?, &set).map_err(bad_request)?;
+            if rows > 0 {
+                let at = cells(server.clone(), sheet).await?.rows.len();
+                write(lines(sheet, AxisName::Rows, TextOp::Insert { pos: at, content: "r".repeat(rows) })).await?;
+            }
+            if columns > 0 {
+                let at = cells(server.clone(), sheet).await?.columns.len();
+                write(lines(sheet, AxisName::Columns, TextOp::Insert { pos: at, content: "c".repeat(columns) })).await?;
+            }
+            let ops =
+                silt_proto::edited::cell_ops(artifact, sheet, &cells(server.clone(), sheet).await?, &set).map_err(bad_request)?;
+            let written = ops.len();
+            for op in ops {
+                write(op).await?;
+            }
+            Ok(Json(serde_json::json!({ "written": written })))
+        }
+        SheetRequest::Insert { sheet, axis, at, count } => {
+            may_edit(&page)?;
+            let now = cells(server.clone(), sheet).await?;
+            let len = if axis == AxisName::Rows { now.rows.len() } else { now.columns.len() };
+            let most = if axis == AxisName::Rows { silt_sheet::ROWS } else { silt_sheet::COLUMNS };
+            if count == 0 || len + count > most {
+                return Err(bad_request(format!("a sheet has at most {most} of them")));
+            }
+            let mark = if axis == AxisName::Rows { "r" } else { "c" };
+            write(lines(sheet, axis, TextOp::Insert { pos: at.min(len), content: mark.repeat(count) })).await?;
+            Ok(Json(serde_json::json!({ "inserted": count })))
+        }
+        SheetRequest::Remove { sheet, axis, at, count } => {
+            may_edit(&page)?;
+            let now = cells(server.clone(), sheet).await?;
+            let len = if axis == AxisName::Rows { now.rows.len() } else { now.columns.len() };
+            if count == 0 || at.checked_add(count).is_none_or(|end| end > len) {
+                return Err(bad_request("those aren't in the sheet"));
+            }
+            write(lines(sheet, axis, TextOp::Delete { pos: at, len: count })).await?;
+            Ok(Json(serde_json::json!({ "removed": count })))
+        }
+    }
+}
+
+/// A sheet as an `.xlsx` workbook, formulas included (ADR 0077).
+async fn sheet_xlsx(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::{HeaderValue, header};
+    use axum::response::IntoResponse;
+    let Json(view) = sheet_data(
+        State(server),
+        Extension(browser),
+        Path((id, artifact)),
+        Json(silt_proto::edited::SheetRequest::Read { sheet: 0, range: None }),
+    )
+    .await?;
+    let view: silt_proto::edited::SheetView = serde_json::from_value(view).map_err(|_| not_found())?;
+    let bytes = silt_proto::edited::xlsx(&view, "Sheet1").map_err(bad_request)?;
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    );
+    headers.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"sheet.xlsx\""));
+    Ok(response)
 }
 
 /// The page document saying the thread's owner archived the artifact (ADR 0075).

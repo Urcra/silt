@@ -585,6 +585,22 @@ impl Core {
                 let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked).await));
                 return;
             }
+            if let Request::DocData { artifact, asked, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.doc_data(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::SheetData { artifact, asked, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.sheet_data(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -631,6 +647,8 @@ impl Core {
                 to_response(self.archive_artifact(&thread, &artifact, archived).await.map(|()| "saved"))
             }
             Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
+            Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
+            Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
             Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
             Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
             Request::ArtifactFile { thread, id, version, path } => {

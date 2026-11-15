@@ -52,8 +52,16 @@ silt_artifact_guide first, follow what it says, then call silt_artifact, and cal
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools only a run watched in the web UI gets.
-pub const SHOW_TOOLS: &[&str] =
-    &["silt_show", "silt_artifact_guide", "silt_artifact", "silt_artifact_read", "silt_artifact_check", "silt_artifact_data"];
+pub const SHOW_TOOLS: &[&str] = &[
+    "silt_show",
+    "silt_artifact_guide",
+    "silt_artifact",
+    "silt_artifact_read",
+    "silt_artifact_check",
+    "silt_artifact_data",
+    "silt_artifact_doc",
+    "silt_artifact_sheet",
+];
 
 /// What the server says it's for, with the showing tools when offered.
 pub fn instructions(shows: bool) -> String {
@@ -90,7 +98,7 @@ fn show_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources, doc a document people edit with you, sheet a grid with formulas"},
                     "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
                 },
                 "required": ["kind"]
@@ -139,13 +147,40 @@ fn show_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "silt_artifact_doc",
+            "description": "Read or edit a doc artifact's text, which people may be editing at the same moment (ADR 0077): each edit merges with theirs. Make the doc first with silt_artifact, kind doc and Markdown content; then change it here, not by a new version. Each edit's old text must occur exactly once in the doc as it is now; read it first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The doc's id"},
+                    "edits": {"type": "array", "description": "Changes in order, all or none; leave out to read the text", "items": {
+                        "type": "object", "properties": {"old": {"type": "string"}, "new": {"type": "string"}}, "required": ["old", "new"]
+                    }}
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "silt_artifact_sheet",
+            "description": "Read or write a sheet artifact's cells (ADR 0077). Make the sheet first with silt_artifact, kind sheet and content {\"rows\": [[...], ...]}; then write cells here by address, with formulas such as =SUM(B2:B9). Rows and columns grow to fit. Formulas: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFS, AND, OR, NOT, ROUND, ABS, CONCAT, TEXT, LEFT, RIGHT, LEN, TODAY, DATE, VLOOKUP, XLOOKUP, SUMIF, COUNTIF.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The sheet's id"},
+                    "set": {"type": "object", "description": "Cells to write, such as {\"A1\": \"Task\", \"B7\": \"=SUM(B2:B6)\"}; \"\" clears one"},
+                    "read": {"type": "string", "description": "A range whose computed values to read, such as A1:D20; leave both out to read the whole sheet"}
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
             "name": "silt_artifact",
             "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact (give title and kind) and returns its id; with the id of one you made, it adds a version, from new content or from edits to the last one. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data. Call silt_artifact_guide before the first version.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "A short name, such as \"Rescan benchmark\""},
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes; doc (Markdown) and sheet ({\"rows\": [[...]]}) are edited in place afterwards with silt_artifact_doc and silt_artifact_sheet"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
                     "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
                     "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact; title and kind then default to its last version's"},

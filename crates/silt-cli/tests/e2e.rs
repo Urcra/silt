@@ -1807,6 +1807,60 @@ fn a_deck_is_checked_against_its_schema_and_revised_by_a_patch() {
     assert!(said.iter().any(|(_, text)| text.contains("at least one slide")), "the agent hears why: {said:?}");
 }
 
+/// A doc and a sheet are edited in place by the person and the agent at
+/// once (ADR 0077): the doc's text keeps both people's edits; the sheet's
+/// formula keeps meaning the same cells when a row goes in above them, and
+/// the sheet downloads as a workbook.
+#[test]
+fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact doc"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact doc");
+    let prompt = |text: &str| {
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+        settled_history(&api, &thread, &format!("Done: {text}"))
+    };
+    let doc = artifacts_of(&api, &thread)[0]["id"].as_str().expect("id").to_owned();
+    let path = format!("/api/threads/{thread}/artifacts/{doc}/doc");
+    assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- ship\n");
+    // The person types a line while the agent edits another.
+    let typed =
+        api.ok("POST", &path, Some(serde_json::json!({"op": "edit", "edits": [{"pos": 7, "delete": 0, "insert": "- test\n"}]})));
+    assert_eq!(typed["text"], "# Plan\n- test\n- ship\n");
+    prompt("Doc edit");
+    assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- test\n- ship on Friday\n");
+
+    prompt("Artifact sheet");
+    let sheet = artifacts_of(&api, &thread).last().expect("the sheet")["id"].as_str().expect("id").to_owned();
+    let said = prompt("Sheet set");
+    assert!(said.iter().any(|(_, text)| text.contains(r#"["total","8"]"#)), "the agent reads the sum: {said:?}");
+    let path = format!("/api/threads/{thread}/artifacts/{sheet}/sheet");
+    api.ok("POST", &path, Some(serde_json::json!({"op": "insert", "axis": "rows", "at": 0})));
+    api.ok("POST", &path, Some(serde_json::json!({"op": "set", "cells": {"A1": "fruit", "B1": "100"}})));
+    let view = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!(view["raw"][3][1], "=SUM(B2:B3)", "the formula moved with its cells: {view}");
+    assert_eq!(view["values"][3][1], "8", "and means the same: {view}");
+    let output = Command::new("curl")
+        .args([
+            "-s",
+            "-H",
+            &format!("Authorization: Bearer {}", api.token),
+            &format!("{}/api/threads/{thread}/artifacts/{sheet}/sheet.xlsx", api.base.trim_end_matches('/')),
+        ])
+        .output()
+        .expect("curl runs");
+    assert!(output.stdout.starts_with(b"PK"), "a workbook: {}", String::from_utf8_lossy(&output.stdout));
+}
+
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps

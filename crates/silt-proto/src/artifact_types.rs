@@ -142,6 +142,22 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             }
             Ok(())
         }
+        "sheet" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Seed {
+                #[serde(default)]
+                rows: Vec<Vec<Value>>,
+            }
+            let seed: Seed = serde_json::from_str(text).map_err(refused)?;
+            if seed.rows.len() > silt_sheet::ROWS || seed.rows.iter().any(|row| row.len() > silt_sheet::COLUMNS) {
+                return Err(format!("a sheet has at most {} rows and {} columns", silt_sheet::ROWS, silt_sheet::COLUMNS));
+            }
+            if seed.rows.iter().flatten().any(|cell| cell.is_object() || cell.is_array()) {
+                return Err("a sheet's cells are text, numbers, booleans or null".into());
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }

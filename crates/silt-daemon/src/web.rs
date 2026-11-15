@@ -142,6 +142,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
+        .route("/api/threads/{id}/artifacts/{artifact}/doc", post(doc_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
         .route(
             "/api/threads/{id}/artifacts/{artifact}/assets",
             post(page_assets).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
@@ -700,6 +703,51 @@ async fn page_assets(
     Json(asked): Json<silt_proto::page::AssetRequest>,
 ) -> HttpResponse {
     ask(&web, Request::PageAssets { thread, artifact, asked }).await
+}
+
+/// A doc's text, or edits of it (ADR 0077).
+async fn doc_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::DocRequest>,
+) -> HttpResponse {
+    ask(&web, Request::DocData { thread, artifact, asked }).await
+}
+
+/// A sheet's cells and values, or changes to it (ADR 0077).
+async fn sheet_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::SheetRequest>,
+) -> HttpResponse {
+    ask(&web, Request::SheetData { thread, artifact, asked }).await
+}
+
+/// A sheet as an `.xlsx` workbook, formulas included (ADR 0077).
+async fn sheet_xlsx(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    let asked = silt_proto::edited::SheetRequest::Read { sheet: 0, range: None };
+    let view = match answer(&web, Request::SheetData { thread, artifact, asked }).await {
+        Ok(view) => view,
+        Err(failed) => return failed.into_response(),
+    };
+    let Ok(view) = serde_json::from_value::<silt_proto::edited::SheetView>(view) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match silt_proto::edited::xlsx(&view, "Sheet1") {
+        Ok(bytes) => xlsx_response(bytes),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
+}
+
+pub(crate) fn xlsx_response(bytes: Vec<u8>) -> HttpResponse {
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    );
+    headers.insert(header::CONTENT_DISPOSITION, header::HeaderValue::from_static("attachment; filename=\"sheet.xlsx\""));
+    response
 }
 
 /// The thread's files, read by a page that declares `files` (ADR 0078).

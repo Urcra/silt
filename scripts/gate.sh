@@ -54,7 +54,7 @@ fi
 # Performance budgets (ADR 0034), timed on an optimized build.
 cargo build --profile perf -p silt-cli -p silt-bench
 target/perf/silt-bench check --tolerance "${SILT_BENCH_TOLERANCE:-0}"
-cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design --target wasm32-unknown-unknown
+cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design -p silt-sheet --target wasm32-unknown-unknown
 
 # Playwright drives the built UI against a real daemon, the optimized one,
 # as `web.thread` is timed there.

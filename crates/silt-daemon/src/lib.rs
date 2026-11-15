@@ -15,6 +15,7 @@ mod core;
 mod design;
 mod design_sync;
 mod disk;
+mod edited;
 mod forks;
 mod frames;
 mod gallery;

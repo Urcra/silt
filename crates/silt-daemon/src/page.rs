@@ -191,7 +191,12 @@ impl Core {
     }
 
     /// The config the artifact's latest version declares for `capability`.
-    fn declared(&self, thread: ThreadId, artifact: ArtifactId, capability: &str) -> Result<serde_json::Value, CoreError> {
+    pub(crate) fn declared(
+        &self,
+        thread: ThreadId,
+        artifact: ArtifactId,
+        capability: &str,
+    ) -> Result<serde_json::Value, CoreError> {
         let id = artifact.to_string();
         self.history_entries(thread)
             .iter()
@@ -221,6 +226,17 @@ impl Core {
         delta.check_shape().map_err(|error| CoreError::Invalid(error.to_string()))?;
         self.raw.entry(family_id).or_default().push(delta.clone());
         self.persist(family_id, std::slice::from_ref(&delta)).await
+    }
+
+    /// The thread a run's token was made for.
+    pub(crate) async fn run_thread(&self, token: &str) -> Result<String, CoreError> {
+        let hash = blake3::hash(token.as_bytes());
+        let (thread, _) = self
+            .store
+            .run_token(hash.as_bytes())
+            .await?
+            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        Ok(thread.to_string())
     }
 
     /// [`Self::page_data`] for the agent of a run, in the thread its token
@@ -296,7 +312,7 @@ impl Core {
 }
 
 /// The causal graph of a log the daemon keeps without a projection.
-fn graph_of(log: &[Delta]) -> CausalGraph {
+pub(crate) fn graph_of(log: &[Delta]) -> CausalGraph {
     let mut graph = CausalGraph::new();
     for delta in log {
         // A delta whose parents the log lacks has no place in a lineage.
