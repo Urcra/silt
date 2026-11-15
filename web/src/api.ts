@@ -221,9 +221,26 @@ export const api = {
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */
   sampleSoFar: (id: string, artifact: string, ask: string) =>
-    request<{ text: string }>('GET', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`),
-  sample: (id: string, artifact: string, ask: string, input: unknown, images: { media_type: string; data: string }[] = [], tools: SampleTool[] = []) =>
-    request<{ text: string; truncated: boolean }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, { ask, input, images, tools }),
+    request<{ text: string; calls?: { call: number; name: string; input: unknown }[] }>(
+      'GET',
+      `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`,
+    ),
+  sample: (
+    id: string,
+    artifact: string,
+    ask: string,
+    input: unknown,
+    images: { media_type: string; data: string }[] = [],
+    tools: SampleTool[] = [],
+    model: { model_tier?: string; model?: string } = {},
+  ) =>
+    request<{ text: string; truncated: boolean; model_applied?: string }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, {
+      ask,
+      input,
+      images,
+      tools,
+      model,
+    }),
   /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
   artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
     request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),

@@ -835,6 +835,8 @@ struct SampleAsk {
     images: Vec<silt_proto::artifact::SampleImage>,
     #[serde(default)]
     tools: Vec<silt_proto::artifact::SampleTool>,
+    #[serde(default)]
+    model: silt_proto::artifact::SampleModel,
 }
 
 /// A page's question for this machine's agent, its answer streamed on the
@@ -851,6 +853,7 @@ async fn sample(
         input: asked.input,
         images: asked.images,
         tools: asked.tools,
+        model: asked.model,
     };
     ask(&web, request).await
 }

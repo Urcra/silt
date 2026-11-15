@@ -1702,6 +1702,11 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
         asking.join().expect("asked")
     });
     assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 42]", "{answered}");
+    // A tier picks print mode's model; a model's name must be one, never an option.
+    let quick = api.ok("POST", &sample, Some(serde_json::json!({"input": "Quickly", "model": {"model_tier": "quick"}})));
+    assert_eq!((&quick["text"], &quick["model_applied"]), (&"Sampled: Quickly (on haiku)".into(), &"haiku".into()), "{quick}");
+    let (refused, said) = api.call("POST", &sample, Some(serde_json::json!({"input": "Hi", "model": {"model": "--yolo"}})));
+    assert!(!refused && said.to_string().contains("isn't a Claude model"), "{said}");
     let (refused, _) = api.call(
         "POST",
         &format!("/api/threads/{thread}/artifacts/{}/sample", "0".repeat(12)),

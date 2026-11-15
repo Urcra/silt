@@ -47,6 +47,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}", get(sample_so_far))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
 }
@@ -74,6 +75,10 @@ struct SampleAsk {
     input: Value,
     #[serde(default)]
     images: Vec<silt_proto::artifact::SampleImage>,
+    #[serde(default)]
+    model: silt_proto::artifact::SampleModel,
+    #[serde(default)]
+    tools: Vec<silt_proto::artifact::SampleTool>,
 }
 
 /// A page's question, answered by the agent of one of the person's own
@@ -95,7 +100,12 @@ async fn sample(
     if !asked.images.is_empty() && !silt_proto::artifact::sample_takes_images(&declared) {
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample with images")));
     }
-    let command = RemoteCommand::Sample { question, images: asked.images };
+    asked.model.resolved().map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    silt_proto::artifact::sample_tools(&asked.tools).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    if !asked.tools.is_empty() && asked.ask.is_none() {
+        return Err(Refused(StatusCode::BAD_REQUEST, "a question with tools has a name, for its calls to reach the page".into()));
+    }
+    let command = RemoteCommand::Sample { question, images: asked.images, model: asked.model, tools: asked.tools };
     let ask =
         asked.ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
     let watched = ask.clone().map(|ask| (browser.user, ask));
@@ -114,7 +124,23 @@ async fn sample_so_far(
     Path((_, _, ask)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, Refused> {
     let text = server.shared.control.said_so_far(browser.user, &ask).unwrap_or_default();
-    Ok(Json(serde_json::json!({ "text": text })))
+    let calls = server.shared.control.calls_waiting(browser.user, &ask);
+    Ok(Json(serde_json::json!({ "text": text, "calls": calls })))
+}
+
+/// The page's answer to the agent's call of one of its tools, which the
+/// device answering the question waits for.
+async fn sample_tool_result(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((_, _, ask, call)): Path<(String, String, String, u32)>,
+    Json(result): Json<Value>,
+) -> Result<StatusCode, Refused> {
+    if server.shared.control.answer_call(browser.user, &ask, call, result) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Refused(StatusCode::NOT_FOUND, "no such call is waiting".into()))
+    }
 }
 
 /// The thread's files for a page, read by one of the person's devices that

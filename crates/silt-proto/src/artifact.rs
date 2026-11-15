@@ -147,7 +147,7 @@ pub const SAMPLE_TOOLS: usize = 16;
 
 /// A tool a page offers the agent answering its question: the page runs
 /// it, in the viewer's browser, when the agent calls it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SampleTool {
     pub name: String,
@@ -185,6 +185,37 @@ pub fn sample_tools(tools: &[SampleTool]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Which model answers a page's question: a tier, or a model the page
+/// names; Claude Code's own default when neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SampleModel {
+    /// `quick`, `default` or `complex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tier: Option<String>,
+    /// A Claude model's id, such as `claude-sonnet-5-5`; it wins over the tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl SampleModel {
+    /// What print mode's `--model` is given, if anything.
+    pub fn resolved(&self) -> Result<Option<String>, String> {
+        if let Some(model) = &self.model {
+            let named = model.starts_with("claude-")
+                && model.len() <= 64
+                && model.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
+            return if named { Ok(Some(model.clone())) } else { Err(format!("{model:?} isn't a Claude model's id")) };
+        }
+        match self.model_tier.as_deref() {
+            None | Some("default") => Ok(None),
+            Some("quick") => Ok(Some("haiku".into())),
+            Some("complex") => Ok(Some("opus".into())),
+            Some(other) => Err(format!("{other} isn't a model tier: quick, default or complex")),
+        }
+    }
 }
 
 /// Whether a version's declaration lets its page show the agent images.
@@ -376,6 +407,18 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_names_a_tier_or_a_model() {
+        let asked = |tier: Option<&str>, model: Option<&str>| {
+            SampleModel { model_tier: tier.map(str::to_owned), model: model.map(str::to_owned) }.resolved()
+        };
+        assert_eq!(asked(None, None), Ok(None));
+        assert_eq!(asked(Some("quick"), None), Ok(Some("haiku".into())));
+        assert_eq!(asked(Some("complex"), Some("claude-sonnet-5-5")), Ok(Some("claude-sonnet-5-5".into())), "a named model wins");
+        assert!(asked(Some("huge"), None).is_err());
+        assert!(asked(None, Some("--dangerously-skip")).is_err(), "never an option");
+    }
 
     #[test]
     fn a_question_offers_few_plainly_named_tools() {

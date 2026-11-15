@@ -386,6 +386,20 @@ impl Remote {
         Ok(checked(self.request(reqwest::Method::POST, "/v1/rooms/agent").json(&body).send().await?).await?.json().await?)
     }
 
+    /// The agent's call of one of a page's tools while it answers command
+    /// `id`, run by the page through the server; waits for its answer.
+    pub async fn command_tool(
+        &self,
+        id: i64,
+        call: u32,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, RemoteError> {
+        let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/tool")).timeout(Duration::from_secs(75));
+        let body = serde_json::json!({ "call": call, "name": name, "input": input });
+        Ok(checked(request.json(&body).send().await?).await?.json().await?)
+    }
+
     /// What this device's agent has said so far of command `id`'s answer.
     pub async fn command_progress(&self, id: i64, text: &str) -> Result<(), RemoteError> {
         let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"));

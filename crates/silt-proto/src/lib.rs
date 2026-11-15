@@ -1319,6 +1319,12 @@ pub enum RemoteCommand {
         /// declared.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<crate::artifact::SampleImage>,
+        #[serde(default)]
+        model: crate::artifact::SampleModel,
+        /// Tools the page runs, which the device's agent calls through the
+        /// server while it answers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<crate::artifact::SampleTool>,
     },
     /// The thread's files for a page that declares `files` (ADR 0078), as
     /// the device that holds the family reads them.

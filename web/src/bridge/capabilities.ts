@@ -411,16 +411,19 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
     // Each question asks once; its tools' answers are many.
     perMinute: 120,
     call: async (method, args, context) => {
-      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: !hosted() }
+      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: true }
       if (method === 'toolResult') {
         const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
         const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
         await api.sampleToolResult(thread, artifact.id, String(said.ask ?? ''), Number(said.call), result)
         return null
       }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown }
+      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; model?: { model_tier?: unknown; model?: unknown } }
+      const model = {
+        model_tier: typeof given.model?.model_tier === 'string' ? given.model.model_tier : undefined,
+        model: typeof given.model?.model === 'string' ? given.model.model : undefined,
+      }
       const tools = sampleTools(given.tools)
-      if (tools.length > 0 && hosted()) throw new Refusal('unavailable', "a page's tools run only on your own computer's agent, not in the hosted app")
       const blobs = Array.isArray(given.images) ? given.images : []
       if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
       if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
@@ -436,18 +439,26 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       })
       // The hosted app has no bus: it reads what the device's agent has said so far.
       let heard = ''
+      // The calls of the page's tools already told to the page.
+      const told = new Set<number>()
       const polling = hosted()
         ? window.setInterval(() => {
             void api
               .sampleSoFar(thread, artifact.id, ask)
-              .then(({ text }) => {
+              .then(({ text, calls }) => {
                 if (text && text !== heard) context.emit('sample', 'text', { ask, text: (heard = text) })
+                for (const call of calls ?? []) {
+                  if (told.has(call.call)) continue
+                  told.add(call.call)
+                  context.emit('sample', 'tool', { ask, call: call.call, name: call.name, input: call.input })
+                }
               })
               .catch(() => undefined)
           }, 400)
         : null
       try {
-        return await api.sample(thread, artifact.id, ask, given.input, images, tools)
+        const answer = await api.sample(thread, artifact.id, ask, given.input, images, tools, model)
+        return { text: answer.text, truncated: answer.truncated, ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}) }
       } catch (failure) {
         throw refusalOf(failure)
       } finally {

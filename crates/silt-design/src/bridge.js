@@ -187,6 +187,7 @@ function sampleClient(ns) {
     var done = function () { off(); offTools(); delete sample.last[ask]; };
     var asked = { input: input, ask: ask };
     if (opts.images) asked.images = Array.prototype.slice.call(opts.images);
+    if (opts.modelTier || opts.model) asked.model = { model_tier: opts.modelTier || null, model: opts.model || null };
     if (tools.length) {
       asked.tools = tools.map(function (tool) {
         return { name: String(tool.name), description: String(tool.description || ''), inputSchema: tool.inputSchema };

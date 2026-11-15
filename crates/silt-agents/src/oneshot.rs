@@ -47,13 +47,14 @@ pub struct OfferedTools {
 }
 
 /// Asks Claude Code's print mode `question` from `cwd`, a directory of its
-/// own so no project's instructions apply, showing it `images` and offering
-/// it `tools` and no others, and telling `heard` the answer so far each
+/// own so no project's instructions apply, showing it `images`, offering it
+/// `tools` and no others, on `model` when given, and telling `heard` the answer so far each
 /// time more of it arrives.
 pub fn ask_claude(
     question: &str,
     images: &[Image<'_>],
     tools: Option<&OfferedTools>,
+    model: Option<&str>,
     cwd: &Path,
     mut heard: impl FnMut(&str),
 ) -> Result<Answer, OneShotError> {
@@ -63,6 +64,9 @@ pub fn ask_claude(
     let launch = Launch::new("claude");
     let mut command = Command::new(&launch.program);
     command.args(["-p", "--output-format", "stream-json", "--verbose"]);
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
     match tools {
         Some(tools) => {
             command.args(["--mcp-config", &tools.mcp_config, "--strict-mcp-config", "--allowedTools", &tools.allowed.join(",")]);

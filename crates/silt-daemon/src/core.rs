@@ -759,8 +759,9 @@ impl Core {
             Request::ArtifactFile { thread, id, version, path } => {
                 to_response(self.artifact_file(&thread, &id, version, &path).await)
             }
-            Request::Sample { thread, artifact, ask, input, images, tools } => {
-                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images, tools));
+            Request::Sample { thread, artifact, ask, input, images, tools, model } => {
+                let asked = crate::sample::Question { input, images, tools, model };
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, asked));
             }
             Request::ArtifactPdf { thread, artifact, html } => {
                 let printable = self

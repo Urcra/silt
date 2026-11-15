@@ -433,6 +433,8 @@ pub enum Request {
         images: Vec<silt_proto::artifact::SampleImage>,
         #[serde(default)]
         tools: Vec<silt_proto::artifact::SampleTool>,
+        #[serde(default)]
+        model: silt_proto::artifact::SampleModel,
     },
     /// A doc or a deck as a PDF, printed from `html`, the page the browser
     /// drew of it, by this machine's headless browser; a deck's page says

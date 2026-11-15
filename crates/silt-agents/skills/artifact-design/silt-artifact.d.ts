@@ -144,9 +144,13 @@ interface SiltSampleTool {
 }
 interface SiltSampleOptions {
   onText?: (said: { text: string; delta: string }) => void
-  /** Up to 16 functions of the page the agent may call while it answers.
-   * Only on this computer's agent: `limits().tools` is false in the hosted
-   * app, where a question with tools is refused (`unavailable`). */
+  /** `quick` for a short, cheap answer, `complex` for a hard one. */
+  modelTier?: 'quick' | 'default' | 'complex'
+  /** Only when the person names one, such as `claude-sonnet-5-5`; wins over the tier. */
+  model?: string
+  /** Up to 16 functions of the page the agent may call while it answers;
+   * in the hosted app, one of the person's computers answers and its calls
+   * come back to the page through the server. */
   tools?: SiltSampleTool[]
   /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most
    * about 3.7 MB; declare `{"sample": {"images": true}}` for them. */
@@ -156,12 +160,14 @@ interface SiltSample {
   (input: string | { role: 'user' | 'assistant'; content: string }[], opts?: SiltSampleOptions): Promise<{
     text: string
     truncated: boolean
+    /** The model or tier asked for, as print mode was given it. */
+    modelApplied?: string
   }>
   /** The answer parsed as JSON, a ```json fence around it allowed. */
   json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: SiltSampleOptions): Promise<any>
   /** `images` is how many one question may show, or false when the page
    * didn't declare them. */
-  limits(): Promise<{ images: number | false; perMinute: number; tools: boolean }>
+  limits(): Promise<{ images: number | false; perMinute: number; tools: true }>
 }
 
 // `assets` (declare `{"assets": {}}`, or `{"assets": {"upload": "comment"}}`

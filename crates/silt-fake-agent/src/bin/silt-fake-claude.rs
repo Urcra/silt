@@ -537,7 +537,10 @@ fn print_mode(args: &[String]) -> Step {
     };
     let answer = env::var("FAKE_SAMPLE").unwrap_or_else(|_| {
         let words: Vec<&str> = message.split_whitespace().take(6).collect();
-        let seen = if images > 0 { format!(" ({images} images)") } else { String::new() };
+        let mut seen = if images > 0 { format!(" ({images} images)") } else { String::new() };
+        if let Some(model) = args.iter().position(|arg| arg == "--model").and_then(|at| args.get(at + 1)) {
+            seen.push_str(&format!(" (on {model})"));
+        }
         format!("Sampled: {}{seen}{used}", words.join(" "))
     });
     let (first, rest) = answer.split_at(answer.find(' ').unwrap_or(answer.len()));

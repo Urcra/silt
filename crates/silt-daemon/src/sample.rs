@@ -21,6 +21,9 @@ const PER_MINUTE: usize = 4;
 pub(crate) struct Sampled {
     pub(crate) text: String,
     pub(crate) truncated: bool,
+    /// The tier or model print mode was given, when the page asked for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) model_applied: Option<String>,
 }
 
 impl Core {
@@ -33,11 +36,11 @@ impl Core {
         thread: &str,
         artifact: Option<&str>,
         ask: Option<String>,
-        input: &serde_json::Value,
-        images: Vec<silt_proto::artifact::SampleImage>,
-        tools: Vec<silt_proto::artifact::SampleTool>,
+        asked: Question,
     ) -> Result<impl Future<Output = Result<Sampled, CoreError>> + Send + 'static, CoreError> {
-        let question = silt_proto::artifact::sample_question(input).map_err(CoreError::Invalid)?;
+        let Question { input, images, tools, model } = asked;
+        let model = model.resolved().map_err(CoreError::Invalid)?;
+        let question = silt_proto::artifact::sample_question(&input).map_err(CoreError::Invalid)?;
         silt_proto::artifact::sample_images(&images).map_err(CoreError::Invalid)?;
         silt_proto::artifact::sample_tools(&tools).map_err(CoreError::Invalid)?;
         let thread_id = self.find_thread(thread)?;
@@ -68,12 +71,12 @@ impl Core {
         let cwd = self.data_dir.join("sample");
         let offered = match (tools.is_empty(), &ask, artifact) {
             (true, ..) => None,
-            (false, Some(ask), Some(artifact)) => Some(self.offer_tools(thread_id, artifact, ask, &tools)?),
-            (false, ..) => {
-                return Err(CoreError::Invalid("a page's tools run only for a named question from a page here".into()));
-            }
+            // From elsewhere, the page answers through the server, which checked it.
+            (false, Some(ask), artifact) => Some(self.offer_tools(thread_id, artifact.unwrap_or_default(), ask, &tools)?),
+            (false, None, _) => return Err(CoreError::Invalid("a page's tools run only for a named question".into())),
         };
         let bus = self.bus.clone();
+        let applied = model.clone();
         Ok(async move {
             std::fs::create_dir_all(&cwd)?;
             let answer = tokio::task::spawn_blocking(move || {
@@ -81,7 +84,7 @@ impl Core {
                     .iter()
                     .map(|image| silt_agents::oneshot::Image { media_type: &image.media_type, data: &image.data })
                     .collect();
-                silt_agents::oneshot::ask_claude(&question, &shown, offered.as_ref(), &cwd, |text| {
+                silt_agents::oneshot::ask_claude(&question, &shown, offered.as_ref(), model.as_deref(), &cwd, |text| {
                     if let Some(ask) = &ask {
                         let _ = bus.send(BusEvent::Sample { ask: ask.clone(), text: text.to_owned() });
                     }
@@ -90,7 +93,7 @@ impl Core {
             .await
             .map_err(|error| CoreError::Invalid(error.to_string()))?
             .map_err(|error| CoreError::Invalid(error.to_string()))?;
-            Ok(Sampled { text: answer.text, truncated: answer.truncated })
+            Ok(Sampled { text: answer.text, truncated: answer.truncated, model_applied: applied })
         })
     }
 
@@ -175,6 +178,15 @@ impl Core {
         let _ = answer.send(if result.ok { Ok(result.value) } else { Err(result.error) });
         Ok(())
     }
+}
+
+/// What a page asks: its words, the images it shows, the tools it offers,
+/// and the model it wants.
+pub(crate) struct Question {
+    pub(crate) input: serde_json::Value,
+    pub(crate) images: Vec<silt_proto::artifact::SampleImage>,
+    pub(crate) tools: Vec<silt_proto::artifact::SampleTool>,
+    pub(crate) model: silt_proto::artifact::SampleModel,
 }
 
 /// How long a page's tool may take to answer a call.
