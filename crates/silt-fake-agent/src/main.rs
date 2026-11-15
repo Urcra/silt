@@ -569,6 +569,10 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
             let rows = serde_json::json!({"rows": [["apples", 3], ["pears", 5]]});
             arguments = serde_json::json!({"title": "Tracker", "kind": "sheet", "content": rows.to_string()});
         }
+        if prompt.contains("Artifact tools") {
+            let mcp = serde_json::json!({"servers": [{"server": "silt", "tools": ["silt_history_search"]}]});
+            arguments = serde_json::json!({"title": "History finder", "kind": "html", "content": "<!doctype html><h1>Finder</h1>", "capabilities": {"mcp": mcp}});
+        }
         if prompt.contains("Artifact numbers") {
             let page = serde_json::json!({"title": "Rescan benchmark", "sources": [
                 {"id": "bench", "name": "silt-bench rescan", "kind": "command", "detail": "silt-bench run --only rescan", "at": "2026-11-15T09:00:00Z"}

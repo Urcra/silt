@@ -143,6 +143,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route("/api/threads/{id}/artifacts/{artifact}/doc", post(doc_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
+        .route("/api/page-connectors", get(page_connectors).put(set_page_connectors))
+        .route("/api/page-connectors/import", post(import_page_connectors))
+        .route("/api/page-connectors/{name}/tools", get(connector_tools))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
         .route(
@@ -703,6 +707,34 @@ async fn page_assets(
     Json(asked): Json<silt_proto::page::AssetRequest>,
 ) -> HttpResponse {
     ask(&web, Request::PageAssets { thread, artifact, asked }).await
+}
+
+/// A page's call of one of the viewer's connectors' tools (ADR 0080).
+async fn page_mcp(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<crate::connectors::McpAsk>,
+) -> HttpResponse {
+    ask(&web, Request::PageMcp { thread, artifact, asked }).await
+}
+
+async fn page_connectors(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::PageConnectors).await
+}
+
+async fn set_page_connectors(
+    State(web): State<Web>,
+    Json(connectors): Json<Vec<crate::connectors::PageConnector>>,
+) -> HttpResponse {
+    ask(&web, Request::SetPageConnectors { connectors }).await
+}
+
+async fn import_page_connectors(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ImportPageConnectors).await
+}
+
+async fn connector_tools(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {
+    ask(&web, Request::ConnectorTools { name }).await
 }
 
 /// A doc's text, or edits of it (ADR 0077).

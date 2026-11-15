@@ -6,6 +6,7 @@ import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
 import { dbHandler } from './db'
+import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } from './voiceAndTools'
 
 /** What a capability asks of the page holding the frame: the person's say before something acts for them. */
 export type Holder = {
@@ -25,6 +26,9 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     sample: sampleHandler(thread, artifact, holder),
     assets: assetsHandler(thread, artifact),
     files: filesHandler(thread, artifact, holder),
+    ...(dictationServed() ? { dictation: dictationHandler(thread, artifact, holder) } : {}),
+    ...(ttsServed() ? { tts: ttsHandler() } : {}),
+    mcp: mcpHandler(thread, artifact, holder),
   }
 }
 

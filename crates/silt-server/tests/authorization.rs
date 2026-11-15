@@ -1092,7 +1092,7 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
     let listed = devices.iter().find(|device| device["kind"] == "phone").expect("the phone is listed");
     assert_eq!(
         listed["capabilities"],
-        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true, "sample": false })
+        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true, "sample": false, "page_tools": false })
     );
     let id = listed["id"].as_str().expect("an id").to_owned();
     let change = |browser: &Browser, body: serde_json::Value| {

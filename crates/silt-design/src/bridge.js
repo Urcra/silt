@@ -188,7 +188,55 @@ function filesClient(ns) {
     download: function (path) { return ns.download({ path: String(path) }); }
   });
 }
-var clients = { db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient };
+function dictationClient(ns) {
+  return Object.freeze({
+    start: function () { return ns.start(); },
+    stop: function () { return ns.stop(); },
+    onPartial: function (fn) { return ns.on('partial', fn); },
+    onFinal: function (fn) { return ns.on('final', fn); },
+    onState: function (fn) { return ns.on('state', fn); }
+  });
+}
+function ttsClient(ns) {
+  function lines(text, opts) {
+    var given = Array.isArray(text) ? text : [Object.assign({ text: String(text) }, opts || {})];
+    return given.map(function (line) { return typeof line === 'string' ? { text: line } : line; });
+  }
+  return Object.freeze({
+    speak: function (text, opts) { return ns.speak({ lines: lines(text, opts) }); },
+    add: function (text, opts) { return ns.add({ lines: lines(text, opts) }); },
+    stop: function () { return ns.stop(); },
+    pause: function () { return ns.pause(); },
+    resume: function () { return ns.resume(); },
+    setRate: function (rate) { return ns.setRate({ rate: rate }); },
+    onState: function (fn) { return ns.on('state', fn); },
+    onLine: function (fn) { return ns.on('line', fn); }
+  });
+}
+function mcpClient(ns) {
+  function call(server, tool, input) { return ns.callTool({ server: server, tool: tool, input: input || {} }); }
+  return Object.freeze({
+    callTool: call,
+    describeTool: function (server, tool) { return ns.describeTool({ server: server, tool: tool }); },
+    listTools: function (server) { return ns.listTools({ server: server }); },
+    // Reads a tool that only reads now and then again, no faster than every 30 s.
+    watchTool: function (server, tool, input, handler, opts) {
+      var every = Math.max(30000, (opts && opts.refetchInterval) || 0), timer = null, gone = false;
+      function read() {
+        ns.callTool({ server: server, tool: tool, input: input || {}, read: true }).then(function (result) {
+          if (!gone) handler({ type: 'data', data: result, cache: { storedAt: Date.now() } });
+        }, function (error) { if (!gone) handler({ type: 'error', error: error }); });
+        if (!gone && opts && opts.refetchInterval) timer = setTimeout(read, every);
+      }
+      read();
+      return function () { gone = true; if (timer) clearTimeout(timer); };
+    }
+  });
+}
+var clients = {
+  db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient,
+  dictation: dictationClient, tts: ttsClient, mcp: mcpClient
+};
 var made = {};
 window.silt = Object.freeze({
   version: '1',

@@ -1861,6 +1861,54 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     assert!(output.stdout.starts_with(b"PK"), "a workbook: {}", String::from_utf8_lossy(&output.stdout));
 }
 
+/// A page calls a tool of an MCP server the person set up for pages, through
+/// their daemon (ADR 0080): only a tool both declared and ticked, and its
+/// description says whether it only reads.
+#[test]
+fn a_page_calls_a_ticked_tool_of_a_page_connector() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact tools"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact tools");
+    let id = artifacts_of(&api, &thread)[0]["id"].as_str().expect("id").to_owned();
+
+    // `silt mcp` is an MCP server whose history tools only read.
+    let silt = env!("CARGO_BIN_EXE_silt");
+    let connector = serde_json::json!([{"name": "silt", "command": silt, "args": ["mcp", "--thread", thread], "tools": {}}]);
+    api.ok("PUT", "/api/page-connectors", Some(connector.clone()));
+    let tools = api.ok("GET", "/api/page-connectors/silt/tools", None);
+    let search = tools
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "silt_history_search"))
+        .cloned()
+        .expect("listed");
+    assert_eq!(search["read_only"], true, "{search}");
+
+    let mcp = format!("/api/threads/{thread}/artifacts/{id}/mcp");
+    let call = serde_json::json!({"op": "call", "server": "silt", "tool": "silt_history_search", "input": {"query": "Artifact"}});
+    let (refused, said) = api.call("POST", &mcp, Some(call.clone()));
+    assert!(!refused && said.to_string().contains("not_granted"), "not ticked yet: {said}");
+    let mut ticked = connector.clone();
+    ticked[0]["tools"]["silt_history_search"] = true.into();
+    api.ok("PUT", "/api/page-connectors", Some(ticked));
+    let described =
+        api.ok("POST", &mcp, Some(serde_json::json!({"op": "describe", "server": "silt", "tool": "silt_history_search"})));
+    assert_eq!(described["read_only"], true);
+    let result = api.ok("POST", &mcp, Some(call));
+    assert!(result.to_string().contains("[Artifact] tools"), "the tool answered: {result}");
+    let other = serde_json::json!({"op": "call", "server": "silt", "tool": "silt_history_read", "input": {}});
+    let (refused, said) = api.call("POST", &mcp, Some(other));
+    assert!(!refused && said.to_string().contains("doesn't declare"), "only what the page declares: {said}");
+}
+
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps

@@ -43,6 +43,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs", "io-util", "process"] }
 tracing = "0.1.44"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
+rmcp = { version = "3.10.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 [dev-dependencies]
 silt-proto = { path = "../silt-proto", features = ["ts"] }

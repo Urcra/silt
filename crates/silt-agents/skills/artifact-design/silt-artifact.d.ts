@@ -156,3 +156,43 @@ interface SiltFiles {
   /** Asks the viewer to save it. */
   download(path: string): Promise<{ saved: true }>
 }
+
+// `dictation` (declare `{"dictation": {}}`): the viewer's speech as text, on
+// the daemon only. Call `start()` from a click; the first asks the viewer.
+interface SiltDictation {
+  start(): Promise<null>
+  /** Waits for the last words. */
+  stop(): Promise<null>
+  /** A live guess, replacing the last. */
+  onPartial(fn: (said: { text: string }) => void): () => void
+  /** A settled phrase to append. */
+  onFinal(fn: (said: { text: string }) => void): () => void
+  onState(fn: (said: { state: 'listening' | 'idle'; reason?: string }) => void): () => void
+}
+
+// `tts` (declare `{"tts": {}}`): text spoken in the browser's own voices.
+// Keep the text on screen too. `busy` while the viewer dictates.
+interface SiltTts {
+  speak(text: string | { text: string; voice?: string; rate?: number; language?: string; id?: string }[], opts?: { voice?: string; rate?: number; language?: string }): Promise<null>
+  add(text: string | { text: string; voice?: string }[]): Promise<null>
+  stop(): Promise<null>
+  pause(): Promise<null>
+  resume(): Promise<null>
+  /** 0.7 to 1.5. */
+  setRate(rate: number): Promise<null>
+  onState(fn: (said: { state: 'speaking' | 'paused' | 'idle'; reason?: string }) => void): () => void
+  onLine(fn: (said: { line: number; id: string | null }) => void): () => void
+}
+
+// `mcp` (declare `{"mcp": {"servers": [{"server": "tracker", "tools": ["list_issues"]}]}}`):
+// the viewer's own page connectors, MCP servers they set up in Settings,
+// each tool ticked by them. A tool marked as only reading may be watched;
+// anything else asks the viewer every time it runs. Results are untrusted:
+// insert them with `textContent`.
+interface SiltMcp {
+  callTool(server: string, tool: string, input?: object): Promise<{ content: unknown[]; structuredContent?: unknown; isError?: boolean }>
+  /** Reads now, and every `refetchInterval` ms (at least 30 s) if given; returns a function that stops it. */
+  watchTool(server: string, tool: string, input: object, handler: (event: { type: 'data'; data: unknown; cache: { storedAt: number } } | { type: 'error'; error: Error }) => void, opts?: { refetchInterval?: number }): () => void
+  describeTool(server: string, tool: string): Promise<{ name: string; description: string | null; read_only: boolean; input_schema: unknown }>
+  listTools(server: string): Promise<string[]>
+}

@@ -9,6 +9,8 @@ import type {
   AgentChoices,
   ArtifactContent,
   ArtifactListed,
+  ConnectorTool,
+  PageConnector,
   ArtifactSettings,
   ChatSettings,
   CloudLaunch,
@@ -186,6 +188,13 @@ export const api = {
   /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
   archiveArtifact: (id: string, artifact: string, archived: boolean) =>
     request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/archive`, { archived }),
+  /** A page's call of the viewer's page connectors (ADR 0080). */
+  pageMcp: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/mcp`, asked),
+  /** The MCP servers this machine lists for pages (ADR 0080). */
+  pageConnectors: () => request<PageConnector[]>('GET', '/api/page-connectors'),
+  setPageConnectors: (connectors: PageConnector[]) => request<unknown>('PUT', '/api/page-connectors', connectors),
+  importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
+  connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
   /** A doc's text, or edits of it (ADR 0077). */
   docData: (id: string, artifact: string, asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[] }) =>
     request<{ text: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),

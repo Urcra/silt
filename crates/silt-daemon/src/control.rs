@@ -241,6 +241,11 @@ impl Core {
             RemoteCommand::SignInCode { code } => Request::AcpSignInCode { thread, code },
             RemoteCommand::SignInCancel => Request::AcpSignInCancel { thread },
             RemoteCommand::PageFiles { artifact, asked } => Request::PageFiles { thread, artifact, asked },
+            RemoteCommand::PageMcp { artifact, asked } => Request::PageMcp {
+                thread,
+                artifact,
+                asked: serde_json::from_value(asked).map_err(|error| format!("that isn't a connector call: {error}"))?,
+            },
             RemoteCommand::Sample { question } => {
                 Request::Sample { thread, artifact: None, ask: None, input: serde_json::Value::String(question) }
             }

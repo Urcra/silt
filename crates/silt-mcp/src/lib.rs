@@ -234,7 +234,7 @@ fn history_tools() -> Value {
             "required": ["query"]
         })
     };
-    json!([
+    let mut tools = json!([
         {
             "name": "silt_history_search",
             "description": "Search this session's full history, including what was compacted away and what the thread inherited from the thread it was forked from. Returns entry numbers to read with silt_history_read.",
@@ -287,7 +287,12 @@ fn history_tools() -> Value {
                 "required": ["path"]
             }
         }
-    ])
+    ]);
+    // Each only reads, which a client such as a page connector relies on (ADR 0080).
+    for tool in tools.as_array_mut().into_iter().flatten() {
+        tool["annotations"] = json!({"readOnlyHint": true});
+    }
+    tools
 }
 
 /// Serves newline-delimited JSON-RPC from `input` until it ends. A line

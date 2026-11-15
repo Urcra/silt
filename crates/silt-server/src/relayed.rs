@@ -47,6 +47,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
 }
 
 /// A file at a version for a permalink, from one of the person's devices,
@@ -100,6 +101,22 @@ async fn page_files(
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare files")));
     }
     Ok(Json(ask_any_device(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked }).await?))
+}
+
+/// A page's call of the person's page connectors, run by one of their own
+/// online computers, where the connectors are (ADR 0080).
+async fn page_mcp(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<Value>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("mcp")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare mcp")));
+    }
+    Ok(Json(ask_device_within(&server, browser, thread, RemoteCommand::PageMcp { artifact, asked }, SAMPLE_WAIT).await?))
 }
 
 /// How long one device's view of a merge request stands in for asking

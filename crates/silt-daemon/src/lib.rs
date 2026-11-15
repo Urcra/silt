@@ -10,6 +10,7 @@ pub mod chats;
 pub mod client;
 mod cloud;
 mod comments;
+mod connectors;
 mod control;
 mod core;
 mod design;

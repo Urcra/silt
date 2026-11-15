@@ -1318,6 +1318,13 @@ pub enum RemoteCommand {
         artifact: String,
         asked: crate::page::FilesRequest,
     },
+    /// A page's call of the person's page connectors, on the device that
+    /// has them (ADR 0080): `{op, server, tool, input}`.
+    PageMcp {
+        artifact: String,
+        #[cfg_attr(feature = "ts", ts(type = "unknown"))]
+        asked: serde_json::Value,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1332,13 +1339,16 @@ pub struct Capabilities {
     pub review: bool,
     /// Ask one of the person's computers' agents a page's question (ADR 0072).
     pub sample: bool,
+    /// Call the person's page connectors on one of their computers (ADR 0080).
+    pub page_tools: bool,
 }
 
 impl Capabilities {
-    pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true, sample: true };
+    pub const ALL: Self =
+        Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true, sample: true, page_tools: true };
     /// A paired phone's, unless its person gives it more (ADR 0028).
     pub const PHONE: Self =
-        Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true, sample: false };
+        Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true, sample: false, page_tools: false };
 
     /// Whether these let the device send `command`, and if not, what it
     /// would need, for saying so.
@@ -1364,6 +1374,7 @@ impl Capabilities {
                 (self.review, "review merge requests")
             }
             RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),
+            RemoteCommand::PageMcp { .. } => (self.page_tools, "call your page connectors"),
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

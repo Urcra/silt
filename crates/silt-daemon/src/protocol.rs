@@ -436,6 +436,23 @@ pub enum Request {
         artifact: String,
         asked: silt_proto::page::AssetRequest,
     },
+    /// The MCP servers this machine lists for pages (ADR 0080).
+    PageConnectors,
+    SetPageConnectors {
+        connectors: Vec<crate::connectors::PageConnector>,
+    },
+    /// Adds the servers Claude Code lists, every tool off.
+    ImportPageConnectors,
+    /// A page connector's tools, started if it isn't running.
+    ConnectorTools {
+        name: String,
+    },
+    /// A page's call of a connector's tool, or its description (ADR 0080).
+    PageMcp {
+        thread: String,
+        artifact: String,
+        asked: crate::connectors::McpAsk,
+    },
     /// A doc's text, or edits of it (ADR 0077).
     DocData {
         thread: String,
@@ -1754,6 +1771,8 @@ mod tests {
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
             silt_proto::view::ArtifactListed::decl(&config),
+            crate::connectors::PageConnector::decl(&config),
+            crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),

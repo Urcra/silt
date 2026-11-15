@@ -288,6 +288,8 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// The page connectors' running MCP clients (ADR 0080).
+    pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
     /// When each artifact's page last asked `sample`, for its rate.
     pub(crate) samples: HashMap<String, Vec<Instant>>,
     /// What changed, for browsers listening (ADR 0021).
@@ -531,6 +533,7 @@ impl Core {
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
+            page_clients: std::sync::Arc::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
@@ -649,6 +652,13 @@ impl Core {
             Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
             Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
             Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
+            Request::PageConnectors => Response::ok(crate::connectors::connectors(&self.data_dir)),
+            Request::SetPageConnectors { connectors } => {
+                to_response(crate::connectors::set_connectors(&self.data_dir, &connectors).map(|()| "saved"))
+            }
+            Request::ImportPageConnectors => to_response(self.import_page_connectors()),
+            Request::ConnectorTools { name } => return answer_later(reply, self.connector_tools(&name)),
+            Request::PageMcp { thread, artifact, asked } => return answer_later(reply, self.page_mcp(&thread, &artifact, asked)),
             Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
             Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
             Request::ArtifactFile { thread, id, version, path } => {

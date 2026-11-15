@@ -13,7 +13,11 @@ export type Capabilities = { answer_permissions: boolean, send_prompts: boolean,
 /**
  * Ask one of the person's computers' agents a page's question (ADR 0072).
  */
-sample: boolean, };
+sample: boolean, 
+/**
+ * Call the person's page connectors on one of their computers (ADR 0080).
+ */
+page_tools: boolean, };
 
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
@@ -652,6 +656,32 @@ time_ms: number, pinned: boolean,
  * Hidden by the thread's owner; shown only when asked for.
  */
 archived: boolean, };
+
+export type PageConnector = { name: string, 
+/**
+ * A stdio server's program, with `args`.
+ */
+command: string | null, args: Array<string>, 
+/**
+ * A Streamable HTTP server's address.
+ */
+url: string | null, 
+/**
+ * Headers sent to an HTTP server, each from the environment variable
+ * it names, so no secret is kept in the file.
+ */
+header_env: { [key in string]: string }, 
+/**
+ * The tools pages may call, by name; every one is off until ticked.
+ */
+tools: { [key in string]: boolean }, };
+
+export type ConnectorTool = { name: string, description: string | null, 
+/**
+ * The server marks it as only reading; anything else is an action the
+ * viewer confirms each time.
+ */
+read_only: boolean, input_schema: unknown, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 
