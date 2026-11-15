@@ -67,6 +67,18 @@ pub enum Request {
     ModelRemove {
         model: String,
     },
+    /// GGUF models on Hugging Face matching `query`, the most downloaded
+    /// first; with an empty query, the most downloaded of all.
+    ModelSearch {
+        query: String,
+    },
+    /// A Hugging Face repository's quantizations, as this machine would run
+    /// each.
+    ModelFiles {
+        repo: String,
+    },
+    /// Starts downloading llama.cpp's latest build for this machine.
+    RuntimePull,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -721,8 +733,7 @@ pub struct LocalModels {
     /// Bytes a model may use here: the devices', else the machine's memory.
     pub room: u64,
     pub models: Vec<LocalModel>,
-    /// The catalog's models not downloaded yet.
-    pub catalog: Vec<CatalogModel>,
+    /// A model's download, or llama.cpp's (`llama.cpp`), while it runs.
     pub pull: Option<ModelPull>,
     /// Why the last download failed.
     pub failed: Option<ModelFailure>,
@@ -742,7 +753,7 @@ pub struct ModelDevice {
 pub struct LocalModel {
     pub id: String,
     pub name: String,
-    /// Where it came from: the catalog, `owner/repo:file` or a file here.
+    /// Where it came from: `owner/repo:file` or a file here.
     pub source: String,
     pub size: u64,
     pub context: u32,
@@ -751,17 +762,42 @@ pub struct LocalModel {
     pub path: PathBuf,
 }
 
+/// A model repository a search on Hugging Face found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub struct CatalogModel {
-    pub id: String,
-    pub name: String,
-    pub about: String,
+pub struct FoundModel {
+    /// `owner/name`.
+    pub repo: String,
+    /// Downloads in the last month.
+    pub downloads: u64,
+    pub updated: Option<String>,
+}
+
+/// A repository's quantizations, as this machine would run each.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelFiles {
+    pub repo: String,
+    pub architecture: Option<String>,
+    /// The most context the model was trained for.
+    pub context_length: Option<u64>,
+    /// Smallest first.
+    pub quantizations: Vec<ModelQuantization>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelQuantization {
+    /// What a pull takes: `owner/repo:file.gguf`.
+    pub source: String,
+    /// Its kind, such as `Q4_K_M`.
+    pub label: String,
     pub size: u64,
-    pub context: u32,
-    /// Whether it was tried with Claude Code and `local` on real hardware.
-    pub tested: bool,
+    /// Files it's split across.
+    pub parts: u32,
     pub fit: ModelFit,
+    /// The context it would start with here.
+    pub context: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1557,7 +1593,9 @@ mod tests {
             LocalModels::decl(&config),
             ModelDevice::decl(&config),
             LocalModel::decl(&config),
-            CatalogModel::decl(&config),
+            FoundModel::decl(&config),
+            ModelFiles::decl(&config),
+            ModelQuantization::decl(&config),
             ModelFit::decl(&config),
             ModelPull::decl(&config),
             ModelFailure::decl(&config),

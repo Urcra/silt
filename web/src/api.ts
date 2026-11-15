@@ -23,10 +23,12 @@ import type {
   HistoryPage,
   InboxEntry,
   InboxRead,
+  FoundModel,
   KindSetting,
   LiveState,
   LocalModels,
   Mine,
+  ModelFiles,
   MrDetails,
   MrSummary,
   NewLink,
@@ -133,6 +135,12 @@ export const api = {
   /** Starts a download: a catalog name, `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
   pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
   removeModel: (id: string) => request<string>('DELETE', `/api/models/${encodeURIComponent(id)}`),
+  /** GGUF models on Hugging Face, the most downloaded first; with no words, the most downloaded of all. */
+  searchModels: (words: string) => request<FoundModel[]>('GET', `/api/models/search?q=${encodeURIComponent(words)}`),
+  /** A Hugging Face repository's quantizations, as this machine would run each. */
+  modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
+  /** Starts downloading llama.cpp's latest build for this machine. */
+  pullRuntime: () => request<string>('POST', '/api/models/runtime'),
   /** Erases a Local only thread and its forks (ADR 0066); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),

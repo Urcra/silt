@@ -1,22 +1,30 @@
-//! Local models on this machine (ADR 0066): the ones downloaded, the
-//! catalog's others, what this machine can run, and downloads, which start
-//! only when the person asks for one.
+//! Local models on this machine (ADR 0066): the ones downloaded, finding
+//! others on Hugging Face, what this machine can run, llama.cpp itself, and
+//! downloads, which start only when the person asks for one.
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use silt_llm::{Budget, Device, Hub, Installed, LlmError, ModelId, Models, Plan, Remote, Source};
+use silt_llm::{Budget, Device, Hub, Installed, LlmError, ModelId, Models, Plan, Remote, Repo, Runtimes, Source};
 
 use crate::core::CoreError;
-use crate::protocol::{CatalogModel, LocalModel, LocalModels, ModelFit, ModelPull};
+use crate::protocol::{FoundModel, LocalModel, LocalModels, ModelFiles, ModelFit, ModelPull, ModelQuantization};
+
+/// What a download of llama.cpp itself is called while it runs.
+pub const RUNTIME: &str = "llama.cpp";
+/// Models a search answers with.
+const FOUND: usize = 30;
 
 pub(crate) struct LocalModelsHere {
     models: Models,
+    runtimes: Runtimes,
     store: silt_store::Store,
     /// The model gateway and its address, once it's started (ADR 0066).
     gateway: tokio::sync::OnceCell<(String, std::sync::Arc<crate::gateway::Gateway>)>,
     hub: Hub,
+    /// Where llama.cpp's releases are listed: GitHub's, or a stand-in in tests.
+    releases: String,
     client: reqwest::Client,
     pulling: Mutex<Pulling>,
     /// What the server found last listed, so a listing doesn't run it again.
@@ -29,19 +37,15 @@ struct Pulling {
     failed: Option<(String, String)>,
 }
 
-/// What `silt model pull` and the web UI name: a catalog entry, a file on
-/// Hugging Face, or a GGUF file here.
+/// What `silt model pull` and the web UI name: a file on Hugging Face, or a
+/// GGUF file here.
 enum Wanted {
-    Catalog(&'static silt_llm::Entry),
     Remote(Remote),
     File(PathBuf),
 }
 
 impl Wanted {
     fn parse(source: &str) -> Result<Self, LlmError> {
-        if let Some(entry) = silt_llm::entry(source) {
-            return Ok(Self::Catalog(entry));
-        }
         let path = Path::new(source);
         if path.is_absolute() {
             return Ok(Self::File(path.to_owned()));
@@ -51,21 +55,30 @@ impl Wanted {
 
     fn id(&self) -> Result<ModelId, LlmError> {
         match self {
-            Self::Catalog(entry) => ModelId::new(entry.id),
             Self::Remote(remote) => ModelId::for_file(&remote.file),
             Self::File(path) => ModelId::for_file(&path.to_string_lossy()),
         }
     }
 }
 
+/// The `llama-server` this machine runs models with: `$SILT_LLAMA_SERVER`,
+/// else the `PATH`'s, else the build of llama.cpp Silt fetched.
+pub(crate) fn server_in(runtimes: &Runtimes) -> Option<PathBuf> {
+    silt_llm::find_server(env::var_os("SILT_LLAMA_SERVER"), env::var_os("PATH").as_deref(), Path::is_file)
+        .or_else(|| runtimes.server())
+}
+
 impl LocalModelsHere {
     pub(crate) fn new(data_dir: &Path, store: silt_store::Store) -> Self {
         let hub = env::var("SILT_HUGGINGFACE_URL").map(Hub::new).unwrap_or_default();
+        let releases = env::var("SILT_LLAMA_RELEASES_URL").unwrap_or_else(|_| silt_llm::RELEASES.to_owned());
         Self {
             models: Models::new(data_dir.join("models").join("llm")),
+            runtimes: Runtimes::new(data_dir.join("runtimes").join("llama.cpp")),
             store,
             gateway: tokio::sync::OnceCell::new(),
             hub,
+            releases,
             client: reqwest::Client::new(),
             pulling: Mutex::default(),
             devices: Mutex::default(),
@@ -76,7 +89,7 @@ impl LocalModelsHere {
     pub(crate) async fn gateway(&self) -> Result<String, CoreError> {
         let (url, _) = self
             .gateway
-            .get_or_try_init(|| crate::gateway::start(self.store.clone(), self.models.clone(), Self::server()))
+            .get_or_try_init(|| crate::gateway::start(self.store.clone(), self.models.clone(), self.runtimes.clone()))
             .await?;
         Ok(url.clone())
     }
@@ -94,9 +107,8 @@ impl LocalModelsHere {
         self.models.list_now()
     }
 
-    /// The `llama-server` this machine runs models with.
-    pub(crate) fn server() -> Option<PathBuf> {
-        silt_llm::find_server(env::var_os("SILT_LLAMA_SERVER"), env::var_os("PATH").as_deref(), Path::is_file)
+    fn server(&self) -> Option<PathBuf> {
+        server_in(&self.runtimes)
     }
 
     async fn budget(&self, server: Option<&Path>) -> Budget {
@@ -117,11 +129,9 @@ impl LocalModelsHere {
     }
 
     pub(crate) async fn view(&self) -> LocalModels {
-        let server = Self::server();
+        let server = self.server();
         let budget = self.budget(server.as_deref()).await;
         let installed = self.models.list().await;
-        let fit =
-            |size: u64, kv: Option<u64>, context: u32| ModelFit::from(silt_llm::fit(silt_llm::need(size, kv, context), &budget));
         let models = installed
             .iter()
             .map(|model| LocalModel {
@@ -130,21 +140,11 @@ impl LocalModelsHere {
                 source: source_text(model),
                 size: model.size,
                 context: model.context,
-                fit: fit(model.size, model.meta.kv_bytes_per_token(), model.context),
+                fit: ModelFit::from(silt_llm::fit(
+                    silt_llm::need(model.size, model.meta.kv_bytes_per_token(), model.context),
+                    &budget,
+                )),
                 path: self.models.weights(model),
-            })
-            .collect();
-        let catalog = silt_llm::CATALOG
-            .iter()
-            .filter(|entry| !installed.iter().any(|model| model.id.as_str() == entry.id))
-            .map(|entry| CatalogModel {
-                id: entry.id.to_owned(),
-                name: entry.name.to_owned(),
-                about: entry.about.to_owned(),
-                size: entry.size(),
-                context: entry.context,
-                tested: entry.tested,
-                fit: fit(entry.size(), None, entry.context),
             })
             .collect();
         let pulling = self.pulling.lock().expect("lock");
@@ -162,7 +162,6 @@ impl LocalModelsHere {
                 .collect(),
             room: budget.room(),
             models,
-            catalog,
             pull: pulling.current.clone(),
             failed: pulling
                 .failed
@@ -171,47 +170,122 @@ impl LocalModelsHere {
         }
     }
 
+    /// GGUF models on Hugging Face matching `words`, the most downloaded
+    /// first; with no words, the most downloaded of all.
+    pub(crate) async fn search(&self, words: &str) -> Result<Vec<FoundModel>, CoreError> {
+        let found = self.hub.search(&self.client, words, FOUND).await?;
+        Ok(found
+            .into_iter()
+            .map(|found| FoundModel { repo: found.repo.to_string(), downloads: found.downloads, updated: found.updated })
+            .collect())
+    }
+
+    /// A repository's quantizations, each with whether it fits here and the
+    /// context it would start with.
+    pub(crate) async fn files(&self, repo: &str) -> Result<ModelFiles, CoreError> {
+        let repo = Repo::new(repo)?;
+        let model = self.hub.model(&self.client, &repo).await?;
+        let budget = self.budget(self.server().as_deref()).await;
+        let quantizations = model
+            .quantizations
+            .iter()
+            .map(|quantization| {
+                let size = quantization.size();
+                let context = silt_llm::context_to_fit(size, None, model.context_length, &budget);
+                ModelQuantization {
+                    source: format!("{repo}:{}", quantization.file),
+                    label: quantization.label.clone(),
+                    size,
+                    parts: u32::try_from(quantization.files.len()).unwrap_or(u32::MAX),
+                    fit: ModelFit::from(silt_llm::fit(silt_llm::need(size, None, context), &budget)),
+                    context,
+                }
+            })
+            .collect();
+        Ok(ModelFiles {
+            repo: repo.to_string(),
+            architecture: model.architecture,
+            context_length: model.context_length,
+            quantizations,
+        })
+    }
+
+    /// Takes the one download slot for `id`, or says what holds it.
+    fn begin(&self, id: &str) -> Result<(), CoreError> {
+        let mut pulling = self.pulling.lock().expect("lock");
+        if let Some(current) = &pulling.current {
+            return Err(CoreError::Invalid(format!("{} is still downloading; one download at a time", current.id)));
+        }
+        pulling.current = Some(ModelPull { id: id.to_owned(), done: 0, total: 0 });
+        pulling.failed = None;
+        Ok(())
+    }
+
+    fn finish(&self, id: String, result: Result<(), LlmError>) {
+        let mut pulling = self.pulling.lock().expect("lock");
+        pulling.current = None;
+        if let Err(error) = result {
+            pulling.failed = Some((id, error.to_string()));
+        }
+    }
+
+    fn progress(&self, done: u64, total: u64) {
+        if let Some(current) = self.pulling.lock().expect("lock").current.as_mut() {
+            current.done = done;
+            current.total = total;
+        }
+    }
+
     /// Starts fetching `source`, one download at a time, and answers with
     /// the model's name.
     pub(crate) fn start_pull(self: &Arc<Self>, source: &str) -> Result<String, CoreError> {
         let wanted = Wanted::parse(source)?;
         let id = wanted.id()?;
-        {
-            let mut pulling = self.pulling.lock().expect("lock");
-            if let Some(current) = &pulling.current {
-                return Err(CoreError::Invalid(format!("{} is still downloading; one model at a time", current.id)));
-            }
-            pulling.current = Some(ModelPull { id: id.to_string(), done: 0, total: 0 });
-            pulling.failed = None;
-        }
+        self.begin(id.as_str())?;
         let here = self.clone();
         let name = id.to_string();
         tokio::spawn(async move {
-            let result = here.pull(wanted).await;
-            let mut pulling = here.pulling.lock().expect("lock");
-            pulling.current = None;
-            if let Err(error) = result {
-                pulling.failed = Some((name, error.to_string()));
-            }
+            let result = here.pull(wanted).await.map(drop);
+            here.finish(name, result);
         });
         Ok(id.to_string())
     }
 
     async fn pull(&self, wanted: Wanted) -> Result<Installed, LlmError> {
         let plan = match wanted {
-            Wanted::File(path) => return self.models.add_file(&path).await,
-            Wanted::Catalog(entry) => Plan::catalog(entry, &self.hub)?,
+            Wanted::File(path) => {
+                let model = self.models.add_file(&path).await?;
+                return self.sized(model).await;
+            }
             Wanted::Remote(remote) => Plan::remote(&self.client, &self.hub, remote).await?,
         };
-        let pulling = &self.pulling;
-        self.models
-            .pull(&self.client, plan, &mut |progress| {
-                if let Some(current) = pulling.lock().expect("lock").current.as_mut() {
-                    current.done = progress.done;
-                    current.total = progress.total;
-                }
-            })
-            .await
+        let model = self.models.pull(&self.client, plan, &mut |progress| self.progress(progress.done, progress.total)).await?;
+        self.sized(model).await
+    }
+
+    /// Gives a model the most context that fits this machine, now that its
+    /// header says how large its KV cache is.
+    async fn sized(&self, model: Installed) -> Result<Installed, LlmError> {
+        let budget = self.budget(self.server().as_deref()).await;
+        let context = silt_llm::context_to_fit(model.size, model.meta.kv_bytes_per_token(), model.meta.context_length, &budget);
+        if context == model.context {
+            return Ok(model);
+        }
+        self.models.set_context(&model.id, context).await
+    }
+
+    /// Starts fetching llama.cpp's latest build for this machine.
+    pub(crate) fn start_runtime_pull(self: &Arc<Self>) -> Result<String, CoreError> {
+        self.begin(RUNTIME)?;
+        let here = self.clone();
+        tokio::spawn(async move {
+            let result = here.runtimes.pull(&here.client, &here.releases, &mut |done, total| here.progress(done, total)).await;
+            if result.is_ok() {
+                *here.devices.lock().expect("lock") = None;
+            }
+            here.finish(RUNTIME.to_owned(), result.map(drop));
+        });
+        Ok(RUNTIME.to_owned())
     }
 
     pub(crate) async fn remove(&self, id: &str) -> Result<String, CoreError> {
@@ -234,8 +308,11 @@ impl LocalModelsHere {
 /// What Claude Code needs to run on the local model `model`: the gateway as
 /// its API, the run's token as its key, the model for every tier, and no
 /// traffic of its own besides (ADR 0066).
-pub(crate) fn claude_env(gateway: &str, token: &str, model: &ModelId) -> Vec<(String, String)> {
+pub(crate) fn claude_env(gateway: &str, token: &str, model: &Installed) -> Vec<(String, String)> {
+    let id = &model.id;
     let mut env = vec![
+        // Claude Code otherwise compacts for its own models' context, far past a local one's.
+        ("CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(), model.context.to_string()),
         ("ANTHROPIC_BASE_URL".to_owned(), gateway.to_owned()),
         ("ANTHROPIC_AUTH_TOKEN".to_owned(), token.to_owned()),
         ("ANTHROPIC_API_KEY".to_owned(), token.to_owned()),
@@ -253,7 +330,7 @@ pub(crate) fn claude_env(gateway: &str, token: &str, model: &ModelId) -> Vec<(St
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
     ] {
-        env.push((tier.to_owned(), format!("local:{model}")));
+        env.push((tier.to_owned(), format!("local:{id}")));
     }
     env
 }
@@ -291,7 +368,6 @@ impl LocalModelsHere {
 
 fn source_text(model: &Installed) -> String {
     match &model.source {
-        Source::Catalog => "Silt's catalog".to_owned(),
         Source::HuggingFace { remote } => format!("{}:{}", remote.repo, remote.file),
         Source::File { path } => path.display().to_string(),
     }

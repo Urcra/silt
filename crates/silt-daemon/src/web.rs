@@ -134,6 +134,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/models", get(models))
         .route("/api/models/pull", post(model_pull))
+        .route("/api/models/search", get(model_search))
+        .route("/api/models/files", get(model_files))
+        .route("/api/models/runtime", post(runtime_pull))
         .route("/api/models/{id}", delete(model_remove))
         .route("/api/threads/{id}/erase", post(thread_erase))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
@@ -580,6 +583,29 @@ struct ModelSource {
 
 async fn model_pull(State(web): State<Web>, Json(body): Json<ModelSource>) -> HttpResponse {
     ask(&web, Request::ModelPull { source: body.source }).await
+}
+
+#[derive(Deserialize)]
+struct ModelQuery {
+    #[serde(default)]
+    q: String,
+}
+
+async fn model_search(State(web): State<Web>, Query(query): Query<ModelQuery>) -> HttpResponse {
+    ask(&web, Request::ModelSearch { query: query.q }).await
+}
+
+#[derive(Deserialize)]
+struct RepoQuery {
+    repo: String,
+}
+
+async fn model_files(State(web): State<Web>, Query(query): Query<RepoQuery>) -> HttpResponse {
+    ask(&web, Request::ModelFiles { repo: query.repo }).await
+}
+
+async fn runtime_pull(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::RuntimePull).await
 }
 
 async fn model_remove(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {

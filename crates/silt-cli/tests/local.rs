@@ -128,6 +128,7 @@ fn claude_code_runs_on_a_local_model_through_the_gateway() {
     assert_eq!(env["ANTHROPIC_MODEL"], "local:tiny");
     assert_eq!(env["ANTHROPIC_SMALL_FAST_MODEL"], "local:tiny");
     assert_eq!(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1");
+    assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "32768", "it compacts for the local model's context");
     let gateway = env["ANTHROPIC_BASE_URL"].as_str().expect("the gateway");
     assert!(gateway.starts_with("http://127.0.0.1:"), "{gateway}");
     let token = env["ANTHROPIC_AUTH_TOKEN"].as_str().expect("the run's token");

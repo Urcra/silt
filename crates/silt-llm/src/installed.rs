@@ -11,7 +11,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::download::{self, Wanted};
 use crate::hub::{Hub, PinnedFile};
-use crate::{Entry, GgufError, LlmError, Meta, ModelId, Remote, parse_gguf};
+use crate::{GgufError, LlmError, Meta, ModelId, Remote, parse_gguf};
 
 const MANIFEST: &str = "model.json";
 /// The context a model the catalog doesn't know starts with, at most.
@@ -23,7 +23,6 @@ const MOST_HEADER_BYTES: u64 = 64 << 20;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
-    Catalog,
     HuggingFace {
         remote: Remote,
     },
@@ -55,7 +54,7 @@ pub struct Plan {
     pub name: String,
     pub source: Source,
     pub files: Vec<(PinnedFile, String)>,
-    /// The catalog's tested context, if it has one.
+    /// The context to start it with, where it's known before its header is.
     pub context: Option<u32>,
     pub flags: Vec<String>,
 }
@@ -63,25 +62,6 @@ pub struct Plan {
 impl Plan {
     pub fn size(&self) -> u64 {
         self.files.iter().map(|(file, _)| file.size).sum()
-    }
-
-    pub fn catalog(entry: &Entry, hub: &Hub) -> Result<Self, LlmError> {
-        let remote = Remote { repo: crate::Repo::new(entry.repo)?, file: entry.files[0].path.to_owned() };
-        Ok(Self {
-            id: ModelId::new(entry.id)?,
-            name: entry.name.to_owned(),
-            source: Source::Catalog,
-            files: entry
-                .files
-                .iter()
-                .map(|file| {
-                    let pinned = PinnedFile { path: file.path.to_owned(), sha256: file.sha256.to_owned(), size: file.size };
-                    (pinned, hub.file_url(&remote, file.path))
-                })
-                .collect(),
-            context: Some(entry.context),
-            flags: entry.flags.iter().map(|flag| (*flag).to_owned()).collect(),
-        })
     }
 
     /// Asks the Hub for the file's pins; they're kept from then on.
@@ -174,6 +154,18 @@ impl Models {
         }
     }
 
+    /// Sets the context a model starts with, as fits this machine.
+    pub async fn set_context(&self, id: &ModelId, context: u32) -> Result<Installed, LlmError> {
+        let mut model = self.get(id).await.ok_or_else(|| LlmError::NotOnHub(id.to_string()))?;
+        model.context = context;
+        let manifest = serde_json::to_vec_pretty(&model).expect("a manifest serializes");
+        let path = self.model_dir(id).join(MANIFEST);
+        let partial = path.with_extension("json.partial");
+        fs::write(&partial, manifest).await.map_err(LlmError::Disk)?;
+        fs::rename(&partial, &path).await.map_err(LlmError::Disk)?;
+        Ok(model)
+    }
+
     /// Removes a model and any download of it left unfinished. A file the
     /// person brought stays where it is.
     pub async fn remove(&self, id: &ModelId) -> io::Result<bool> {
@@ -225,7 +217,7 @@ impl Models {
         let model = Installed {
             context: context(plan.context, &meta),
             id: plan.id,
-            name: meta.name.clone().filter(|_| plan.source != Source::Catalog).unwrap_or(plan.name),
+            name: meta.name.clone().unwrap_or(plan.name),
             source: plan.source,
             files: plan.files.into_iter().map(|(file, _)| file).collect(),
             size: total,
@@ -370,13 +362,13 @@ mod tests {
 
         let bytes = model_bytes();
         let sha256: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
-        let listing = serde_json::json!([
-            {"type": "file", "path": "README.md", "size": 5},
-            {"type": "file", "path": "Tiny-Q4.gguf", "size": bytes.len(), "lfs": {"oid": sha256, "size": bytes.len()}},
-        ]);
+        let listing = serde_json::json!({"siblings": [
+            {"rfilename": "README.md", "size": 5},
+            {"rfilename": "Tiny-Q4.gguf", "size": bytes.len(), "lfs": {"sha256": sha256, "size": bytes.len()}},
+        ]});
         let served = bytes.clone();
         let app = Router::new()
-            .route("/api/models/owner/tiny/tree/main", get(move || async move { axum::Json(listing) }))
+            .route("/api/models/owner/tiny", get(move || async move { axum::Json(listing) }))
             .route("/owner/tiny/resolve/main/Tiny-Q4.gguf", get(move || async move { served }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let hub = Hub::new(format!("http://{}", listener.local_addr().expect("address")));

@@ -631,6 +631,15 @@ impl Core {
                 return answer_later(reply, Ok(async move { Ok::<_, CoreError>(models.view().await) }));
             }
             Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
+            Request::RuntimePull => to_response(self.models.start_runtime_pull()),
+            Request::ModelSearch { query } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.search(&query).await }));
+            }
+            Request::ModelFiles { repo } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.files(&repo).await }));
+            }
             Request::ThreadErase { thread, confirm } => to_response(self.erase(&thread, confirm).await),
             Request::ModelRemove { model } => {
                 let models = self.models.clone();

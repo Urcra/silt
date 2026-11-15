@@ -32,6 +32,8 @@ export const keys = {
   agents: ['agents'] as const,
   voice: ['voice'] as const,
   models: ['models'] as const,
+  modelSearch: (words: string) => ['models', 'search', words] as const,
+  modelFiles: (repo: string) => ['models', 'files', repo] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
   found: ['projects', 'found'] as const,

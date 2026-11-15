@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -47,16 +46,18 @@ struct Running {
 pub(crate) struct Gateway {
     store: Store,
     models: Models,
-    program: Option<PathBuf>,
+    /// Where `llama-server` is, looked up at each load, as one may be
+    /// fetched after the gateway starts.
+    runtimes: silt_llm::Runtimes,
     client: reqwest::Client,
     running: Mutex<Running>,
 }
 
 /// Starts the gateway on loopback and answers with its address, and itself
 /// for stopping the model.
-pub(crate) async fn start(store: Store, models: Models, program: Option<PathBuf>) -> std::io::Result<(String, Arc<Gateway>)> {
+pub(crate) async fn start(store: Store, models: Models, runtimes: silt_llm::Runtimes) -> std::io::Result<(String, Arc<Gateway>)> {
     let client = reqwest::Client::builder().no_proxy().build().map_err(std::io::Error::other)?;
-    let gateway = Arc::new(Gateway { store, models, program, client, running: Mutex::default() });
+    let gateway = Arc::new(Gateway { store, models, runtimes, client, running: Mutex::default() });
     let app = Router::new()
         .route("/v1/models", get(list))
         .route("/v1/models/{id}", get(one))
@@ -253,8 +254,8 @@ impl Gateway {
     }
 
     async fn load(&self, model: &ModelId) -> Result<Server, String> {
-        let program =
-            self.program.as_deref().ok_or("there's no llama-server here; install llama.cpp, or set SILT_LLAMA_SERVER")?;
+        let program = crate::models::server_in(&self.runtimes)
+            .ok_or("there's no llama-server here; download llama.cpp in Settings › Local models or with `silt model runtime`")?;
         let installed = self.models.get(model).await.ok_or_else(|| format!("there's no model {model} here"))?;
         let launch = Launch {
             weights: self.models.weights(&installed),
@@ -264,7 +265,7 @@ impl Gateway {
             key: uuid::Uuid::new_v4().simple().to_string(),
             key_file: self.models.dir().join(".server-key"),
         };
-        Server::start(program, &launch, LOADING).await.map_err(|error| error.to_string())
+        Server::start(&program, &launch, LOADING).await.map_err(|error| error.to_string())
     }
 }
 

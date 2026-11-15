@@ -1,7 +1,8 @@
 #!/bin/sh
 # One machine with no server: a local model, served by silt-fake-llama, a
-# clone of a project in a Local only workspace, and the daemon's web UI.
-# Prints the details as one JSON line.
+# clone of a project in a Local only workspace, the daemon's web UI, and a
+# stand-in for Hugging Face with one more model to find. Prints the details
+# as one JSON line.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
@@ -30,6 +31,14 @@ for key, value in entries:
     data += struct.pack("<Q", len(key)) + key.encode() + struct.pack("<IQ", 8, len(value)) + value.encode()
 open(sys.argv[1], "wb").write(data)
 PY
+port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 "$(dirname "$0")/fake-hub.py" "$port" "$work/Tiny.gguf" > /dev/null 2>&1 &
+echo $! > "$work/hub.pid"
+export SILT_HUGGINGFACE_URL="http://127.0.0.1:$port"
+for _ in $(seq 1 50); do
+    python3 -c "import socket; socket.create_connection(('127.0.0.1', $port), 1)" 2>/dev/null && break
+    sleep 0.1
+done
 cd "$work/me/incidents"
 "$silt" model pull "$work/Tiny.gguf" > /dev/null
 "$silt" workspace new Incidents --local-only --folder "$work/me/incidents" > /dev/null

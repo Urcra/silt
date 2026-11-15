@@ -653,7 +653,7 @@ impl Core {
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
         let local_model = match take_local_model(&info.id, &mut options.settings) {
-            Some(model) => Some(self.models.installed(&model).await?.id),
+            Some(model) => Some(self.models.installed(&model).await?),
             None => None,
         };
         let project = self.threads.get(&thread).map(|record| record.repo.clone());
@@ -682,7 +682,7 @@ impl Core {
                 checkout,
                 handle: None,
                 queued: Vec::new(),
-                local_model,
+                local_model: local_model.map(|model| model.id),
                 session: None,
                 load,
                 primer,
@@ -2328,7 +2328,7 @@ mod tests {
         let tiny = silt_llm::Installed {
             id: silt_llm::ModelId::new("tiny").expect("an id"),
             name: "Tiny".to_owned(),
-            source: silt_llm::Source::Catalog,
+            source: silt_llm::Source::File { path: "/m/tiny.gguf".into() },
             files: Vec::new(),
             size: 1,
             context: 4096,

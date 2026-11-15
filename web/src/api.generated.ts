@@ -1088,9 +1088,9 @@ server: string | null, devices: Array<ModelDevice>,
  */
 room: number, models: Array<LocalModel>, 
 /**
- * The catalog's models not downloaded yet.
+ * A model's download, or llama.cpp's (`llama.cpp`), while it runs.
  */
-catalog: Array<CatalogModel>, pull: ModelPull | null, 
+pull: ModelPull | null, 
 /**
  * Why the last download failed.
  */
@@ -1100,7 +1100,7 @@ export type ModelDevice = { name: string, description: string, total: number, fr
 
 export type LocalModel = { id: string, name: string, 
 /**
- * Where it came from: the catalog, `owner/repo:file` or a file here.
+ * Where it came from: `owner/repo:file` or a file here.
  */
 source: string, size: number, context: number, fit: ModelFit, 
 /**
@@ -1108,11 +1108,43 @@ source: string, size: number, context: number, fit: ModelFit,
  */
 path: string, };
 
-export type CatalogModel = { id: string, name: string, about: string, size: number, context: number, 
+export type FoundModel = { 
 /**
- * Whether it was tried with Claude Code and `local` on real hardware.
+ * `owner/name`.
  */
-tested: boolean, fit: ModelFit, };
+repo: string, 
+/**
+ * Downloads in the last month.
+ */
+downloads: number, updated: string | null, };
+
+export type ModelFiles = { repo: string, architecture: string | null, 
+/**
+ * The most context the model was trained for.
+ */
+context_length: number | null, 
+/**
+ * Smallest first.
+ */
+quantizations: Array<ModelQuantization>, };
+
+export type ModelQuantization = { 
+/**
+ * What a pull takes: `owner/repo:file.gguf`.
+ */
+source: string, 
+/**
+ * Its kind, such as `Q4_K_M`.
+ */
+label: string, size: number, 
+/**
+ * Files it's split across.
+ */
+parts: number, fit: ModelFit, 
+/**
+ * The context it would start with here.
+ */
+context: number, };
 
 export type ModelFit = "fits" | "tight" | "too_big";
 

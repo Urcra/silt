@@ -1,27 +1,26 @@
-//! Local models (ADR 0066): the ones Silt offers, whether one fits this
-//! machine, fetching them on consent, which model `llama-server` should
-//! hold, and running it.
+//! Local models (ADR 0066): finding them on Hugging Face, whether one fits
+//! this machine, fetching them on consent, fetching llama.cpp, which model
+//! `llama-server` should hold, and running it.
 
 mod budget;
-mod catalog;
 mod download;
 mod gguf;
 mod hub;
 mod installed;
+mod names;
+mod runtime;
 mod schedule;
 mod server;
 
 use std::path::PathBuf;
 
-pub use budget::{Budget, Device, Fit, fit, need, parse_devices};
-pub use catalog::{
-    CATALOG, CatalogFile, Entry, ModelId, Remote, Repo, SplitPart, checked_file, entry, local_model, local_model_in_args,
-    split_part,
-};
+pub use budget::{Budget, Device, Fit, context_to_fit, fit, need, parse_devices};
 pub use download::{Check, Wanted, fetch, part_path};
 pub use gguf::{GgufError, Meta, parse as parse_gguf};
-pub use hub::{Hub, PinnedFile};
+pub use hub::{Found, Hub, MOST_FOUND, Model, PinnedFile, Quantization, label_of, parse_model, parse_search, select};
 pub use installed::{DEFAULT_CONTEXT, Installed, Models, Plan, Progress, Source};
+pub use names::{ModelId, Remote, Repo, SplitPart, checked_file, local_model, local_model_in_args, split_part};
+pub use runtime::{Asset, RELEASES, Release, Runtimes, choose_asset, parse_release};
 pub use schedule::{Schedule, Step, Ticket};
 pub use server::{Launch, Server, find_server, free_port, list_devices};
 

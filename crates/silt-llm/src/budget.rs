@@ -77,6 +77,30 @@ pub fn need(weights: u64, kv_per_token: Option<u64>, context: u32) -> u64 {
     weights.saturating_add(kv).saturating_add(OVERHEAD)
 }
 
+/// The least and most context Silt starts a model with.
+const LEAST_CONTEXT: u32 = 8192;
+const MOST_CONTEXT: u32 = 131_072;
+/// The context a model starts with when its KV cache's size isn't known yet.
+const UNSIZED_CONTEXT: u32 = 32_768;
+
+/// The context to run a model with: the most, as a power of two, that the
+/// model was trained for and that fits here with its weights, else the least.
+pub fn context_to_fit(weights: u64, kv_per_token: Option<u64>, trained: Option<u64>, budget: &Budget) -> u32 {
+    let trained = trained.and_then(|trained| u32::try_from(trained).ok()).unwrap_or(u32::MAX);
+    let most = MOST_CONTEXT.min(trained).max(LEAST_CONTEXT.min(trained));
+    let Some(per_token) = kv_per_token else {
+        return UNSIZED_CONTEXT.min(most);
+    };
+    let mut context = most.next_power_of_two();
+    while context > most {
+        context /= 2;
+    }
+    while context > LEAST_CONTEXT && fit(need(weights, Some(per_token), context), budget) != Fit::Fits {
+        context /= 2;
+    }
+    context.min(most)
+}
+
 pub fn fit(need: u64, budget: &Budget) -> Fit {
     let room = budget.room();
     if need <= room / 10 * 9 {
@@ -110,6 +134,27 @@ Available devices:
         assert_eq!(devices[0].free, 23860 * MIB);
         assert_eq!(devices[1].description, "AMD Radeon 8060S Graphics (RADV GFX1151)");
         assert_eq!(parse_devices("Available devices:\n"), []);
+    }
+
+    #[test]
+    fn the_context_is_the_most_that_fits() {
+        let gpu = Budget { devices: parse_devices(LISTED)[..1].to_vec(), memory: 64 << 30 };
+        let kv = 48 * 4 * 192 * 2;
+        assert_eq!(
+            context_to_fit(18_556_689_568, Some(kv), Some(262_144), &gpu),
+            32_768,
+            "on 24 GB an 18.6 GB model has room for 32k"
+        );
+        assert_eq!(context_to_fit(17_000_000_000, Some(kv), Some(262_144), &gpu), 65_536, "a 17 GB one for 64k");
+        assert_eq!(context_to_fit(1 << 30, Some(kv), Some(262_144), &gpu), 131_072, "never past the most Silt starts with");
+        assert_eq!(context_to_fit(1 << 30, Some(kv), Some(4096), &gpu), 4096, "never past what it was trained for");
+        assert_eq!(context_to_fit(30 << 30, Some(kv), Some(262_144), &gpu), 8192, "the least, when nothing fits");
+        assert_eq!(context_to_fit(1 << 30, None, Some(262_144), &gpu), 32_768, "unsized until its header is read");
+        assert_eq!(
+            context_to_fit(1 << 30, Some(kv), Some(40_000), &gpu),
+            32_768,
+            "a power of two within what it was trained for"
+        );
     }
 
     #[test]

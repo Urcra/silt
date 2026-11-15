@@ -6,19 +6,25 @@ use std::time::Duration;
 
 use clap::Subcommand;
 use exn::{Exn, ResultExt};
-use silt_daemon::protocol::{LocalModels, ModelFit, Request};
+use silt_daemon::protocol::{FoundModel, LocalModels, ModelFiles, ModelFit, Request};
 
 use crate::CliError;
 use crate::commands::{call, ensure_daemon, fail};
 
 #[derive(Debug, Subcommand)]
 pub enum ModelCommand {
-    /// List the models here, the catalog's others, and what this machine can run
+    /// List the models here and what this machine can run
     List,
-    /// Download a model: a catalog name, `owner/repo:file.gguf` from Hugging Face, or a GGUF file you have
+    /// Find GGUF models on Hugging Face, the most downloaded first; with no words, the most downloaded of all
+    Search { words: Vec<String> },
+    /// List a Hugging Face model's quantizations, with whether each fits here
+    Files { repo: String },
+    /// Download a model: `owner/repo:file.gguf` from Hugging Face, or a GGUF file you have
     Pull { model: String },
     /// Remove a model; a GGUF file of your own stays where it is
     Rm { model: String },
+    /// Download llama.cpp's latest build of llama-server for this machine
+    Runtime,
 }
 
 pub fn run(command: ModelCommand) -> Result<(), Exn<CliError>> {
@@ -28,7 +34,28 @@ pub fn run(command: ModelCommand) -> Result<(), Exn<CliError>> {
             list(&call(&Request::Models)?);
             Ok(())
         }
+        ModelCommand::Search { words } => {
+            let found: Vec<FoundModel> = call(&Request::ModelSearch { query: words.join(" ") })?;
+            if found.is_empty() {
+                println!("Nothing found.");
+            }
+            for model in &found {
+                println!("{}  {} downloads", model.repo, model.downloads);
+            }
+            if !found.is_empty() {
+                println!("\n`silt model files <owner/repo>` lists one's quantizations.");
+            }
+            Ok(())
+        }
+        ModelCommand::Files { repo } => {
+            files(&call(&Request::ModelFiles { repo })?);
+            Ok(())
+        }
         ModelCommand::Pull { model } => pull(&model),
+        ModelCommand::Runtime => {
+            let id: String = call(&Request::RuntimePull)?;
+            wait_for(&id)
+        }
         ModelCommand::Rm { model } => {
             let said: String = call(&Request::ModelRemove { model })?;
             println!("{said}");
@@ -45,6 +72,11 @@ fn pull(model: &str) -> Result<(), Exn<CliError>> {
         model.to_owned()
     };
     let id: String = call(&Request::ModelPull { source })?;
+    wait_for(&id)
+}
+
+/// Shows a download's progress until it ends, and how it ended.
+fn wait_for(id: &str) -> Result<(), Exn<CliError>> {
     let interactive = std::io::stderr().is_terminal();
     loop {
         let view: LocalModels = call(&Request::Models)?;
@@ -63,6 +95,13 @@ fn pull(model: &str) -> Result<(), Exn<CliError>> {
                 if let Some(failed) = view.failed.filter(|failed| failed.id == id) {
                     return Err(fail(format!("couldn't download {id}: {}", failed.reason)));
                 }
+                if id == silt_daemon::models::RUNTIME {
+                    match &view.server {
+                        Some(server) => println!("llama.cpp is ready: {server}"),
+                        None => return Err(fail("llama.cpp didn't finish downloading")),
+                    }
+                    return Ok(());
+                }
                 let Some(model) = view.models.iter().find(|model| model.id == id) else {
                     return Err(fail(format!("{id} didn't finish downloading")));
                 };
@@ -79,7 +118,7 @@ fn pull(model: &str) -> Result<(), Exn<CliError>> {
 fn list(view: &LocalModels) {
     match &view.server {
         Some(server) => println!("llama-server: {server}"),
-        None => println!("llama-server: not found; install llama.cpp, or set SILT_LLAMA_SERVER"),
+        None => println!("llama-server: not found; `silt model runtime` downloads llama.cpp's, or install one on the PATH"),
     }
     for device in &view.devices {
         println!("  {}: {} ({})", device.name, device.description, size(device.total));
@@ -101,14 +140,31 @@ fn list(view: &LocalModels) {
     if let Some(failed) = &view.failed {
         println!("  {} failed to download: {}", failed.id, failed.reason);
     }
-    if !view.catalog.is_empty() {
+    if view.models.is_empty() {
         println!();
-        println!("In the catalog (`silt model pull <name>`):");
-        for model in &view.catalog {
-            let tested = if model.tested { "" } else { ", not tested yet" };
-            println!("  {}  {}, {}, {}{tested}", model.id, model.name, size(model.size), fit(model.fit));
-            println!("      {}", model.about);
-        }
+        println!("Find one with `silt model search <words>`, then `silt model files <owner/repo>`.");
+    }
+}
+
+fn files(model: &ModelFiles) {
+    let about =
+        [model.architecture.clone(), model.context_length.map(|length| format!("trained for {length} tokens of context"))];
+    let about: Vec<String> = about.into_iter().flatten().collect();
+    println!("{}{}", model.repo, if about.is_empty() { String::new() } else { format!(" ({})", about.join(", ")) });
+    if model.quantizations.is_empty() {
+        println!("  No GGUF files Silt can check: each needs the SHA-256 Hugging Face keeps for it.");
+        return;
+    }
+    for quantization in &model.quantizations {
+        let parts = if quantization.parts > 1 { format!(", {} parts", quantization.parts) } else { String::new() };
+        println!(
+            "  {:<14} {:>8}{parts}  {}, {} context",
+            quantization.label,
+            size(quantization.size),
+            fit(quantization.fit),
+            quantization.context
+        );
+        println!("      silt model pull {}", quantization.source);
     }
 }
 

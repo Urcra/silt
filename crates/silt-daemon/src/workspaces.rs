@@ -759,7 +759,7 @@ impl Core {
         let (locks, mut env) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
         let local =
             match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
-                Some((model, rest)) => Some((self.models.installed(&model).await?.id, rest)),
+                Some((model, rest)) => Some((self.models.installed(&model).await?, rest)),
                 None => None,
             };
         let token = self.mint_run_token(thread, &workspace.id, Some(&project)).await?;

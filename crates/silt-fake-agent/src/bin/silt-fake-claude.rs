@@ -45,7 +45,7 @@ fn run() -> Step {
     let log_dir = env::var_os("FAKE_LOG_DIR").map(PathBuf::from);
     if let Some(logs) = &log_dir {
         let model_env: serde_json::Map<String, serde_json::Value> = env::vars()
-            .filter(|(name, _)| name.starts_with("ANTHROPIC_") || name == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+            .filter(|(name, _)| name.starts_with("ANTHROPIC_") || name.starts_with("CLAUDE_CODE_"))
             .map(|(name, value)| (name, value.into()))
             .collect();
         let said = serde_json::json!({"args": env::args().skip(1).collect::<Vec<_>>(), "env": model_env});

@@ -1,4 +1,4 @@
-//! The models Silt offers, and the names a model has on this machine.
+//! The names a model has: on this machine, and on Hugging Face.
 
 use std::fmt;
 
@@ -198,87 +198,6 @@ pub fn split_part(stem: &str) -> Option<SplitPart<'_>> {
     (1..=count).contains(&index).then_some(SplitPart { base, index, count })
 }
 
-/// A file of a catalog entry, pinned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CatalogFile {
-    pub path: &'static str,
-    pub sha256: &'static str,
-    pub size: u64,
-}
-
-/// A model Silt offers by name, with the settings it was tried with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Entry {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub about: &'static str,
-    pub repo: &'static str,
-    /// The first is the one `llama-server` loads; a split model's other
-    /// parts follow it.
-    pub files: &'static [CatalogFile],
-    pub context: u32,
-    pub flags: &'static [&'static str],
-    /// Whether tool calls were checked with Claude Code and with `local` on
-    /// real hardware (the probes, docs/research/probes.md).
-    pub tested: bool,
-}
-
-impl Entry {
-    pub fn size(&self) -> u64 {
-        self.files.iter().map(|file| file.size).sum()
-    }
-}
-
-// Untested until the probes have run on each of the three machines.
-pub const CATALOG: &[Entry] = &[
-    Entry {
-        id: "qwen3-coder-30b-a3b",
-        name: "Qwen3 Coder 30B A3B (Q4_K_M)",
-        about: "A mixture-of-experts coder with 3B active parameters, for 24 GB and up",
-        repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-        files: &[CatalogFile {
-            path: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-            sha256: "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
-            size: 18_556_689_568,
-        }],
-        context: 32_768,
-        flags: &[],
-        tested: false,
-    },
-    Entry {
-        id: "gpt-oss-20b",
-        name: "gpt-oss 20B (MXFP4)",
-        about: "A small mixture-of-experts model that leaves room for long context on 24 GB",
-        repo: "ggml-org/gpt-oss-20b-GGUF",
-        files: &[CatalogFile {
-            path: "gpt-oss-20b-MXFP4.gguf",
-            sha256: "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
-            size: 12_109_566_624,
-        }],
-        context: 65_536,
-        flags: &[],
-        tested: false,
-    },
-    Entry {
-        id: "gpt-oss-120b",
-        name: "gpt-oss 120B (MXFP4)",
-        about: "A large mixture-of-experts model for unified memory of 96 GB and up",
-        repo: "ggml-org/gpt-oss-120b-GGUF",
-        files: &[CatalogFile {
-            path: "gpt-oss-120b-MXFP4.gguf",
-            sha256: "582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d",
-            size: 63_387_346_208,
-        }],
-        context: 131_072,
-        flags: &[],
-        tested: false,
-    },
-];
-
-pub fn entry(id: &str) -> Option<&'static Entry> {
-    CATALOG.iter().find(|entry| entry.id == id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,20 +248,5 @@ mod tests {
         assert_eq!(split_part("m-00004-of-00003"), None);
         assert_eq!(split_part("m-2-of-3"), None);
         assert_eq!(split_part("model"), None);
-    }
-
-    #[test]
-    fn the_catalog_holds_valid_names_and_pins() {
-        for entry in CATALOG {
-            assert!(ModelId::new(entry.id).is_ok(), "{}", entry.id);
-            assert!(Repo::new(entry.repo).is_ok(), "{}", entry.repo);
-            assert!(!entry.files.is_empty());
-            for file in entry.files {
-                assert!(checked_file(file.path).is_ok(), "{}", file.path);
-                assert_eq!(file.sha256.len(), 64);
-                assert!(file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
-            }
-        }
-        assert_eq!(entry("gpt-oss-20b").map(Entry::size), Some(12_109_566_624));
     }
 }
