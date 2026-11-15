@@ -180,7 +180,7 @@ impl Core {
         Ok(silt_proto::view::ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) })
     }
 
-    fn page_docs(&self, family_id: FamilyId, thread: ThreadId, artifact: ArtifactId) -> silt_log::page::Documents {
+    pub(crate) fn page_docs(&self, family_id: FamilyId, thread: ThreadId, artifact: ArtifactId) -> silt_log::page::Documents {
         match self.families.get(&family_id) {
             Some(family) => family.page_documents(thread, artifact),
             None => {
@@ -206,7 +206,7 @@ impl Core {
     /// Writes `op` on `thread`: through the family's projection where this
     /// machine has one, else onto the log it keeps from the server, as page
     /// data needs no file's text.
-    async fn append_page(&mut self, family_id: FamilyId, thread: ThreadId, op: PageOp) -> Result<(), CoreError> {
+    pub(crate) async fn append_page(&mut self, family_id: FamilyId, thread: ThreadId, op: PageOp) -> Result<(), CoreError> {
         if let Some(family) = self.families.get(&family_id) {
             let head = family.thread_head(thread);
             self.append_op(family_id, thread, head, Op::Page(op)).await?;
@@ -261,7 +261,7 @@ impl Core {
 
     /// What this machine's person may do in `thread`: as `may_write`
     /// decides, else comment, as anyone who sees a thread may.
-    fn page_level(&self, thread: ThreadId) -> Level {
+    pub(crate) fn page_level(&self, thread: ThreadId) -> Level {
         let user = self.own_user(thread);
         let Some(record) = self.threads.get(&thread) else {
             return Level::Comment;

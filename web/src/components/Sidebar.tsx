@@ -387,6 +387,9 @@ export function Sidebar() {
       <NavItem to="/threads" icon="list">
         All threads
       </NavItem>
+      <NavItem to="/artifacts" icon="image">
+        Artifacts
+      </NavItem>
       <NavItem to="/mrs" icon="merge" count={reviews || undefined} also={path.startsWith('/mr/')}>
         Merge requests
       </NavItem>

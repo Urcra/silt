@@ -639,6 +639,20 @@ files?: { [key in string]: ArtifactFile } | null, };
 
 export type ArtifactFile = { blob: string, size: number, media_type: string, };
 
+export type ArtifactListed = { thread: string, thread_title: string | null, repo: string, owner: string, 
+/**
+ * Whether the thread is the person's own.
+ */
+mine: boolean, artifact: ArtifactView, 
+/**
+ * When its latest version was made.
+ */
+time_ms: number, pinned: boolean, 
+/**
+ * Hidden by the thread's owner; shown only when asked for.
+ */
+archived: boolean, };
+
 export type DesignSource = "project" | "personal" | "builtin";
 
 export type ArtifactSettings = { 

@@ -8,6 +8,7 @@ import { askedServer } from './workspace'
 import type {
   AgentChoices,
   ArtifactContent,
+  ArtifactListed,
   ArtifactSettings,
   ChatSettings,
   CloudLaunch,
@@ -167,6 +168,12 @@ export const api = {
     request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/assets`, asked),
   /** The thread's files, for a page that declares `files` (ADR 0078). */
   pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
+  /** Every artifact in the threads the person can read, for the Artifacts page (ADR 0075). */
+  artifacts: () => request<ArtifactListed[]>('GET', '/api/artifacts'),
+  pinArtifact: (id: string, artifact: string, pinned: boolean) => request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/pin`, { pinned }),
+  /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
+  archiveArtifact: (id: string, artifact: string, archived: boolean) =>
+    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/archive`, { archived }),
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
   /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */

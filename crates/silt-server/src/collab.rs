@@ -232,6 +232,12 @@ fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &
     };
     let artifact = op.artifact();
     let refused = |what: &str| forbidden(format!("you may not {what} artifact {artifact}'s page data in thread {thread}"));
+    // Archiving is the owner's, whatever the version declares (ADR 0075).
+    if let PageOp::Set { path, .. } = op
+        && path == "_meta/archived"
+    {
+        return if level == Level::Owner { Ok(()) } else { Err(refused("archive")) };
+    }
     let declared = ledger.pages.get(&(thread, artifact)).cloned().flatten();
     let Some(declared) = declared else {
         return Err(refused("write"));

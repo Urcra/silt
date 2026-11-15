@@ -1,7 +1,7 @@
 // What agents showed the person (ADR 0068): artifacts, each a run of
 // versions under one id, and images shown in the conversation.
 
-import type { ArtifactContent, ArtifactView, CommentView, HistoryEntry } from './api'
+import type { ArtifactContent, ArtifactListed, ArtifactView, CommentView, HistoryEntry } from './api'
 import {
   FIRST_SCRIPT_BRIDGE,
   FIRST_SCRIPT_END,
@@ -224,6 +224,21 @@ function escape(text: string): string {
  * `rendered` with its diagrams drawn in, under the same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
  * content inline, on a plain page titled with the artifact's name.
  */
+/** The path that opens one artifact, at its latest version unless `version` names another. */
+export function artifactPath(thread: string, artifact: string, version?: number | null): string {
+  return version ? `/t/${thread}/artifacts/${artifact}/v/${version}` : `/t/${thread}/artifacts/${artifact}`
+}
+
+/** Whether `row` is among what the filters ask for. */
+export function listingMatches(row: ArtifactListed, filters: { text: string; kind: string; repo: string; mine: boolean; archived: boolean }): boolean {
+  if (row.archived !== filters.archived) return false
+  if (filters.kind && row.artifact.kind !== filters.kind) return false
+  if (filters.repo && row.repo !== filters.repo) return false
+  if (filters.mine && !row.mine) return false
+  const text = filters.text.trim().toLowerCase()
+  return !text || `${row.artifact.title} ${row.artifact.description ?? ''}`.toLowerCase().includes(text)
+}
+
 /** A version's files as the offline copy carries them: each one's type and its bytes as base64, by path. */
 export type InlineFiles = Record<string, { media_type: string; data: string }>
 

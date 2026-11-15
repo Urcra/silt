@@ -138,6 +138,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
             post(publish_artifact).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
         )
         .route("/api/threads/{id}/viewer", get(page_viewer))
+        .route("/api/artifacts", get(artifact_listing))
+        .route("/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
+        .route("/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route(
             "/api/threads/{id}/artifacts/{artifact}/assets",
@@ -706,6 +709,37 @@ async fn page_files(
     Json(asked): Json<silt_proto::page::FilesRequest>,
 ) -> HttpResponse {
     ask(&web, Request::PageFiles { thread, artifact, asked }).await
+}
+
+/// Every artifact in the threads here, for the Artifacts page (ADR 0075).
+async fn artifact_listing(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ArtifactListing).await
+}
+
+#[derive(Deserialize)]
+struct Pinned {
+    pinned: bool,
+}
+
+async fn pin_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(pin): Json<Pinned>,
+) -> HttpResponse {
+    ask(&web, Request::PinArtifact { thread, artifact, pinned: pin.pinned }).await
+}
+
+#[derive(Deserialize)]
+struct Archived {
+    archived: bool,
+}
+
+async fn archive_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(archive): Json<Archived>,
+) -> HttpResponse {
+    ask(&web, Request::ArchiveArtifact { thread, artifact, archived: archive.archived }).await
 }
 
 async fn page_viewer(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

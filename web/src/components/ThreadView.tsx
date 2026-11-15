@@ -1731,8 +1731,8 @@ function ThreadBody({
     const before = seenArtifacts.current
     seenArtifacts.current = newest ?? -1
     if (before === null) {
-      const linked = /^#?artifact-([0-9a-f]{12})$/.exec(hash)
-      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1])
+      const linked = /^#?artifact-([0-9a-f]{12})(?:-v(\d+))?$/.exec(hash)
+      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1], linked[2] ? Number(linked[2]) : null)
       return
     }
     if (newest === undefined || newest <= before || !desktop) return

@@ -44,6 +44,7 @@ function useGlobalActions() {
           { id: 'new-chat', label: 'New chat', keys: 'c', run: () => void navigate({ to: '/chat' }) },
         ]),
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/threads' }) },
+    { id: 'artifacts', label: 'Artifacts', run: () => void navigate({ to: '/artifacts' }) },
     { id: 'settings', label: 'Settings', run: () => void navigate({ to: '/settings' }) },
     { id: 'projects', label: 'Projects', keys: 'p', run: () => void navigate({ to: '/settings/projects' }) },
     { id: 'orgs', label: 'Orgs', run: () => void navigate({ to: '/settings/orgs' }) },

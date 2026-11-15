@@ -465,6 +465,55 @@ impl ArtifactView {
     }
 }
 
+/// One artifact on the Artifacts page (ADR 0075): its latest version,
+/// the thread it's in, and whether the person pinned it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactListed {
+    pub thread: String,
+    pub thread_title: Option<String>,
+    pub repo: String,
+    pub owner: String,
+    /// Whether the thread is the person's own.
+    pub mine: bool,
+    pub artifact: ArtifactView,
+    /// When its latest version was made.
+    pub time_ms: i64,
+    pub pinned: bool,
+    /// Hidden by the thread's owner; shown only when asked for.
+    pub archived: bool,
+}
+
+/// The listing as the page shows it: one row per artifact, a fork's copy
+/// left out unless it made a version of its own, pinned ones first, then
+/// the most recently changed.
+pub fn artifact_listing(mut rows: Vec<ArtifactListed>) -> Vec<ArtifactListed> {
+    // A version a fork inherited has the same id, version and content as the
+    // source's, so the first thread to have it keeps it.
+    rows.sort_by(|a, b| a.time_ms.cmp(&b.time_ms).then_with(|| a.thread.cmp(&b.thread)));
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|row| seen.insert((row.artifact.id.clone(), row.artifact.version, row.artifact.blob.clone())));
+    rows.sort_by(|a, b| b.pinned.cmp(&a.pinned).then_with(|| b.time_ms.cmp(&a.time_ms)));
+    rows
+}
+
+/// The latest version of each artifact among a thread's history `entries`,
+/// with when it was made.
+pub fn latest_artifacts<'a>(entries: impl IntoIterator<Item = &'a HistoryEntry>) -> Vec<(ArtifactView, i64)> {
+    let mut latest: std::collections::BTreeMap<String, (ArtifactView, i64)> = std::collections::BTreeMap::new();
+    for entry in entries {
+        let Some(artifact) = &entry.artifact else { continue };
+        if artifact.inline {
+            continue;
+        }
+        let newer = latest.get(&artifact.id).is_none_or(|(kept, _)| artifact.version > kept.version);
+        if newer {
+            latest.insert(artifact.id.clone(), (artifact.clone(), entry.time_ms));
+        }
+    }
+    latest.into_values().collect()
+}
+
 /// An artifact's content, as its route answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

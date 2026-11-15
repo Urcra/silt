@@ -499,6 +499,20 @@ impl Browser {
         let status = response.status();
         (status, response.json().await.unwrap_or_default())
     }
+
+    async fn put(&self, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let response = self
+            .http
+            .put(format!("{}/app/api{path}", self.base))
+            .header(reqwest::header::COOKIE, &self.cookie)
+            .header("x-silt-request", "1")
+            .json(&body)
+            .send()
+            .await
+            .expect("sends");
+        let status = response.status();
+        (status, response.json().await.unwrap_or_default())
+    }
 }
 
 #[tokio::test]
@@ -1724,6 +1738,24 @@ async fn a_page_saves_itself_only_for_the_owner_over_the_latest_version() {
     let (status, saved) = alice.post(&publish, page.clone()).await;
     assert_eq!((status, &saved["version"]), (StatusCode::OK, &2.into()), "{saved}");
     assert_eq!(alice.post(&publish, page).await.0, StatusCode::CONFLICT, "version 1 is no longer the latest");
+    // The Artifacts page lists it for those who can read the thread, and
+    // only its owner archives it (ADR 0075).
+    let (_, listed) = carol.get("/artifacts").await;
+    let row = listed.as_array().and_then(|rows| rows.first()).cloned().expect("carol sees it");
+    assert_eq!((&row["artifact"]["version"], &row["mine"]), (&2.into(), &false.into()), "{row}");
+    let erin = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "erin").expect("erin").1, "erin").await;
+    let (_, none) = erin.get("/artifacts").await;
+    assert_eq!(none.as_array().map(Vec::len), Some(0), "erin can't read the thread: {none}");
+    let archive = format!("/threads/{THREAD}/artifacts/0123456789ab/archive");
+    assert_eq!(carol.put(&archive, serde_json::json!({"archived": true})).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(alice.put(&archive, serde_json::json!({"archived": true})).await.0, StatusCode::NO_CONTENT);
+    let (_, listed) = carol.get("/artifacts").await;
+    assert_eq!(listed[0]["archived"], true, "archived for everyone: {listed}");
+    let pin = format!("/threads/{THREAD}/artifacts/0123456789ab/pin");
+    assert_eq!(carol.put(&pin, serde_json::json!({"pinned": true})).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(carol.get("/artifacts").await.1[0]["pinned"], true);
+    assert_eq!(alice.get("/artifacts").await.1[0]["pinned"], false, "a pin is the person's own");
+
     let (_, history) = alice.get(&format!("/threads/{THREAD}/history")).await;
     let latest = history["entries"]
         .as_array()

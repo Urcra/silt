@@ -104,7 +104,7 @@ impl System {
     }
 }
 
-fn read_capped(path: &Path, limit: u64) -> Option<String> {
+pub(crate) fn read_capped(path: &Path, limit: u64) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     (meta.is_file() && meta.len() <= limit).then(|| fs::read_to_string(path).ok()).flatten()
 }
@@ -218,7 +218,7 @@ pub(crate) fn set_artifact_grant(
     write_atomically(&data_dir.join(GRANTS), &json)
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
     let staging = path.with_extension("tmp");
     fs::write(&staging, bytes)?;
     fs::rename(&staging, path)?;

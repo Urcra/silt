@@ -456,6 +456,19 @@ pub enum Request {
         version: Option<u32>,
         path: String,
     },
+    /// Every artifact in the threads here, for the Artifacts page (ADR 0075).
+    ArtifactListing,
+    PinArtifact {
+        thread: String,
+        artifact: String,
+        pinned: bool,
+    },
+    /// Hides an artifact for everyone, or shows it again; the owner's to do.
+    ArchiveArtifact {
+        thread: String,
+        artifact: String,
+        archived: bool,
+    },
     /// Who views an artifact's page, as its `user` capability answers.
     PageViewer {
         thread: String,
@@ -1724,6 +1737,7 @@ mod tests {
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
+            silt_proto::view::ArtifactListed::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),

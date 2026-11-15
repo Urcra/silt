@@ -623,6 +623,13 @@ impl Core {
                 to_response(self.publish_artifact(&thread, &artifact, html, base).await)
             }
             Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
+            Request::ArtifactListing => Response::ok(self.artifact_listing()),
+            Request::PinArtifact { thread, artifact, pinned } => {
+                to_response(self.pin_artifact(&thread, &artifact, pinned).map(|()| "saved"))
+            }
+            Request::ArchiveArtifact { thread, artifact, archived } => {
+                to_response(self.archive_artifact(&thread, &artifact, archived).await.map(|()| "saved"))
+            }
             Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
             Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
             Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),

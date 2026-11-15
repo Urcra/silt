@@ -46,6 +46,9 @@ pub(crate) fn routes() -> Router<Server> {
             post(page_assets).layer(axum::extract::DefaultBodyLimit::max(PAGE_FILE_BODY)),
         )
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
+        .route("/app/api/artifacts", get(artifact_listing))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -624,6 +627,121 @@ async fn publish_artifact(
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
     crate::writes::write_as_with(&server, browser, row.family, row.id, None, native).await?;
     Ok(Json(serde_json::json!({ "id": artifact, "version": version })))
+}
+
+/// The page document saying the thread's owner archived the artifact (ADR 0075).
+const ARCHIVED: &str = "_meta/archived";
+
+/// Every artifact in the threads the person can read, for the Artifacts
+/// page (ADR 0075), with their pins.
+async fn artifact_listing(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+) -> Result<Json<Vec<silt_proto::view::ArtifactListed>>, ApiError> {
+    use silt_proto::view::{ArtifactListed, artifact_listing, latest_artifacts};
+    let readable = Readable::load(&server, browser.user).await?;
+    let titles = titles(&server, browser.user).await?;
+    let pins: std::collections::HashSet<(Vec<u8>, String)> =
+        sqlx::query!("SELECT thread_id, artifact_id FROM artifact_pins WHERE user_id = ?", browser.user)
+            .fetch_all(server.db())
+            .await?
+            .into_iter()
+            .map(|row| (row.thread_id, row.artifact_id))
+            .collect();
+    let mut rows = Vec::new();
+    for row in &readable.rows {
+        let Some(browsed) = readable.deltas.get(&row.family) else { continue };
+        let entries = browsed.entries(row.id);
+        let latest = latest_artifacts(entries.iter().map(|(_, entry)| entry));
+        if latest.is_empty() {
+            continue;
+        }
+        let mut graph = silt_crdt::CausalGraph::new();
+        for delta in &browsed.log {
+            let _ = graph.add(delta.span, &delta.parents);
+        }
+        for (artifact, time_ms) in latest {
+            let archived = artifact.id.parse::<silt_types::ArtifactId>().is_ok_and(|id| {
+                silt_log::page_documents_in(&browsed.log, &graph, row.id, id).get(ARCHIVED)
+                    == Some(&serde_json::Value::Bool(true))
+            });
+            rows.push(ArtifactListed {
+                pinned: pins.contains(&(crate::id_bytes(row.id.0).to_vec(), artifact.id.clone())),
+                thread: row.id.to_string(),
+                thread_title: titles.get(&row.id).cloned().flatten(),
+                repo: row.repo.clone(),
+                owner: row.owner.clone(),
+                mine: row.owner == readable.me,
+                artifact,
+                time_ms,
+                archived,
+            });
+        }
+    }
+    Ok(Json(artifact_listing(rows)))
+}
+
+#[derive(Deserialize)]
+struct Pinned {
+    pinned: bool,
+}
+
+/// Pins an artifact to the top of the person's Artifacts page, or unpins it.
+async fn pin_artifact(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(pin): Json<Pinned>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let _: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let thread = crate::id_bytes(readable.row(&id)?.id.0);
+    if pin.pinned {
+        let now = crate::now_ms();
+        sqlx::query!(
+            "INSERT OR REPLACE INTO artifact_pins (user_id, thread_id, artifact_id, at_ms) VALUES (?, ?, ?, ?)",
+            browser.user,
+            thread,
+            artifact,
+            now
+        )
+        .execute(server.db())
+        .await?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM artifact_pins WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
+            browser.user,
+            thread,
+            artifact
+        )
+        .execute(server.db())
+        .await?;
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct Archived {
+    archived: bool,
+}
+
+/// Hides an artifact for everyone, or shows it again: the thread's owner's
+/// to do, kept in the thread's page data (ADR 0075).
+async fn archive_artifact(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(archive): Json<Archived>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    if page.level < silt_proto::page::Level::Owner {
+        return Err(crate::forbidden("only the thread's owner archives its artifacts"));
+    }
+    let op = silt_log::PageOp::Set { artifact, path: ARCHIVED.into(), value: archive.archived.to_string() };
+    crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// Who views a thread's pages, for their `user` capability.

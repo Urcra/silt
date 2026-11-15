@@ -16,6 +16,8 @@ import {
   throughVendor,
   versionOf,
   withFilesInlined,
+  artifactPath,
+  listingMatches,
 } from './artifacts'
 import { FRAME_FIXTURES, OFFLINE_STUB } from './frame.generated'
 
@@ -189,5 +191,34 @@ describe("the offline copy of a page with files", () => {
     expect(await (await scope.fetch('data.json')).json()).toEqual({ n: 3 })
     await scope.fetch('https://example.com/x')
     expect(fetched).toEqual(['https://example.com/x'])
+  })
+})
+
+describe('the Artifacts page', () => {
+  const row = {
+    thread: 't1',
+    thread_title: 'Bench',
+    repo: '/r/silt',
+    owner: 'ann',
+    mine: true,
+    artifact: { id: '0123456789ab', version: 2, title: 'Rescan benchmark', kind: 'html', media_type: 'text/html', blob: 'b', size: 1, inline: false, description: 'How long a rescan takes' },
+    time_ms: 1,
+    pinned: false,
+    archived: false,
+  }
+  const all = { text: '', kind: '', repo: '', mine: false, archived: false }
+  it('filters by text in the title or description, kind, project, ownership and archiving', () => {
+    expect(listingMatches(row, all)).toBe(true)
+    expect(listingMatches(row, { ...all, text: 'RESCAN never' })).toBe(false)
+    expect(listingMatches(row, { ...all, text: 'rescan' })).toBe(true)
+    expect(listingMatches(row, { ...all, text: 'how long' })).toBe(true)
+    expect(listingMatches(row, { ...all, kind: 'svg' })).toBe(false)
+    expect(listingMatches(row, { ...all, repo: '/r/other' })).toBe(false)
+    expect(listingMatches({ ...row, mine: false }, { ...all, mine: true })).toBe(false)
+    expect(listingMatches(row, { ...all, archived: true })).toBe(false)
+  })
+  it('links to an artifact, at a version when not the latest', () => {
+    expect(artifactPath('t1', '0123456789ab')).toBe('/t/t1/artifacts/0123456789ab')
+    expect(artifactPath('t1', '0123456789ab', 3)).toBe('/t/t1/artifacts/0123456789ab/v/3')
   })
 })

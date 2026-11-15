@@ -1,7 +1,7 @@
 // What agents showed the person (ADR 0068): images in the conversation,
 // artifact cards there, and the panel that shows an artifact beside it.
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { api, type ArtifactContent, type ArtifactView, type CommentView } from '../api'
 import {
@@ -13,6 +13,7 @@ import {
   fileName,
   kindLabel,
   latest,
+  artifactPath,
   offlineHtml,
   type InlineFiles,
   problemsPrompt,
@@ -51,6 +52,10 @@ export function ArtifactList({
   onOpen: (id: string) => void
 }) {
   const now = useNow()
+  // Artifacts the thread's owner archived stay in the history but leave this list (ADR 0075).
+  const listing = useQuery({ queryKey: keys.artifacts, queryFn: api.artifacts, staleTime: 15_000 })
+  const archived = new Set((listing.data ?? []).filter((row) => row.thread === thread && row.archived).map((row) => row.artifact.id))
+  groups = groups.filter((group) => !archived.has(group.id))
   if (groups.length === 0 && images.length === 0)
     return (
       <p className="px-5 py-6 text-sm text-fg-2">
@@ -186,6 +191,8 @@ export function ArtifactViewer({
   const [problems, setProblems] = useState<{ blob: string; seen: FrameProblem[] } | null>(null)
   const link = usePermalink(thread)
   const now = useNow()
+  const queries = useQueryClient()
+  const listing = useQuery({ queryKey: keys.artifacts, queryFn: api.artifacts, staleTime: 15_000 })
   if (!group || !shown) return <p className="px-5 py-6 text-sm text-fg-2">This artifact isn't in the thread's history.</p>
   const artifact = shown.artifact
   const styleText = style.data ? textOf(style.data) : null
@@ -201,6 +208,18 @@ export function ArtifactViewer({
     }
   }
   const textual = artifact.kind !== 'image'
+  const latestVersion = latest(group).artifact.version
+  const listed = listing.data?.find((row) => row.thread === thread && row.artifact.id === artifact.id)
+  const keep = async (what: 'pin' | 'archive') => {
+    try {
+      if (what === 'pin') await api.pinArtifact(thread, artifact.id, !listed?.pinned)
+      else await api.archiveArtifact(thread, artifact.id, !listed?.archived)
+      await queries.invalidateQueries({ queryKey: keys.artifacts })
+      toast(what === 'pin' ? (listed?.pinned ? 'Unpinned' : 'Pinned') : listed?.archived ? 'Unarchived' : 'Archived', 'ok')
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   const download = (bytes: BlobPart, type: string, name: string) => {
     const url = URL.createObjectURL(new Blob([bytes], { type }))
     const anchor = document.createElement('a')
@@ -230,11 +249,17 @@ export function ArtifactViewer({
       toast(message(failure), 'danger')
     }
   }
-  const latestVersion = latest(group).artifact.version
   const zoomTo = (step: number) => ZOOMS[ZOOMS.indexOf(zoom) + step]
   const shareItems: MenuItem[] = [
     { label: 'Read-only link…', icon: 'lock', hint: 'no account needed', onSelect: () => setSharing(true) },
-    { label: 'Copy link', icon: 'link', hint: 'for people in the thread', onSelect: () => link(`/t/${thread}#artifact-${artifact.id}`) },
+    {
+      label: 'Copy link',
+      icon: 'link',
+      hint: 'for people in the thread',
+      onSelect: () => link(artifactPath(thread, artifact.id, artifact.version === latestVersion ? null : artifact.version)),
+    },
+    { label: listed?.pinned ? 'Unpin from Artifacts' : 'Pin to Artifacts', icon: 'check', onSelect: () => void keep('pin'), divided: true },
+    { label: listed?.archived ? 'Unarchive' : 'Archive', icon: 'folder', hint: "the thread's owner's", onSelect: () => void keep('archive') },
     { label: 'Download as one HTML file', icon: 'download', hint: 'opens anywhere', onSelect: () => void exportHtml(), divided: true },
     { label: 'Download the file', icon: 'file', onSelect: downloadFile },
   ]

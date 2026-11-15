@@ -1644,6 +1644,24 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     );
     assert!(!stale && said.to_string().contains("conflict"), "{said}");
 
+    // The Artifacts page lists it; a pin keeps it first and archiving hides
+    // it, for this machine's person, who owns the thread (ADR 0075).
+    let listed = api.ok("GET", "/api/artifacts", None);
+    let row = listed.as_array().and_then(|rows| rows.iter().find(|row| row["artifact"]["id"] == id)).cloned().expect("listed");
+    assert_eq!(
+        (&row["artifact"]["version"], &row["pinned"], &row["archived"], &row["mine"]),
+        (&2.into(), &false.into(), &false.into(), &true.into()),
+        "{row}"
+    );
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/pin"), Some(serde_json::json!({"pinned": true})));
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/archive"), Some(serde_json::json!({"archived": true})));
+    let listed = api.ok("GET", "/api/artifacts", None);
+    let row = listed.as_array().and_then(|rows| rows.iter().find(|row| row["artifact"]["id"] == id)).cloned().expect("listed");
+    assert_eq!((&row["pinned"], &row["archived"]), (&true.into(), &true.into()), "{row}");
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/archive"), Some(serde_json::json!({"archived": false})));
+    let listed = api.ok("GET", "/api/artifacts", None);
+    assert!(listed.as_array().is_some_and(|rows| rows.iter().any(|row| row["artifact"]["id"] == id && row["archived"] == false)));
+
     let viewer = api.ok("GET", &format!("/api/threads/{thread}/viewer"), None);
     assert_eq!((&viewer["id"], &viewer["level"]), (&"local".into(), &"owner".into()), "{viewer}");
 
