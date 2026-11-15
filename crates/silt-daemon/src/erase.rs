@@ -115,6 +115,11 @@ impl Core {
                 files.push(offset.path);
             }
         }
+        let family_gone =
+            self.threads.values().filter(|record| record.family == family).all(|record| erasing.contains(&record.id));
+        if let Some(record) = self.threads.get(&thread).filter(|record| family_gone && silt_types::is_chat(&record.repo)) {
+            files.push(record.repo_root.clone());
+        }
         files.sort();
         files.dedup();
         blobs.sort();
@@ -152,6 +157,23 @@ impl Core {
         self.data_dir.join(MARKERS).join(format!("{thread}.json"))
     }
 
+    /// Whether a marker read back asks only what an erasure of Local only
+    /// threads would: anything else in it, such as a file elsewhere, means
+    /// it isn't one Silt wrote, and nothing of it is done.
+    fn trusted(&self, erasure: &Erasure) -> bool {
+        let threads_local = erasure.threads.iter().all(|thread| {
+            self.threads.get(thread).is_none_or(|record| self.effective_policy(&self.family_workspace(record.family)).local_only)
+        });
+        let roots = self.erasable_roots();
+        let files_inside = erasure.files.iter().all(|file| inside(file, &roots));
+        let checkouts_managed = erasure.checkouts.iter().all(|(clone, id, path)| {
+            id.parse::<ThreadId>().is_ok_and(|parsed| parsed.to_string() == *id)
+                && plain(clone)
+                && *path == clone.join(".silt").join("checkouts").join(id)
+        });
+        threads_local && files_inside && checkouts_managed
+    }
+
     /// Finishes the erasures a stop interrupted.
     pub(crate) async fn finish_erasures(&mut self) {
         let Ok(entries) = std::fs::read_dir(self.data_dir.join(MARKERS)) else {
@@ -162,6 +184,10 @@ impl Core {
             let Some(erasure) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Erasure>(&bytes).ok()) else {
                 continue;
             };
+            if !self.trusted(&erasure) {
+                warn!(marker = %path.display(), "not finishing an erasure whose marker asks more than an erasure would");
+                continue;
+            }
             match self.carry_out(&erasure).await {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&path);
@@ -190,8 +216,8 @@ impl Core {
         }
         let allowed = self.erasable_roots();
         for file in &erasure.files {
-            if !allowed.iter().any(|root| file.starts_with(root)) {
-                warn!(path = %file.display(), "not erasing a file outside the agents' homes and Silt's data");
+            if !inside(file, &allowed) {
+                warn!(path = %file.display(), "not erasing a file outside the agents' session folders");
                 continue;
             }
             let removed = if file.is_dir() { std::fs::remove_dir_all(file) } else { std::fs::remove_file(file) };
@@ -202,12 +228,12 @@ impl Core {
             }
         }
         for (clone, id, path) in &erasure.checkouts {
-            let Ok(repo) = silt_git::Repo::discover(clone) else {
+            let managed = id.parse::<ThreadId>().is_ok_and(|parsed| parsed.to_string() == *id)
+                && plain(clone)
+                && *path == clone.join(".silt").join("checkouts").join(id);
+            let Some(repo) = managed.then(|| silt_git::Repo::discover(clone).ok()).flatten() else {
                 continue;
             };
-            if !path.starts_with(clone.join(".silt").join("checkouts")) {
-                continue;
-            }
             let checkout = silt_git::ManagedCheckout { path: path.clone(), git_dir: repo.managed_git_dir(id) };
             repo.remove_managed_checkout(id, &checkout)?;
         }
@@ -221,15 +247,26 @@ impl Core {
         Ok(())
     }
 
-    /// Where an agent's files may be erased from: its homes, and Silt's data.
+    /// Where erasure may remove files from: the agents' own folders, by the
+    /// variables that move them and where they are by default, chats'
+    /// folders, and the local agent's sessions.
     fn erasable_roots(&self) -> Vec<PathBuf> {
-        let mut roots = vec![self.data_dir.clone()];
-        roots.extend(silt_os::home_dir());
-        roots.extend(silt_agents::HOME_VARIABLES.iter().filter_map(std::env::var_os).map(PathBuf::from));
-        for workspace in &self.workspaces().workspaces {
-            roots.extend(workspace.env.values().map(PathBuf::from).filter(|path| path.is_absolute()));
+        const HOMES: [(&str, &str); 4] = [
+            ("CLAUDE_CONFIG_DIR", ".claude"),
+            ("CODEX_HOME", ".codex"),
+            ("GEMINI_CLI_HOME", ".gemini"),
+            ("COPILOT_HOME", ".copilot"),
+        ];
+        let mut roots = vec![self.data_dir.join("local").join("sessions"), crate::chats::chats_dir(&self.data_dir)];
+        let home = silt_os::home_dir();
+        for (variable, folder) in HOMES {
+            roots.extend(std::env::var_os(variable).map(PathBuf::from));
+            roots.extend(home.as_ref().map(|home| home.join(folder)));
+            for workspace in &self.workspaces().workspaces {
+                roots.extend(workspace.env.get(variable).map(PathBuf::from));
+            }
         }
-        roots.retain(|root| root.components().count() > 2);
+        roots.retain(|root| root.is_absolute() && plain(root) && root.components().count() > 2);
         roots
     }
 
@@ -237,5 +274,33 @@ impl Core {
     fn every_log(&self) -> impl Iterator<Item = &[silt_log::Delta]> {
         let families: HashSet<FamilyId> = self.families.keys().chain(self.raw.keys()).copied().collect();
         families.into_iter().map(|family| self.local_log(family)).collect::<Vec<_>>().into_iter()
+    }
+}
+
+/// A path with no `.` or `..` in it, absolute, so where it points is plain.
+fn plain(path: &std::path::Path) -> bool {
+    path.is_absolute()
+        && path.components().all(|part| {
+            matches!(part, std::path::Component::Normal(_) | std::path::Component::RootDir | std::path::Component::Prefix(_))
+        })
+}
+
+/// Whether `path` is strictly within one of `roots`, read without the disk.
+fn inside(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+    plain(path) && roots.iter().any(|root| path.starts_with(root) && path != root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_plain_paths_strictly_inside_a_root_are_erased() {
+        let roots = [PathBuf::from("/home/me/.claude")];
+        assert!(inside(std::path::Path::new("/home/me/.claude/projects/x/s.jsonl"), &roots));
+        assert!(!inside(std::path::Path::new("/home/me/.claude"), &roots), "never the root itself");
+        assert!(!inside(std::path::Path::new("/home/me/.claude/../../me"), &roots), "nothing climbing out");
+        assert!(!inside(std::path::Path::new("/home/me/notes"), &roots));
+        assert!(!inside(std::path::Path::new("relative/.claude/x"), &roots));
     }
 }

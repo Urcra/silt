@@ -20,11 +20,9 @@ impl ModelId {
         let starts_well = id.bytes().next().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
         let plain =
             id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_'));
-        if starts_well && plain && id.len() <= MOST_ID_CHARS && !id.contains("..") {
-            Ok(Self(id))
-        } else {
-            Err(LlmError::BadId(id))
-        }
+        // `<id>.partial` is a download's folder, so no model is named that.
+        let ok = starts_well && plain && id.len() <= MOST_ID_CHARS && !id.contains("..") && !id.ends_with(".partial");
+        if ok { Ok(Self(id)) } else { Err(LlmError::BadId(id)) }
     }
 
     /// The name of a GGUF file the person brings: its stem, lowercased, with
@@ -288,7 +286,7 @@ mod tests {
     #[test]
     fn model_ids_hold_only_what_a_file_name_safely_can() {
         assert!(ModelId::new("gpt-oss-20b").is_ok());
-        for bad in ["", "-x", ".x", "a/b", "a..b", "Upper", "a b", &"a".repeat(81)] {
+        for bad in ["", "-x", ".x", "a/b", "a..b", "Upper", "a b", "x.partial", &"a".repeat(81)] {
             assert!(ModelId::new(bad).is_err(), "{bad:?}");
         }
     }

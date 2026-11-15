@@ -114,10 +114,10 @@ impl Schedule {
         Vec::new()
     }
 
-    /// The server stopped by itself: whatever ran there failed.
+    /// The server stopped: whatever ran there fails, and is done once its
+    /// caller hears so.
     pub fn server_exited(&mut self) -> Vec<Step> {
         self.loaded = None;
-        self.running = 0;
         self.next_load()
     }
 
@@ -220,10 +220,11 @@ mod tests {
     #[test]
     fn a_server_that_exits_is_loaded_again_for_whoever_waits() {
         let mut schedule = Schedule::new();
-        schedule.want(id("a"));
+        let (first, _) = schedule.want(id("a"));
         schedule.load_finished(&id("a"), true);
         let (next, _) = schedule.want(id("b"));
-        assert_eq!(schedule.server_exited(), [Step::Load(id("b"))]);
+        assert_eq!(schedule.server_exited(), [], "the request that ran there isn't done yet");
+        assert_eq!(schedule.done(first, Instant::now()), [Step::Load(id("b"))]);
         assert_eq!(schedule.load_finished(&id("b"), true), [Step::Run(next)]);
     }
 }

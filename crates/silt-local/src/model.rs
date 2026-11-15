@@ -73,7 +73,9 @@ impl Gateway {
     pub fn from_env() -> Option<Self> {
         let url = std::env::var("SILT_MODEL_URL").ok().filter(|url| !url.is_empty())?;
         let token = std::env::var("SILT_MODEL_TOKEN").unwrap_or_default();
-        Some(Self { url: url.trim_end_matches('/').to_owned(), token, client: reqwest::Client::new() })
+        // The gateway is on loopback; a proxy the environment names must never see the conversation.
+        let client = reqwest::Client::builder().no_proxy().build().ok()?;
+        Some(Self { url: url.trim_end_matches('/').to_owned(), token, client })
     }
 
     pub async fn models(&self) -> Result<Vec<Listed>, String> {

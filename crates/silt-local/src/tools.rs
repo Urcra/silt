@@ -13,6 +13,8 @@ use tokio::sync::watch;
 use crate::conversation::Call;
 
 const MOST_READ_LINES: usize = 2000;
+/// How much of a file a read looks at; a larger one is read in parts by line.
+const MOST_READ_BYTES: u64 = 16 << 20;
 const MOST_TOOL_BYTES: usize = 64 * 1024;
 const MOST_LISTED: usize = 1000;
 const MOST_FOUND: usize = 500;
@@ -197,8 +199,35 @@ pub fn plan(call: &Call, root: &Path) -> Result<Planned, String> {
         "run" => (Kind::Execute, format!("$ {}", text_arg(&input, "command")?), Vec::new()),
         other => return Err(format!("there's no tool {other}")),
     };
-    let outside = paths.iter().any(|path| !path.starts_with(root));
+    let outside = paths.iter().any(|path| is_outside(root, path));
     Ok(Planned { kind, title, paths, outside, input })
+}
+
+/// Whether `path` is outside `root`, as written or once its symlinks are
+/// followed: a link in the project to a file elsewhere is elsewhere.
+fn is_outside(root: &Path, path: &Path) -> bool {
+    if !path.starts_with(root) {
+        return true;
+    }
+    let Ok(real_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let mut existing = path.to_owned();
+    let mut rest = Vec::new();
+    while !existing.exists() && std::fs::symlink_metadata(&existing).is_err() {
+        match (existing.file_name().map(std::ffi::OsStr::to_owned), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                existing = parent.to_owned();
+            }
+            _ => return false,
+        }
+    }
+    // A dangling link points somewhere this can't see; ask.
+    let Ok(real) = std::fs::canonicalize(&existing) else {
+        return true;
+    };
+    !real.starts_with(&real_root)
 }
 
 fn shown(root: &Path, path: &Path) -> String {
@@ -259,7 +288,13 @@ pub async fn run(planned: &Planned, name: &str, root: &Path, cancel: watch::Rece
 }
 
 async fn read(path: &Path, input: &Value) -> Result<Outcome, String> {
-    let text = tokio::fs::read_to_string(path).await.map_err(|error| format!("can't read {}: {error}", path.display()))?;
+    let file = tokio::fs::File::open(path).await.map_err(|error| format!("can't read {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MOST_READ_BYTES)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("can't read {}: {error}", path.display()))?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
     let offset = input["offset"].as_u64().and_then(|offset| usize::try_from(offset).ok()).unwrap_or(1).max(1);
     let limit =
         input["limit"].as_u64().and_then(|limit| usize::try_from(limit).ok()).unwrap_or(MOST_READ_LINES).min(MOST_READ_LINES);
@@ -438,8 +473,7 @@ async fn command(root: &Path, input: &Value, cancel: watch::Receiver<bool>) -> O
     };
     let (mut stdout, mut stderr) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
     let gathered = async move {
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let _ = tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err));
+        let (out, err) = tokio::join!(tail_of(&mut stdout), tail_of(&mut stderr));
         let status = child.wait().await;
         (out, err, status)
     };
@@ -460,6 +494,23 @@ async fn command(root: &Path, input: &Value, cancel: watch::Receiver<bool>) -> O
         Some(code) => Outcome::failed(format!("{tail}\n(exit code {code})")),
         None => Outcome::failed(format!("{tail}\n(ended by a signal)")),
     }
+}
+
+/// What a stream says, keeping only its last part while it runs, so a
+/// command that prints without end can't fill the memory.
+async fn tail_of(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let mut buffer = vec![0; 16 * 1024];
+    while let Ok(read) = stream.read(&mut buffer).await {
+        if read == 0 {
+            break;
+        }
+        kept.extend_from_slice(&buffer[..read]);
+        if kept.len() > 2 * MOST_TOOL_BYTES {
+            kept.drain(..kept.len() - MOST_TOOL_BYTES);
+        }
+    }
+    kept
 }
 
 /// The end of a long output, which is where errors usually are.
@@ -494,6 +545,23 @@ mod tests {
         assert!(escaping.needs_asking(Leeway::Everything));
         let absolute = plan(&call("write", json!({"path": "/tmp/x", "content": ""})), root).expect("planned");
         assert!(absolute.outside && absolute.needs_asking(Leeway::Everything));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_project_is_outside_it() {
+        let project = tempfile::tempdir().expect("temp");
+        let elsewhere = tempfile::tempdir().expect("temp");
+        std::fs::write(elsewhere.path().join("bashrc"), "x").expect("write");
+        std::os::unix::fs::symlink(elsewhere.path().join("bashrc"), project.path().join("notes")).expect("link");
+        std::os::unix::fs::symlink(elsewhere.path(), project.path().join("out")).expect("link");
+        let root = project.path();
+        let through = plan(&call("write", json!({"path": "notes", "content": "y"})), root).expect("planned");
+        assert!(through.outside && through.needs_asking(Leeway::Everything));
+        let under = plan(&call("write", json!({"path": "out/new.txt", "content": "y"})), root).expect("planned");
+        assert!(under.outside, "a new file under a linked folder is elsewhere too");
+        let own = plan(&call("write", json!({"path": "src/new.rs", "content": "y"})), root).expect("planned");
+        assert!(!own.outside);
     }
 
     #[test]

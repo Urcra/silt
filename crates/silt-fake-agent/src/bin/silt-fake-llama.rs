@@ -63,7 +63,10 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let served = Arc::new(Served {
-        key: flag(&args, "--api-key").unwrap_or_default(),
+        key: flag(&args, "--api-key")
+            .or_else(|| flag(&args, "--api-key-file").and_then(|file| std::fs::read_to_string(file).ok()))
+            .map(|key| key.trim().to_owned())
+            .unwrap_or_default(),
         model: Path::new(&model).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
         context: flag(&args, "-c").and_then(|context| context.parse().ok()).unwrap_or(4096),
         ready: AtomicBool::new(false),

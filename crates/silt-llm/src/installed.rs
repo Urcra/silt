@@ -207,6 +207,9 @@ impl Models {
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).await.map_err(LlmError::Disk)?;
             }
+            if fs::metadata(&to).await.is_ok() && !matches_pin(&to, file).await {
+                fs::remove_file(&to).await.map_err(LlmError::Disk)?;
+            }
             if fs::metadata(&to).await.is_err() {
                 let wanted = Wanted { url: url.clone(), sha256: file.sha256.clone(), size: file.size };
                 download::fetch(client, &wanted, &to, &mut |done| on_progress(Progress { done: before + done, total })).await?;
@@ -263,6 +266,22 @@ impl Models {
         let manifest = serde_json::to_vec_pretty(&model).expect("a manifest serializes");
         fs::write(dir.join(MANIFEST), manifest).await.map_err(LlmError::Disk)?;
         Ok(model)
+    }
+}
+
+/// Whether a file left by an earlier try is the one `file` pins.
+async fn matches_pin(path: &Path, file: &PinnedFile) -> bool {
+    let Ok(mut opened) = fs::File::open(path).await else {
+        return false;
+    };
+    let mut check = crate::Check::new(file.size);
+    let mut buffer = vec![0; 1 << 20];
+    loop {
+        match opened.read(&mut buffer).await {
+            Ok(0) => return check.matches(&file.sha256),
+            Ok(read) if check.feed(&buffer[..read]) => {}
+            _ => return false,
+        }
     }
 }
 

@@ -198,6 +198,21 @@ impl Core {
 
     /// Replaces the workspaces with `workspaces`, checked first.
     pub(crate) fn set_workspaces(&mut self, workspaces: Workspaces) -> Result<(), CoreError> {
+        for workspace in workspaces.workspaces.iter().filter(|workspace| workspace.policy.local_only) {
+            let syncing = self.family_workspaces.iter().filter(|(_, id)| **id == workspace.id).find_map(|(family, _)| match self
+                .homes
+                .get(family)
+            {
+                Some(Home::Server(url)) => Some(url.clone()),
+                _ => None,
+            });
+            if let Some(url) = syncing {
+                return Err(CoreError::Invalid(format!(
+                    "{} has threads that sync with {url}; a Local only workspace keeps everything on this machine, so make a new one for them",
+                    workspace.name
+                )));
+            }
+        }
         for workspace in &workspaces.workspaces {
             if let Some(binding) = &workspace.server
                 && !self.remotes.iter().any(|remote| remote.config.url == binding.url)

@@ -416,11 +416,13 @@ impl Core {
 
     /// What `local` needs to reach the gateway with its run's token.
     async fn local_env(&self, token: &str) -> Result<Vec<(String, String)>, CoreError> {
-        Ok(vec![
+        let mut env = vec![
             ("SILT_MODEL_URL".to_owned(), self.models.gateway().await?),
             ("SILT_MODEL_TOKEN".to_owned(), token.to_owned()),
             ("SILT_LOCAL_HOME".to_owned(), self.data_dir.join("local").to_string_lossy().into_owned()),
-        ])
+        ];
+        env.extend(crate::models::no_proxy());
+        Ok(env)
     }
 
     /// The agents the web UI can start. The registry's copy is brought up to

@@ -241,6 +241,11 @@ pub(crate) fn claude_env(gateway: &str, token: &str, model: &ModelId) -> Vec<(St
         ("ANTHROPIC_API_KEY".to_owned(), token.to_owned()),
         ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(), "1".to_owned()),
     ];
+    // Each of these would send it to a cloud's own endpoint, past the base URL.
+    for cloud in ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"] {
+        env.push((cloud.to_owned(), "0".to_owned()));
+    }
+    env.extend(no_proxy());
     for tier in [
         "ANTHROPIC_MODEL",
         "ANTHROPIC_SMALL_FAST_MODEL",
@@ -251,6 +256,26 @@ pub(crate) fn claude_env(gateway: &str, token: &str, model: &ModelId) -> Vec<(St
         env.push((tier.to_owned(), format!("local:{model}")));
     }
     env
+}
+
+/// `NO_PROXY` with loopback added, so a proxy the environment names is
+/// never handed what goes to the gateway.
+pub(crate) fn no_proxy() -> Vec<(String, String)> {
+    let mut hosts: Vec<String> = env::var("NO_PROXY")
+        .or_else(|_| env::var("no_proxy"))
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for loopback in ["127.0.0.1", "localhost", "::1"] {
+        if !hosts.iter().any(|host| host == loopback) {
+            hosts.push(loopback.to_owned());
+        }
+    }
+    let hosts = hosts.join(",");
+    vec![("NO_PROXY".to_owned(), hosts.clone()), ("no_proxy".to_owned(), hosts)]
 }
 
 impl LocalModelsHere {

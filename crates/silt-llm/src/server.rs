@@ -36,6 +36,9 @@ pub struct Launch {
     pub flags: Vec<String>,
     pub port: u16,
     pub key: String,
+    /// Where the key is written for the server to read, which other users
+    /// can't, rather than on its command line, which they can.
+    pub key_file: PathBuf,
 }
 
 impl Launch {
@@ -46,7 +49,7 @@ impl Launch {
         }
         args.extend(["-c".into(), self.context.to_string().into()]);
         args.extend(["--port".into(), self.port.to_string().into()]);
-        args.extend(["--api-key".into(), self.key.clone().into()]);
+        args.extend(["--api-key-file".into(), self.key_file.clone().into()]);
         args.extend(self.flags.iter().map(OsString::from));
         args
     }
@@ -82,6 +85,10 @@ impl Server {
     /// Starts `program` and waits until it answers `/health`, which it does
     /// only once the model is loaded.
     pub async fn start(program: &Path, launch: &Launch, within: Duration) -> Result<Self, LlmError> {
+        silt_os::write_private(&launch.key_file, launch.key.as_bytes())
+            .map_err(|error| LlmError::Start(format!("could not keep the server's key: {error}")))?;
+        silt_os::write_private(&launch.key_file, launch.key.as_bytes())
+            .map_err(|error| LlmError::Start(format!("could not keep the server's key: {error}")))?;
         let mut command = Command::new(program);
         command.args(launch.args()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         silt_os::own_group(&mut command);
@@ -91,7 +98,7 @@ impl Server {
         keep_lines(child.stdout.take(), log.clone());
         keep_lines(child.stderr.take(), log.clone());
         let mut server = Self { child, port: launch.port, key: launch.key.clone(), log };
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().no_proxy().build().map_err(|error| LlmError::Start(error.to_string()))?;
         let started = Instant::now();
         loop {
             if let Ok(Some(status)) = server.child.try_wait() {
@@ -170,11 +177,12 @@ mod tests {
             flags: vec!["--cache-type-k".into(), "q8_0".into()],
             port: 18431,
             key: "k".into(),
+            key_file: "/run/key".into(),
         };
         let args: Vec<String> = launch.args().into_iter().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args.join(" "),
-            "-m /m/model.gguf --jinja -ngl 999 --host 127.0.0.1 -c 32768 --port 18431 --api-key k --cache-type-k q8_0"
+            "-m /m/model.gguf --jinja -ngl 999 --host 127.0.0.1 -c 32768 --port 18431 --api-key-file /run/key --cache-type-k q8_0"
         );
     }
 }

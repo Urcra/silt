@@ -151,6 +151,12 @@ impl Policy {
         }
     }
 
+    /// An org's policy as it applies: a workspace bound to its server can't
+    /// be Local only, so that rule is the person's alone.
+    pub fn without_local_only(&self) -> Self {
+        Self { local_only: false, wide_history: false, ..self.clone() }
+    }
+
     /// Whether agents' history tools read only their own project.
     pub fn history_by_project(&self) -> bool {
         self.local_only && !self.wide_history
@@ -335,15 +341,17 @@ impl Rules<'_> {
     /// The rules in effect, both at once.
     pub fn effective(&self) -> Policy {
         match &self.org {
-            Some(Ok(org)) => self.local.stricter(&org.policy),
+            Some(Ok(org)) => self.local.stricter(&org.policy.without_local_only()),
             _ => self.local.clone(),
         }
     }
 
-    fn each(&self) -> Result<Vec<(&Policy, Source)>, Refusal> {
-        let mut all = vec![(self.local, Source::Local)];
+    fn each(&self) -> Result<Vec<(Policy, Source)>, Refusal> {
+        let mut all = vec![(self.local.clone(), Source::Local)];
         match &self.org {
-            Some(Ok(org)) => all.push((&org.policy, Source::Org { org: org.org.clone(), server: org.server.clone() })),
+            Some(Ok(org)) => {
+                all.push((org.policy.without_local_only(), Source::Org { org: org.org.clone(), server: org.server.clone() }));
+            }
             Some(Err(source)) => return Err(self.refusal(Broken::WaitingForPolicy, source.clone())),
             None => {}
         }
@@ -358,7 +366,7 @@ impl Rules<'_> {
     /// would refuse.
     fn check(&self, broken: impl Fn(&Policy) -> Option<Broken>) -> Result<(), Refusal> {
         for (policy, source) in self.each()?.into_iter().rev() {
-            if let Some(broken) = broken(policy) {
+            if let Some(broken) = broken(&policy) {
                 return Err(self.refusal(broken, source));
             }
         }

@@ -55,7 +55,8 @@ pub(crate) struct Gateway {
 /// Starts the gateway on loopback and answers with its address, and itself
 /// for stopping the model.
 pub(crate) async fn start(store: Store, models: Models, program: Option<PathBuf>) -> std::io::Result<(String, Arc<Gateway>)> {
-    let gateway = Arc::new(Gateway { store, models, program, client: reqwest::Client::new(), running: Mutex::default() });
+    let client = reqwest::Client::builder().no_proxy().build().map_err(std::io::Error::other)?;
+    let gateway = Arc::new(Gateway { store, models, program, client, running: Mutex::default() });
     let app = Router::new()
         .route("/v1/models", get(list))
         .route("/v1/models/{id}", get(one))
@@ -261,6 +262,7 @@ impl Gateway {
             flags: installed.flags.clone(),
             port: silt_llm::free_port().map_err(|error| error.to_string())?,
             key: uuid::Uuid::new_v4().simple().to_string(),
+            key_file: self.models.dir().join(".server-key"),
         };
         Server::start(program, &launch, LOADING).await.map_err(|error| error.to_string())
     }
