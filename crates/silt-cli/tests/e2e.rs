@@ -1787,6 +1787,22 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
         Some(serde_json::json!({"op": "add", "name": "x.html", "media_type": "text/html", "data": png})),
     );
     assert!(!refused, "a page's files are never pages");
+    // An SVG someone adds is kept as a picture only.
+    let svg = base64::engine::general_purpose::STANDARD.encode(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" onload="steal()"><script>steal()</script><rect width="4" height="4"/></svg>"#,
+    );
+    let drawing = api.ok(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "d.svg", "media_type": "image/svg+xml", "data": svg})),
+    );
+    let kept =
+        api.ok("GET", &format!("/api/threads/{thread}/artifacts/{id}/assets/{}", drawing["id"].as_str().expect("id")), None);
+    let kept =
+        String::from_utf8(base64::engine::general_purpose::STANDARD.decode(kept["data"].as_str().expect("data")).expect("b64"))
+            .expect("utf-8");
+    assert!(kept.contains("<rect") && !kept.contains("steal"), "{kept}");
+    api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": drawing["id"]})));
     // The agent reads a file someone added, as text when it is text.
     let csv = base64::engine::general_purpose::STANDARD.encode(b"name,score\nada,9\n");
     let table = api.ok(
@@ -2054,6 +2070,7 @@ fn an_artifact_takes_the_repositorys_design_system() {
     let made = artifacts_of(&api, &thread);
     assert_eq!(made.len(), 1, "{made:?}");
     assert_eq!(made[0]["design_system"], "nous");
+    assert_eq!(made[0]["contract"], silt_proto::artifact::CONTRACT, "a page is made for the newest contract, and keeps it");
     let style = made[0]["style"].as_str().expect("a style blob");
     let css = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{style}"), None);
     assert_eq!(css["media_type"], "text/css");

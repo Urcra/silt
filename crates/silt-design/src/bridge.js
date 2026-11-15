@@ -341,7 +341,8 @@ var clients = {
 };
 var made = {};
 window.silt = Object.freeze({
-  version: '1',
+  // The runtime contract the version was made with (ADR 0072).
+  version: (boot && typeof boot.contract === 'string' && boot.contract) || '1',
   // A capability's functions, or null where this view can't run it: not
   // declared, not granted, not served here, or failed. Null after 10 s
   // when nothing answers.

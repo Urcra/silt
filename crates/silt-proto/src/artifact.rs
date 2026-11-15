@@ -104,6 +104,23 @@ pub fn asset_media_type_ok(media_type: &str) -> bool {
     )
 }
 
+/// The runtime contract a page's `silt` is: the newest, and every one this
+/// Silt still serves. A version keeps the one it was made with until a new
+/// version asks for another (ADR 0072).
+pub const CONTRACT: &str = "1";
+pub const CONTRACTS: &[&str] = &["1"];
+
+/// The contract a new version gets: the one it asks for (`latest` for the
+/// newest), else its last version's, else the newest.
+pub fn contract_for(asked: Option<&str>, previous: Option<&str>) -> Result<String, String> {
+    match asked {
+        Some("latest") => Ok(CONTRACT.to_owned()),
+        Some(asked) if CONTRACTS.contains(&asked) => Ok(asked.to_owned()),
+        Some(asked) => Err(format!("this Silt serves contract {} only, not {asked}", CONTRACTS.join(", "))),
+        None => Ok(previous.filter(|kept| CONTRACTS.contains(kept)).unwrap_or(CONTRACT).to_owned()),
+    }
+}
+
 /// The most of a page's question to `sample`, in bytes.
 pub const SAMPLE_BYTES: usize = 256 * 1024;
 /// The most images one question shows, each at most [`SAMPLE_IMAGE_BYTES`]
@@ -407,6 +424,14 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_version_keeps_its_contract_until_it_asks_for_another() {
+        assert_eq!(contract_for(None, None).as_deref(), Ok(CONTRACT));
+        assert_eq!(contract_for(None, Some("1")).as_deref(), Ok("1"));
+        assert_eq!(contract_for(Some("latest"), Some("1")).as_deref(), Ok(CONTRACT));
+        assert!(contract_for(Some("9"), None).is_err());
+    }
 
     #[test]
     fn a_question_names_a_tier_or_a_model() {

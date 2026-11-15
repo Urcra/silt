@@ -29,7 +29,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
   return {
     db: dbHandler(thread, artifact),
     artifact: artifactHandler(thread, artifact),
-    user: userHandler(thread),
+    user: userHandler(thread, artifact),
     downloads: downloadsHandler(holder),
     comments: commentsHandler(thread, artifact, holder),
     sample: sampleHandler(thread, artifact, holder),
@@ -223,14 +223,17 @@ function artifactHandler(thread: string, artifact: ArtifactView): CapabilityHand
 }
 
 /** `user`: who views the page, as an id that's the same on every machine and the server, and the names behind ids. */
-function userHandler(thread: string): CapabilityHandler {
+function userHandler(thread: string, artifact: ArtifactView): CapabilityHandler {
   let viewer: Promise<PageViewer> | null = null
   const known = () => (viewer ??= api.pageViewer(thread))
+  // People's names reach a page only when it declares the `profile` scope; Silt keeps no email addresses.
+  const scopes = (artifact.capabilities?.user as { scopes?: unknown } | undefined)?.scopes
+  const names = Array.isArray(scopes) && scopes.includes('profile')
   return {
-    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles', 'search'],
+    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles', ...(names ? ['search'] : [])],
     call: async (method, args) => {
       const me = await known()
-      const name = (id: string) => me.people[id] ?? ''
+      const name = (id: string) => (names ? (me.people[id] ?? '') : '')
       switch (method) {
         case 'id':
           return me.id

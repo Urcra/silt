@@ -68,9 +68,13 @@ impl Core {
                     return Err(CoreError::Invalid(format!("a page's files may not be {media_type}")));
                 }
                 let name: String = name.chars().filter(|char| !char.is_control()).take(200).collect();
-                let bytes = base64::engine::general_purpose::STANDARD
+                let mut bytes = base64::engine::general_purpose::STANDARD
                     .decode(data.trim())
                     .map_err(|_| CoreError::Invalid("the file's base64 doesn't decode".into()))?;
+                // An SVG is kept only as a picture, whatever it held.
+                if media_type.starts_with("image/svg+xml") {
+                    bytes = silt_proto::svg::sanitized_svg(&bytes).map_err(CoreError::Invalid)?;
+                }
                 if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
                     return Err(CoreError::Invalid(format!("a file is at most {} MiB", silt_proto::artifact::ASSET_BYTES >> 20)));
                 }

@@ -682,7 +682,14 @@ impl Core {
             }
             None => (None, None, Vec::new()),
         };
+        let contract = if kind == "html" {
+            let kept = last.and_then(|artifact| artifact.contract.as_deref());
+            Some(silt_proto::artifact::contract_for(new.contract.as_deref(), kept).map_err(CoreError::Invalid)?)
+        } else {
+            None
+        };
         let view = ArtifactView {
+            contract,
             id: id.clone(),
             version,
             title,
@@ -879,6 +886,7 @@ mod tests {
 
     fn new(kind: &str, content: Option<&str>) -> NewArtifact {
         NewArtifact {
+            contract: None,
             title: "t".into(),
             kind: kind.into(),
             content: content.map(str::to_owned),
@@ -948,6 +956,7 @@ mod tests {
     #[test]
     fn versions_count_up_per_id() {
         let view = |id: &str, version| ArtifactView {
+            contract: None,
             id: id.into(),
             version,
             title: "t".into(),

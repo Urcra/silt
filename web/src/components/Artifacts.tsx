@@ -569,7 +569,7 @@ function ArtifactPage({
         version: artifact.version,
         theme: startTheme,
         parent: window.location.origin,
-        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id) },
+        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id), contract: artifact.contract ?? '1' },
       }),
     enabled: artifact.kind === 'html',
     staleTime: Infinity,

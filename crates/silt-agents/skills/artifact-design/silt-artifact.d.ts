@@ -95,7 +95,9 @@ interface SiltArtifact {
 
 // `user` (declare `{"user": {}}`): who views the page. `id()` is the same
 // on every machine and the server for one person; store ids, never names,
-// and resolve names with `profiles` each time you render.
+// and resolve names with `profiles` each time you render. Names, and
+// `search`, need `{"user": {"scopes": ["profile"]}}`; without it every
+// name is "". Silt keeps no email addresses, so an `email` scope adds none.
 interface SiltUser {
   id(): Promise<string>
   me(): Promise<{ id: string; name: string }>

@@ -566,9 +566,13 @@ async fn page_assets(
                 return Err(bad_request(format!("a page's files may not be {media_type}")));
             }
             let name: String = name.chars().filter(|char| !char.is_control()).take(200).collect();
-            let bytes = base64::engine::general_purpose::STANDARD
+            let mut bytes = base64::engine::general_purpose::STANDARD
                 .decode(data.trim())
                 .map_err(|_| bad_request("the file's base64 doesn't decode"))?;
+            // An SVG is kept only as a picture, whatever it held.
+            if media_type.starts_with("image/svg+xml") {
+                bytes = silt_proto::svg::sanitized_svg(&bytes).map_err(bad_request)?;
+            }
             if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
                 return Err(bad_request("the file is larger than a page keeps"));
             }

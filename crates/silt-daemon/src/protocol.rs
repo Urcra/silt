@@ -982,6 +982,10 @@ pub struct NewArtifact {
     /// The design system to style an HTML version with, or `none`.
     #[serde(default)]
     pub design_system: Option<String>,
+    /// The runtime contract an HTML version's page is written for, or
+    /// `latest`; by default its last version's.
+    #[serde(default)]
+    pub contract: Option<String>,
     /// Changes to the latest version's source, in place of `content` or
     /// `path` (ADR 0073).
     #[serde(default)]

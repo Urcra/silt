@@ -148,6 +148,7 @@ impl silt_mcp::Backend for DaemonTools {
                 let caption = arguments.get("caption").and_then(Value::as_str).map(str::to_owned);
                 let title = caption.clone().unwrap_or_else(|| file_title(&path));
                 let artifact = NewArtifact {
+                    contract: None,
                     title,
                     kind: "image".into(),
                     content: None,
@@ -183,6 +184,7 @@ impl silt_mcp::Backend for DaemonTools {
                     caption: None,
                     inline: false,
                     design_system: text("design_system"),
+                    contract: text("contract"),
                     edits: edits_arg(arguments)?,
                     note: text("note"),
                     description: text("description"),

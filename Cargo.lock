@@ -5438,6 +5438,7 @@ dependencies = [
  "base64 0.22.1",
  "calamine",
  "json-patch",
+ "quick-xml",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
