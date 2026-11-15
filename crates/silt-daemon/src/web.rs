@@ -801,7 +801,7 @@ async fn page_data(
     Path((thread, artifact)): Path<(String, String)>,
     Json(request): Json<silt_proto::page::PageRequest>,
 ) -> HttpResponse {
-    ask(&web, Request::PageData { thread, artifact, asked: request }).await
+    ask(&web, Request::PageData { thread, artifact, asked: request, as_level: None }).await
 }
 
 #[derive(Deserialize)]

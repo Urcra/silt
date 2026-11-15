@@ -590,8 +590,8 @@ impl Core {
                 let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
                 return;
             }
-            if let Request::PageData { artifact, asked, .. } = *asking {
-                let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked).await));
+            if let Request::PageData { artifact, asked, as_level, .. } = *asking {
+                let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked, as_level).await));
                 return;
             }
             if let Request::RoomAgent { artifact, emit, .. } = *asking {
@@ -657,7 +657,9 @@ impl Core {
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
-            Request::PageData { thread, artifact, asked } => to_response(self.page_data(&thread, &artifact, asked).await),
+            Request::PageData { thread, artifact, asked, as_level } => {
+                to_response(self.page_data(&thread, &artifact, asked, as_level).await)
+            }
             Request::PublishArtifact { thread, artifact, html, base } => {
                 to_response(self.publish_artifact(&thread, &artifact, html, base).await)
             }

@@ -148,7 +148,8 @@ fn show_tools() -> Vec<Value> {
                     "value": {"description": "The document, for set"},
                     "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},
                     "query": {"type": "object", "description": "For query: where (a list of {field, op, value}), order_by, descending, limit"},
-                    "writes": {"type": "array", "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"}
+                    "writes": {"type": "array", "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"},
+                    "as_level": {"type": "string", "enum": ["read", "comment", "collaborator"], "description": "For get, list and query: read as another person at this level, to check that the rules hide from them what they should; writes refuse it"}
                 },
                 "required": ["id", "op"]
             }

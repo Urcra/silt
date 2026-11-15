@@ -18,6 +18,7 @@ impl Core {
         thread: &str,
         artifact: &str,
         request: PageRequest,
+        as_level: Option<Level>,
     ) -> Result<serde_json::Value, CoreError> {
         let thread = self.find_thread(thread)?;
         let artifact: ArtifactId =
@@ -29,6 +30,10 @@ impl Core {
         let family_id = self.threads[&thread].family;
         // A family known only from the server is folded from its log.
         let docs = self.page_docs(family_id, thread, artifact);
+        if let Some(asked) = as_level {
+            return silt_proto::page::read_as(&docs, &request, &rules, asked, level)
+                .ok_or_else(|| CoreError::Invalid("as_level only reads; write without it".into()));
+        }
         if let Some(read) = silt_proto::page::read(&docs, &request, &rules, &me, level) {
             return Ok(read);
         }
@@ -246,6 +251,7 @@ impl Core {
         token: &str,
         artifact: &str,
         request: PageRequest,
+        as_level: Option<Level>,
     ) -> Result<serde_json::Value, CoreError> {
         let hash = blake3::hash(token.as_bytes());
         let (thread, _) = self
@@ -253,7 +259,7 @@ impl Core {
             .run_token(hash.as_bytes())
             .await?
             .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
-        self.page_data(&thread.to_string(), artifact, request).await
+        self.page_data(&thread.to_string(), artifact, request, as_level).await
     }
 
     /// The rules the artifact's latest version declares; refused when it
