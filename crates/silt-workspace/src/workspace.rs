@@ -93,6 +93,17 @@ struct Specificity {
 }
 
 impl MatchRule {
+    /// A folder rule for `folder`, which already covers everything under
+    /// it: a trailing `/*` or `/**`, as one written like a remote pattern
+    /// has, means the folder itself.
+    pub fn folder(folder: &str) -> Self {
+        let mut folder = folder.trim_end_matches('/');
+        while let Some(parent) = folder.strip_suffix("/**").or_else(|| folder.strip_suffix("/*")) {
+            folder = parent.trim_end_matches('/');
+        }
+        Self::Folder(folder.to_owned())
+    }
+
     fn matches(&self, project: &str, clone: Option<&str>) -> Option<Specificity> {
         match self {
             Self::Remote(pattern) => remote_matches(pattern, project),
@@ -159,6 +170,20 @@ pub struct Defaults {
     pub preset: Option<Preset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chats_preset: Option<Preset>,
+    /// By agent id, as each agent's models and modes are its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, AgentDefaults>,
+}
+
+/// An agent's mode and settings (its model, effort, …) by the ids the
+/// agent lists them with; those it no longer lists are left as it says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AgentDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +243,8 @@ pub enum InvalidWorkspaces {
     RelativeFolder { workspace: WorkspaceId, folder: String },
     #[error("{0} is local only, so it has no server")]
     LocalOnlyServer(WorkspaceId),
+    #[error("{workspace}'s folder {folder:?} has a wildcard; a folder rule takes one folder and covers everything under it")]
+    WildcardFolder { workspace: WorkspaceId, folder: String },
 }
 
 /// Why a project is in its workspace.
@@ -270,6 +297,12 @@ impl Workspaces {
                             folder: folder.clone(),
                         });
                     }
+                    MatchRule::Folder(folder) if folder.contains('*') => {
+                        return Err(InvalidWorkspaces::WildcardFolder {
+                            workspace: workspace.id.clone(),
+                            folder: folder.clone(),
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -278,6 +311,15 @@ impl Workspaces {
             return Err(InvalidWorkspaces::NoDefault(self.default.clone()));
         }
         Ok(())
+    }
+
+    /// Writes each folder rule as [`MatchRule::folder`] would.
+    pub fn tidy(&mut self) {
+        for rule in self.workspaces.iter_mut().flat_map(|workspace| &mut workspace.rules) {
+            if let MatchRule::Folder(folder) = rule {
+                *rule = MatchRule::folder(folder);
+            }
+        }
     }
 
     pub fn get(&self, id: &WorkspaceId) -> Option<&Workspace> {
@@ -409,7 +451,24 @@ mod tests {
         let mut all = sample();
         all.workspaces[1].rules.push(MatchRule::Folder("~/work".into()));
         assert!(matches!(all.validate(), Err(InvalidWorkspaces::RelativeFolder { .. })));
+        let mut all = sample();
+        all.workspaces[1].rules.push(MatchRule::Folder("/home/*/work".into()));
+        assert!(matches!(all.validate(), Err(InvalidWorkspaces::WildcardFolder { .. })));
         assert_eq!(Workspaces { default: id("x"), workspaces: vec![] }.validate(), Err(InvalidWorkspaces::Empty));
+    }
+
+    #[test]
+    fn a_folder_written_like_a_remote_pattern_means_the_folder() {
+        for written in ["/home/me/work/*", "/home/me/work/**", "/home/me/work/*/", "/home/me/work//**/*", "/home/me/work/"] {
+            assert_eq!(MatchRule::folder(written), MatchRule::Folder("/home/me/work".into()), "{written}");
+        }
+        assert_eq!(MatchRule::folder("C:/Users/me/work/*"), MatchRule::Folder("C:/Users/me/work".into()));
+        let mut all = sample();
+        all.workspaces[1].rules = vec![MatchRule::Folder("/home/me/work/*".into())];
+        all.tidy();
+        assert_eq!(all.validate(), Ok(()));
+        let resolved = all.resolve("github.com/other/app", Some("/home/me/work/app"), None);
+        assert_eq!(resolved.workspace.id, id("work"));
     }
 
     #[test]

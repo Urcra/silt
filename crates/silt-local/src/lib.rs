@@ -1,4 +1,4 @@
-//! Silt's own agent, `local` (ADR 0066): an ACP agent on a model this
+//! Silt's own agent, `local` (ADR 0070): an ACP agent on a model this
 //! machine runs, reached through the daemon's model gateway.
 
 mod agent;

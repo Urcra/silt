@@ -36,7 +36,7 @@ pub(crate) struct AcpRun {
     handle: Option<AgentHandle>,
     /// Commands given before the agent was up.
     queued: Vec<Command>,
-    /// The local model Claude Code runs on, chosen when it started (ADR 0066).
+    /// The local model Claude Code runs on, chosen when it started (ADR 0070).
     local_model: Option<silt_llm::ModelId>,
     session: Option<String>,
     /// An earlier session of the same agent to load, by its own id.
@@ -343,7 +343,7 @@ impl AcpRun {
 
 /// Takes a `local:<id>` model out of what Claude Code starts with: its
 /// adapter knows only Anthropic's, so the model goes in the run's
-/// environment instead (ADR 0066).
+/// environment instead (ADR 0070).
 fn take_local_model(agent: &str, settings: &mut Vec<(String, String)>) -> Option<silt_llm::ModelId> {
     if silt_workspace::agent_key(agent).as_str() != "claude" {
         return None;

@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { PRESETS, modeForPreset, permissionModes, startSettings } from '../agentState'
-import { api, type Preset } from '../api'
+import { PRESETS, modeForPreset, permissionModes, startSettings, startingValue } from '../agentState'
+import { type AgentSetting, api, type Preset } from '../api'
 import { agentRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
 import { type Takes, attachChoice, useAttachments } from '../attachments'
 import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
+import { useHeldSend } from '../heldSend'
 import { useMedia } from '../media'
 import { keys, message } from '../query'
 import { addSending } from '../sending'
@@ -55,6 +56,8 @@ export function NewChat() {
   const modesArePermissions = permissionModes(modes)
   const chosenMode = mode ?? (modesArePermissions ? modeForPreset(preset, modes) : undefined) ?? seen?.modes?.current
   const settings = startSettings(seen?.settings ?? [], modes)
+  const settingValue = (setting: AgentSetting) =>
+    startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
   const takes: Takes = { agent: agentName || 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
   const { attached, add, remove, clear } = useAttachments(takes)
   const attach = (files: File[], pasted = false) => {
@@ -77,7 +80,7 @@ export function NewChat() {
           chat: true,
           workspace: workspaceId ?? null,
           mode: modesArePermissions ? (mode ?? null) : null,
-          settings: settings.map((setting) => [setting.id, chosenSettings[setting.id] ?? setting.current]),
+          settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           prompt: prompt.trim() ? prompt : null,
           attachments: attached,
@@ -102,6 +105,7 @@ export function NewChat() {
   }
 
   const ready = !starting && Boolean(agent)
+  const send = useHeldSend(choices.isPending, ready, () => start(false))
   return (
     <Page title="New chat" flush label="new chat">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
@@ -111,7 +115,7 @@ export function NewChat() {
           className="flex flex-col"
           onSubmit={(event) => {
             event.preventDefault()
-            start(false)
+            send()
           }}
         >
           <ComposerBox
@@ -120,7 +124,7 @@ export function NewChat() {
             rows={4}
             value={prompt}
             onChange={setPrompt}
-            onSend={() => ready && start(false)}
+            onSend={send}
             onCycle={() => {
               if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
@@ -153,7 +157,7 @@ export function NewChat() {
                   mode={chosenMode}
                   onMode={setMode}
                   settings={settings}
-                  value={(setting) => chosenSettings[setting.id] ?? setting.current}
+                  value={settingValue}
                   onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
                   narrow={narrow}
                 />

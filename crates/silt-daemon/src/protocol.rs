@@ -48,7 +48,7 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
-    /// Erases a Local only thread and its forks for good (ADR 0066); without
+    /// Erases a Local only thread and its forks for good (ADR 0070); without
     /// `confirm`, says what would go.
     ThreadErase {
         thread: String,
@@ -56,7 +56,7 @@ pub enum Request {
         confirm: bool,
     },
     /// The local models here, the catalog's others, and what this machine
-    /// can run (ADR 0066).
+    /// can run (ADR 0070).
     Models,
     /// Starts downloading a model, one at a time: a catalog name,
     /// `owner/repo:file.gguf` on Hugging Face, or the absolute path of a GGUF
@@ -723,7 +723,7 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
-/// The local models on this machine and what it can run (ADR 0066).
+/// The local models on this machine and what it can run (ADR 0070).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct LocalModels {
@@ -1576,6 +1576,7 @@ mod tests {
             silt_workspace::ServerBinding::decl(&config),
             silt_workspace::MatchRule::decl(&config),
             silt_workspace::Defaults::decl(&config),
+            silt_workspace::AgentDefaults::decl(&config),
             silt_workspace::Policy::decl(&config),
             silt_workspace::OrgPolicy::decl(&config),
             silt_workspace::Why::decl(&config),

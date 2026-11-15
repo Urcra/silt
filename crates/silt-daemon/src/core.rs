@@ -258,7 +258,7 @@ pub struct Core {
     /// When each server's listing was last asked for, by URL.
     pub(crate) last_listings: HashMap<String, Instant>,
     pub(crate) notes_settings: crate::notes::NotesSettings,
-    /// The local models here and their downloads (ADR 0066).
+    /// The local models here and their downloads (ADR 0070).
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,

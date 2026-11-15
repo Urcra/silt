@@ -1,5 +1,5 @@
 //! Local models through a real daemon, with `silt-fake-llama` in place of
-//! llama.cpp's server (ADR 0066).
+//! llama.cpp's server (ADR 0070).
 
 mod common;
 

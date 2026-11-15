@@ -1,4 +1,4 @@
-//! Local models on this machine (ADR 0066): the ones downloaded, finding
+//! Local models on this machine (ADR 0070): the ones downloaded, finding
 //! others on Hugging Face, what this machine can run, llama.cpp itself, and
 //! downloads, which start only when the person asks for one.
 
@@ -20,7 +20,7 @@ pub(crate) struct LocalModelsHere {
     models: Models,
     runtimes: Runtimes,
     store: silt_store::Store,
-    /// The model gateway and its address, once it's started (ADR 0066).
+    /// The model gateway and its address, once it's started (ADR 0070).
     gateway: tokio::sync::OnceCell<(String, std::sync::Arc<crate::gateway::Gateway>)>,
     hub: Hub,
     /// Where llama.cpp's releases are listed: GitHub's, or a stand-in in tests.
@@ -307,7 +307,7 @@ impl LocalModelsHere {
 
 /// What Claude Code needs to run on the local model `model`: the gateway as
 /// its API, the run's token as its key, the model for every tier, and no
-/// traffic of its own besides (ADR 0066).
+/// traffic of its own besides (ADR 0070).
 pub(crate) fn claude_env(gateway: &str, token: &str, model: &Installed) -> Vec<(String, String)> {
     let id = &model.id;
     let mut env = vec![

@@ -42,7 +42,7 @@ function whose(view: WorkspaceView, rule: (policy: Policy) => boolean): string {
 
 /** Why `agent` can't start in the workspace, or nothing when it can. */
 export function agentRefused(view: WorkspaceView | undefined, agent: string): string | undefined {
-  // A Local only workspace runs Silt's own agent, and Claude Code on a local model (ADR 0066).
+  // A Local only workspace runs Silt's own agent, and Claude Code on a local model (ADR 0070).
   if (view?.effective.local_only && !LOCAL_AGENTS.includes(agentKey(agent))) return `Local only · ${view.workspace.name} runs local models only`
   const allowed = view?.effective.agents
   if (!view || !allowed || allowed.includes(agentKey(agent))) return undefined

@@ -1631,7 +1631,7 @@ function ThreadBody({
   useEffect(() => {
     if (id !== thread) void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
   }, [id, thread, hash, navigate])
-  const { agent: status, tool, preset, setPreset, said } = useLive(thread, total)
+  const { agent: status, heard, tool, preset, setPreset, said } = useLive(thread, total)
   // What the agent said stays where it was until the history has it, rather than blink out and come back above.
   const pending = useMemo(() => unrecorded(said, entries), [said, entries])
   const agent = useMemo(
@@ -1918,6 +1918,7 @@ function ThreadBody({
           <AgentDock
             thread={thread}
             status={agent}
+            heard={heard}
             preset={preset}
             onPreset={setPreset}
             draft={draft}

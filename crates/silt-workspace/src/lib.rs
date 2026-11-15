@@ -11,6 +11,6 @@ pub use policy::{
 };
 pub use preset::Preset;
 pub use workspace::{
-    BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId, Workspaces,
-    is_absolute,
+    AgentDefaults, BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId,
+    Workspaces, is_absolute,
 };

@@ -877,7 +877,7 @@ impl Store {
 
     /// After an erasure: the search index merged, so it keeps no trace of
     /// deleted rows, then the file rebuilt from what's left and the WAL
-    /// emptied, so deleted pages don't stay in either (ADR 0066).
+    /// emptied, so deleted pages don't stay in either (ADR 0070).
     pub async fn compact_erased(&self) -> Result<(), StoreError> {
         // Statements sqlx's macros can't describe.
         sqlx::query("INSERT INTO search(search) VALUES('optimize')").execute(&self.pool).await?;

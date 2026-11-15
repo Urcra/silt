@@ -1,4 +1,4 @@
-//! Silt's own agent, `local`, in a chat on a local model (ADR 0066), with
+//! Silt's own agent, `local`, in a chat on a local model (ADR 0070), with
 //! `silt-fake-llama` in place of llama.cpp's server.
 
 mod common;

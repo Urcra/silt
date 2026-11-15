@@ -1,4 +1,4 @@
-//! The model gateway (ADR 0066). Agents reach a local model only through
+//! The model gateway (ADR 0070). Agents reach a local model only through
 //! the daemon, with their run's token, so `llama-server`'s own key never
 //! leaves it. The gateway loads the model a request names, one at a time,
 //! and stops the server once it has been idle.
