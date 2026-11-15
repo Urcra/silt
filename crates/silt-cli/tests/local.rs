@@ -209,3 +209,32 @@ fn in_chat_mode_the_local_agent_is_offered_no_tools() {
     let sent = requests(&laptop.agents.join("logs/model-requests.jsonl"));
     assert!(sent.iter().all(|request| request["body"]["tools"].is_null()));
 }
+
+#[test]
+fn a_local_only_workspace_runs_only_local_models_and_keeps_its_threads_here() {
+    let root = common::temp_root("silt-local-only");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    let repo = laptop.repo.to_string_lossy().into_owned();
+    laptop.silt(&["workspace", "new", "Logs", "--local-only", "--folder", &repo]);
+
+    let codex = laptop.run(&["codex"]);
+    assert!(!codex.status.success());
+    assert!(String::from_utf8_lossy(&codex.stderr).contains("Logs is local only: Codex doesn't run on a local model"));
+    let online = laptop.run(&["claude"]);
+    assert!(!online.status.success());
+    assert!(String::from_utf8_lossy(&online.stderr).contains("choose a local model for Claude Code"));
+
+    laptop.silt(&["claude", "--model", "local:tiny"]);
+    let threads = laptop.web("GET", "/api/threads", None);
+    let recorded = threads.as_array().and_then(|threads| threads.first()).cloned().expect("the run's thread");
+    assert_eq!(recorded["local_only"], true, "it stays on this machine: {recorded}");
+
+    let bound = laptop.run(&["workspace", "policy", "Default", "--local-only", "on"]);
+    assert!(!bound.status.success());
+    assert!(String::from_utf8_lossy(&bound.stderr).contains("a Local only workspace has none"));
+}

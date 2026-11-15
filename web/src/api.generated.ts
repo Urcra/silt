@@ -942,7 +942,13 @@ isolated?: boolean,
  * Projects keep the workspace's server: no other, and not this machine
  * only.
  */
-home_locked?: boolean, };
+home_locked?: boolean, 
+/**
+ * Nothing Silt holds of its threads leaves this machine, and only
+ * local models answer (ADR 0066): no server, `local`, and Claude Code
+ * on a local model only.
+ */
+local_only?: boolean, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

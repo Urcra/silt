@@ -460,6 +460,7 @@ impl Core {
         preset: Option<Preset>,
         chosen: bool,
         mode: Option<&str>,
+        on_local_model: bool,
     ) -> Result<Option<Preset>, CoreError> {
         let rules = self.rules(workspace);
         let policy = rules.effective();
@@ -471,6 +472,7 @@ impl Core {
             silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(&agent.id), name: agent.name.clone() }
         };
         rules.check_agent(&choice, can_sandbox(silt_agents::SandboxSupport::None, &policy)).map_err(refused)?;
+        rules.check_model(&choice, on_local_model).map_err(refused)?;
         let preset = match (preset, policy.max_preset) {
             (Some(preset), Some(cap)) if !chosen && !preset.within(cap) => Some(cap),
             (preset, _) => preset,
@@ -661,6 +663,7 @@ fn check_run(
     let choice =
         silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(agent.id()), name: agent.display_name().to_owned() };
     rules.check_agent(&choice, can_sandbox(agent.sandbox_support(), &policy)).map_err(refused)?;
+    rules.check_model(&choice, silt_llm::local_model_in_args(args).is_some()).map_err(refused)?;
     if let Some(flag) = agent.bypass_flag(args) {
         rules.check_flag(&flag, agent.display_name()).map_err(refused)?;
     }

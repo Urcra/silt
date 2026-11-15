@@ -562,7 +562,8 @@ impl Core {
             (None, true) => Some(crate::chats::settings(&self.data_dir).preset),
             (None, false) => Some(Preset::default()),
         });
-        let allowed = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref())?;
+        let on_local_model = options.settings.iter().any(|(id, value)| id == "model" && silt_llm::local_model(value).is_some());
+        let allowed = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref(), on_local_model)?;
         if allowed != asked {
             options.preset = allowed;
         }

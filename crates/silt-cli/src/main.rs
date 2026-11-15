@@ -832,6 +832,8 @@ fn run() -> Result<(), Exn<CliError>> {
                     sandbox,
                     isolated,
                     home_locked,
+                    // A Local only workspace has no server, so no org's policy reaches it.
+                    local_only: false,
                 };
                 admin::org_change(OrgChange::Policy { org, policy })
             }

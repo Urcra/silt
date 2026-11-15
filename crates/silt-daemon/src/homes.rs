@@ -116,7 +116,7 @@ impl Core {
     /// first server signed in to later.
     pub(crate) fn new_home(&self, repo: &str) -> Option<Home> {
         let (workspace, _) = self.project_workspace(repo, None);
-        let locked = self.effective_policy(&workspace).home_locked;
+        let locked = self.effective_policy(&workspace).keeps_home();
         self.project_homes.get(repo).filter(|_| !locked).cloned().or_else(|| self.workspace_home(&workspace))
     }
 

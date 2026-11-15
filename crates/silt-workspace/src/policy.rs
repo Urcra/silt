@@ -104,7 +104,16 @@ pub struct Policy {
     /// only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub home_locked: bool,
+    /// Nothing Silt holds of its threads leaves this machine, and only
+    /// local models answer (ADR 0066): no server, `local`, and Claude Code
+    /// on a local model only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_only: bool,
 }
+
+/// The agents that run on local models: Silt's own, and Claude Code, which
+/// must then be on one.
+pub const LOCAL_AGENTS: [&str; 2] = ["local", "claude"];
 
 impl Policy {
     pub fn sandbox_required(&self) -> bool {
@@ -133,7 +142,14 @@ impl Policy {
             sandbox: self.sandbox || other.sandbox,
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
+            local_only: self.local_only || other.local_only,
         }
+    }
+
+    /// Whether projects keep the workspace's home, a Local only one's being
+    /// this machine.
+    pub fn keeps_home(&self) -> bool {
+        self.home_locked || self.local_only
     }
 }
 
@@ -195,14 +211,43 @@ pub enum ModeMeaning {
 /// Which rule refused, and what was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Broken {
-    Agent { agent: String, allowed: Vec<AgentKey> },
-    CustomAgent { agent: String },
-    Preset { asked: Preset, cap: Preset },
-    Mode { mode: String, cap: Preset },
-    Flag { flag: String, agent: String, cap: Preset },
-    Sandbox { agent: String },
+    Agent {
+        agent: String,
+        allowed: Vec<AgentKey>,
+    },
+    CustomAgent {
+        agent: String,
+    },
+    Preset {
+        asked: Preset,
+        cap: Preset,
+    },
+    Mode {
+        mode: String,
+        cap: Preset,
+    },
+    Flag {
+        flag: String,
+        agent: String,
+        cap: Preset,
+    },
+    Sandbox {
+        agent: String,
+    },
     Home,
-    Move { project: String, servers: Vec<String>, to: Option<String> },
+    /// An agent that doesn't run on a local model, in a Local only workspace.
+    NotLocal {
+        agent: String,
+    },
+    /// Claude Code on a model other than a local one there.
+    OnlineModel {
+        agent: String,
+    },
+    Move {
+        project: String,
+        servers: Vec<String>,
+        to: Option<String>,
+    },
     WaitingForPolicy,
 }
 
@@ -243,6 +288,14 @@ impl Refusal {
                 format!("{workspace} needs the agent's own sandbox, which Silt can't turn on for {agent} ({source})")
             }
             Broken::Home => format!("{workspace}'s projects sync with its server only ({source})"),
+            Broken::NotLocal { agent } => {
+                format!(
+                    "{workspace} is local only: {agent} doesn't run on a local model; Silt (local model) and Claude Code on one do"
+                )
+            }
+            Broken::OnlineModel { agent } => {
+                format!("{workspace} is local only: choose a local model for {agent}, such as local:<name>")
+            }
             Broken::Move { project, servers, to } => {
                 let to =
                     to.as_deref().map_or("keeps its threads on this machine".to_owned(), |to| format!("syncs with {}", host(to)));
@@ -304,6 +357,10 @@ impl Rules<'_> {
 
     /// Whether this agent may start here, sandboxed if the rules say so.
     pub fn check_agent(&self, agent: &AgentChoice, can_sandbox: bool) -> Result<(), Refusal> {
+        self.check(|policy| {
+            let local = matches!(agent, AgentChoice::Known { key, .. } if LOCAL_AGENTS.contains(&key.as_str()));
+            (policy.local_only && !local).then(|| Broken::NotLocal { agent: agent.name().to_owned() })
+        })?;
         self.check(|policy| match agent {
             AgentChoice::Known { key, name } => policy
                 .agents
@@ -319,6 +376,15 @@ impl Rules<'_> {
         })?;
         self.check(|policy| {
             (policy.sandbox_required() && !can_sandbox).then(|| Broken::Sandbox { agent: agent.name().to_owned() })
+        })
+    }
+
+    /// Whether Claude Code may run on the model it's given: a local one,
+    /// where the workspace is Local only.
+    pub fn check_model(&self, agent: &AgentChoice, on_local_model: bool) -> Result<(), Refusal> {
+        let is_claude = matches!(agent, AgentChoice::Known { key, .. } if key.as_str() == "claude");
+        self.check(|policy| {
+            (policy.local_only && is_claude && !on_local_model).then(|| Broken::OnlineModel { agent: agent.name().to_owned() })
         })
     }
 
@@ -351,7 +417,7 @@ impl Rules<'_> {
 
     /// Whether a project's home may be set apart from the workspace's server.
     pub fn check_home(&self) -> Result<(), Refusal> {
-        self.check(|policy| policy.home_locked.then_some(Broken::Home))
+        self.check(|policy| policy.keeps_home().then_some(Broken::Home))
     }
 }
 
@@ -384,6 +450,26 @@ mod tests {
 
     fn acme(policy: Policy) -> OrgPolicy {
         OrgPolicy { org: "acme".into(), server: "https://silt.acme.dev".into(), policy }
+    }
+
+    #[test]
+    fn a_local_only_workspace_runs_only_local_models() {
+        let policy = Policy { local_only: true, ..Policy::default() };
+        let rules = Rules { workspace: "Logs", local: &policy, org: None };
+        assert!(rules.check_agent(&known("local", "Silt (local model)"), false).is_ok());
+        assert!(rules.check_agent(&known("claude", "Claude Code"), false).is_ok());
+        let codex = rules.check_agent(&known("codex", "Codex"), false).expect_err("refused");
+        assert!(codex.to_string().contains("Codex doesn't run on a local model"), "{codex}");
+        let custom = rules.check_agent(&AgentChoice::Custom { name: "Mine".into() }, false);
+        assert!(custom.is_err(), "a custom agent may reach any model");
+        assert!(rules.check_model(&known("claude", "Claude Code"), true).is_ok());
+        let online = rules.check_model(&known("claude", "Claude Code"), false).expect_err("refused");
+        assert!(online.to_string().contains("choose a local model for Claude Code"), "{online}");
+        assert!(rules.check_model(&known("local", "Silt (local model)"), false).is_ok(), "only Claude's model is checked");
+        assert!(rules.check_home().is_err(), "its home is this machine");
+        assert!(policy.stricter(&Policy::default()).local_only);
+        let anywhere = Rules { workspace: "Default", local: &Policy::default(), org: None };
+        assert!(anywhere.check_model(&known("claude", "Claude Code"), false).is_ok());
     }
 
     #[test]

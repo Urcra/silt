@@ -287,6 +287,19 @@ export function WorkspacesSettings() {
                 effect={effective.isolated ? 'On' : 'Off'}
               />
               <Rule
+                name="Local only"
+                mine={
+                  <Toggle
+                    label="local only"
+                    on={Boolean(workspace.policy.local_only)}
+                    disabled={Boolean(workspace.server)}
+                    onChange={(local_only) => changePolicy({ local_only })}
+                  />
+                }
+                theirs="—"
+                effect={effective.local_only ? 'Local models only; nothing leaves this machine' : workspace.server ? 'Needs no server' : 'Off'}
+              />
+              <Rule
                 name="Where threads sync"
                 mine={<Toggle label="lock where threads sync" on={Boolean(workspace.policy.home_locked)} onChange={(home_locked) => changePolicy({ home_locked })} />}
                 theirs={org?.policy.home_locked ? `Locked to ${serverName(org.server)}` : '—'}
@@ -382,10 +395,17 @@ function PresetSelect({
   )
 }
 
-function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+function Toggle({ label, on, onChange, disabled }: { label: string; on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
   return (
-    <label className="inline-flex cursor-pointer items-center gap-2 text-xs">
-      <input type="checkbox" aria-label={label} checked={on} onChange={(event) => onChange(event.target.checked)} className="accent-[var(--accent)]" />
+    <label className={cx('inline-flex items-center gap-2 text-xs', disabled ? 'opacity-50' : 'cursor-pointer')}>
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={on}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="accent-[var(--accent)]"
+      />
       {on ? 'on' : 'off'}
     </label>
   )

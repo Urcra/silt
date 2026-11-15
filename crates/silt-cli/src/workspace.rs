@@ -28,6 +28,9 @@ pub enum WorkspaceCommand {
         /// Keep its threads on this machine
         #[arg(long)]
         local: bool,
+        /// Keep its threads on this machine, with only local models answering
+        #[arg(long, conflicts_with = "server")]
+        local_only: bool,
         /// Put projects whose remote matches in it, such as `github.com/acme/*`; repeatable
         #[arg(long = "remote")]
         remotes: Vec<String>,
@@ -82,6 +85,9 @@ pub enum WorkspaceCommand {
         /// Projects keep the workspace's server: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         home_locked: Option<bool>,
+        /// Nothing Silt holds of its threads leaves this machine, and only local models answer: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        local_only: Option<bool>,
     },
     /// Set or unset a variable given to every agent started in a workspace, such as its own CLAUDE_CONFIG_DIR
     Env {
@@ -159,13 +165,14 @@ fn folder(text: &str) -> Result<MatchRule, Exn<CliError>> {
 
 fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<CliError>> {
     match change {
-        WorkspaceCommand::New { name, server, org, local, remotes, folders, default } => {
+        WorkspaceCommand::New { name, server, org, local, local_only, remotes, folders, default } => {
             let id = WorkspaceId::from_name(&name).map_err(|error| fail(error.to_string()))?;
             if all.get(&id).is_some() {
                 return Err(fail(format!("there's a workspace {id} already")));
             }
             let mut workspace = Workspace::new(id.clone(), name.trim());
-            workspace.server = match (server, local) {
+            workspace.policy.local_only = local_only;
+            workspace.server = match (server, local || local_only) {
                 (Some(url), _) => Some(ServerBinding { url: url.trim_end_matches('/').to_owned(), org }),
                 (None, true) => None,
                 // Like the default workspace, unless told to stay here.
@@ -203,7 +210,7 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                 Ok(format!("{} takes {}", workspace.name, rule_text(&rule)))
             }
         }
-        WorkspaceCommand::Policy { workspace, agents, custom_agents, max_preset, sandbox, isolated, home_locked } => {
+        WorkspaceCommand::Policy { workspace, agents, custom_agents, max_preset, sandbox, isolated, home_locked, local_only } => {
             let workspace = find_mut(all, &workspace)?;
             let policy = &mut workspace.policy;
             if let Some(agents) = agents {
@@ -229,6 +236,16 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             if let Some(isolated) = isolated {
                 policy.isolated = isolated;
             }
+            if let Some(local_only) = local_only {
+                if local_only && workspace.server.is_some() {
+                    return Err(fail(format!(
+                        "{} syncs with a server; a Local only workspace has none: make one with `silt workspace new <name> --local-only`",
+                        workspace.name
+                    )));
+                }
+                workspace.policy.local_only = local_only;
+            }
+            let policy = &mut workspace.policy;
             if let Some(locked) = home_locked {
                 policy.home_locked = locked;
             }
@@ -310,6 +327,9 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     }
     if policy.home_locked {
         parts.push("home locked".into());
+    }
+    if policy.local_only {
+        parts.push("local only".into());
     }
     parts.join(" · ")
 }
