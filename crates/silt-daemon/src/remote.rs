@@ -374,6 +374,18 @@ impl Remote {
         Ok(())
     }
 
+    /// The thread's agent speaks in, or listens to, a page's room on the
+    /// server, where the thread's views meet (ADR 0081).
+    pub async fn room_agent(
+        &self,
+        thread: &str,
+        artifact: &str,
+        emit: Option<(String, serde_json::Value)>,
+    ) -> Result<serde_json::Value, RemoteError> {
+        let body = serde_json::json!({ "thread": thread, "artifact": artifact, "emit": emit });
+        Ok(checked(self.request(reqwest::Method::POST, "/v1/rooms/agent").json(&body).send().await?).await?.json().await?)
+    }
+
     /// What this device's agent has said so far of command `id`'s answer.
     pub async fn command_progress(&self, id: i64, text: &str) -> Result<(), RemoteError> {
         let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"));

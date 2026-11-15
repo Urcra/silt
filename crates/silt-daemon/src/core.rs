@@ -603,6 +603,24 @@ impl Core {
                 return;
             }
             if let Request::RoomAgent { artifact, emit, .. } = *asking {
+                // A thread that syncs with a server meets its views in the
+                // server's room, so the agent speaks there.
+                let remote = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        self.find_thread(&thread).ok().and_then(|id| self.remote_for(id).cloned()).map(|remote| (thread, remote))
+                    }
+                    Err(_) => None,
+                };
+                if let Some((thread, remote)) = remote {
+                    tokio::spawn(async move {
+                        let answer = remote
+                            .room_agent(&thread, &artifact, emit)
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()));
+                        let _ = reply.send(to_response(answer));
+                    });
+                    return;
+                }
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
                         // What the agent said reaches the open views through the web server.

@@ -330,6 +330,18 @@ async fn a_rooms_moments_reach_a_view_on_another_machine() {
     let seen = heard(&mut theirs).await;
     let moment = seen.iter().find(|event| event["event"] == "moment").unwrap_or_else(|| panic!("bob hears it: {seen:?}"));
     assert_eq!((&moment["topic"], &moment["data"]["x"]), (&"move".into(), &7.into()));
+    // Alice's agent speaks where the views meet, so Bob hears it too.
+    alice.web("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "Room say"})));
+    let mut said = Vec::new();
+    for _ in 0..10 {
+        said.extend(heard(&mut theirs).await);
+        if said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note") {
+            break;
+        }
+    }
+    let note = said.iter().find(|event| event["event"] == "moment" && event["topic"] == "note");
+    let note = note.unwrap_or_else(|| panic!("bob hears the agent: {said:?}"));
+    assert_eq!((&note["data"]["said"], &note["from"]["kind"]), (&"hello".into(), &"agent".into()), "{note}");
     drop(mine);
     drop(theirs);
 }

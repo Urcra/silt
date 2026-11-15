@@ -159,7 +159,7 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_room",
-            "description": "Speak in, or listen to, the room of a page that declares room (ADR 0081): the people viewing it on this machine right now. Emit a moment to a topic, and read the last 100 moments and who's present. Nothing in a room is kept; lasting changes go in page data or a new version.",
+            "description": "Speak in, or listen to, the room of a page that declares room (ADR 0081): the people viewing it right now, on every machine when the thread syncs with a server. Emit a moment to a topic, and read the last 100 moments and who's present. Nothing in a room is kept; lasting changes go in page data or a new version.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
