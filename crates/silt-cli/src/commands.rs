@@ -970,6 +970,17 @@ pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+/// Says what erasing `thread` removes, and with `yes` erases it (ADR 0066).
+pub fn thread_erase(thread: String, yes: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let said: String = call(&Request::ThreadErase { thread: thread.clone(), confirm: yes })?;
+    println!("{said}");
+    if !yes {
+        println!("Run `silt thread erase {thread} --yes` to erase it.");
+    }
+    Ok(())
+}
+
 pub fn thread_link(thread: String, days: u32, frozen: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let link: silt_daemon::protocol::ThreadLink =

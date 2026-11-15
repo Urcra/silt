@@ -14,8 +14,8 @@ use crate::protocol::{CatalogModel, LocalModel, LocalModels, ModelFit, ModelPull
 pub(crate) struct LocalModelsHere {
     models: Models,
     store: silt_store::Store,
-    /// The model gateway's address, once it's started (ADR 0066).
-    gateway: tokio::sync::OnceCell<String>,
+    /// The model gateway and its address, once it's started (ADR 0066).
+    gateway: tokio::sync::OnceCell<(String, std::sync::Arc<crate::gateway::Gateway>)>,
     hub: Hub,
     client: reqwest::Client,
     pulling: Mutex<Pulling>,
@@ -74,11 +74,19 @@ impl LocalModelsHere {
 
     /// Where agents reach local models, starting the gateway the first time.
     pub(crate) async fn gateway(&self) -> Result<String, CoreError> {
-        let url = self
+        let (url, _) = self
             .gateway
             .get_or_try_init(|| crate::gateway::start(self.store.clone(), self.models.clone(), Self::server()))
             .await?;
         Ok(url.clone())
+    }
+
+    /// Stops the model, if one runs, so nothing of an erased thread stays in
+    /// its cache.
+    pub(crate) async fn unload(&self) {
+        if let Some((_, gateway)) = self.gateway.get() {
+            gateway.unload().await;
+        }
     }
 
     /// The models here, as `local`'s model setting offers them.

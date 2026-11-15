@@ -857,6 +857,34 @@ impl Store {
     }
 
     /// The thread and workspace a run token was made for.
+    /// Forgets the tokens of a thread's runs.
+    pub async fn remove_run_tokens(&self, thread: ThreadId) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!("DELETE FROM run_tokens WHERE thread_id = ?", thread).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Forgets where a family syncs and which workspace it's in, once it
+    /// has no thread left.
+    pub async fn forget_family(&self, family: FamilyId) -> Result<(), StoreError> {
+        let family = id_bytes(family.0);
+        let mut tx = self.write_transaction().await?;
+        sqlx::query!("DELETE FROM family_homes WHERE family_id = ?", family).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM family_workspaces WHERE family_id = ?", family).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// After an erasure: the search index merged, so it keeps no trace of
+    /// deleted rows, then the file rebuilt from what's left and the WAL
+    /// emptied, so deleted pages don't stay in either (ADR 0066).
+    pub async fn compact_erased(&self) -> Result<(), StoreError> {
+        // Statements sqlx's macros can't describe.
+        sqlx::query("INSERT INTO search(search) VALUES('optimize')").execute(&self.pool).await?;
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        self.checkpoint().await
+    }
+
     pub async fn run_token(&self, hash: &[u8]) -> Result<Option<RunToken>, StoreError> {
         sqlx::query!("SELECT thread_id, workspace, project FROM run_tokens WHERE hash = ?", hash)
             .fetch_optional(&self.pool)

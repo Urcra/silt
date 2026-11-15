@@ -12,6 +12,7 @@ mod comments;
 mod control;
 mod core;
 mod disk;
+mod erase;
 mod forks;
 mod gateway;
 mod history;

@@ -451,6 +451,13 @@ enum ThreadCommand {
     /// Remove a thread in the trash for good, keeping only what forks of it
     /// build on
     Purge { thread: String },
+    /// Erase a Local only thread and its forks from this machine for good, with what agents kept of them
+    Erase {
+        thread: String,
+        /// Erase it; without this, says what would go
+        #[arg(long)]
+        yes: bool,
+    },
     /// List the threads in the trash
     Trash,
     /// Let someone edit a thread of yours with you, or stop it with --remove
@@ -801,6 +808,7 @@ fn run() -> Result<(), Exn<CliError>> {
             ThreadCommand::Delete { thread } => commands::thread_change(Request::ThreadDelete { thread }),
             ThreadCommand::Restore { thread } => commands::thread_change(Request::ThreadRestore { thread }),
             ThreadCommand::Purge { thread } => commands::thread_change(Request::ThreadPurge { thread }),
+            ThreadCommand::Erase { thread, yes } => commands::thread_erase(thread, yes),
             ThreadCommand::Trash => commands::trash(),
             ThreadCommand::Share { thread, user, remove } => {
                 commands::thread_change(Request::ThreadShare { thread, user, remove })

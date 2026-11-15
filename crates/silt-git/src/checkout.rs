@@ -79,7 +79,7 @@ impl Repo {
         git_dir.exists() && run_git(&git_dir, &["config", "--get", READY_KEY], None).is_ok()
     }
 
-    fn managed_git_dir(&self, id: &str) -> PathBuf {
+    pub fn managed_git_dir(&self, id: &str) -> PathBuf {
         self.common_dir().join("silt").join("clones").join(format!("{id}.git"))
     }
 

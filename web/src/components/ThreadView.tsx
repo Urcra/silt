@@ -44,6 +44,7 @@ import {
 } from '../ui'
 import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
 import { CommentThread } from './CommentThread'
+import { EraseThread } from './EraseThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
@@ -1038,6 +1039,7 @@ function ThreadMore({
               <div className="my-1 border-t border-line-subtle" />
             </>
           )}
+          <EraseThread thread={thread} summary={summary} onDone={close} />
           <p className="px-1 pb-0.5 text-2xs text-fg-2">
             {summary && isChat(summary.repo) ? 'Continue in a terminal, anywhere' : 'Continue in a terminal, in a clone of the repository'}
           </p>

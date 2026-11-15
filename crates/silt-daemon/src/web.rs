@@ -135,6 +135,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/models", get(models))
         .route("/api/models/pull", post(model_pull))
         .route("/api/models/{id}", delete(model_remove))
+        .route("/api/threads/{id}/erase", post(thread_erase))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
         .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
@@ -556,6 +557,16 @@ struct AgentStart {
     agent: String,
     #[serde(default, flatten)]
     options: crate::protocol::StartOptions,
+}
+
+#[derive(Deserialize)]
+struct Erase {
+    #[serde(default)]
+    confirm: bool,
+}
+
+async fn thread_erase(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<Erase>) -> HttpResponse {
+    ask(&web, Request::ThreadErase { thread, confirm: body.confirm }).await
 }
 
 async fn models(State(web): State<Web>) -> HttpResponse {

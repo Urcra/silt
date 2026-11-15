@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use axum::Json;
 use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::StatusCode;
-use silt_log::{Content, ConvOp, Delta, GitOp, Op, kept_after_purge};
+use silt_log::{Delta, kept_after_purge};
 use silt_proto::ThreadInfo;
 use silt_sync::Room;
 use silt_types::{BlobHash, FamilyId, ThreadId};
@@ -109,13 +109,7 @@ pub(crate) async fn trash(
 
 /// The blobs a delta needs.
 fn blob_of(delta: &Delta) -> Option<BlobHash> {
-    match &delta.op {
-        Op::Create { content: Content::Blob(hash), .. }
-        | Op::SetContent { content: Content::Blob(hash), .. }
-        | Op::Conv(ConvOp::Attachment { blob: hash, .. } | ConvOp::SessionTranslated { lines: hash, .. })
-        | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
-        _ => None,
-    }
+    delta.blob()
 }
 
 impl Server {

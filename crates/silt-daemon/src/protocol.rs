@@ -48,6 +48,13 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
+    /// Erases a Local only thread and its forks for good (ADR 0066); without
+    /// `confirm`, says what would go.
+    ThreadErase {
+        thread: String,
+        #[serde(default)]
+        confirm: bool,
+    },
     /// The local models here, the catalog's others, and what this machine
     /// can run (ADR 0066).
     Models,

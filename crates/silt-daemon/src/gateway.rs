@@ -44,7 +44,7 @@ struct Running {
     failure: Option<String>,
 }
 
-struct Gateway {
+pub(crate) struct Gateway {
     store: Store,
     models: Models,
     program: Option<PathBuf>,
@@ -52,8 +52,9 @@ struct Gateway {
     running: Mutex<Running>,
 }
 
-/// Starts the gateway on loopback and answers with its address.
-pub(crate) async fn start(store: Store, models: Models, program: Option<PathBuf>) -> std::io::Result<String> {
+/// Starts the gateway on loopback and answers with its address, and itself
+/// for stopping the model.
+pub(crate) async fn start(store: Store, models: Models, program: Option<PathBuf>) -> std::io::Result<(String, Arc<Gateway>)> {
     let gateway = Arc::new(Gateway { store, models, program, client: reqwest::Client::new(), running: Mutex::default() });
     let app = Router::new()
         .route("/v1/models", get(list))
@@ -65,8 +66,8 @@ pub(crate) async fn start(store: Store, models: Models, program: Option<PathBuf>
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
     let url = format!("http://{}", listener.local_addr()?);
     tokio::spawn(async move { axum::serve(listener, app).await });
-    tokio::spawn(watch(gateway));
-    Ok(url)
+    tokio::spawn(watch(gateway.clone()));
+    Ok((url, gateway))
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
@@ -176,6 +177,17 @@ async fn forward(State(gateway): State<Arc<Gateway>>, request: Request) -> Respo
 }
 
 impl Gateway {
+    /// Stops the server, dropping whatever prompt it has cached; a request
+    /// still waiting loads the model again.
+    pub(crate) async fn unload(self: &Arc<Self>) {
+        let mut running = self.running.lock().await;
+        if let Some(server) = running.server.take() {
+            server.stop().await;
+        }
+        let steps = running.schedule.server_exited();
+        self.apply(&mut running, steps);
+    }
+
     /// Waits for `model` to be loaded and this request's turn.
     async fn place(self: &Arc<Self>, model: ModelId) -> Result<(Place, Ready), String> {
         let (sender, receiver) = oneshot::channel();

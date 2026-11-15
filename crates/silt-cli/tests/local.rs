@@ -312,3 +312,103 @@ fn in_a_local_only_workspace_an_agents_history_tools_read_its_own_project_only()
     let wide = mcp_answer(&laptop, &service_thread, &token, "silt_history_read", json!({"thread": notes_thread}));
     assert!(!wide.contains("no thread matches"), "widened to the workspace: {wide}");
 }
+
+/// Whether `needle` is anywhere in the store's files, the WAL included.
+fn in_store(machine: &Machine, needle: &str) -> bool {
+    ["silt.sqlite", "silt.sqlite-wal"].iter().any(|name| {
+        fs::read(machine.silt_home.join(name))
+            .is_ok_and(|bytes| bytes.windows(needle.len()).any(|window| window == needle.as_bytes()))
+    })
+}
+
+#[test]
+fn erasing_a_local_only_thread_removes_it_its_forks_and_the_agents_copies() {
+    let root = common::temp_root("silt-local-erase");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    let repo = laptop.repo.to_string_lossy().into_owned();
+    laptop.silt(&["workspace", "new", "Logs", "--local-only", "--folder", &repo]);
+
+    laptop.silt(&["claude", "--model", "local:tiny"]);
+    let thread = laptop.web("GET", "/api/threads", None)[0]["id"].as_str().expect("the thread").to_owned();
+    // The fork's agent says something only it says, which the search index keeps as one word.
+    let said = [("FAKE_SAY", "the zebrafjord42 customer's export failed")];
+    let forked = laptop.command(&["fork", &thread, "--", "--model", "local:tiny"], &said).output().expect("silt runs");
+    assert!(forked.status.success(), "{}", String::from_utf8_lossy(&forked.stderr));
+    let fork = String::from_utf8_lossy(&forked.stdout).into_owned();
+    let transcripts: Vec<std::path::PathBuf> = walk(&laptop.claude_dir.join("projects"));
+    assert!(!transcripts.is_empty(), "Claude Code kept its transcript");
+    assert!(in_store(&laptop, "zebrafjord42"), "the store holds what was said");
+
+    let asked = laptop.stdout(&["thread", "erase", &thread]);
+    assert!(asked.contains("erasing removes threads"), "{asked}");
+    assert!(asked.contains("--yes"), "{asked}");
+    assert_eq!(laptop.web("GET", "/api/threads", None).as_array().map(Vec::len), Some(2), "nothing went yet: {fork}");
+
+    let erased = laptop.stdout(&["thread", "erase", &thread, "--yes"]);
+    assert!(erased.starts_with("erased"), "{erased}");
+    assert_eq!(laptop.web("GET", "/api/threads", None).as_array().map(Vec::len), Some(0), "the thread and its fork are gone");
+    assert!(transcripts.iter().all(|path| !path.exists()), "Claude Code's own copy is gone");
+    assert!(!in_store(&laptop, "zebrafjord42"), "nothing of it stays in the store's files");
+    assert!(!laptop.stdout(&["search", "zebrafjord42"]).contains("zebrafjord42"), "search finds nothing of it");
+
+    let elsewhere = laptop.run(&["thread", "erase", "nope"]);
+    assert!(!elsewhere.status.success());
+}
+
+#[test]
+fn only_a_local_only_thread_can_be_erased() {
+    let root = common::temp_root("silt-local-erase-refused");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    laptop.silt(&["claude"]);
+    let thread = laptop.web("GET", "/api/threads", None)[0]["id"].as_str().expect("the thread").to_owned();
+    let refused = laptop.run(&["thread", "erase", &thread, "--yes"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("only threads of a Local only workspace can be erased"));
+}
+
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn an_erasure_a_stop_interrupted_is_finished_at_the_next_start() {
+    let root = common::temp_root("silt-local-erase-resumed");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    let repo = laptop.repo.to_string_lossy().into_owned();
+    laptop.silt(&["workspace", "new", "Logs", "--local-only", "--folder", &repo]);
+    laptop.silt(&["claude", "--model", "local:tiny"]);
+    let thread = laptop.web("GET", "/api/threads", None)[0]["id"].as_str().expect("the thread").to_owned();
+
+    laptop.silt(&["daemon", "stop"]);
+    let markers = laptop.silt_home.join("erasing");
+    fs::create_dir_all(&markers).expect("mkdir");
+    let marker = markers.join(format!("{thread}.json"));
+    fs::write(&marker, json!({"threads": [thread], "files": [], "checkouts": [], "blobs": []}).to_string()).expect("the marker");
+    laptop.silt(&["model", "list"]);
+    assert!(eventually(|| !marker.exists()), "the erasure was finished");
+    assert_eq!(laptop.web("GET", "/api/threads", None).as_array().map(Vec::len), Some(0));
+}

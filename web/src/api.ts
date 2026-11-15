@@ -133,6 +133,8 @@ export const api = {
   /** Starts a download: a catalog name, `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
   pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
   removeModel: (id: string) => request<string>('DELETE', `/api/models/${encodeURIComponent(id)}`),
+  /** Erases a Local only thread and its forks (ADR 0066); unconfirmed, says what would go. */
+  eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
