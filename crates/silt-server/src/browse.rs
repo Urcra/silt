@@ -572,6 +572,11 @@ async fn page_assets(
             if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
                 return Err(bad_request("the file is larger than a page keeps"));
             }
+            let limit = server.config().artifact_assets_mib.saturating_mul(1 << 20);
+            let taken: u64 = silt_proto::page::assets(&page.docs).iter().map(|kept| kept.size).sum();
+            if taken.saturating_add(bytes.len() as u64) > limit {
+                return Err(bad_request(format!("this page's files would take more than this server's {} MiB", limit >> 20)));
+            }
             let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the file couldn't be kept"))?;
             let asset = format!("{:032x}", uuid::Uuid::new_v4().as_u128())[..12].to_owned();
             let size = bytes.len() as u64;

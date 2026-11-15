@@ -125,12 +125,13 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_read",
-            "description": "Read back a version of one of this thread's artifacts, the latest by default, to revise it: its source is written to a file outside the checkout, whose path this returns, and a short source is also returned whole.",
+            "description": "Read back a version of one of this thread's artifacts, the latest by default, to revise it: its source is written to a file outside the checkout, whose path this returns, and a short source is also returned whole. With asset, it reads a file someone added to the page instead, such as a photo or a CSV, the same way.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id, as silt_artifact returned it or its card shows it"},
-                    "version": {"type": "integer", "description": "A version other than the latest"}
+                    "version": {"type": "integer", "description": "A version other than the latest"},
+                    "asset": {"type": "string", "description": "Instead, a file someone added to the page, by the id its page data names it with (_assets/<id>)"}
                 },
                 "required": ["id"]
             }

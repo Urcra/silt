@@ -594,6 +594,14 @@ impl Core {
                 let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked).await));
                 return;
             }
+            if let Request::PageAsset { artifact, asset, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             if let Request::RoomAgent { artifact, emit, .. } = *asking {
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {

@@ -1782,6 +1782,19 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
         Some(serde_json::json!({"op": "add", "name": "x.html", "media_type": "text/html", "data": png})),
     );
     assert!(!refused, "a page's files are never pages");
+    // The agent reads a file someone added, as text when it is text.
+    let csv = base64::engine::general_purpose::STANDARD.encode(b"name,score\nada,9\n");
+    let table = api.ok(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "scores.csv", "media_type": "text/csv", "data": csv})),
+    );
+    let asset = table["id"].as_str().expect("an id");
+    let text = format!("Read asset {asset}");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+    let said = settled_history(&api, &thread, &format!("Done: {text}"));
+    assert!(said.iter().any(|(_, said)| said.contains("ada,9") && said.contains("text/csv")), "the agent read it: {said:?}");
+    api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": asset})));
     let listed = api.ok("POST", &assets, Some(serde_json::json!({"op": "list"})));
     assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
     api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": added["id"]})));
