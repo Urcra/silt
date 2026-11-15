@@ -14,6 +14,15 @@ pub(crate) struct FrameGrant {
     pub(crate) theme: Option<Theme>,
     /// The origin of the page holding the frame.
     pub(crate) parent: Option<String>,
+    /// What the holding page kept for this viewer, as a JSON object (ADR 0072).
+    pub(crate) boot: Option<String>,
+}
+
+/// `boot` from a frame request: an object within the limit, as JSON text.
+pub(crate) fn boot_of(boot: Option<serde_json::Value>) -> Option<String> {
+    boot.filter(serde_json::Value::is_object)
+        .map(|boot| boot.to_string())
+        .filter(|text| text.len() <= silt_design::frame::BOOT_BYTES)
 }
 
 pub(crate) type FrameKeys = silt_proto::frames::FrameKeys<FrameGrant>;

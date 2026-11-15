@@ -15,7 +15,13 @@ pub struct BuiltinSkill {
 }
 
 pub const BUILTIN_SKILLS: &[BuiltinSkill] = &[
-    BuiltinSkill { name: "artifact-design", files: &[("SKILL.md", include_str!("../skills/artifact-design/SKILL.md"))] },
+    BuiltinSkill {
+        name: "artifact-design",
+        files: &[
+            ("SKILL.md", include_str!("../skills/artifact-design/SKILL.md")),
+            ("silt-artifact.d.ts", include_str!("../skills/artifact-design/silt-artifact.d.ts")),
+        ],
+    },
     BuiltinSkill {
         name: "artifact-dataviz",
         files: &[

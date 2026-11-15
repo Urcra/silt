@@ -178,6 +178,46 @@ pub(crate) fn set_artifact_settings(data_dir: &Path, settings: ArtifactSettings)
     write_atomically(&data_dir.join(SETTINGS), &json)
 }
 
+/// What the person allowed or refused artifacts' pages on this machine
+/// (ADR 0072), by `<thread>/<artifact>`, then capability.
+const GRANTS: &str = "artifact-grants.json";
+
+type Grants = BTreeMap<String, BTreeMap<String, String>>;
+
+pub(crate) fn artifact_grants(data_dir: &Path, thread: &str, artifact: &str) -> BTreeMap<String, String> {
+    let all: Grants =
+        read_capped(&data_dir.join(GRANTS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
+    all.get(&format!("{thread}/{artifact}")).cloned().unwrap_or_default()
+}
+
+/// Keeps a grant, or forgets it with no `state`, so the page asks again.
+pub(crate) fn set_artifact_grant(
+    data_dir: &Path,
+    thread: &str,
+    artifact: &str,
+    capability: &str,
+    state: Option<&str>,
+) -> Result<(), CoreError> {
+    if !silt_proto::artifact::CAPABILITIES.contains(&capability) || artifact.len() != 12 {
+        return Err(CoreError::Invalid("no such capability or artifact".into()));
+    }
+    let mut all: Grants =
+        read_capped(&data_dir.join(GRANTS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
+    let grants = all.entry(format!("{thread}/{artifact}")).or_default();
+    match state {
+        Some(state @ ("granted" | "refused")) => {
+            grants.insert(capability.to_owned(), state.to_owned());
+        }
+        Some(_) => return Err(CoreError::Invalid("a grant is granted or refused".into())),
+        None => {
+            grants.remove(capability);
+        }
+    }
+    all.retain(|_, grants| !grants.is_empty());
+    let json = serde_json::to_vec_pretty(&all).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    write_atomically(&data_dir.join(GRANTS), &json)
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
     let staging = path.with_extension("tmp");
     fs::write(&staging, bytes)?;

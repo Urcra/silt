@@ -436,6 +436,11 @@ pub struct ArtifactView {
     /// What the artifact is, as its card says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The capabilities the version's page may use, each with its config
+    /// (ADR 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, Record<string, unknown>> | null"))]
+    pub capabilities: Option<crate::artifact::Capabilities>,
 }
 
 /// An artifact's content, as its route answers it.

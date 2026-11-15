@@ -531,6 +531,7 @@ mod tests {
             style: Some("cd".repeat(32)),
             note: Some("Darker axis".into()),
             description: Some("How long a rescan takes".into()),
+            capabilities: Some([("db".to_owned(), serde_json::json!({}))].into()),
         };
         let read = read_line(&artifact(&shown));
         assert_eq!(read.entries, vec![Entry::Artifact(shown.clone())]);

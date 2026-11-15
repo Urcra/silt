@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT capability, state FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "capability",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "artifact_grants",
+            "name": "capability"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "artifact_grants",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "60cfe2c14558f95a9d6d42682de27da005e252c9c3bd42ae0d0e939f3b739938"
+}

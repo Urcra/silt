@@ -32,6 +32,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/history", get(history))
         .route("/app/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -426,6 +427,79 @@ async fn artifact_content(
     Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
 }
 
+#[derive(Deserialize)]
+struct GrantChange {
+    capability: String,
+    /// `granted` or `refused`, or none to ask again.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// What the person allowed or refused an artifact's page, by capability
+/// (ADR 0072).
+async fn artifact_grants(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+) -> Result<Json<std::collections::BTreeMap<String, String>>, ApiError> {
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let thread = crate::id_bytes(readable.row(&id)?.id.0);
+    let rows = sqlx::query!(
+        "SELECT capability, state FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
+        browser.user,
+        thread,
+        artifact
+    )
+    .fetch_all(server.db())
+    .await?;
+    Ok(Json(rows.into_iter().map(|row| (row.capability, row.state)).collect()))
+}
+
+async fn set_artifact_grant(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(change): Json<GrantChange>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    if !silt_proto::artifact::CAPABILITIES.contains(&change.capability.as_str()) || artifact.len() != 12 {
+        return Err(bad_request("no such capability or artifact"));
+    }
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let thread = crate::id_bytes(readable.row(&id)?.id.0);
+    match change.state.as_deref() {
+        None => {
+            sqlx::query!(
+                "DELETE FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ? AND capability = ?",
+                browser.user,
+                thread,
+                artifact,
+                change.capability
+            )
+            .execute(server.db())
+            .await?;
+        }
+        Some(state @ ("granted" | "refused")) => {
+            let at = now_ms();
+            sqlx::query!(
+                "INSERT INTO artifact_grants (user_id, thread_id, artifact_id, capability, state, at_ms) VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT (user_id, thread_id, artifact_id, capability) DO UPDATE SET state = excluded.state, at_ms = excluded.at_ms",
+                browser.user,
+                thread,
+                artifact,
+                change.capability,
+                state,
+                at
+            )
+            .execute(server.db())
+            .await?;
+        }
+        Some(_) => return Err(bad_request("a grant is granted or refused")),
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 /// What a frame key opens on the server: one version of one artifact, for
 /// the person who asked, whose right to read the thread is checked again
 /// each time the frame loads (ADR 0074).
@@ -437,6 +511,7 @@ pub(crate) struct FrameGrant {
     version: Option<u32>,
     theme: Option<silt_design::frame::Theme>,
     parent: Option<String>,
+    boot: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -447,6 +522,8 @@ struct FrameAsk {
     theme: Option<String>,
     #[serde(default)]
     parent: Option<String>,
+    #[serde(default)]
+    boot: Option<serde_json::Value>,
 }
 
 /// The version of artifact `id` a person may read, the latest when
@@ -493,6 +570,11 @@ async fn make_frame(
         version: ask.version,
         theme: ask.theme.as_deref().and_then(silt_design::frame::Theme::parse),
         parent: ask.parent.filter(|origin| silt_design::frame::is_origin(origin)),
+        boot: ask
+            .boot
+            .filter(serde_json::Value::is_object)
+            .map(|boot| boot.to_string())
+            .filter(|text| text.len() <= silt_design::frame::BOOT_BYTES),
     };
     let key = crate::accounts::random_token();
     server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone(), grant);
@@ -532,6 +614,7 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
         vendor: vendor.as_deref(),
         parent: grant.parent.as_deref(),
         policy_meta: false,
+        boot: grant.boot.as_deref(),
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&content), &parts);
     let mut response = (StatusCode::OK, page).into_response();

@@ -16,7 +16,7 @@ import {
   throughVendor,
   versionOf,
 } from './artifacts'
-import { FRAME_FIXTURES } from './frame.generated'
+import { FRAME_FIXTURES, OFFLINE_STUB } from './frame.generated'
 
 function artifact(index: number, id: string, version: number, extra: Partial<ArtifactView> = {}): HistoryEntry {
   return {
@@ -75,7 +75,9 @@ describe('artifacts', () => {
     expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com'])
     expect(directives['font-src']).toEqual(['data:', 'https://fonts.gstatic.com'])
     expect(directives['img-src']).toEqual(['data:', 'blob:'])
-    expect(sandboxedDocument('<p>hi</p>', { probe: false })).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
+    expect(sandboxedDocument('<p>hi</p>', { probe: false })).toBe(
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><script>${OFFLINE_STUB}</script><p>hi</p>`,
+    )
   })
 
   it("gives the frame the design system's tokens and the viewer's theme before the page's own content", () => {
@@ -164,6 +166,7 @@ describe('the frame contract', () => {
         vendor: fixture.vendor,
         parent: fixture.parent,
         policyMeta: fixture.policyMeta,
+        boot: fixture.boot,
       })
       expect(composed).toBe(fixture.out)
     }

@@ -158,7 +158,7 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
     let (status, headers, body) =
         fetch(&format!("{url}/content"), &["content-security-policy", "content-type", "x-content-type-options"]);
     assert_eq!(status, "200");
-    assert_eq!(body, "<h1>Rescan benchmark</h1>");
+    assert!(body.starts_with("<!doctype html><script>window.silt=") && body.ends_with("<h1>Rescan benchmark</h1>"), "{body}");
     assert!(headers[0].starts_with("sandbox allow-scripts;") && headers[0].contains("default-src 'none'"), "{headers:?}");
     assert!(headers[0].contains("https://cdnjs.cloudflare.com") && !headers[0].contains("connect-src"), "{headers:?}");
     assert_eq!((headers[1].as_str(), headers[2].as_str()), ("text/html; charset=utf-8", "nosniff"));

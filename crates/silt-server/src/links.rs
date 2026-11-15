@@ -453,7 +453,7 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     };
     let vendor =
         (artifact.kind == "html" && server.config().artifact_proxy).then(|| format!("{}/vendor/", server.config().public_url()));
-    if artifact.kind == "html" && (artifact.style.is_some() || vendor.is_some()) {
+    if artifact.kind == "html" {
         let css = match artifact.style.as_deref().and_then(|style| style.parse().ok()) {
             Some(style) => server.shared.blobs.get(style).await.ok(),
             None => None,
@@ -589,10 +589,11 @@ mod tests {
     #[test]
     fn a_design_systems_css_goes_after_the_doctype_and_cant_close_its_element() {
         let styled = |html: &str| framed(html, Some(":root { --bg: #fff; }</style>"), None);
+        let stub = format!("<script>{}</script>", silt_design::frame::OFFLINE_STUB);
         assert_eq!(
             styled("<!DOCTYPE html><p>hi</p>"),
-            "<!DOCTYPE html><style data-silt=\"design-system\">:root { --bg: #fff; }<\\/style></style><p>hi</p>"
+            format!("<!DOCTYPE html>{stub}<style data-silt=\"design-system\">:root {{ --bg: #fff; }}<\\/style></style><p>hi</p>")
         );
-        assert!(styled("<p>hi</p>").starts_with("<!doctype html><style data-silt=\"design-system\">"));
+        assert!(styled("<p>hi</p>").starts_with(&format!("<!doctype html>{stub}<style data-silt=\"design-system\">")));
     }
 }

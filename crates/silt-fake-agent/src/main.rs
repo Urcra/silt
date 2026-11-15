@@ -511,7 +511,17 @@ async fn show(
             serde_json::json!({"id": last, "edits": [edit], "note": "Retitled", "description": "How long a rescan takes"}),
         )
     } else {
-        let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
+        // A page that counts its opens in the viewer's storage and asks for a
+        // capability it didn't declare (ADR 0072).
+        let counter = "<!doctype html><h1>Rescan benchmark</h1><p id=\"n\"></p><p id=\"cap\">db: asking</p><script>\
+var n=Number(localStorage.getItem('n')||0)+1;localStorage.setItem('n',String(n));\
+document.getElementById('n').textContent='Opened '+n+' times';\
+silt.use('db').then(function(db){document.getElementById('cap').textContent=db?'db: yes':'db: none'});</script>";
+        let html = if prompt.contains("Artifact counter") {
+            counter.to_owned()
+        } else {
+            std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into())
+        };
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});
         if let Ok(system) = std::env::var("FAKE_ACP_DESIGN_SYSTEM") {
             arguments["design_system"] = serde_json::json!(system);

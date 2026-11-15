@@ -616,7 +616,12 @@ note?: string | null,
 /**
  * What the artifact is, as its card says.
  */
-description?: string | null, };
+description?: string | null, 
+/**
+ * The capabilities the version's page may use, each with its config
+ * (ADR 0072).
+ */
+capabilities?: Record<string, Record<string, unknown>> | null, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 

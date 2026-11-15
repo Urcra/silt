@@ -32,6 +32,10 @@ import { ArtifactCommentsButton, AskForChange } from './ArtifactComments'
 import { KindIcon, ShownImage } from './ArtifactCards'
 import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
+import { Broker, callOf } from '../bridge/broker'
+import { handlersFor } from '../bridge/capabilities'
+import { lastSnapshot, rememberSnapshot } from '../bridge/hot'
+import { keep, keptFor } from '../bridge/storage'
 
 /** The Artifacts tab with none open: the thread's artifacts, the one changed last first, and the images agents showed. */
 export function ArtifactList({
@@ -423,9 +427,17 @@ function ArtifactPage({
   const [startTheme] = useState(theme)
   // An HTML version loads from a frame address the daemon or server composes it at (ADR 0074). The key behind it
   // lasts an hour from its last use, so one is asked for each time the frame opens.
+  // Each time the frame opens, its key carries what the viewer's page stored since (ADR 0072).
+  const [opening] = useState(() => Math.random().toString(36).slice(2))
   const address = useQuery({
-    queryKey: ['artifact-frame', thread, artifact.id, artifact.version, startTheme],
-    queryFn: () => api.artifactFrame(thread, artifact.id, { version: artifact.version, theme: startTheme, parent: window.location.origin }),
+    queryKey: ['artifact-frame', thread, artifact.id, artifact.version, startTheme, opening],
+    queryFn: () =>
+      api.artifactFrame(thread, artifact.id, {
+        version: artifact.version,
+        theme: startTheme,
+        parent: window.location.origin,
+        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id) },
+      }),
     enabled: artifact.kind === 'html',
     staleTime: Infinity,
     gcTime: 0,
@@ -456,16 +468,44 @@ function ArtifactPage({
   })
   // A frame's page says what's selected in it and what went wrong; only messages from that frame count. The listener
   // is added once, reading the latest callbacks, so a render doesn't drop a message between removing and adding it.
+  const snapshots = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (snapshots.current !== null) window.clearInterval(snapshots.current)
+    },
+    [],
+  )
   const callbacks = useRef({ onSelect, onProblems })
   useEffect(() => {
     callbacks.current = { onSelect, onProblems }
   })
   useEffect(() => {
+    // The bridge (ADR 0072): calls the page makes through `silt.use`, answered here.
+    const broker = new Broker(
+      {
+        thread,
+        artifact,
+        emit: (cap, topic, data) => frame.current?.contentWindow?.postMessage({ silt: 'event', cap, topic, data }, '*'),
+      },
+      handlersFor(thread, artifact),
+    )
     const heard = (event: MessageEvent) => {
       const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown } | null
       if (event.source === null || event.source !== frame.current?.contentWindow) return
       if (said?.silt === 'selection') callbacks.current.onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
       if (said?.silt === 'problems' && Array.isArray(said.problems)) callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
+      const call = callOf(said)
+      if (call) {
+        void broker.answer(call).then((answer) => frame.current?.contentWindow?.postMessage({ silt: 'reply', id: call.id, ...answer }, '*'))
+      }
+      if (said?.silt === 'storage') {
+        const stored = said as { kind?: unknown; items?: unknown }
+        keep(thread, artifact.id, stored.kind, stored.items)
+      }
+      if (said?.silt === 'hot' && (said as { keeps?: unknown }).keeps === true && snapshots.current === null) {
+        snapshots.current = window.setInterval(() => frame.current?.contentWindow?.postMessage({ silt: 'snapshot' }, '*'), 2000)
+      }
+      if (said?.silt === 'snapshotted') rememberSnapshot(thread, artifact.id, (said as { data?: unknown }).data)
       if (said?.silt === 'mermaid' && Array.isArray((said as { diagrams?: unknown }).diagrams)) {
         diagrams.current = ((said as { diagrams: unknown[] }).diagrams)
           .filter((diagram): diagram is { i: number; text: string } => {
@@ -478,7 +518,7 @@ function ArtifactPage({
     }
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
-  }, [])
+  }, [thread, artifact])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
@@ -495,7 +535,7 @@ function ArtifactPage({
           ref={frame}
           title={artifact.title}
           sandbox="allow-scripts"
-          allow="fullscreen"
+          allow="fullscreen; clipboard-write"
           {...(address.data ? { src: address.data.path } : address.isError ? { srcDoc: framed } : {})}
           referrerPolicy="no-referrer"
           style={zoomed}

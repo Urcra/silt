@@ -2,7 +2,16 @@
 // versions under one id, and images shown in the conversation.
 
 import type { ArtifactContent, ArtifactView, CommentView, HistoryEntry } from './api'
-import { FIRST_SCRIPT_END, FIRST_SCRIPT_START, FONT_SOURCES, SCRIPT_SOURCES, STYLE_SOURCES, VENDOR_HOSTS } from './frame.generated'
+import {
+  FIRST_SCRIPT_BRIDGE,
+  FIRST_SCRIPT_END,
+  FIRST_SCRIPT_START,
+  FONT_SOURCES,
+  OFFLINE_STUB,
+  SCRIPT_SOURCES,
+  STYLE_SOURCES,
+  VENDOR_HOSTS,
+} from './frame.generated'
 
 export type ArtifactVersion = { entry: HistoryEntry; artifact: ArtifactView }
 
@@ -86,10 +95,26 @@ function isOrigin(origin: string): boolean {
  * viewer's theme, now and as it changes, and tells the page holding the frame, at `parent`, what text is selected, for
  * a comment to quote, and what went wrong in it (ADR 0071).
  */
-function frameScript(theme: FrameTheme | null, parent: string | null): string {
+function frameScript(theme: FrameTheme | null, parent: string | null, boot: string | null): string {
   const themed = theme ? `root.setAttribute('data-theme','${theme}');` : ''
   const to = parent !== null && isOrigin(parent) ? parent : '*'
-  return `${FIRST_SCRIPT_START}${themed}var to='${to}';${FIRST_SCRIPT_END}`
+  return `${FIRST_SCRIPT_START}${themed}var to='${to}';var boot=${bootJson(boot)};${FIRST_SCRIPT_END}${FIRST_SCRIPT_BRIDGE}})();`
+}
+
+/** The most of a viewer's storage and kept state a frame is handed, as `silt_design::frame::BOOT_BYTES`. */
+const BOOT_BYTES = 2 << 20
+
+/** `boot` as a JSON object safe inside a script element, or `{}`, as `silt_design::frame` writes it: checked, then kept as written. */
+function bootJson(boot: string | null): string {
+  if (boot === null || boot.length > BOOT_BYTES) return '{}'
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(boot)
+  } catch {
+    return '{}'
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return '{}'
+  return boot.replace(/<\//g, '<\\/').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
 export type FrameOptions = {
@@ -105,6 +130,8 @@ export type FrameOptions = {
   parent?: string | null
   /** The policy as a `<meta>`; a page served with it as a header leaves it out. */
   policyMeta?: boolean
+  /** What the holding page kept for this viewer, as a JSON object: their storage, and the last version's state. */
+  boot?: string | null
 }
 
 /** A page's doctype, or the standard one when it has none, and the rest, as `silt_design::frame::split_doctype` splits it. */
@@ -121,7 +148,7 @@ function splitDoctype(html: string): [string, string] {
  */
 export function sandboxedDocument(
   html: string,
-  { probe = true, style = null, theme = null, vendor = null, parent = null, policyMeta = true }: FrameOptions = {},
+  { probe = true, style = null, theme = null, vendor = null, parent = null, policyMeta = true, boot = null }: FrameOptions = {},
 ): string {
   if (vendor) {
     html = throughVendor(html, vendor)
@@ -129,7 +156,7 @@ export function sandboxedDocument(
   }
   const [doctype, rest] = splitDoctype(html)
   const policy = policyMeta ? `<meta http-equiv="Content-Security-Policy" content="${framePolicy(vendor)}">` : ''
-  const script = probe ? `<script>${frameScript(theme, parent)}</script>` : ''
+  const script = probe ? `<script>${frameScript(theme, parent, boot)}</script>` : `<script>${OFFLINE_STUB}</script>`
   // The CSS can't close its own element, whatever a peer put in it.
   const styled = style ? `<style data-silt="design-system">${style.replace(/<\//g, '<\\/')}</style>` : ''
   return `${doctype}${policy}${script}${styled}${rest}`

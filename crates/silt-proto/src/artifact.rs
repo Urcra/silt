@@ -10,6 +10,37 @@ pub const NOTE_CHARS: usize = 200;
 /// The longest description of an artifact, in characters.
 pub const DESCRIPTION_CHARS: usize = 300;
 
+/// The capabilities a page may declare (ADR 0072 and the ADRs after it).
+pub const CAPABILITIES: &[&str] =
+    &["artifact", "assets", "comments", "db", "dictation", "downloads", "files", "mcp", "room", "sample", "tts", "user"];
+
+/// The capabilities a version declares, by name, each with its config.
+pub type Capabilities = std::collections::BTreeMap<String, serde_json::Value>;
+
+/// The largest declaration, as JSON.
+const CAPABILITIES_BYTES: usize = 16 * 1024;
+
+/// A declaration checked: known names, each with an object or `true` as
+/// its config, `true` read as `{}`.
+pub fn checked_capabilities(declared: &serde_json::Map<String, serde_json::Value>) -> Result<Capabilities, String> {
+    if serde_json::to_string(declared).map_or(true, |text| text.len() > CAPABILITIES_BYTES) {
+        return Err(format!("a capabilities declaration is at most {} KiB", CAPABILITIES_BYTES / 1024));
+    }
+    let mut checked = Capabilities::new();
+    for (name, config) in declared {
+        if !CAPABILITIES.contains(&name.as_str()) {
+            return Err(format!("{name} isn't a capability; they're {}", CAPABILITIES.join(", ")));
+        }
+        let config = match config {
+            serde_json::Value::Bool(true) => serde_json::json!({}),
+            serde_json::Value::Object(_) => config.clone(),
+            _ => return Err(format!("{name}'s config is an object, or true")),
+        };
+        checked.insert(name.clone(), config);
+    }
+    Ok(checked)
+}
+
 /// One change to a version's source: `old` occurs exactly once, and
 /// becomes `new`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +127,16 @@ mod tests {
         assert_eq!(apply_edits(source, &[]), Err(EditError::None));
         assert_eq!(apply_edits(source, &vec![edit("v1", "v1"); MAX_EDITS + 1]), Err(EditError::TooMany));
         assert_eq!(apply_edits(source, &[edit("</p>", "")]).as_deref(), Ok("<h1>Rescan</h1><p>v1"), "an empty new text deletes");
+    }
+
+    #[test]
+    fn a_declaration_names_known_capabilities_with_objects() {
+        let declared = serde_json::json!({"db": {"rules": []}, "downloads": true});
+        let checked = checked_capabilities(declared.as_object().expect("an object")).expect("checked");
+        assert_eq!(checked["downloads"], serde_json::json!({}));
+        assert_eq!(checked["db"], serde_json::json!({"rules": []}));
+        assert!(checked_capabilities(serde_json::json!({"camera": {}}).as_object().expect("an object")).is_err());
+        assert!(checked_capabilities(serde_json::json!({"db": 3}).as_object().expect("an object")).is_err());
     }
 
     #[test]

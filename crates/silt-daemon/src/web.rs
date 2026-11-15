@@ -128,6 +128,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/git/{oid}", get(git_text))
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
+        .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -625,6 +626,29 @@ struct FrameAsk {
     /// The origin of the page that will hold the frame.
     #[serde(default)]
     parent: Option<String>,
+    /// What the holding page kept for this viewer: their storage, and the
+    /// last version's state (ADR 0072).
+    #[serde(default)]
+    boot: Option<serde_json::Value>,
+}
+
+async fn artifact_grants(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactGrants { thread, artifact }).await
+}
+
+#[derive(Deserialize)]
+struct GrantChange {
+    capability: String,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+async fn set_artifact_grant(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(change): Json<GrantChange>,
+) -> HttpResponse {
+    ask(&web, Request::SetArtifactGrant { thread, artifact, capability: change.capability, state: change.state }).await
 }
 
 /// A key that opens one version of an HTML artifact in a frame (ADR 0074).
@@ -648,6 +672,7 @@ async fn make_frame(
         version: ask.version,
         theme: ask.theme.as_deref().and_then(silt_design::frame::Theme::parse),
         parent: ask.parent.filter(|origin| silt_design::frame::is_origin(origin)),
+        boot: crate::frames::boot_of(ask.boot),
     };
     let key = crate::frames::new_key();
     web.frames.lock().expect("lock").insert(key.clone(), grant);
@@ -684,6 +709,7 @@ async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: H
         vendor: vendor.as_deref(),
         parent: grant.parent.as_deref(),
         policy_meta: false,
+        boot: grant.boot.as_deref(),
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
     framed_response(page, &silt_design::frame::policy(vendor.as_deref()))

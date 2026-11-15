@@ -839,6 +839,26 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(list.getByTestId('shown-image')).toBeVisible()
 })
 
+test("an artifact's page keeps what it stores for the viewer, and gets null for a capability it didn't declare", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact counter')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact counter')).toBeVisible()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await expect(frame.getByText('Opened 1 times')).toBeVisible()
+  await expect(frame.getByText('db: none')).toBeVisible()
+  // The frame loads from its own address (ADR 0074), and what the page stored comes back on the next open (ADR 0072).
+  await expect(page.getByTestId('artifact-frame')).toHaveAttribute('src', /^\/f\/[0-9a-f]{64}\/$/)
+  const viewer = page.getByTestId('artifact-viewer')
+  const reload = viewer.getByRole('button', { name: 'Reload' })
+  if (await reload.isVisible()) await reload.click()
+  else {
+    await viewer.getByRole('button', { name: 'More' }).click()
+    await page.getByRole('menuitem', { name: 'Reload' }).click()
+  }
+  await expect(frame.getByText('Opened 2 times')).toBeVisible()
+})
+
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')

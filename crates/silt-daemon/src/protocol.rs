@@ -404,6 +404,18 @@ pub enum Request {
     SetArtifactSettings {
         settings: ArtifactSettings,
     },
+    /// What the person allowed or refused an artifact's page (ADR 0072).
+    ArtifactGrants {
+        thread: String,
+        artifact: String,
+    },
+    SetArtifactGrant {
+        thread: String,
+        artifact: String,
+        capability: String,
+        #[serde(default)]
+        state: Option<String>,
+    },
     /// The design system picked for each project on this machine.
     ProjectDesignSystems,
     /// Picks a project's design system on this machine, or drops the pick.
@@ -807,6 +819,10 @@ pub struct NewArtifact {
     /// last.
     #[serde(default)]
     pub description: Option<String>,
+    /// The capabilities the page may use (ADR 0072): none keeps the last
+    /// version's, `{}` clears them, and an object replaces them all.
+    #[serde(default)]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.

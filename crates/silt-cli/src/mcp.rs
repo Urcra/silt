@@ -159,6 +159,7 @@ impl silt_mcp::Backend for DaemonTools {
                     edits: Vec::new(),
                     note: None,
                     description: None,
+                    capabilities: None,
                 };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
@@ -183,6 +184,11 @@ impl silt_mcp::Backend for DaemonTools {
                     edits: edits_arg(arguments)?,
                     note: text("note"),
                     description: text("description"),
+                    capabilities: match arguments.get("capabilities") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::Object(declared)) => Some(declared.clone()),
+                        Some(_) => return Err("capabilities is an object of names and configs".into()),
+                    },
                 };
                 let kept = self.show(artifact)?;
                 let mut out = format!(

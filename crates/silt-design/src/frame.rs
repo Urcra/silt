@@ -163,7 +163,21 @@ addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,
 if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');parent.postMessage({silt:'checked'},to)},300);\
 var pres=document.querySelectorAll('pre.mermaid'),list=[];for(var i=0;i<pres.length&&i<20;i++){var t=pres[i].textContent||'';\
 if(t.length>65536)continue;pres[i].setAttribute('data-silt-mermaid',String(i));list.push({i:i,text:t})}\
-if(list.length)parent.postMessage({silt:'mermaid',diagrams:list},to)});})();";
+if(list.length)parent.postMessage({silt:'mermaid',diagrams:list},to)});";
+
+/// The bridge's frame side (ADR 0072): `silt.use`, `silt.hot`, and the
+/// viewer's own storage, inside the first script.
+pub const FIRST_SCRIPT_BRIDGE: &str = include_str!("bridge.js");
+
+/// What a page composed without the first script gets, as the offline copy
+/// is: a `silt` whose every capability is `null`, so a page written for
+/// Silt still opens anywhere.
+pub const OFFLINE_STUB: &str = "window.silt=Object.freeze({version:'1',use:function(){return Promise.resolve(null)},\
+hot:Object.freeze({data:null,snapshot:function(){},ready:function(start){start({})}})});";
+
+/// The most the holding page hands a frame of a viewer's storage and kept
+/// state, as JSON.
+pub const BOOT_BYTES: usize = 2 << 20;
 
 /// Whether `origin` is a bare `http(s)://host[:port]`, safe to write into
 /// the first script as the target of its messages.
@@ -176,12 +190,26 @@ pub fn is_origin(origin: &str) -> bool {
     })
 }
 
-/// The first script a frame runs: the theme on its root, and messages to
-/// `parent`, the origin of the page holding it, or to any when unknown.
-pub fn first_script(theme: Option<Theme>, parent: Option<&str>) -> String {
+/// The first script a frame runs: the theme on its root, messages to
+/// `parent`, the origin of the page holding it, or to any when unknown, and
+/// `boot`, a JSON object of what the holding page kept for this viewer.
+pub fn first_script(theme: Option<Theme>, parent: Option<&str>, boot: Option<&str>) -> String {
     let theme = theme.map(|theme| format!("root.setAttribute('data-theme','{}');", theme.as_str())).unwrap_or_default();
     let to = parent.filter(|origin| is_origin(origin)).unwrap_or("*");
-    format!("{FIRST_SCRIPT_START}{theme}var to='{to}';{FIRST_SCRIPT_END}")
+    let boot = boot_json(boot);
+    format!("{FIRST_SCRIPT_START}{theme}var to='{to}';var boot={boot};{FIRST_SCRIPT_END}{FIRST_SCRIPT_BRIDGE}}})();")
+}
+
+/// `boot` as a JSON object safe inside a script element, or `{}`. It's
+/// checked, then kept as written, so the web UI's composer writes the same.
+fn boot_json(boot: Option<&str>) -> String {
+    let object = boot
+        .filter(|text| text.len() <= BOOT_BYTES)
+        .filter(|text| serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| value.is_object()));
+    match object {
+        Some(text) => text.replace("</", "<\\/").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029"),
+        None => "{}".to_owned(),
+    }
 }
 
 /// What goes into a frame ahead of the page.
@@ -200,11 +228,14 @@ pub struct FrameParts<'a> {
     /// The policy as a `<meta>`; a page served with it as a header leaves
     /// it out.
     pub policy_meta: bool,
+    /// What the holding page kept for this viewer, as a JSON object: their
+    /// storage, and the state the last version left (ADR 0072).
+    pub boot: Option<&'a str>,
 }
 
 impl Default for FrameParts<'_> {
     fn default() -> Self {
-        Self { style: None, theme: None, probe: true, vendor: None, parent: None, policy_meta: true }
+        Self { style: None, theme: None, probe: true, vendor: None, parent: None, policy_meta: true, boot: None }
     }
 }
 
@@ -236,8 +267,11 @@ pub fn compose(html: &str, parts: &FrameParts<'_>) -> String {
     } else {
         String::new()
     };
-    let script =
-        if parts.probe { format!("<script>{}</script>", first_script(parts.theme, parts.parent)) } else { String::new() };
+    let script = if parts.probe {
+        format!("<script>{}</script>", first_script(parts.theme, parts.parent, parts.boot))
+    } else {
+        format!("<script>{OFFLINE_STUB}</script>")
+    };
     // The CSS can't close its own element, whatever a peer put in it.
     let style =
         style.map(|css| format!("<style data-silt=\"design-system\">{}</style>", css.replace("</", "<\\/"))).unwrap_or_default();
@@ -302,10 +336,10 @@ mod tests {
 
     #[test]
     fn messages_go_only_to_a_plain_origin() {
-        assert!(first_script(None, Some("http://127.0.0.1:7777")).contains("var to='http://127.0.0.1:7777';"));
-        assert!(first_script(None, Some("https://silt.example")).contains("var to='https://silt.example';"));
+        assert!(first_script(None, Some("http://127.0.0.1:7777"), None).contains("var to='http://127.0.0.1:7777';"));
+        assert!(first_script(None, Some("https://silt.example"), None).contains("var to='https://silt.example';"));
         for forged in ["https://a.example/'+alert(1)+'", "javascript:alert(1)", "https://", "https://a b", "file:///x"] {
-            assert!(first_script(None, Some(forged)).contains("var to='*';"), "{forged}");
+            assert!(first_script(None, Some(forged), None).contains("var to='*';"), "{forged}");
         }
     }
 
@@ -328,7 +362,11 @@ mod tests {
             "{page}"
         );
         let bare = compose("<p>x</p>", &FrameParts { probe: false, policy_meta: false, ..FrameParts::default() });
-        assert_eq!(bare, "<!doctype html><p>x</p>");
+        assert_eq!(
+            bare,
+            format!("<!doctype html><script>{OFFLINE_STUB}</script><p>x</p>"),
+            "a page without the first script gets the stub"
+        );
     }
 
     /// The web UI composes frames in TypeScript; this writes what it must
@@ -339,7 +377,7 @@ mod tests {
         let list =
             |items: &[&str]| format!("[{}] as const", items.iter().map(|item| quoted(item)).collect::<Vec<_>>().join(", "));
         let case = |html, style, theme, probe, vendor, parent, policy_meta| {
-            (html, FrameParts { style, theme, probe, vendor, parent, policy_meta })
+            (html, FrameParts { style, theme, probe, vendor, parent, policy_meta, boot: None })
         };
         let cases = [
             case("<!DOCTYPE html><html><body><p>hi</p></body></html>", None, None, true, None, None, true),
@@ -365,13 +403,17 @@ mod tests {
             case("<p>served with a header</p>", None, Some(Theme::Light), true, None, Some("https://a.example/'+x+'"), false),
             case("<!DOCTYPE html  >\n<p>odd doctype</p>", None, None, true, None, None, true),
         ];
+        let mut cases = cases.to_vec();
+        let boot = r#"{"storage":{"local":{"tab":"</script><b>"}},"hot":{"n":3}}"#;
+        cases.push(("<p>remembered</p>", FrameParts { boot: Some(boot), ..FrameParts::default() }));
+        cases.push(("<p>not an object</p>", FrameParts { boot: Some("[1,2]"), ..FrameParts::default() }));
         let fixtures = cases
             .iter()
             .map(|(html, parts)| {
                 let out = compose(html, parts);
                 let option = |value: Option<&str>| value.map_or_else(|| "null".to_owned(), quoted);
                 format!(
-                    "  {{ html: {}, style: {}, theme: {}, probe: {}, vendor: {}, parent: {}, policyMeta: {}, out: {} }},",
+                    "  {{ html: {}, style: {}, theme: {}, probe: {}, vendor: {}, parent: {}, policyMeta: {}, boot: {}, out: {} }},",
                     quoted(html),
                     option(parts.style),
                     option(parts.theme.map(Theme::as_str)),
@@ -379,6 +421,7 @@ mod tests {
                     option(parts.vendor),
                     option(parts.parent),
                     parts.policy_meta,
+                    option(parts.boot),
                     quoted(&out)
                 )
             })
@@ -387,15 +430,17 @@ mod tests {
         let generated = format!(
             "// What an artifact's frame gets, written by `UPDATE_FRAME=1 cargo test -p silt-design frame_ts`\n// from crates/silt-design/src/frame.rs. Don't edit by hand.\n\n\
 export const SCRIPT_SOURCES = {}\nexport const STYLE_SOURCES = {}\nexport const FONT_SOURCES = {}\nexport const VENDOR_HOSTS = {}\n\n\
-export const FIRST_SCRIPT_START = {}\nexport const FIRST_SCRIPT_END = {}\n\n\
+export const FIRST_SCRIPT_START = {}\nexport const FIRST_SCRIPT_END = {}\nexport const FIRST_SCRIPT_BRIDGE = {}\nexport const OFFLINE_STUB = {}\n\n\
 /** Frames composed by `silt_design::frame::compose`, which the web UI's must match. */\n\
-export const FRAME_FIXTURES: {{ html: string; style: string | null; theme: 'light' | 'dark' | null; probe: boolean; vendor: string | null; parent: string | null; policyMeta: boolean; out: string }}[] = [\n{fixtures}\n]\n",
+export const FRAME_FIXTURES: {{ html: string; style: string | null; theme: 'light' | 'dark' | null; probe: boolean; vendor: string | null; parent: string | null; policyMeta: boolean; boot: string | null; out: string }}[] = [\n{fixtures}\n]\n",
             list(&SCRIPT_SOURCES),
             list(&STYLE_SOURCES),
             list(&FONT_SOURCES),
             list(&VENDOR_HOSTS),
             quoted(FIRST_SCRIPT_START),
             quoted(FIRST_SCRIPT_END),
+            quoted(FIRST_SCRIPT_BRIDGE),
+            quoted(OFFLINE_STUB),
         );
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/frame.generated.ts");
         if std::env::var_os("UPDATE_FRAME").is_some() {

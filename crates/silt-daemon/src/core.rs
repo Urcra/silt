@@ -611,6 +611,23 @@ impl Core {
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
+            Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
+                Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),
+                Err(error) => Response::failure(&error),
+            },
+            Request::SetArtifactGrant { thread, artifact, capability, state } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(
+                    crate::design::set_artifact_grant(
+                        &self.data_dir,
+                        &thread.to_string(),
+                        &artifact,
+                        &capability,
+                        state.as_deref(),
+                    )
+                    .map(|()| "saved"),
+                ),
+                Err(error) => Response::failure(&error),
+            },
             Request::SetProjectDesignSystem { repo, design_system } => {
                 to_response(self.set_project_design_system(&repo, design_system.as_deref()))
             }

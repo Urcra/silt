@@ -209,6 +209,11 @@ impl Core {
         let last = artifacts.iter().filter(|artifact| artifact.id == id).max_by_key(|artifact| artifact.version);
         let previous = last.map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
         let description = described.or_else(|| last.and_then(|artifact| artifact.description.clone()));
+        let capabilities = match &new.capabilities {
+            None => last.and_then(|artifact| artifact.capabilities.clone()),
+            Some(declared) if declared.is_empty() => None,
+            Some(declared) => Some(silt_proto::artifact::checked_capabilities(declared).map_err(CoreError::Invalid)?),
+        };
         let styled = if kind == "html" {
             let workspace_default = self.workspace_design_system(&workspace);
             let repository = design::project_default(&checkout);
@@ -260,6 +265,7 @@ impl Core {
             style,
             note,
             description,
+            capabilities,
         };
         self.record_acp(thread, &silt_agents::acp::artifact(&view)).await?;
         Ok(ArtifactPut { id, version, design_system, dropped })
@@ -435,6 +441,7 @@ mod tests {
             edits: Vec::new(),
             note: None,
             description: None,
+            capabilities: None,
         }
     }
 
@@ -503,6 +510,7 @@ mod tests {
             style: None,
             note: None,
             description: None,
+            capabilities: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO artifact_grants (user_id, thread_id, artifact_id, capability, state, at_ms) VALUES (?, ?, ?, ?, ?, ?)\n                 ON CONFLICT (user_id, thread_id, artifact_id, capability) DO UPDATE SET state = excluded.state, at_ms = excluded.at_ms",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ec30af7e51cc7159b63a4ed855fcc7e22c40c00f4ff601ab31e88be9f41591b8"
+}
