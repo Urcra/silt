@@ -120,6 +120,18 @@ impl Core {
         }
     }
 
+    /// A doc's text CRDT, which comments on it anchor in.
+    pub(crate) fn doc_crdt(&self, thread: ThreadId, artifact: ArtifactId) -> silt_crdt::TextDoc {
+        let family_id = self.threads[&thread].family;
+        match self.families.get(&family_id) {
+            Some(family) => family.doc_crdt(thread, artifact),
+            None => {
+                let log = self.local_log(family_id);
+                silt_log::doc_crdt_in(log, &crate::page::graph_of(log), thread, artifact)
+            }
+        }
+    }
+
     pub(crate) fn sheet_cells(&self, thread: ThreadId, artifact: ArtifactId, sheet: u16) -> silt_log::page::SheetCells {
         let family_id = self.threads[&thread].family;
         match self.families.get(&family_id) {
@@ -132,7 +144,7 @@ impl Core {
     }
 
     /// The artifact `id` of the thread, which must be a `kind`.
-    fn edited_artifact(&self, thread: ThreadId, id: &str, kind: &str) -> Result<ArtifactId, CoreError> {
+    pub(crate) fn edited_artifact(&self, thread: ThreadId, id: &str, kind: &str) -> Result<ArtifactId, CoreError> {
         let parsed: ArtifactId = id.parse().map_err(|_| CoreError::Invalid(format!("{id} isn't an artifact id")))?;
         let found = self
             .history_entries(thread)

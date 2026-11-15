@@ -1812,7 +1812,7 @@ function ThreadBody({
     if (linked) follow.landed.current = true
     else toEnd()
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
-  const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
+  const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry' && comment.location.at !== 'doc')
   const files = stats.data ?? null
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
   const entryProps: EntryProps = {

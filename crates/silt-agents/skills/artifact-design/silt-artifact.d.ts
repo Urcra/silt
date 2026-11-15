@@ -112,10 +112,18 @@ interface SiltDownloads {
   save(file: { filename: string; data: string | Blob | ArrayBuffer | Uint8Array; type?: string }): Promise<{ saved: true }>
 }
 
-// `comments` (declare `{"comments": {}}`): opens the artifact's own comment
-// composer, quoting `text`. Silt shows the comments; never list them.
+// `comments`: `{"comments": {"composer_only": true}}` only opens the
+// artifact's own comment composer, quoting `text`, and asks nothing.
+// `{"comments": {}}` also writes as the viewer, once they agree for the
+// artifact (`not_granted` if they don't): `add` comments on the version
+// shown, quoting `quote`; `reply` and `resolve` take the id of a comment on
+// this artifact. Call them from a viewer's click, never on load. Silt shows
+// the comments; never list them.
 interface SiltComments {
   openComposer(at: { text?: string }): Promise<null>
+  add(comment: { text: string; quote?: string }): Promise<{ id: string }>
+  reply(to: { id: string; text: string }): Promise<{ id: string }>
+  resolve(comment: { id: string }): Promise<{ id: string }>
 }
 
 // `sample` (declare `{"sample": {}}`): asks an agent a question, with no

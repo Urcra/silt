@@ -125,11 +125,15 @@ fn sequence<'a>(items: &[HistoryItem<'a>], graph: &CausalGraph, wanted: impl Fn(
 
 /// A doc's text as it stands along `items`.
 pub fn doc_text(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: ArtifactId) -> String {
+    doc_crdt(items, graph, artifact).text()
+}
+
+/// A doc's text CRDT along `items`, which comments on it anchor in.
+pub fn doc_crdt(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: ArtifactId) -> TextDoc {
     sequence(items, graph, |op| match op {
         PageOp::Text { artifact: of, op } if *of == artifact => Some(op),
         _ => None,
     })
-    .text()
 }
 
 /// A sheet as it stands: its rows' and columns' ids in order, and each

@@ -115,11 +115,20 @@ async fn add_comment(
 ) -> Result<Json<CommentView>, ApiError> {
     let text = said(&body.text)?;
     let seen = browse::seen_thread(&server, browser.user, &id).await?;
-    let CommentOn::Entry { index } = body.on else {
-        return Err(bad_request("comment on code from a machine with the thread checked out"));
+    let target = match body.on {
+        CommentOn::Entry { index } => {
+            let (delta, _) = seen.entries.get(index).ok_or_else(|| bad_request("no such message"))?;
+            CommentTarget::Message { delta: *delta }
+        }
+        CommentOn::Doc { artifact, start, end } => {
+            let (artifact, doc) = browse::seen_doc(&server, browser.user, &id, &artifact).await?;
+            silt_proto::edited::doc_comment_target(&doc, artifact, start, end).map_err(bad_request)?
+        }
+        CommentOn::Lines { .. } | CommentOn::Anchored { .. } => {
+            return Err(bad_request("comment on code from a machine with the thread checked out"));
+        }
     };
-    let (delta, _) = seen.entries.get(index).ok_or_else(|| bad_request("no such message"))?;
-    let op = Op::Comment(CommentOp::Added { target: CommentTarget::Message { delta: *delta }, text, by: seen.me });
+    let op = Op::Comment(CommentOp::Added { target, text, by: seen.me });
     let comment = write_as(&server, browser, seen.family, seen.thread, None, op).await?;
     comment_view(&server, browser, seen.thread, comment).await
 }

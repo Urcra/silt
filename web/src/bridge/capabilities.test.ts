@@ -15,8 +15,17 @@ const artifact: ArtifactView = {
   capabilities: { downloads: {}, comments: {}, artifact: {} },
 }
 
-function holder(agrees: boolean, opened: string[] = []): Holder {
-  return { confirm: async () => agrees, openComposer: (text) => opened.push(text) }
+function holder(agrees: boolean, opened: string[] = [], added: string[] = []): Holder {
+  return {
+    confirm: async () => agrees,
+    openComposer: (text) => opened.push(text),
+    addComment: async (text, quote) => {
+      added.push(quote ? `${quote}: ${text}` : text)
+      return `c${added.length}`
+    },
+    commentIds: () => ['c1'],
+    commentsChanged: () => undefined,
+  }
 }
 
 describe('the capabilities a page is served', () => {
@@ -47,6 +56,21 @@ describe('the capabilities a page is served', () => {
       error: { code: 'refused' },
     })
     expect(await broker.answer({ id: 3, cap: 'artifact', method: 'version', args: null })).toEqual({ ok: true, value: { version: 3 } })
+  })
+
+  it('comments as the viewer once they agree, and only replies to comments on this artifact', async () => {
+    const added: string[] = []
+    const broker = new Broker({ thread: 't', artifact, emit: () => undefined }, handlersFor('t', artifact, holder(true, [], added)))
+    const made = await broker.answer({ id: 1, cap: 'comments', method: 'add', args: { text: 'Move this up', quote: 'Q3 row' } })
+    expect(made).toEqual({ ok: true, value: { id: 'c1' } })
+    expect(added).toEqual(['Q3 row: Move this up'])
+    const foreign = await broker.answer({ id: 2, cap: 'comments', method: 'reply', args: { id: 'elsewhere', text: 'hi' } })
+    expect(foreign).toMatchObject({ ok: false, error: { code: 'refused' } })
+    const declined = new Broker({ thread: 't', artifact, emit: () => undefined }, handlersFor('t', artifact, holder(false)))
+    expect(await declined.answer({ id: 3, cap: 'comments', method: 'add', args: { text: 'no' } })).toMatchObject({ ok: false, error: { code: 'not_granted' } })
+    const composerOnly: ArtifactView = { ...artifact, capabilities: { comments: { composer_only: true } } }
+    const opener = new Broker({ thread: 't', artifact: composerOnly, emit: () => undefined }, handlersFor('t', composerOnly, holder(true)))
+    expect(await opener.answer({ id: 4, cap: 'comments', method: 'add', args: { text: 'no' } })).toMatchObject({ ok: false })
   })
 })
 

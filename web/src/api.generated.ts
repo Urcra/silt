@@ -259,7 +259,7 @@ export type CommentLocation = { "at": "entry", index: number, excerpt: string, }
  * Where they are in the base the comments were asked against, when
  * they're there: a diff shows a comment on deleted lines beside them.
  */
-before: LineSpan | null, } | { "at": "unknown" };
+before: LineSpan | null, } | { "at": "doc", artifact: string, start: number, end: number, excerpt: string, outdated: boolean, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
@@ -268,7 +268,7 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, };
+hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, };
 
 export type PendingAnchor = { anchor: string, };
 

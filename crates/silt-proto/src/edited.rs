@@ -264,6 +264,44 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
     book.save_to_buffer().map_err(|error| error.to_string())
 }
 
+/// A comment's target on characters `start..end` of a doc as it stands:
+/// anchored before the first and after the last, so it follows its text
+/// through edits, as a comment on code does (ADR 0066).
+pub fn doc_comment_target(
+    doc: &silt_crdt::TextDoc,
+    artifact: ArtifactId,
+    start: usize,
+    end: usize,
+) -> Result<silt_log::CommentTarget, String> {
+    use silt_crdt::Bias;
+    if start >= end {
+        return Err("choose some of the doc's text to comment on".into());
+    }
+    let anchor = |pos, bias| doc.anchor(pos, bias).map_err(|_| format!("the doc has {} characters", doc.len()));
+    Ok(silt_log::CommentTarget::Page { artifact, start: anchor(start, Bias::Right)?, end: anchor(end, Bias::Left)? })
+}
+
+/// Where a comment on a doc's text is now.
+pub fn doc_comment_location(
+    doc: &silt_crdt::TextDoc,
+    artifact: ArtifactId,
+    start: &silt_crdt::Anchor,
+    end: &silt_crdt::Anchor,
+) -> crate::view::CommentLocation {
+    let (Ok(from), Ok(to)) = (doc.resolve(start), doc.resolve(end)) else {
+        return crate::view::CommentLocation::Unknown;
+    };
+    let (start, end) = (from.pos, to.pos.max(from.pos));
+    let excerpt = doc.text().chars().skip(start).take((end - start).min(120)).collect();
+    crate::view::CommentLocation::Doc {
+        artifact: artifact.to_string(),
+        start,
+        end,
+        excerpt,
+        outdated: (from.outdated && to.outdated) || start == end,
+    }
+}
+
 /// How many words a doc's or a sheet's search hit shows, as the index's
 /// snippets do.
 const SNIPPET_WORDS: usize = 12;

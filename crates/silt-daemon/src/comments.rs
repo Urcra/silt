@@ -78,6 +78,11 @@ impl Core {
                 let (inode, start, end) = self.held_anchor(family_id, thread, &anchor)?;
                 CommentTarget::Code { inode, start, end }
             }
+            CommentOn::Doc { artifact, start, end } => {
+                let artifact = self.edited_artifact(thread, &artifact, "doc")?;
+                silt_proto::edited::doc_comment_target(&self.doc_crdt(thread, artifact), artifact, start, end)
+                    .map_err(CoreError::Invalid)?
+            }
         };
         let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
@@ -307,6 +312,7 @@ impl Core {
         let family = &self.families[&family_id];
         let entries = self.history_entries(thread);
         let places = Places::new(family, thread, base, hide_git);
+        let mut docs = std::collections::HashMap::new();
         Ok(family
             .comments(thread)
             .into_iter()
@@ -318,7 +324,10 @@ impl Core {
                         })
                     }
                     CommentTarget::Code { inode, start, end } => places.locate(inode, &start, &end),
-                    CommentTarget::Page { .. } => CommentLocation::Unknown,
+                    CommentTarget::Page { artifact, start, end } => {
+                        let doc = docs.entry(artifact).or_insert_with(|| family.doc_crdt(thread, artifact));
+                        silt_proto::edited::doc_comment_location(doc, artifact, &start, &end)
+                    }
                 };
                 CommentView {
                     id: short_mr(comment.id),

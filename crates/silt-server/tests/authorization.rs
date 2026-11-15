@@ -1821,6 +1821,19 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     assert_eq!(hit["snippet"], "[Launch] plan", "{found}");
     let (_, found) = erin.get("/search?q=launch").await;
     assert_eq!(found, serde_json::json!([]), "erin can't read the thread");
+
+    // A comment on the doc's text follows it through edits.
+    let comments = format!("/threads/{THREAD}/comments");
+    let on =
+        |artifact: &str| serde_json::json!({"on": {"on": "doc", "artifact": artifact, "start": 2, "end": 8}, "text": "rename?"});
+    let (status, made) = carol.post(&comments, on("0123456789ab")).await;
+    assert_eq!((status, &made["location"]["excerpt"]), (StatusCode::OK, &"Launch".into()), "{made}");
+    assert_eq!(carol.post(&comments, on("ba9876543210")).await.0, StatusCode::BAD_REQUEST, "a sheet's text takes no comments");
+    alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"pos": 0, "delete": 0, "insert": "Draft\n"}]})).await;
+    let (_, listed) = carol.get(&comments).await;
+    let location =
+        &listed.as_array().and_then(|all| all.iter().find(|comment| comment["text"] == "rename?")).expect("listed")["location"];
+    assert_eq!((&location["start"], &location["excerpt"]), (&8.into(), &"Launch".into()), "{listed}");
 }
 
 type RoomStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

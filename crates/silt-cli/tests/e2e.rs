@@ -1842,10 +1842,24 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let doc = artifacts_of(&api, &thread)[0]["id"].as_str().expect("id").to_owned();
     let path = format!("/api/threads/{thread}/artifacts/{doc}/doc");
     assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- ship\n");
+    // A comment on "ship" follows it when a line goes in above.
+    let on = serde_json::json!({"on": "doc", "artifact": doc, "start": 9, "end": 13});
+    api.ok("POST", &format!("/api/threads/{thread}/comments"), Some(serde_json::json!({"on": on, "text": "by when?"})));
+    let commented = || {
+        let comments = api.ok("GET", &format!("/api/threads/{thread}/comments"), None);
+        comments.as_array().and_then(|all| all.iter().find(|comment| comment["text"] == "by when?")).expect("the comment")["location"].clone()
+    };
+    assert_eq!((&commented()["start"], &commented()["excerpt"]), (&9.into(), &"ship".into()));
     // The person types a line while the agent edits another.
     let typed =
         api.ok("POST", &path, Some(serde_json::json!({"op": "edit", "edits": [{"pos": 7, "delete": 0, "insert": "- test\n"}]})));
     assert_eq!(typed["text"], "# Plan\n- test\n- ship\n");
+    let moved = commented();
+    assert_eq!(
+        (&moved["at"], &moved["start"], &moved["end"], &moved["excerpt"]),
+        (&"doc".into(), &16.into(), &20.into(), &"ship".into()),
+        "{moved}"
+    );
     prompt("Doc edit");
     assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- test\n- ship on Friday\n");
     // Search finds the doc's text as it stands, words the person typed too.

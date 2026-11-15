@@ -638,6 +638,15 @@ pub enum CommentLocation {
         #[serde(default)]
         before: Option<LineSpan>,
     },
+    /// Where the commented text of a doc is now, by character; `outdated`
+    /// once it's deleted.
+    Doc {
+        artifact: String,
+        start: usize,
+        end: usize,
+        excerpt: String,
+        outdated: bool,
+    },
     Unknown,
 }
 
@@ -773,6 +782,8 @@ pub enum CommentOn {
     /// Lines held by an anchor a pending review comment took when it was
     /// written, so it lands where its text is now (ADR 0066).
     Anchored { anchor: String },
+    /// Characters `start..end` of a doc's text as it stands (ADR 0077).
+    Doc { artifact: String, start: usize, end: usize },
 }
 
 /// Where a pending review comment's lines are held, as the daemon anchored

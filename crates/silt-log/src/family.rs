@@ -438,6 +438,12 @@ impl Family {
         crate::page::doc_text(&items, &self.graph, artifact)
     }
 
+    /// A doc's text CRDT in `thread`, which comments on it anchor in.
+    pub fn doc_crdt(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> silt_crdt::TextDoc {
+        let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
+        crate::page::doc_crdt(&items, &self.graph, artifact)
+    }
+
     /// One sheet of a sheet artifact in `thread` (ADR 0077).
     pub fn sheet_cells(&self, thread: ThreadId, artifact: silt_types::ArtifactId, sheet: u16) -> crate::page::SheetCells {
         let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
@@ -647,6 +653,13 @@ pub fn doc_text_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId, artifac
     let threads = LogThreads::new(log, graph);
     let items = expand(&threads, thread, true, &mut Expansion::default()).0;
     crate::page::doc_text(&items, graph, artifact)
+}
+
+/// [`Family::doc_crdt`] over any deltas of a family.
+pub fn doc_crdt_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId, artifact: silt_types::ArtifactId) -> silt_crdt::TextDoc {
+    let threads = LogThreads::new(log, graph);
+    let items = expand(&threads, thread, true, &mut Expansion::default()).0;
+    crate::page::doc_crdt(&items, graph, artifact)
 }
 
 /// [`Family::sheet_cells`] over any deltas of a family.

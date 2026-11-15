@@ -15,6 +15,12 @@ export type Holder = {
   confirm: (ask: { title: string; detail: string; action: string }) => Promise<boolean>
   /** Opens the artifact's comment composer, quoting `text`. */
   openComposer: (text: string) => void
+  /** Comments as the viewer on the version shown, quoting `quote`, and answers the comment's id. */
+  addComment: (text: string, quote: string | null) => Promise<string>
+  /** The ids of the comments on this artifact, which a page may reply to and resolve. */
+  commentIds: () => string[]
+  /** Shows what a page's reply or resolve changed. */
+  commentsChanged: () => void
 }
 
 export function handlersFor(thread: string, artifact: ArtifactView, holder: Holder): Record<string, CapabilityHandler> {
@@ -23,7 +29,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     artifact: artifactHandler(thread, artifact),
     user: userHandler(thread),
     downloads: downloadsHandler(holder),
-    comments: commentsHandler(holder),
+    comments: commentsHandler(thread, artifact, holder),
     sample: sampleHandler(thread, artifact, holder),
     assets: assetsHandler(thread, artifact),
     files: filesHandler(thread, artifact, holder),
@@ -36,11 +42,11 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
 }
 
 /** The capabilities that ask the viewer before they act, which `permissions` reports on. */
-const ASKED = ['sample', 'dictation', 'mcp']
+const ASKED = ['sample', 'dictation', 'mcp', 'comments']
 
 /** `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. */
 function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
-  const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]))
+  const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]) && !(name === 'comments' && composerOnly(artifact)))
   const states = async () => {
     const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
     return Object.fromEntries(declared().map((name) => [name, grants[name] === 'granted' ? 'granted' : grants[name] === 'refused' ? 'denied' : 'prompt']))
@@ -314,16 +320,56 @@ function sizeText(bytes: number): string {
 }
 
 /** `comments`: the page opens the artifact's own comment composer; the comments themselves stay Silt's to show. */
-function commentsHandler(holder: Holder): CapabilityHandler {
+function commentsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  const writes = !composerOnly(artifact)
+  let consent: Promise<boolean> | null = null
+  const consented = () =>
+    (consent ??= (async () => {
+      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
+      if (grants.comments === 'granted') return true
+      if (grants.comments === 'refused') return false
+      const agreed = await holder.confirm({
+        title: `Let ${artifact.title} comment as you?`,
+        detail: 'Comments it writes are yours, on this artifact, and go to the agent as yours do.',
+        action: 'Allow',
+      })
+      await api.setArtifactGrant(thread, artifact.id, 'comments', agreed ? 'granted' : 'refused').catch(() => undefined)
+      return agreed
+    })())
+  const said = (value: unknown) => {
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (!text || text.length > 4000) throw new Refusal('refused', 'a comment is 1 to 4,000 characters')
+    return text
+  }
+  const own = (value: unknown) => {
+    const id = String(value ?? '')
+    if (!holder.commentIds().includes(id)) throw new Refusal('refused', "that isn't a comment on this artifact")
+    return id
+  }
   return {
-    methods: ['openComposer'],
+    methods: writes ? ['openComposer', 'add', 'reply', 'resolve'] : ['openComposer'],
     perMinute: 20,
-    call: async (_method, args) => {
-      const text = (args as { text?: unknown } | null)?.text
-      holder.openComposer(typeof text === 'string' ? text.slice(0, 500) : '')
-      return null
+    call: async (method, args) => {
+      const given = (args ?? {}) as { text?: unknown; quote?: unknown; id?: unknown }
+      if (method === 'openComposer') {
+        holder.openComposer(typeof given.text === 'string' ? given.text.slice(0, 500) : '')
+        return null
+      }
+      if (!(await consented())) throw new Refusal('not_granted', 'the viewer chose not to let this page comment as them')
+      if (method === 'add') return { id: await holder.addComment(said(given.text), typeof given.quote === 'string' ? given.quote.slice(0, 500) : null) }
+      const id = own(given.id)
+      if (method === 'reply') await api.reply(thread, id, said(given.text))
+      else await api.resolveComment(thread, id)
+      holder.commentsChanged()
+      return { id }
     },
   }
+}
+
+/** A page that declares `{comments: {composer_only: true}}` only opens the composer, and asks nothing. */
+function composerOnly(artifact: ArtifactView): boolean {
+  const declared = artifact.capabilities?.comments as { composer_only?: unknown } | undefined
+  return declared?.composer_only === true
 }
 
 /** `sample`: a question for an agent, asked once the person agrees, its answer told to the page as it streams. */

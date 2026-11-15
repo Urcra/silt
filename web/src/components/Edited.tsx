@@ -3,12 +3,62 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { api, type SheetView } from '../api'
+import { api, type CommentView, type SheetView } from '../api'
 import { useTopic } from '../bus'
-import { message } from '../query'
+import { keys, message } from '../query'
 import { columnName, splice } from '../typed'
-import { Button, IconButton, cx, toast } from '../ui'
+import { Button, IconButton, Textarea, cx, toast } from '../ui'
+import { CommentThread } from './CommentThread'
 import { Markdown } from './Markdown'
+
+/** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
+function characters(text: string, units: number): number {
+  return Array.from(text.slice(0, units)).length
+}
+
+/** The UTF-16 offset of character `at` of `text`. */
+function units(text: string, at: number): number {
+  return Array.from(text).slice(0, at).join('').length
+}
+
+/** The doc's comments, each on the text it was made on, which they follow through edits (ADR 0077). */
+function DocComments({
+  thread,
+  comments,
+  onShow,
+  onChanged,
+}: {
+  thread: string
+  comments: CommentView[]
+  /** Selects a comment's text in the editor. */
+  onShow: (start: number, end: number) => void
+  onChanged: () => Promise<unknown>
+}) {
+  if (comments.length === 0) return null
+  return (
+    <section aria-label="comments on the doc" data-testid="doc-comments" className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
+      <h3 className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Comments</h3>
+      {comments.map((comment) => {
+        const at = comment.location.at === 'doc' ? comment.location : null
+        return (
+          <div key={comment.id} className={cx('flex flex-col gap-1', comment.resolved && 'opacity-60')}>
+            {at && (
+              <button type="button" className="self-start border-l-2 border-accent pl-2 text-left text-xs text-fg-2 hover:text-fg-1" onClick={() => onShow(at.start, at.end)}>
+                {at.outdated ? 'The text it was on was deleted' : `“${at.excerpt}”`}
+              </button>
+            )}
+            <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
+            {!comment.resolved && (
+              <Button variant="ghost" size="sm" className="self-start" onClick={() => void api.resolveComment(thread, comment.id).then(onChanged)}>
+                Resolve
+              </Button>
+            )}
+          </div>
+        )
+      })}
+    </section>
+  )
+}
 
 export function DocEditor({ thread, artifact }: { thread: string; artifact: string }) {
   useTopic(`thread:${thread}`)
@@ -17,6 +67,40 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
   const doc = useQuery({ queryKey: key, queryFn: () => api.docData(thread, artifact, { op: 'read' }), refetchInterval: 5_000 })
   const [view, setView] = useState<'write' | 'read'>('read')
   const [draft, setDraft] = useState<string | null>(null)
+  const comments = useQuery({ queryKey: keys.comments(thread), queryFn: () => api.comments(thread) })
+  const commentsHere = (comments.data ?? []).filter((comment) => comment.location.at === 'doc' && comment.location.artifact === artifact)
+  const editor = useRef<HTMLTextAreaElement>(null)
+  // The characters selected in the editor, which a new comment is on.
+  const [chosen, setChosen] = useState<{ start: number; end: number } | null>(null)
+  const [composing, setComposing] = useState(false)
+  const [commenting, setCommenting] = useState('')
+  const refreshComments = () => queries.invalidateQueries({ queryKey: keys.comments(thread) })
+  const choose = () => {
+    const box = editor.current
+    if (!box || box.selectionStart === box.selectionEnd) return setChosen(null)
+    setChosen({ start: characters(box.value, box.selectionStart), end: characters(box.value, box.selectionEnd) })
+  }
+  const comment = async () => {
+    if (!chosen || !commenting.trim()) return
+    try {
+      await api.addComment(thread, { on: 'doc', artifact, ...chosen }, commenting.trim())
+      setCommenting('')
+      setComposing(false)
+      setChosen(null)
+      await refreshComments()
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
+  const show = (start: number, end: number) => {
+    setView('write')
+    requestAnimationFrame(() => {
+      const box = editor.current
+      if (!box) return
+      box.focus()
+      box.setSelectionRange(units(box.value, start), units(box.value, end))
+    })
+  }
   // What the daemon or server last said the text is, which edits are made against.
   const synced = useRef<string | null>(null)
   const pending = useRef<number | null>(null)
@@ -55,21 +139,51 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
           Edit
         </Button>
         <span className="flex-1" />
+        {view === 'write' && (
+          <Button size="sm" variant="ghost" icon="comment" disabled={!chosen} title={chosen ? undefined : 'Select some text first'} onClick={() => setComposing(true)}>
+            Comment
+          </Button>
+        )}
         <span className="font-mono text-2xs text-fg-3">{draft !== null ? 'Saving…' : 'Saved'}</span>
       </div>
+      {view === 'write' && chosen && composing && (
+        <form
+          className="flex shrink-0 flex-col gap-1.5 border-b border-line-subtle px-3 py-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void comment()
+          }}
+        >
+          <Textarea aria-label="comment on the selected text" rows={2} value={commenting} onChange={(event) => setCommenting(event.target.value)} placeholder="What about this text?" autoFocus />
+          <div className="flex justify-end gap-1.5">
+            <Button type="button" size="sm" variant="ghost" onClick={() => setComposing(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" variant="primary" disabled={!commenting.trim()}>
+              Comment
+            </Button>
+          </div>
+        </form>
+      )}
       {view === 'write' ? (
-        <textarea
-          aria-label="the doc's text"
-          value={text}
-          onChange={(event) => typed(event.target.value)}
-          className="min-h-0 flex-1 resize-none bg-bg px-6 py-4 font-mono text-sm leading-6 text-fg-1 outline-none"
-          spellCheck
-        />
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <textarea
+            ref={editor}
+            aria-label="the doc's text"
+            value={text}
+            onChange={(event) => typed(event.target.value)}
+            onSelect={choose}
+            className="min-h-64 flex-1 resize-none bg-bg px-6 py-4 font-mono text-sm leading-6 text-fg-1 outline-none"
+            spellCheck
+          />
+          <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
+        </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
             <Markdown text={text} />
           </article>
+          <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
         </div>
       )}
     </div>

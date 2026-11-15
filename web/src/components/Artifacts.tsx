@@ -21,6 +21,8 @@ import {
   svgUrl,
   textOf,
   versionOf,
+  commentsOn,
+  quoted,
 } from '../artifacts'
 import type { Opened } from '../artifactActions'
 import { keys, message } from '../query'
@@ -160,6 +162,12 @@ export function ArtifactViewer({
   // What a page asks the person to agree to, such as saving a file, until they answer.
   const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
   const composer = useRef<(() => void) | null>(null)
+  const shown = group ? versionOf(group, opened.version) : null
+  // What the holder's calls act on, as the view now stands; the holder itself is made once.
+  const current = useRef({ group, shown: shown, comments, onCommentsChanged })
+  useEffect(() => {
+    current.current = { group, shown: shown, comments, onCommentsChanged }
+  })
   const [holder] = useState<Holder>(() => ({
     confirm: (ask) =>
       new Promise<boolean>((answer) =>
@@ -172,12 +180,23 @@ export function ArtifactViewer({
       setQuote(text || null)
       composer.current?.()
     },
+    addComment: async (text, quote) => {
+      const { shown, onCommentsChanged } = current.current
+      if (!shown) throw new Error('no version is shown')
+      const made = await api.addComment(thread, { on: 'entry', index: shown.entry.index }, quoted(text, quote))
+      await onCommentsChanged()
+      return made.id
+    },
+    commentIds: () => {
+      const { group, comments } = current.current
+      return group ? commentsOn(group, comments).map((comment) => comment.id) : []
+    },
+    commentsChanged: () => void current.current.onCommentsChanged(),
   }))
   const answerAsking = (agreed: boolean) => {
     asking?.answer(agreed)
     setAsking(null)
   }
-  const shown = group ? versionOf(group, opened.version) : null
   const content = useQuery({
     queryKey: keys.artifact(thread, shown?.artifact.blob ?? ''),
     queryFn: () => api.artifact(thread, shown!.artifact.blob),
