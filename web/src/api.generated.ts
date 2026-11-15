@@ -948,7 +948,12 @@ home_locked?: boolean,
  * local models answer (ADR 0066): no server, `local`, and Claude Code
  * on a local model only.
  */
-local_only?: boolean, };
+local_only?: boolean, 
+/**
+ * In a Local only workspace, agents' history tools read the whole
+ * workspace rather than their own project.
+ */
+wide_history?: boolean, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

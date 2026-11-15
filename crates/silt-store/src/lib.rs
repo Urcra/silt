@@ -304,6 +304,15 @@ impl StoredDeltas {
     }
 }
 
+/// What a run's token was made for (ADR 0065).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunToken {
+    pub thread: ThreadId,
+    pub workspace: String,
+    /// The project it runs in, where it was known.
+    pub project: Option<String>,
+}
+
 /// The local database and blob store.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -825,13 +834,21 @@ impl Store {
 
     /// Remembers a run's token by its hash, for what its history tools may
     /// read.
-    pub async fn add_run_token(&self, hash: &[u8], thread: ThreadId, workspace: &str, now_ms: i64) -> Result<(), StoreError> {
+    pub async fn add_run_token(
+        &self,
+        hash: &[u8],
+        thread: ThreadId,
+        workspace: &str,
+        project: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);
         sqlx::query!(
-            "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, created_ms) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, project, created_ms) VALUES (?, ?, ?, ?, ?)",
             hash,
             thread,
             workspace,
+            project,
             now_ms
         )
         .execute(&self.pool)
@@ -840,11 +857,13 @@ impl Store {
     }
 
     /// The thread and workspace a run token was made for.
-    pub async fn run_token(&self, hash: &[u8]) -> Result<Option<(ThreadId, String)>, StoreError> {
-        sqlx::query!("SELECT thread_id, workspace FROM run_tokens WHERE hash = ?", hash)
+    pub async fn run_token(&self, hash: &[u8]) -> Result<Option<RunToken>, StoreError> {
+        sqlx::query!("SELECT thread_id, workspace, project FROM run_tokens WHERE hash = ?", hash)
             .fetch_optional(&self.pool)
             .await?
-            .map(|row| Ok((ThreadId(id_from(&row.thread_id)?), row.workspace)))
+            .map(|row| {
+                Ok(RunToken { thread: ThreadId(id_from(&row.thread_id)?), workspace: row.workspace, project: row.project })
+            })
             .transpose()
     }
 

@@ -654,7 +654,8 @@ impl Core {
             Some(model) => Some(self.models.installed(&model).await?.id),
             None => None,
         };
-        let token = self.mint_run_token(thread, &workspace.id).await?;
+        let project = self.threads.get(&thread).map(|record| record.repo.clone());
+        let token = self.mint_run_token(thread, &workspace.id, project.as_deref()).await?;
         let local_token = token.clone();
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
         if let Some((_, args)) = &mut start.mcp {

@@ -109,6 +109,10 @@ pub struct Policy {
     /// on a local model only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_only: bool,
+    /// In a Local only workspace, agents' history tools read the whole
+    /// workspace rather than their own project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wide_history: bool,
 }
 
 /// The agents that run on local models: Silt's own, and Claude Code, which
@@ -143,7 +147,13 @@ impl Policy {
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
             local_only: self.local_only || other.local_only,
+            wide_history: self.wide_history && other.wide_history,
         }
+    }
+
+    /// Whether agents' history tools read only their own project.
+    pub fn history_by_project(&self) -> bool {
+        self.local_only && !self.wide_history
     }
 
     /// Whether projects keep the workspace's home, a Local only one's being

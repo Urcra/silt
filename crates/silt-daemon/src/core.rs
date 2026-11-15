@@ -246,7 +246,7 @@ pub struct Core {
     pub(crate) asked_server: Option<String>,
     /// The workspace the request being handled may read, for an agent's
     /// history tools (ADR 0065).
-    pub(crate) scope: Option<silt_workspace::WorkspaceId>,
+    pub(crate) scope: Option<crate::workspaces::Scope>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests
     /// made before aren't taken as answers to new ones.

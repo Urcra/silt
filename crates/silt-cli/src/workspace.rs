@@ -88,6 +88,9 @@ pub enum WorkspaceCommand {
         /// Nothing Silt holds of its threads leaves this machine, and only local models answer: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         local_only: Option<bool>,
+        /// In a Local only workspace, agents' history tools read every project in it, not only their own: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        wide_history: Option<bool>,
     },
     /// Set or unset a variable given to every agent started in a workspace, such as its own CLAUDE_CONFIG_DIR
     Env {
@@ -210,7 +213,17 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                 Ok(format!("{} takes {}", workspace.name, rule_text(&rule)))
             }
         }
-        WorkspaceCommand::Policy { workspace, agents, custom_agents, max_preset, sandbox, isolated, home_locked, local_only } => {
+        WorkspaceCommand::Policy {
+            workspace,
+            agents,
+            custom_agents,
+            max_preset,
+            sandbox,
+            isolated,
+            home_locked,
+            local_only,
+            wide_history,
+        } => {
             let workspace = find_mut(all, &workspace)?;
             let policy = &mut workspace.policy;
             if let Some(agents) = agents {
@@ -246,6 +259,9 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                 workspace.policy.local_only = local_only;
             }
             let policy = &mut workspace.policy;
+            if let Some(wide) = wide_history {
+                policy.wide_history = wide;
+            }
             if let Some(locked) = home_locked {
                 policy.home_locked = locked;
             }
@@ -329,7 +345,7 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
         parts.push("home locked".into());
     }
     if policy.local_only {
-        parts.push("local only".into());
+        parts.push(if policy.wide_history { "local only, history across it" } else { "local only, history by project" }.into());
     }
     parts.join(" · ")
 }

@@ -238,3 +238,77 @@ fn a_local_only_workspace_runs_only_local_models_and_keeps_its_threads_here() {
     assert!(!bound.status.success());
     assert!(String::from_utf8_lossy(&bound.stderr).contains("a Local only workspace has none"));
 }
+
+/// What `silt mcp` answers one call with, for a run's token.
+fn mcp_answer(machine: &Machine, thread: &str, token: &str, tool: &str, arguments: Value) -> String {
+    use std::io::Write as _;
+    let mut mcp = std::process::Command::new(env!("CARGO_BIN_EXE_silt"))
+        .args(["mcp", "--thread", thread, "--token", token])
+        .env("SILT_HOME", &machine.silt_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("silt mcp runs");
+    {
+        let mut stdin = mcp.stdin.take().expect("stdin");
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": arguments}});
+        writeln!(stdin, "{call}").expect("write");
+    }
+    String::from_utf8_lossy(&mcp.wait_with_output().expect("mcp exits").stdout).into_owned()
+}
+
+/// Claude Code's run in `dir` on the local model, and the thread and token
+/// it got.
+fn claude_in(machine: &Machine, dir: &Path) -> (String, String) {
+    let output = machine.command(&["claude", "--model", "local:tiny"], &[]).current_dir(dir).output().expect("silt runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let run: Value =
+        serde_json::from_slice(&fs::read(machine.agents.join("logs/claude-run")).expect("the run's log")).expect("JSON");
+    let args: Vec<&str> = run["args"].as_array().expect("args").iter().filter_map(Value::as_str).collect();
+    let config: Value =
+        serde_json::from_str(args.iter().skip_while(|arg| **arg != "--mcp-config").nth(1).expect("Silt's MCP server"))
+            .expect("JSON");
+    let mcp: Vec<String> = config["mcpServers"]["silt"]["args"]
+        .as_array()
+        .expect("args")
+        .iter()
+        .filter_map(|arg| arg.as_str().map(str::to_owned))
+        .collect();
+    let after = |flag: &str| mcp.iter().skip_while(|arg| *arg != flag).nth(1).cloned().expect("the flag's value");
+    (after("--thread"), after("--token"))
+}
+
+#[test]
+fn in_a_local_only_workspace_an_agents_history_tools_read_its_own_project_only() {
+    let root = common::temp_root("silt-local-history");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    // Two projects under one folder: a clone, and a repository of its own.
+    let logs = root.path().join("laptop/logs");
+    let service = logs.join("service");
+    common::git(root.path(), &["clone", "-q", &origin.to_string_lossy(), &service.to_string_lossy()]);
+    let notes = logs.join("notes");
+    fs::create_dir_all(&notes).expect("mkdir");
+    common::git(&notes, &["init", "-q"]);
+    fs::write(notes.join("README.md"), "notes\n").expect("write");
+    common::git(&notes, &["add", "."]);
+    common::git(&notes, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first"]);
+    let logs = common::canonical(&logs);
+    laptop.silt(&["workspace", "new", "Logs", "--local-only", "--folder", &logs.to_string_lossy()]);
+
+    let (notes_thread, _) = claude_in(&laptop, &common::canonical(&notes));
+    let (service_thread, token) = claude_in(&laptop, &common::canonical(&service));
+    let own = mcp_answer(&laptop, &service_thread, &token, "silt_history_read", json!({}));
+    assert!(!own.contains("no thread matches"), "it reads its own project's thread: {own}");
+    let other = mcp_answer(&laptop, &service_thread, &token, "silt_history_read", json!({"thread": notes_thread}));
+    assert!(other.contains("no thread matches"), "another project in the workspace is out of reach: {other}");
+
+    laptop.silt(&["workspace", "policy", "Logs", "--wide-history", "on"]);
+    let (service_thread, token) = claude_in(&laptop, &common::canonical(&service));
+    let wide = mcp_answer(&laptop, &service_thread, &token, "silt_history_read", json!({"thread": notes_thread}));
+    assert!(!wide.contains("no thread matches"), "widened to the workspace: {wide}");
+}

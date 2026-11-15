@@ -76,7 +76,7 @@ export function rulesLine(policy: Policy): string {
   if (policy.isolated) parts.push('isolated history')
   else if (policy.sandbox) parts.push("agent's sandbox required")
   if (policy.home_locked) parts.push('home locked')
-  if (policy.local_only) parts.push('local only')
+  if (policy.local_only) parts.push(policy.wide_history ? 'local only, history across it' : 'local only, history by project')
   return parts.join(' · ')
 }
 
