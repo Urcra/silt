@@ -192,7 +192,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   }
   const pdf = async () => {
     try {
-      const printed = await api.docPdf(thread, artifact, await page())
+      // The printed page's margins are the page's own, as a deck's slides have none.
+      const printable = (await page()).replace('</head>', '<style>@page{margin:18mm 16mm}</style></head>')
+      const printed = await api.artifactPdf(thread, artifact, printable)
       saveFile(Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0)), 'application/pdf', `${named}.pdf`)
     } catch (failure) {
       toast(message(failure), 'danger')

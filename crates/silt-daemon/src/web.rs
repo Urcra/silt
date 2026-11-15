@@ -161,7 +161,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
         .route("/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
-        .route("/api/threads/{id}/artifacts/{artifact}/doc.pdf", post(doc_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/pdf",
+            post(artifact_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
         .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
@@ -866,13 +869,14 @@ struct DocPage {
     html: String,
 }
 
-/// A doc printed to a PDF by this machine's headless browser (ADR 0077).
-async fn doc_pdf(
+/// A doc or a deck printed to a PDF by this machine's headless browser
+/// (ADRs 0076, 0077).
+async fn artifact_pdf(
     State(web): State<Web>,
     Path((thread, artifact)): Path<(String, String)>,
     Json(page): Json<DocPage>,
 ) -> HttpResponse {
-    ask(&web, Request::DocPdf { thread, artifact, html: page.html }).await
+    ask(&web, Request::ArtifactPdf { thread, artifact, html: page.html }).await
 }
 
 #[derive(Deserialize)]

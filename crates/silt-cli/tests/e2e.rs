@@ -1832,6 +1832,21 @@ fn a_deck_is_checked_against_its_schema_and_revised_by_a_patch() {
     let deck: serde_json::Value = serde_json::from_str(&artifact_text(&api, &thread, latest)).expect("json");
     assert_eq!(deck["slides"].as_array().map(Vec::len), Some(3));
     assert_eq!(deck["slides"][2]["title"], "Next");
+    // The deck prints a slide a page, where there's a headless browser.
+    let id = latest["id"].as_str().expect("id");
+    let page = serde_json::json!({"html": "<!doctype html><style>@page{size:1280px 720px;margin:0}section{height:720px;break-after:page}</style><section>One</section><section>Two</section>"});
+    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{id}/pdf"), Some(page));
+    if printed {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["data"].as_str().expect("data")).expect("base64");
+        let pages = bytes
+            .windows(b"/Type /Page\n".len())
+            .filter(|window| window.starts_with(b"/Type /Page") && !window.starts_with(b"/Type /Pages"))
+            .count();
+        assert!(bytes.starts_with(b"%PDF") && pages >= 2, "a page a slide: {pages}");
+    } else {
+        assert!(pdf.to_string().contains("headless"), "{pdf}");
+    }
 
     let said = prompt("Artifact bad deck");
     assert_eq!(artifacts_of(&api, &thread).len(), 2, "a deck with no slides isn't kept");
@@ -1907,7 +1922,7 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n");
     // A PDF of it, printed where there's a headless browser.
     let page = serde_json::json!({"html": "<!doctype html><h1>Plan</h1><ul><li>test</li></ul>"});
-    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/doc.pdf"), Some(page));
+    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/pdf"), Some(page));
     if printed {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["data"].as_str().expect("data")).expect("base64");

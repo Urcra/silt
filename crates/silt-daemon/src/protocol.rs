@@ -434,9 +434,10 @@ pub enum Request {
         #[serde(default)]
         tools: Vec<silt_proto::artifact::SampleTool>,
     },
-    /// A doc as a PDF, printed from `html`, the page the browser drew of
-    /// it, by this machine's headless browser.
-    DocPdf {
+    /// A doc or a deck as a PDF, printed from `html`, the page the browser
+    /// drew of it, by this machine's headless browser; a deck's page says
+    /// its own size.
+    ArtifactPdf {
         thread: String,
         artifact: String,
         html: String,

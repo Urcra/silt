@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { type FrameTheme } from "../artifacts";
+import { hosted } from "../served";
 import {
   type Block,
   type Canvas,
@@ -18,6 +19,7 @@ import {
   type Source,
   chartTable,
   csvOf,
+  deckPrint,
   layout,
   parsed,
   partDocument,
@@ -54,11 +56,17 @@ export function SlidesView({
   style,
   theme,
   title,
+  onComment,
+  onPrint,
 }: {
   text: string;
   style: string | null;
   theme: FrameTheme;
   title: string;
+  /** Opens the artifact's comment composer, quoting what the comment is on. */
+  onComment?: (quote: string) => void;
+  /** Prints the deck, a slide a page, where this computer can. */
+  onPrint?: (html: string) => void;
 }) {
   const deck = useMemo(() => parsed<Deck>(text), [text]);
   const count = deck?.slides.length ?? 0;
@@ -220,6 +228,20 @@ export function SlidesView({
             </li>
           ))}
         </ol>
+        {onComment && (
+          <IconButton
+            icon="comment"
+            label="Comment on this slide"
+            onClick={() => onComment(`Slide ${at + 1}: ${slide.title}`)}
+          />
+        )}
+        {onPrint && !hosted() && (
+          <IconButton
+            icon="download"
+            label="Download as PDF"
+            onClick={() => onPrint(deckPrint(deck, width, height, style))}
+          />
+        )}
         <Button
           size="sm"
           onClick={() =>
@@ -239,10 +261,13 @@ export function CanvasView({
   text,
   style,
   theme,
+  onComment,
 }: {
   text: string;
   style: string | null;
   theme: FrameTheme;
+  /** Opens the artifact's comment composer, quoting what the comment is on. */
+  onComment?: (quote: string) => void;
 }) {
   const canvas = useMemo(() => parsed<Canvas>(text), [text]);
   const placed = useMemo(() => layout(canvas?.boards ?? []), [canvas]);
@@ -380,6 +405,16 @@ export function CanvasView({
                   {board.width}×{board.height}
                   {board.caption ? ` · ${board.caption}` : ""}
                 </span>
+                {onComment && (
+                  <button
+                    type="button"
+                    onClick={() => onComment(`Board ${board.name}`)}
+                    className="text-fg-2 hover:text-fg-1 hover:underline"
+                    aria-label={`Comment on ${board.name}`}
+                  >
+                    Comment
+                  </button>
+                )}
               </figcaption>
               <iframe
                 title={board.name}

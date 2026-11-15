@@ -683,8 +683,19 @@ function ArtifactPage({
   if (artifact.kind === 'mermaid') return page(<Mermaid text={textOf(content)} title={artifact.title} />)
   const typed = (viewer: ReactNode) => <Suspense fallback={null}>{viewer}</Suspense>
   // Types Silt draws from the version's JSON (ADR 0076).
-  if (artifact.kind === 'slides') return typed(<SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />)
-  if (artifact.kind === 'canvas') return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} />)
+  if (artifact.kind === 'slides')
+    return typed(
+      <SlidesView
+        text={textOf(content)}
+        style={style}
+        theme={startTheme}
+        title={artifact.title}
+        onComment={(quote) => holder.openComposer(quote)}
+        onPrint={(html) => void printDeck(thread, artifact, html)}
+      />,
+    )
+  if (artifact.kind === 'canvas')
+    return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} onComment={(quote) => holder.openComposer(quote)} />)
   if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
   if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
@@ -725,6 +736,21 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
 }
 
 /** What an offline copy shows for an artifact that isn't a page of its own: Markdown's markup, a diagram's SVG. */
+/** A deck printed to a PDF by this computer's headless browser, handed to the person to save. */
+async function printDeck(thread: string, artifact: ArtifactView, html: string) {
+  try {
+    const printed = await api.artifactPdf(thread, artifact.id, html)
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0))], { type: 'application/pdf' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${artifact.title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'deck'}.pdf`
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (failure) {
+    toast(message(failure), 'danger')
+  }
+}
+
 async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent): Promise<string | undefined> {
   if (artifact.kind === 'markdown' || artifact.kind === 'doc') {
     const { renderToStaticMarkup } = await import('react-dom/server')

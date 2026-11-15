@@ -38,7 +38,8 @@ const job = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 })().catch((error) => { console.log(JSON.stringify({ failed: String(error && error.message || error).slice(0, 500) })); process.exit(2); });
 "#;
 
-/// A document printed to A4, its scripts off, as a doc's PDF (ADR 0077).
+/// A document printed with its scripts off: to A4 for a doc (ADR 0077), or
+/// at the size its `@page` rule gives, as a deck's slides do (ADR 0076).
 const PDF_SCRIPT: &str = r#"const fs = require('fs');
 let playwright;
 try { playwright = require('playwright'); } catch (e) { console.log(JSON.stringify({ missing: true })); process.exit(0); }
@@ -49,7 +50,7 @@ const job = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   const context = await browser.newContext({ javaScriptEnabled: false, offline: true });
   const page = await context.newPage();
   await page.setContent(job.page, { waitUntil: 'load' });
-  await page.pdf({ path: job.out, format: 'A4', printBackground: true, margin: { top: '18mm', bottom: '18mm', left: '16mm', right: '16mm' } });
+  await page.pdf({ path: job.out, format: 'A4', preferCSSPageSize: true, printBackground: true });
   await browser.close();
   console.log(JSON.stringify({ done: true }));
 })().catch((error) => { console.log(JSON.stringify({ failed: String(error && error.message || error).slice(0, 500) })); process.exit(2); });
@@ -65,7 +66,7 @@ pub(crate) fn render(html: &str, style: Option<&str>, dir: &Path) -> Result<Opti
 /// Prints the document `page` to a PDF in `dir`; none where there's no
 /// headless browser.
 pub(crate) fn pdf(page: &str, dir: &Path) -> Result<Option<Vec<u8>>, String> {
-    run(PDF_SCRIPT, page, dir, "doc.pdf")
+    run(PDF_SCRIPT, page, dir, "printed.pdf")
 }
 
 /// Runs `script` on `page` in Node with Playwright, which writes `name` in

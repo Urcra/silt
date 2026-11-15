@@ -736,11 +736,16 @@ impl Core {
             Request::Sample { thread, artifact, ask, input, images, tools } => {
                 return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images, tools));
             }
-            Request::DocPdf { thread, artifact, html } => {
-                let printable =
-                    self.find_thread(&thread).and_then(|thread| self.edited_artifact(thread, &artifact, "doc")).and_then(|id| {
+            Request::ArtifactPdf { thread, artifact, html } => {
+                let printable = self
+                    .find_thread(&thread)
+                    .and_then(|thread| {
+                        self.edited_artifact(thread, &artifact, "doc")
+                            .or_else(|_| self.edited_artifact(thread, &artifact, "slides"))
+                    })
+                    .and_then(|id| {
                         if html.len() > DOC_PDF_HTML_BYTES {
-                            return Err(CoreError::Invalid("the doc's page is too large to print".into()));
+                            return Err(CoreError::Invalid("the page is too large to print".into()));
                         }
                         Ok(self.data_dir.join("pdf").join(id.to_string()))
                     });

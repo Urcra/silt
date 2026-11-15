@@ -214,8 +214,8 @@ export const api = {
   /** Keeps a doc, a sheet or a whiteboard as it stands as its next version (ADR 0077). */
   saveVersion: (id: string, artifact: string, note: string) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/versions`, { note }),
-  /** A doc printed to a PDF by this computer's headless browser, from the page drawn of it. */
-  docPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/doc.pdf`, { html }),
+  /** A doc or a deck printed to a PDF by this computer's headless browser, from the page drawn of it. */
+  artifactPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
   /** A page's answer to the agent's call of a tool it gave its question. */
   sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),

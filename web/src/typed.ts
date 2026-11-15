@@ -34,6 +34,13 @@ export function partDocument(html: string, shared: string | undefined, width: nu
   })
 }
 
+/** A deck as one document to print, a slide a page at the deck's own size; scripts don't run in it. */
+export function deckPrint(deck: Deck, width: number, height: number, style: string | null): string {
+  const slides = deck.slides.map((slide) => `<section class="silt-slide">${slide.html}</section>`).join('')
+  const css = `@page{size:${width}px ${height}px;margin:0}html,body{margin:0;padding:0}.silt-slide{position:relative;width:${width}px;height:${height}px;overflow:hidden;break-after:page}${deck.style ?? ''}${style ?? ''}`
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${slides}</body></html>`
+}
+
 /** Which slide `#n` names, counting from 1, or the first. */
 export function slideFromHash(hash: string, count: number): number {
   const named = /^#(\d+)$/.exec(hash)
