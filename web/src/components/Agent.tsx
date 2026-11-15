@@ -587,6 +587,17 @@ export function AgentDock({
   })
 
   // While a turn runs, the line above the composer says so, with its clock.
+  // The preset picked counts at once, as starting the agent takes it along: waiting for the daemon's answer, a start
+  // in between would carry the one before and undo the pick. Refused, it goes back.
+  const choosePreset = (picked: Preset) => {
+    const before = preset
+    onPreset(picked)
+    void api.setPreset(thread, picked).catch((failure: unknown) => {
+      onPreset(before)
+      setError(message(failure))
+    })
+  }
+
   // Shift+Tab moves to the agent's next mode, or Silt's next preset for an agent without modes.
   const cycle = () => {
     if (live && status.modes && permissionModes(status.modes.available)) {
@@ -598,8 +609,7 @@ export function AgentDock({
     }
     if (hosted() && !live) return
     const at = PRESETS.findIndex((choice) => choice.id === preset)
-    const next = PRESETS[(at + 1) % PRESETS.length]!.id
-    void api.setPreset(thread, next).then(() => onPreset(next))
+    choosePreset(PRESETS[(at + 1) % PRESETS.length]!.id)
   }
 
   // Ready, waiting or planned, the page shows it already (the header, the cards); this says it only to a screen reader.
@@ -695,13 +705,7 @@ export function AgentDock({
           label="permissions"
           icon="lock"
           value={preset}
-          onChange={(chosen) => {
-            const picked = chosen as Preset
-            void api.setPreset(thread, picked).then(
-              () => onPreset(picked),
-              (failure: unknown) => setError(message(failure)),
-            )
-          }}
+          onChange={(chosen) => choosePreset(chosen as Preset)}
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
         />
       )}

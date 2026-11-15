@@ -136,10 +136,17 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await bob.getByLabel('draft').fill('mind the tests')
   await expect(alice.getByTestId('drafts')).toContainText('bob is drafting: mind the tests')
 
+  // The preset picked counts at once, even while the daemon is still taking it: starting the agent then starts it there.
+  await alice.route('**/agent/preset', async (route) => {
+    const taken = await route.fetch()
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await route.fulfill({ response: taken })
+  })
   await alice.getByLabel('permissions').selectOption('ask_for_everything')
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await alice.getByLabel('draft').press('Enter')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await alice.unrouteAll({ behavior: 'wait' })
   await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
 
   // A prompt the daemon refuses comes back to the draft rather than stay shown as sent.
@@ -339,6 +346,8 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
 })
 
 test("another of Alice's machines directs the agent running on the first, through the server", async ({ browser }) => {
+  // Its waits for the second machine to hear the agent through the server take up to 20 s of a test's 30 under load.
+  test.slow()
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
