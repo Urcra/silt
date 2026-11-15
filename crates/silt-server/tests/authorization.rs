@@ -1587,3 +1587,67 @@ async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
     let file = anyone.get(format!("{}{path}data.json", bob.base)).send().await.expect("sends");
     assert_eq!(file.status(), StatusCode::NOT_FOUND, "a version has no files yet");
 }
+
+/// An artifact's page data on the server (ADR 0072): a push is checked
+/// against the rules the version declares, by who wrote it, and the hosted
+/// app reads and writes it as the person.
+#[tokio::test]
+async fn page_data_is_written_under_the_versions_rules_by_who_wrote_it() {
+    use silt_log::{ConvOp, PageOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let rules = serde_json::json!([
+        {"path": "votes", "read": "read", "write": "owner"},
+        {"path": "votes/{self}", "write": "comment"}
+    ]);
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Lunch poll", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"db": {"rules": rules}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let vote = |who: &str| {
+        Op::Page(PageOp::Set {
+            artifact,
+            path: format!("votes/{}", silt_proto::page::person_id(who)),
+            value: r#"{"pick":"soup"}"#.into(),
+        })
+    };
+    let carol = &world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1;
+    let as_alice = family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("alice"));
+    assert_eq!(carol.push(vec![as_alice]).await, StatusCode::FORBIDDEN, "carol can't vote as alice");
+    let own = applied(family, family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("carol")));
+    assert_eq!(carol.push(vec![own]).await, StatusCode::OK, "carol votes as herself");
+
+    let erin = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "erin").expect("erin").1, "erin").await;
+    let data = format!("/threads/{THREAD}/artifacts/0123456789ab/data");
+    let list = serde_json::json!({"op": "list", "collection": "votes"});
+    assert_eq!(erin.post(&data, list.clone()).await.0, StatusCode::NOT_FOUND, "someone who can't read the thread reads nothing");
+
+    let bob = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1, "bob").await;
+    let mine = serde_json::json!({"op": "set", "path": format!("votes/{}", silt_proto::page::person_id("bob")), "value": {"pick": "pizza"}});
+    let (status, written) = bob.post(&data, mine).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let theirs = serde_json::json!({"op": "set", "path": format!("votes/{}", silt_proto::page::person_id("carol")), "value": {"pick": "x"}});
+    assert_eq!(bob.post(&data, theirs).await.0, StatusCode::FORBIDDEN, "bob can't vote as carol");
+    let (status, votes) = bob.post(&data, list).await;
+    assert_eq!(status, StatusCode::OK, "{votes}");
+    let picks: Vec<&str> = votes.as_array().expect("docs").iter().filter_map(|doc| doc["data"]["pick"].as_str()).collect();
+    assert_eq!(picks.len(), 2, "{votes}");
+    assert!(picks.contains(&"soup") && picks.contains(&"pizza"), "{picks:?}");
+}

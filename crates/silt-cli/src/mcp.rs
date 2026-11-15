@@ -203,6 +203,21 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 return Ok(out);
             }
+            "silt_artifact_data" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reaches its artifacts' data")?;
+                let artifact = text_arg(arguments, "id")?;
+                let mut asked = arguments.clone();
+                if let Some(object) = asked.as_object_mut() {
+                    object.remove("id");
+                }
+                let request: silt_proto::page::PageRequest =
+                    serde_json::from_value(asked).map_err(|error| format!("that isn't a request of page data: {error}"))?;
+                let answer: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::PageData { thread: String::new(), artifact, asked: request }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&answer).unwrap_or_default());
+            }
             "silt_artifact_read" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
                 let id = text_arg(arguments, "id")?;

@@ -131,6 +131,9 @@ pub struct ThreadState {
     cloud: Option<CloudSessionId>,
     /// Indices into the family log of the thread's merges.
     merges: Vec<usize>,
+    /// Indices into the family log of the thread's page data (ADR 0072).
+    #[serde(default)]
+    page: Vec<usize>,
 }
 
 impl ThreadState {
@@ -420,7 +423,13 @@ impl Family {
 
     fn history_within<'a>(&'a self, thread: ThreadId, expansion: &mut Expansion<'a>) -> (Rc<[HistoryItem<'a>]>, bool) {
         let source = FamilyThreads(self);
-        expand(&source, thread, expansion)
+        expand(&source, thread, false, expansion)
+    }
+
+    /// `artifact`'s documents in `thread`, along its lineage (ADR 0072).
+    pub fn page_documents(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> crate::page::Documents {
+        let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
+        crate::page::documents(&items, artifact)
     }
 
     /// The comments on `thread`, oldest first by causal order, so every
@@ -454,7 +463,9 @@ struct ThreadLines {
 /// What a history is worked out from: a family's projection, or its log
 /// alone as a server holds it.
 trait Threads<'a> {
-    fn lines(&self, thread: ThreadId) -> Option<ThreadLines>;
+    /// The thread's own lines: its conversation and merges, and with
+    /// `page` its page data too.
+    fn lines(&self, thread: ThreadId, page: bool) -> Option<ThreadLines>;
     fn delta(&self, index: usize) -> &'a Delta;
     fn graph(&self) -> &CausalGraph;
 }
@@ -462,9 +473,10 @@ trait Threads<'a> {
 struct FamilyThreads<'a>(&'a Family);
 
 impl<'a> Threads<'a> for FamilyThreads<'a> {
-    fn lines(&self, thread: ThreadId) -> Option<ThreadLines> {
+    fn lines(&self, thread: ThreadId, page: bool) -> Option<ThreadLines> {
         let state = self.0.threads.get(&thread)?;
-        let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).copied().collect();
+        let pages: &[usize] = if page { &state.page } else { &[] };
+        let mut own: Vec<usize> = state.conversation.iter().chain(&state.merges).chain(pages).copied().collect();
         own.sort_unstable();
         Some(ThreadLines { forked_from: state.forked_from, fork_point: state.fork_point.clone(), own })
     }
@@ -483,11 +495,14 @@ struct LogThreads<'a, 'g> {
     log: &'a [Delta],
     graph: &'g CausalGraph,
     threads: HashMap<ThreadId, ThreadLines>,
+    /// Each thread's page data, by index, for a walk that wants it.
+    pages: HashMap<ThreadId, Vec<usize>>,
 }
 
 impl<'a, 'g> LogThreads<'a, 'g> {
     fn new(log: &'a [Delta], graph: &'g CausalGraph) -> Self {
         let mut threads: HashMap<ThreadId, ThreadLines> = HashMap::new();
+        let mut pages: HashMap<ThreadId, Vec<usize>> = HashMap::new();
         for (index, delta) in log.iter().enumerate() {
             let lines = threads.entry(delta.thread).or_insert_with(|| ThreadLines {
                 forked_from: None,
@@ -500,19 +515,23 @@ impl<'a, 'g> LogThreads<'a, 'g> {
                     lines.fork_point = Some(delta.parents.clone());
                 }
                 Op::Conv(_) | Op::Merge { .. } => lines.own.push(index),
+                Op::Page(_) => pages.entry(delta.thread).or_default().push(index),
                 _ => {}
             }
         }
-        Self { log, graph, threads }
+        Self { log, graph, threads, pages }
     }
 }
 
 impl<'a> Threads<'a> for LogThreads<'a, '_> {
-    fn lines(&self, thread: ThreadId) -> Option<ThreadLines> {
-        self.threads.get(&thread).map(|lines| ThreadLines {
-            forked_from: lines.forked_from,
-            fork_point: lines.fork_point.clone(),
-            own: lines.own.clone(),
+    fn lines(&self, thread: ThreadId, page: bool) -> Option<ThreadLines> {
+        self.threads.get(&thread).map(|lines| {
+            let mut own = lines.own.clone();
+            if page {
+                own.extend(self.pages.get(&thread).into_iter().flatten());
+                own.sort_unstable();
+            }
+            ThreadLines { forked_from: lines.forked_from, fork_point: lines.fork_point.clone(), own }
         })
     }
 
@@ -530,11 +549,16 @@ impl<'a> Threads<'a> for LogThreads<'a, '_> {
 /// what each pull brought in from upstream just before it. The flag says
 /// whether the history is whole rather than cut short where threads pull
 /// from each other both ways; only whole ones are reused.
-fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expansion<'a>) -> (Rc<[HistoryItem<'a>]>, bool) {
+fn expand<'a>(
+    threads: &impl Threads<'a>,
+    thread: ThreadId,
+    page: bool,
+    expansion: &mut Expansion<'a>,
+) -> (Rc<[HistoryItem<'a>]>, bool) {
     if let Some(done) = expansion.done.get(&thread) {
         return (Rc::clone(done), true);
     }
-    let Some(lines) = threads.lines(thread) else {
+    let Some(lines) = threads.lines(thread, page) else {
         return (Rc::from([]), true);
     };
     if !expansion.open.insert(thread) {
@@ -544,7 +568,7 @@ fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expa
     let mut items = Vec::new();
     if let (Some(source), Some(point)) = (lines.forked_from, &lines.fork_point) {
         let before = threads.graph().version_vector(point);
-        let (inherited, inherited_whole) = expand(threads, source, expansion);
+        let (inherited, inherited_whole) = expand(threads, source, page, expansion);
         whole &= inherited_whole;
         items.extend(inherited.iter().filter(|item| before.contains(item.delta.span.first())).map(|item| HistoryItem {
             // What the source pulled in stays upstream progress.
@@ -552,6 +576,9 @@ fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expa
                 HistorySource::Upstream => HistorySource::Upstream,
                 HistorySource::Own | HistorySource::Inherited => HistorySource::Inherited,
             },
+            // Worked out again below from the reverts the fork has: one the
+            // source made after the fork isn't the fork's.
+            rewound: false,
             ..*item
         }));
     }
@@ -560,12 +587,12 @@ fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expa
         let delta = threads.delta(index);
         if let Op::Merge { from, mr: None } = delta.op {
             let merged = threads.graph().version_vector(&delta.parents);
-            let (upstream, upstream_whole) = expand(threads, from, expansion);
+            let (upstream, upstream_whole) = expand(threads, from, page, expansion);
             whole &= upstream_whole;
             for item in upstream.iter() {
                 let id = item.delta.span.first();
                 if merged.contains(id) && seen.insert(id) {
-                    items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream, rewound: item.rewound });
+                    items.push(HistoryItem { delta: item.delta, source: HistorySource::Upstream, rewound: false });
                 }
             }
         }
@@ -586,7 +613,21 @@ fn expand<'a>(threads: &impl Threads<'a>, thread: ThreadId, expansion: &mut Expa
 /// fork inherited, what pulls brought in, and what reverts rewound.
 pub fn history_in<'a>(log: &'a [Delta], graph: &CausalGraph, thread: ThreadId) -> Vec<HistoryItem<'a>> {
     let threads = LogThreads::new(log, graph);
-    expand(&threads, thread, &mut Expansion::default()).0.to_vec()
+    expand(&threads, thread, false, &mut Expansion::default()).0.to_vec()
+}
+
+/// An artifact's documents in `thread` from a family's deltas alone, as a
+/// server folds them: along the lineage, with what reverts rewound left out
+/// (ADR 0072).
+pub fn page_documents_in(
+    log: &[Delta],
+    graph: &CausalGraph,
+    thread: ThreadId,
+    artifact: silt_types::ArtifactId,
+) -> crate::page::Documents {
+    let threads = LogThreads::new(log, graph);
+    let items = expand(&threads, thread, true, &mut Expansion::default()).0;
+    crate::page::documents(&items, artifact)
 }
 
 /// Whether `thread`'s history reaches past its own deltas: it's a fork or
@@ -1018,7 +1059,7 @@ impl Family {
                     return Err(LogError::NotAFile(*inode));
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Mr(_) | Op::Comment(_) => {}
+            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Mr(_) | Op::Comment(_) | Op::Page(_) => {}
         }
         Ok(false)
     }
@@ -1081,7 +1122,14 @@ impl Family {
                     state.executable_stamp = Stamp::from(id);
                 }
             }
-            Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => {}
+            Op::Conv(_)
+            | Op::Git(_)
+            | Op::Lease { .. }
+            | Op::Fork { .. }
+            | Op::Merge { .. }
+            | Op::Mr(_)
+            | Op::Comment(_)
+            | Op::Page(_) => {}
         }
         Ok(())
     }
@@ -1096,6 +1144,9 @@ impl Family {
         }
         if let Op::Merge { .. } = delta.op {
             thread.merges.push(index);
+        }
+        if let Op::Page(_) = delta.op {
+            thread.page.push(index);
         }
         if let Op::Lease { device, epoch } = delta.op
             && thread.lease.is_none_or(|(_, current)| epoch > current)

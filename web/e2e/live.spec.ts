@@ -859,6 +859,23 @@ test("an artifact's page keeps what it stores for the viewer, and gets null for 
   await expect(frame.getByText('Opened 2 times')).toBeVisible()
 })
 
+test("an artifact's page keeps its tasks in the thread's page data, live and across reloads", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact checklist')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact checklist')).toBeVisible()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await expect(frame.getByText('tasks: 0')).toBeVisible()
+  await frame.getByRole('button', { name: 'Add a task' }).click()
+  await expect(frame.getByText('tasks: 1')).toBeVisible()
+  await frame.getByRole('button', { name: 'Add a task' }).click()
+  await expect(frame.getByText('tasks: 2')).toBeVisible()
+  await page.reload()
+  const card = page.getByTestId('artifact-card').first()
+  if (await card.isVisible()) await card.click()
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').getByText('tasks: 2')).toBeVisible()
+})
+
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')

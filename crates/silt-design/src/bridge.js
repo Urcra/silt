@@ -81,6 +81,58 @@ function namespace(cap, methods) {
   ns.on = function (topic, fn) { return listen(cap, topic, fn); };
   return Object.freeze(ns);
 }
+// `db` as a page writes it (ADR 0072): documents at even paths, in
+// collections at odd ones, read once or watched.
+function database(ns) {
+  function watch(request, fn) {
+    var id = null, gone = false;
+    var off = ns.on('snapshot', function (d) { if (d && d.watch === id) fn(d.data); });
+    ns.watch({ request: request }).then(function (answer) {
+      if (gone) { ns.unwatch({ watch: answer.watch }); return; }
+      id = answer.watch;
+      fn(answer.data);
+    }, function () {});
+    return function () { gone = true; off(); if (id !== null) ns.unwatch({ watch: id }); };
+  }
+  function doc(path) {
+    return Object.freeze({
+      path: path,
+      id: path.split('/').pop(),
+      get: function () { return ns.get({ path: path }); },
+      set: function (value) { return ns.set({ path: path, value: value }); },
+      update: function (fields) { return ns.update({ path: path, fields: fields }); },
+      delete: function () { return ns['delete']({ path: path }); },
+      onSnapshot: function (fn) { return watch({ op: 'get', path: path }, fn); }
+    });
+  }
+  function collection(path, query) {
+    query = query || { where: [], order_by: null, descending: false, limit: null };
+    function also(change) {
+      var next = { where: query.where.slice(), order_by: query.order_by, descending: query.descending, limit: query.limit };
+      change(next);
+      return collection(path, next);
+    }
+    return Object.freeze({
+      path: path,
+      doc: function (id) { return doc(path + '/' + id); },
+      add: function (value) {
+        var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        return doc(path + '/' + id).set(value).then(function () { return doc(path + '/' + id); });
+      },
+      where: function (field, op, value) { return also(function (q) { q.where.push({ field: field, op: op, value: value }); }); },
+      orderBy: function (field, direction) { return also(function (q) { q.order_by = field; q.descending = direction === 'desc'; }); },
+      limit: function (n) { return also(function (q) { q.limit = n; }); },
+      get: function () { return ns.query({ collection: path, query: query }); },
+      onSnapshot: function (fn) { return watch({ op: 'query', collection: path, query: query }, fn); }
+    });
+  }
+  return Object.freeze({
+    doc: doc,
+    collection: function (path) { return collection(path); },
+    batch: function (writes) { return ns.batch({ writes: writes }); }
+  });
+}
+var clients = { db: database };
 var made = {};
 window.silt = Object.freeze({
   version: '1',
@@ -91,7 +143,9 @@ window.silt = Object.freeze({
     name = String(name);
     if (made[name]) return made[name];
     var answered = ask('silt', 'use', { name: name }).then(function (answer) {
-      return answer && answer.available ? namespace(name, answer.methods || []) : null;
+      if (!answer || !answer.available) return null;
+      var ns = namespace(name, answer.methods || []);
+      return clients[name] ? clients[name](ns) : ns;
     }, function () { return null; });
     var late = new Promise(function (ok) { setTimeout(function () { ok(null); }, 10000); });
     made[name] = Promise.race([answered, late]);

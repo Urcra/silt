@@ -523,6 +523,27 @@ silt.use('db').then(function(db){document.getElementById('cap').textContent=db?'
             std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into())
         };
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});
+        if prompt.contains("Artifact checklist") {
+            // A page keeping its tasks in the thread's page data (ADR 0072).
+            let page = "<!doctype html><h1>Checklist</h1><button id=\"add\">Add a task</button><p id=\"count\">tasks: asking</p><script>\
+silt.use('db').then(function(db){if(!db){document.getElementById('count').textContent='no db';return}\
+db.collection('tasks').onSnapshot(function(docs){document.getElementById('count').textContent='tasks: '+docs.length});\
+document.getElementById('add').onclick=function(){db.collection('tasks').add({done:false})}});</script>";
+            arguments = serde_json::json!({"title": "Checklist", "kind": "html", "content": page, "capabilities": {"db": {}}});
+        }
+        if prompt.contains("Artifact poll") {
+            // Everyone reads the votes, and each writes their own (ADR 0072).
+            let rules = serde_json::json!([
+                {"path": "votes", "read": "read", "write": "owner"},
+                {"path": "votes/{self}", "write": "comment"}
+            ]);
+            arguments = serde_json::json!({
+                "title": "Lunch poll",
+                "kind": "html",
+                "content": "<!doctype html><h1>Lunch poll</h1>",
+                "capabilities": {"db": {"rules": rules}}
+            });
+        }
         if let Ok(system) = std::env::var("FAKE_ACP_DESIGN_SYSTEM") {
             arguments["design_system"] = serde_json::json!(system);
         }

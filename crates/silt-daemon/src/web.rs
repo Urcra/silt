@@ -129,6 +129,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
+        .route("/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -630,6 +631,16 @@ struct FrameAsk {
     /// last version's state (ADR 0072).
     #[serde(default)]
     boot: Option<serde_json::Value>,
+}
+
+/// A read or write of an artifact's page data, as its page asks through the
+/// bridge (ADR 0072).
+async fn page_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(request): Json<silt_proto::page::PageRequest>,
+) -> HttpResponse {
+    ask(&web, Request::PageData { thread, artifact, asked: request }).await
 }
 
 async fn artifact_grants(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {

@@ -404,6 +404,12 @@ pub enum Request {
     SetArtifactSettings {
         settings: ArtifactSettings,
     },
+    /// A read or write of an artifact's page data (ADR 0072).
+    PageData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::PageRequest,
+    },
     /// What the person allowed or refused an artifact's page (ADR 0072).
     ArtifactGrants {
         thread: String,

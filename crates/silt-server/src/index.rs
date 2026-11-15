@@ -236,6 +236,27 @@ impl Index {
         self.histories.get(&thread)
     }
 
+    /// The capabilities the latest version of artifact `id` declares, in
+    /// `thread` or what it was forked from (ADR 0072).
+    pub(crate) fn artifact_capabilities(&self, thread: ThreadId, id: &str) -> Option<silt_proto::artifact::Capabilities> {
+        let mut at = thread;
+        for _ in 0..64 {
+            let latest = self.histories.get(&at).and_then(|history| {
+                history
+                    .entries
+                    .iter()
+                    .filter_map(|(_, entry)| entry.artifact.as_ref())
+                    .filter(|artifact| artifact.id == id)
+                    .max_by_key(|artifact| artifact.version)
+            });
+            if let Some(latest) = latest {
+                return latest.capabilities.clone();
+            }
+            at = *self.forks.get(&at)?;
+        }
+        None
+    }
+
     /// Whether `thread`'s history reaches past its own deltas: it's a fork,
     /// or it pulled.
     pub(crate) fn has_lineage(&self, thread: ThreadId) -> bool {

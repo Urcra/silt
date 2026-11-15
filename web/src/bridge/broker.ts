@@ -23,6 +23,8 @@ export type CapabilityHandler = {
   call: (method: string, args: unknown, context: CallContext) => Promise<unknown>
   /** Calls allowed per minute; 120 when unset. */
   perMinute?: number
+  /** Ends what the handler started, such as watches, when the frame goes. */
+  dispose?: () => void
 }
 
 /** The largest message a frame may send, or be sent. */
@@ -56,6 +58,11 @@ export class Broker {
     this.context = context
     this.handlers = handlers
     this.now = now
+  }
+
+  /** Ends every handler's work, as the frame goes. */
+  dispose() {
+    for (const handler of Object.values(this.handlers)) handler.dispose?.()
   }
 
   /** Whether the version declared `name` and this view serves it. */

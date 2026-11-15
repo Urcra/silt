@@ -578,6 +578,10 @@ impl Core {
                 let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
                 return;
             }
+            if let Request::PageData { artifact, asked, .. } = *asking {
+                let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked).await));
+                return;
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -611,6 +615,7 @@ impl Core {
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
+            Request::PageData { thread, artifact, asked } => to_response(self.page_data(&thread, &artifact, asked).await),
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),
                 Err(error) => Response::failure(&error),
@@ -2294,7 +2299,14 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => None,
+        Op::Conv(_)
+        | Op::Git(_)
+        | Op::Lease { .. }
+        | Op::Fork { .. }
+        | Op::Merge { .. }
+        | Op::Mr(_)
+        | Op::Comment(_)
+        | Op::Page(_) => None,
     }
 }
 

@@ -7,6 +7,7 @@ use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 pub mod artifact;
 pub mod frames;
+pub mod page;
 pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
@@ -17,8 +18,9 @@ pub mod view;
 /// (ADR 0059). 11: a thread's files marked seen, and the turn a person
 /// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
-/// through each server they use (ADR 0071).
-pub const PROTOCOL: u32 = 12;
+/// through each server they use (ADR 0071). 13: an artifact's page data
+/// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077).
+pub const PROTOCOL: u32 = 13;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

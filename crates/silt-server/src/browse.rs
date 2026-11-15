@@ -33,6 +33,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/app/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -425,6 +426,55 @@ async fn artifact_content(
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
     let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;
     Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
+}
+
+/// A read or write of an artifact's page data, as its page asks through the
+/// bridge (ADR 0072): read along the thread's lineage, written as the
+/// person, under the rules the latest version declares.
+async fn page_data(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(request): Json<silt_proto::page::PageRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use silt_proto::page::{Level, Rules};
+    let artifact_id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let row = readable.row(&id)?;
+    let declared = readable_artifact(&server, browser.user, &id, &artifact, None).await?.capabilities;
+    let config = declared
+        .as_ref()
+        .and_then(|declared| declared.get("db"))
+        .ok_or_else(|| bad_request("this artifact doesn't declare db"))?;
+    let rules = Rules::of(Some(config)).map_err(bad_request)?;
+    let me = silt_proto::page::person_id(&readable.me);
+    let level = if row.owner == readable.me {
+        Level::Owner
+    } else if readable.collaborators.get(&row.id).is_some_and(|names| names.contains(&readable.me)) {
+        Level::Collaborator
+    } else {
+        Level::Comment
+    };
+    let docs = {
+        let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
+        let browsed = slot.browsed(row.family, &viewer);
+        let mut graph = silt_crdt::CausalGraph::new();
+        for delta in &browsed.log {
+            let _ = graph.add(delta.span, &delta.parents);
+        }
+        silt_log::page_documents_in(&browsed.log, &graph, row.id, artifact_id)
+    };
+    if let Some(read) = silt_proto::page::read(&docs, &request, &rules, &me, level) {
+        return Ok(Json(read));
+    }
+    let writes = request.writes().map_err(bad_request)?;
+    let ops = silt_proto::page::page_ops(artifact_id, &docs, writes, &rules, &me, level).map_err(crate::forbidden)?;
+    let written = ops.len();
+    for op in ops {
+        crate::writes::write_as_with(&server, browser, row.family, row.id, None, Op::Page(op)).await?;
+    }
+    Ok(Json(serde_json::json!({ "written": written })))
 }
 
 #[derive(Deserialize)]
@@ -892,7 +942,7 @@ pub(crate) async fn comments(
                             CommentLocation::Entry { index: entry.index, excerpt: entry.text.chars().take(120).collect() }
                         })
                     }
-                    CommentTarget::Code { .. } => CommentLocation::Unknown,
+                    CommentTarget::Code { .. } | CommentTarget::Page { .. } => CommentLocation::Unknown,
                 },
                 replies: comment
                     .replies

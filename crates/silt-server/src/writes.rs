@@ -51,6 +51,19 @@ async fn write_as(
     op: Op,
 ) -> Result<DeltaId, ApiError> {
     browser.may(browser.capabilities.review, "comment or review")?;
+    write_as_with(server, browser, family, thread, also, op).await
+}
+
+/// [`write_as`] for what any session that can read a thread may write,
+/// such as an artifact's page data (ADR 0072), whose rules the push checks.
+pub(crate) async fn write_as_with(
+    server: &Server,
+    browser: Browser,
+    family: FamilyId,
+    thread: ThreadId,
+    also: Option<DeltaId>,
+    op: Op,
+) -> Result<DeltaId, ApiError> {
     let user = browser.user;
     // One at a time: each takes the next lamport, which a write between
     // working it out and pushing would take too.

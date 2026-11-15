@@ -517,7 +517,10 @@ function ArtifactPage({
       }
     }
     window.addEventListener('message', heard)
-    return () => window.removeEventListener('message', heard)
+    return () => {
+      window.removeEventListener('message', heard)
+      broker.dispose()
+    }
   }, [thread, artifact])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100

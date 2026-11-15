@@ -52,8 +52,8 @@ silt_artifact_guide first, follow what it says, then call silt_artifact, and cal
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools only a run watched in the web UI gets.
-pub const SHOW_TOOLS: [&str; 5] =
-    ["silt_show", "silt_artifact_guide", "silt_artifact", "silt_artifact_read", "silt_artifact_check"];
+pub const SHOW_TOOLS: &[&str] =
+    &["silt_show", "silt_artifact_guide", "silt_artifact", "silt_artifact_read", "silt_artifact_check", "silt_artifact_data"];
 
 /// What the server says it's for, with the showing tools when offered.
 pub fn instructions(shows: bool) -> String {
@@ -70,8 +70,8 @@ pub fn tools(shows: bool) -> Value {
     tools
 }
 
-fn show_tools() -> [Value; 5] {
-    [
+fn show_tools() -> Vec<Value> {
+    vec![
         json!({
             "name": "silt_show",
             "description": "Show the person an image (PNG, JPEG, GIF, WebP or SVG) in the conversation, such as a screenshot or a chart you rendered. Write the file first, then pass its path.",
@@ -118,6 +118,24 @@ fn show_tools() -> [Value; 5] {
                     "version": {"type": "integer", "description": "A version other than the latest"}
                 },
                 "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "silt_artifact_data",
+            "description": "Read or write an artifact's page data, which its page reaches with silt.use(\"db\") (ADR 0072): seed a tracker or a poll after the first version, or read back what people entered. The artifact must declare db in its capabilities. Paths are collection/doc, collection/doc/collection/doc and so on; values are JSON.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The artifact's id"},
+                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch"], "description": "What to do"},
+                    "path": {"type": "string", "description": "A document's path, for get, set, update and delete"},
+                    "collection": {"type": "string", "description": "A collection's path, for list and query"},
+                    "value": {"description": "The document, for set"},
+                    "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},
+                    "query": {"type": "object", "description": "For query: where (a list of {field, op, value}), order_by, descending, limit"},
+                    "writes": {"type": "array", "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"}
+                },
+                "required": ["id", "op"]
             }
         }),
         json!({

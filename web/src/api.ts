@@ -150,6 +150,8 @@ export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
+  /** A read or write of an artifact's page data (ADR 0072). */
+  pageData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/data`, asked),
   /** What the person allowed or refused an artifact's page, by capability (ADR 0072). */
   artifactGrants: (id: string, artifact: string) => request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
   setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null) =>

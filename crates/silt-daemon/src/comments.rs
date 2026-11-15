@@ -318,6 +318,7 @@ impl Core {
                         })
                     }
                     CommentTarget::Code { inode, start, end } => places.locate(inode, &start, &end),
+                    CommentTarget::Page { .. } => CommentLocation::Unknown,
                 };
                 CommentView {
                     id: short_mr(comment.id),

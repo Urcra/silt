@@ -195,3 +195,73 @@ fn a_persons_design_systems_follow_them_between_machines() {
     fs::remove_dir_all(on(&world.home)).expect("remove");
     assert!(eventually(|| !on(&world.laptop).exists()), "the removal reaches the laptop: {}", world.laptop.daemon_log());
 }
+
+/// An artifact's page data between two people on two machines (ADR 0072):
+/// each writes their own vote, the rules refuse a vote written for someone
+/// else, both see both votes, and a fork inherits them and then diverges.
+#[test]
+fn a_polls_votes_from_two_people_both_count_and_a_fork_inherits_them() {
+    let root = common::temp_root("silt-page-data");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let alice = Machine::new_for(root.path(), "alice", "alice", &origin, &server);
+    let bob = Machine::new_for(root.path(), "bob", "bob", &origin, &server);
+    let fake = alice.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(alice.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = alice.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": alice.repo, "agent": "v1", "prompt": "Artifact poll"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let mut shown = Vec::new();
+    assert!(eventually(|| {
+        shown = artifacts(&alice, &thread);
+        shown.len() == 1
+    }));
+    let id = shown[0]["id"].as_str().expect("id").to_owned();
+    assert!(shown[0]["capabilities"]["db"].is_object(), "{shown:?}");
+    let data = format!("/api/threads/{thread}/artifacts/{id}/data");
+    let (ann, ben) = (silt_proto::page::person_id("alice"), silt_proto::page::person_id("bob"));
+
+    let vote = |machine: &Machine, who: &str, pick: &str| {
+        let body = serde_json::json!({"op": "set", "path": format!("votes/{who}"), "value": {"pick": pick}});
+        machine.web_answer("POST", &data, Some(body))
+    };
+    assert_eq!(vote(&alice, &ann, "pizza").0, "200");
+    assert!(eventually(|| artifacts(&bob, &thread).len() == 1), "bob's machine pulls the thread");
+    let (status, refused) = vote(&bob, &ann, "salad");
+    assert_ne!(status, "200", "bob can't vote as alice: {refused}");
+    let mut votes = serde_json::Value::Null;
+    let mut last = (String::new(), String::new());
+    assert!(
+        eventually(|| {
+            last = vote(&bob, &ben, "soup");
+            last.0 == "200"
+        }),
+        "bob votes once his machine has the version that declares the rules: {last:?}"
+    );
+    let list = serde_json::json!({"op": "list", "collection": "votes"});
+    assert!(
+        eventually(|| {
+            votes = alice.web("POST", &data, Some(list.clone()));
+            votes.as_array().is_some_and(|docs| docs.len() == 2)
+        }),
+        "alice sees both votes: {votes}"
+    );
+    let picks: Vec<&str> = votes.as_array().expect("docs").iter().filter_map(|doc| doc["data"]["pick"].as_str()).collect();
+    assert!(picks.contains(&"pizza") && picks.contains(&"soup"), "{picks:?}");
+
+    let forked = alice.web("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
+    let fork = forked.as_str().map(str::to_owned).unwrap_or_else(|| forked["thread"].as_str().expect("fork").to_owned());
+    let fork_data = format!("/api/threads/{fork}/artifacts/{id}/data");
+    let inherited = alice.web("POST", &fork_data, Some(list.clone()));
+    assert_eq!(inherited.as_array().map(Vec::len), Some(2), "the fork inherits the votes: {inherited}");
+    let set = serde_json::json!({"op": "set", "path": format!("votes/{ann}"), "value": {"pick": "tacos"}});
+    assert_eq!(alice.web_answer("POST", &fork_data, Some(set)).0, "200");
+    let source = alice.web("POST", &data, Some(serde_json::json!({"op": "get", "path": format!("votes/{ann}")})));
+    assert_eq!(source["data"]["pick"], "pizza", "the source keeps its own: {source}");
+    let changed = alice.web("POST", &fork_data, Some(serde_json::json!({"op": "get", "path": format!("votes/{ann}")})));
+    assert_eq!(changed["data"]["pick"], "tacos");
+}

@@ -24,6 +24,7 @@ mod lifecycle;
 mod live;
 mod load;
 mod notes;
+mod page;
 pub mod paths;
 mod personal;
 mod presets;

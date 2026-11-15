@@ -652,3 +652,81 @@ fn merge_requests_open_and_resolve_once() {
     assert_eq!(view_text(&family, THREAD, main), "// fork\nfn main() {}\n");
     assert_eq!(view_text(&family, FORK, main), "// fork\nfn main() {}\n");
 }
+
+fn set(artifact: silt_types::ArtifactId, path: &str, value: &str) -> Op {
+    Op::Page(silt_log::PageOp::Set { artifact, path: path.into(), value: value.into() })
+}
+
+/// Page data folds alike whatever order the deltas came in, follows a
+/// fork's lineage, and a revert rewinds it with the conversation (ADR 0072).
+#[test]
+fn page_data_folds_alike_everywhere_and_follows_forks_and_rewinds() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    say(&mut family, THREAD, "make a poll");
+    let base = family.thread_head(THREAD);
+    // Two people vote at once, each on the same base.
+    let ann = family.delta(CHECKOUT_A, THREAD, Author::User, 0, base.clone(), set(artifact, "votes/ann", r#"{"pick":"a"}"#));
+    let bob = family.delta(CHECKOUT_B, THREAD, Author::User, 0, base.clone(), set(artifact, "votes/same", r#"{"pick":"b"}"#));
+    let bob_too = family.delta(ActorId(4), THREAD, Author::User, 0, base, set(artifact, "votes/same", r#"{"pick":"c"}"#));
+    let mut one = family.clone();
+    let mut other = family.clone();
+    for delta in [&ann, &bob, &bob_too] {
+        assert_eq!(one.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    for delta in [&bob_too, &bob, &ann] {
+        assert_eq!(other.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    let docs = one.page_documents(THREAD, artifact);
+    assert_eq!(docs, other.page_documents(THREAD, artifact), "replicas agree whatever the order");
+    assert_eq!(docs.len(), 2);
+    assert_eq!(silt_log::page_documents_in(one.log(), one.graph(), THREAD, artifact), docs, "a server folds the same");
+
+    // A fork inherits the data, then the two diverge.
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = one.thread_head(FORK);
+    on_thread(&mut one, ActorId(9), FORK, head, set(artifact, "votes/fork", r#"{"pick":"f"}"#));
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, DAEMON, THREAD, head, set(artifact, "votes/late", r#"{"pick":"l"}"#));
+    let forked = one.page_documents(FORK, artifact);
+    assert!(
+        forked.contains_key("votes/ann") && forked.contains_key("votes/fork") && !forked.contains_key("votes/late"),
+        "{forked:?}"
+    );
+    assert!(!one.page_documents(THREAD, artifact).contains_key("votes/fork"), "the source never sees the fork's");
+
+    // Reverting to before the votes rewinds them.
+    let said = say(&mut one, THREAD, "undo");
+    let _ = said;
+    let to = one
+        .log()
+        .iter()
+        .find(|delta| delta.thread == THREAD && matches!(delta.op, Op::Conv(_)))
+        .expect("the first line")
+        .span
+        .first();
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, DAEMON, THREAD, head, Op::Conv(ConvOp::Rewound { to }));
+    assert!(one.page_documents(THREAD, artifact).is_empty(), "{:?}", one.page_documents(THREAD, artifact));
+    assert_eq!(one.page_documents(FORK, artifact), forked, "the fork keeps its own");
+    let other_artifact: silt_types::ArtifactId = "ba9876543210".parse().expect("an id");
+    assert!(one.page_documents(FORK, other_artifact).is_empty());
+}
+
+/// Page ops a peer made malformed are refused before they apply (ADR 0016).
+#[test]
+fn malformed_page_data_is_refused() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let family = Family::new();
+    for op in [
+        set(artifact, "votes", "{}"),
+        set(artifact, "votes/../x", "{}"),
+        set(artifact, "votes/ann", "{not json"),
+        set(artifact, "votes/ann", &format!("\"{}\"", "x".repeat(silt_log::page::DOC_BYTES))),
+        Op::Page(silt_log::PageOp::Patched { artifact, path: "votes/ann".into(), fields: "[1]".into() }),
+    ] {
+        let delta = family.delta(DAEMON, THREAD, Author::User, 0, family.thread_head(THREAD), op);
+        assert!(delta.check_shape().is_err(), "{:?}", delta.op);
+    }
+}
