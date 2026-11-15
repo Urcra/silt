@@ -312,6 +312,25 @@ impl Core {
             .run_token(hash.as_bytes())
             .await?
             .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        self.artifact_version(thread, id, version).await
+    }
+
+    /// A version of one of `thread`'s artifacts as the web UI's frame route
+    /// composes it (ADR 0074), the latest when `version` is none.
+    pub(crate) async fn artifact_version_of(
+        &self,
+        thread: &str,
+        id: &str,
+        version: Option<u32>,
+    ) -> Result<ArtifactRead, CoreError> {
+        if !valid_id(id) {
+            return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
+        }
+        let thread = self.find_thread(thread)?;
+        self.artifact_version(thread, id, version).await
+    }
+
+    async fn artifact_version(&self, thread: ThreadId, id: &str, version: Option<u32>) -> Result<ArtifactRead, CoreError> {
         let entries = self.history_entries(thread);
         let versions: Vec<&ArtifactView> =
             entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).filter(|artifact| artifact.id == id).collect();

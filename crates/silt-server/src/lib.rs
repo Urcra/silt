@@ -220,6 +220,8 @@ struct Shared {
     passwords: accounts::PasswordChecks,
     /// Families whose pull request comments may need an update (ADR 0042).
     bridge: Option<bridge::Jobs>,
+    /// What each frame key opens (ADR 0074).
+    frames: std::sync::Mutex<silt_proto::frames::FrameKeys<browse::FrameGrant>>,
 }
 
 #[derive(Clone)]
@@ -302,6 +304,7 @@ impl Server {
                 mr_views: Mutex::new(HashMap::new()),
                 passwords: accounts::PasswordChecks::default(),
                 bridge,
+                frames: std::sync::Mutex::default(),
                 config,
                 http,
             }),
@@ -381,6 +384,8 @@ impl Server {
             .route("/login", get(pages::login_page).post(pages::login))
             .route("/fonts/{name}", get(app::font))
             .route("/vendor/{host}/{*path}", get(links::vendor_file))
+            .route("/f/{key}/", get(browse::serve_frame))
+            .route("/f/{key}/{*path}", get(browse::frame_file))
             .route("/logout", post(pages::logout))
             .route("/devices/revoke", post(pages::revoke_device))
             .route("/sessions/end-others", post(pages::end_other_sessions))

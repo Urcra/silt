@@ -150,6 +150,9 @@ export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
+  /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
+  artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string }) =>
+    request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
     request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),

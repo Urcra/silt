@@ -1568,6 +1568,33 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     let text = artifact_text(&api, &thread, latest);
     assert!(text.starts_with("<h1>Rescan benchmark, edited</h1>") && text.contains(secret), "the rest is kept: {text}");
 
+    // The page loads from a frame address with no token (ADR 0074): one
+    // version, under the sandbox's policy, as the panel's frame gets it.
+    let id = first[0]["id"].as_str().expect("id");
+    let made = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{id}/frame"),
+        Some(serde_json::json!({"version": 1, "theme": "dark", "parent": api.base.trim_end_matches('/')})),
+    );
+    let path = made["path"].as_str().expect("a frame path");
+    let output = Command::new("curl")
+        .args(["-s", "-D", "-", &format!("{}{}", api.base.trim_end_matches('/'), path)])
+        .output()
+        .expect("curl runs");
+    let served = String::from_utf8_lossy(&output.stdout).into_owned();
+    let (head, page) = served.split_once("\r\n\r\n").unwrap_or((&served, ""));
+    assert!(
+        head.contains(" 200 ") && head.to_ascii_lowercase().contains("content-security-policy: sandbox allow-scripts;"),
+        "{head}"
+    );
+    assert!(page.contains("setAttribute('data-theme','dark')") && page.ends_with(&html), "{page}");
+    let (made_for_image, _) = api.call(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{}/frame", all[2]["id"].as_str().expect("id")),
+        Some(serde_json::json!({})),
+    );
+    assert!(!made_for_image, "only HTML opens in a frame");
+
     let found = api.ok("GET", "/api/search?q=Rescan", None);
     assert!(found.to_string().contains(&thread[..12]) || found.to_string().contains(&thread), "found by its title: {found}");
 

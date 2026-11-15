@@ -16,6 +16,7 @@ mod design;
 mod design_sync;
 mod disk;
 mod forks;
+mod frames;
 mod history;
 mod homes;
 mod import;

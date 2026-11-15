@@ -616,6 +616,9 @@ impl Core {
             }
             Request::ArtifactRead { .. } => Response::error("only an agent's run reads its artifacts back, with its token"),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
+            Request::ArtifactVersion { thread, id, version } => {
+                to_response(self.artifact_version_of(&thread, &id, version).await)
+            }
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),

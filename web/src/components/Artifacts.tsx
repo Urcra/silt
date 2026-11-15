@@ -334,6 +334,7 @@ export function ArtifactViewer({
         {content.data && styled ? (
           <ArtifactPage
             key={`${artifact.blob}-${reloads}`}
+            thread={thread}
             artifact={artifact}
             content={content.data}
             style={styleText}
@@ -394,6 +395,7 @@ function isProblem(value: unknown): value is FrameProblem {
 
 /** The page itself: an HTML artifact in a frame that can reach nothing, anything else drawn here without running it. */
 function ArtifactPage({
+  thread,
   artifact,
   content,
   style,
@@ -404,6 +406,7 @@ function ArtifactPage({
   onSelect,
   onProblems,
 }: {
+  thread: string
   artifact: ArtifactView
   content: ArtifactContent
   style: string | null
@@ -418,6 +421,17 @@ function ArtifactPage({
   const theme = useShownTheme()
   // The frame starts in the theme shown when it loads, and hears of each change after, so its page isn't reloaded.
   const [startTheme] = useState(theme)
+  // An HTML version loads from a frame address the daemon or server composes it at (ADR 0074). The key behind it
+  // lasts an hour from its last use, so one is asked for each time the frame opens.
+  const address = useQuery({
+    queryKey: ['artifact-frame', thread, artifact.id, artifact.version, startTheme],
+    queryFn: () => api.artifactFrame(thread, artifact.id, { version: artifact.version, theme: startTheme, parent: window.location.origin }),
+    enabled: artifact.kind === 'html',
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  })
+  // Where no frame address can be had, the page is composed here as before.
   const [framed] = useState(() =>
     artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin }) : '',
   )
@@ -482,7 +496,7 @@ function ArtifactPage({
           title={artifact.title}
           sandbox="allow-scripts"
           allow="fullscreen"
-          srcDoc={framed}
+          {...(address.data ? { src: address.data.path } : address.isError ? { srcDoc: framed } : {})}
           referrerPolicy="no-referrer"
           style={zoomed}
           className="block border-0"

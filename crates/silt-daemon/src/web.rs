@@ -35,6 +35,8 @@ struct Web {
     /// The CDN files artifacts load through Silt, when the person turned
     /// that on (ADR 0071).
     vendor: Arc<silt_vendor::Vendor>,
+    /// What each frame key opens (ADR 0074).
+    frames: Arc<Mutex<crate::frames::FrameKeys>>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -99,6 +101,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         codes: codes.clone(),
         voice: Arc::new(Voice::new()),
         vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
+        frames: Arc::default(),
     };
     let api = Router::new()
         .route("/api/events", get(events_socket))
@@ -124,6 +127,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
+        .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -205,6 +209,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         // An artifact's frame has an opaque origin and no token; this serves
         // only pinned files of the CDN allowlist.
         .route("/vendor/{host}/{*path}", get(vendor_file))
+        // A frame has no token either: its key is the whole permission, and
+        // serves only its own version (ADR 0074).
+        .route("/f/{key}/", get(serve_frame))
+        .route("/f/{key}/{*path}", get(frame_file))
         .fallback(asset)
         .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
         .with_state(web);
@@ -606,6 +614,98 @@ async fn artifact_settings(State(web): State<Web>) -> HttpResponse {
 
 async fn set_artifact_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ArtifactSettings>) -> HttpResponse {
     ask(&web, Request::SetArtifactSettings { settings }).await
+}
+
+#[derive(Deserialize)]
+struct FrameAsk {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    theme: Option<String>,
+    /// The origin of the page that will hold the frame.
+    #[serde(default)]
+    parent: Option<String>,
+}
+
+/// A key that opens one version of an HTML artifact in a frame (ADR 0074).
+async fn make_frame(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(ask): Json<FrameAsk>,
+) -> HttpResponse {
+    let request = Request::ArtifactVersion { thread: thread.clone(), id: artifact.clone(), version: ask.version };
+    let read = match answer(&web, request).await {
+        Ok(read) => read,
+        Err(failed) => return failed.into_response(),
+    };
+    if read["kind"] != "html" {
+        return Failed { status: StatusCode::BAD_REQUEST, message: "only an HTML artifact opens in a frame".into() }
+            .into_response();
+    }
+    let grant = crate::frames::FrameGrant {
+        thread,
+        artifact,
+        version: ask.version,
+        theme: ask.theme.as_deref().and_then(silt_design::frame::Theme::parse),
+        parent: ask.parent.filter(|origin| silt_design::frame::is_origin(origin)),
+    };
+    let key = crate::frames::new_key();
+    web.frames.lock().expect("lock").insert(key.clone(), grant);
+    let expires_ms = silt_proto::frames::FRAME_TTL.as_millis() as u64;
+    Json(json!({ "path": format!("/f/{key}/"), "expires_in_ms": expires_ms })).into_response()
+}
+
+/// The page a frame key opens, composed as every surface composes it, with
+/// its policy as a header that also makes its origin opaque.
+async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: HttpRequest) -> HttpResponse {
+    let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
+    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+        return not_found();
+    };
+    let request_version =
+        Request::ArtifactVersion { thread: grant.thread.clone(), id: grant.artifact.clone(), version: grant.version };
+    let Ok(read) = answer(&web, request_version).await else {
+        return not_found();
+    };
+    let Ok(read) = serde_json::from_value::<crate::protocol::ArtifactRead>(read) else {
+        return not_found();
+    };
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&read.data) else {
+        return not_found();
+    };
+    let proxied = answer(&web, Request::ArtifactSettings).await.is_ok_and(|settings| settings["proxy"] == true);
+    let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("127.0.0.1");
+    let vendor = proxied.then(|| format!("http://{host}/vendor/"));
+    let parts = silt_design::frame::FrameParts {
+        style: read.style.as_deref(),
+        theme: grant.theme,
+        probe: true,
+        vendor: vendor.as_deref(),
+        parent: grant.parent.as_deref(),
+        policy_meta: false,
+    };
+    let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
+    framed_response(page, &silt_design::frame::policy(vendor.as_deref()))
+}
+
+/// A file of a frame's version; versions have none yet (ADR 0074).
+async fn frame_file(Path((_key, _path)): Path<(String, String)>) -> HttpResponse {
+    StatusCode::NOT_FOUND.into_response()
+}
+
+fn framed_response(page: String, policy: &str) -> HttpResponse {
+    let mut response = (StatusCode::OK, page).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, header::HeaderValue::from_static("text/html; charset=utf-8"));
+    if let Ok(value) = header::HeaderValue::from_str(&format!("sandbox allow-scripts; {policy}")) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    headers.insert(header::REFERRER_POLICY, header::HeaderValue::from_static("no-referrer"));
+    headers.insert("cross-origin-resource-policy", header::HeaderValue::from_static("same-site"));
+    response
 }
 
 /// A CDN file an artifact's frame loads through Silt (ADR 0071).
@@ -1261,6 +1361,7 @@ mod tests {
             codes,
             voice: Arc::new(Voice::new()),
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
+            frames: Arc::default(),
         };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");

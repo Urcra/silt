@@ -424,6 +424,14 @@ pub enum Request {
         thread: String,
         blob: String,
     },
+    /// A version of one of the thread's artifacts, the latest when `version`
+    /// is none, for its frame (ADR 0074).
+    ArtifactVersion {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+    },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
     Scoped {

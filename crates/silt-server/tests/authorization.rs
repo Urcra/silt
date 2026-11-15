@@ -1517,3 +1517,73 @@ async fn a_forks_history_in_the_hosted_app_includes_what_it_inherited() {
     let (_, source) = browser.get(&format!("/threads/{THREAD}/history")).await;
     assert_eq!(source["total"], 2, "the source keeps its own: {source}");
 }
+
+/// An HTML artifact's frame loads from a key (ADR 0074): made only for
+/// someone who can read the thread, serving that one version under the
+/// sandbox's policy, and nothing for a key that wasn't made.
+#[tokio::test]
+async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let html = b"<!doctype html><h1>Rescan benchmark</h1>";
+    let blob = BlobStore::hash(html);
+    let put = alice.request(Method::PUT, &format!("/v1/blobs/{blob}")).body(html.to_vec());
+    assert_eq!(alice.send(put).await, StatusCode::NO_CONTENT);
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Rescan benchmark", "kind": "html",
+        "media_type": "text/html", "blob": blob.to_string(), "size": html.len(), "inline": false
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let attached = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Attachment { session: session.clone(), name: "artifact/0123456789ab/v1/page.html".into(), blob }),
+        ),
+    );
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            6,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(alice.push(vec![attached, recorded]).await, StatusCode::OK);
+
+    let browser_of = |name: &'static str| {
+        let client = &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+        Browser::sign_in(client, name)
+    };
+    let (bob, erin) = (browser_of("bob").await, browser_of("erin").await);
+    let frame = format!("/threads/{THREAD}/artifacts/0123456789ab/frame");
+    let ask = serde_json::json!({"version": 1, "theme": "dark", "parent": bob.base.clone()});
+    assert_eq!(erin.post(&frame, ask.clone()).await.0, StatusCode::NOT_FOUND, "someone who can't read the thread gets no key");
+    let (status, made) = bob.post(&frame, ask).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let path = made["path"].as_str().expect("a path").to_owned();
+    assert!(path.starts_with("/f/") && path.ends_with('/'), "{path}");
+
+    let anyone = reqwest::Client::new();
+    let served = anyone.get(format!("{}{path}", bob.base)).send().await.expect("sends");
+    assert_eq!(served.status(), StatusCode::OK);
+    let policy = served.headers()[reqwest::header::CONTENT_SECURITY_POLICY].to_str().expect("text").to_owned();
+    assert!(policy.starts_with("sandbox allow-scripts;") && policy.contains("default-src 'none'"), "{policy}");
+    let page = served.text().await.expect("text");
+    assert!(page.contains("setAttribute('data-theme','dark')") && page.contains(&format!("var to='{}';", bob.base)), "{page}");
+    assert!(page.ends_with("<h1>Rescan benchmark</h1>"), "{page}");
+
+    let unknown = anyone.get(format!("{}/f/{}/", bob.base, "0".repeat(64))).send().await.expect("sends");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let file = anyone.get(format!("{}{path}data.json", bob.base)).send().await.expect("sends");
+    assert_eq!(file.status(), StatusCode::NOT_FOUND, "a version has no files yet");
+}

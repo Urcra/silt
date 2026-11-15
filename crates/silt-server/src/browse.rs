@@ -15,8 +15,9 @@ use silt_log::{
     CommentTarget, ConvOp, Delta, GraphEvent, MergeRequest, MrStatus, Op, SessionFile, TurnMark, comments_in, merge_requests_in,
 };
 use silt_proto::view::{
-    ArtifactContent, CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry, Mine, MrDetails,
-    MrGuide, MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo, opens_turn,
+    ArtifactContent, ArtifactView, CommentLocation, CommentView, GraphQuery, GraphRow, HistoryEntry, HistoryPage, InboxEntry,
+    Mine, MrDetails, MrGuide, MrSummary, Project, ReplyView, SearchResult, ShowLine, StateChange, ThreadSummary, TurnInfo,
+    opens_turn,
 };
 use silt_proto::{AgentReport, InboxRead, SearchQuery, ThreadState, Visibility};
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
@@ -30,6 +31,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads", get(threads))
         .route("/app/api/threads/{id}/history", get(history))
         .route("/app/api/threads/{id}/artifacts/{blob}", get(artifact_content))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -422,6 +424,133 @@ async fn artifact_content(
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
     let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;
     Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
+}
+
+/// What a frame key opens on the server: one version of one artifact, for
+/// the person who asked, whose right to read the thread is checked again
+/// each time the frame loads (ADR 0074).
+#[derive(Debug, Clone)]
+pub(crate) struct FrameGrant {
+    user: UserId,
+    thread: String,
+    artifact: String,
+    version: Option<u32>,
+    theme: Option<silt_design::frame::Theme>,
+    parent: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FrameAsk {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    theme: Option<String>,
+    #[serde(default)]
+    parent: Option<String>,
+}
+
+/// The version of artifact `id` a person may read, the latest when
+/// `version` is none, along the thread's lineage.
+async fn readable_artifact(
+    server: &Server,
+    user: UserId,
+    thread: &str,
+    id: &str,
+    version: Option<u32>,
+) -> Result<ArtifactView, ApiError> {
+    let viewer = server.viewer(user).await?;
+    let readable = Readable::rows(server, user, &viewer).await?;
+    let row = readable.row(thread)?;
+    let pick = |entries: &[(DeltaId, HistoryEntry)]| {
+        entries
+            .iter()
+            .filter_map(|(_, entry)| entry.artifact.as_ref())
+            .filter(|artifact| !artifact.inline && artifact.id == id && version.is_none_or(|wanted| wanted == artifact.version))
+            .max_by_key(|artifact| artifact.version)
+            .cloned()
+    };
+    let found = match lineage_entries(server, &viewer, row).await {
+        Some(entries) => pick(&entries),
+        None => server.shared.index.lock().await.history(row.id).and_then(|history| pick(&history.entries)),
+    };
+    found.ok_or_else(not_found)
+}
+
+async fn make_frame(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(ask): Json<FrameAsk>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let view = readable_artifact(&server, browser.user, &id, &artifact, ask.version).await?;
+    if view.kind != "html" {
+        return Err(bad_request("only an HTML artifact opens in a frame"));
+    }
+    let grant = FrameGrant {
+        user: browser.user,
+        thread: id,
+        artifact,
+        version: ask.version,
+        theme: ask.theme.as_deref().and_then(silt_design::frame::Theme::parse),
+        parent: ask.parent.filter(|origin| silt_design::frame::is_origin(origin)),
+    };
+    let key = crate::accounts::random_token();
+    server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone(), grant);
+    Ok(Json(
+        serde_json::json!({ "path": format!("/f/{key}/"), "expires_in_ms": silt_proto::frames::FRAME_TTL.as_millis() as u64 }),
+    ))
+}
+
+/// The page a frame key opens, composed as every surface composes it, with
+/// its policy as a header that also makes its origin opaque.
+pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<String>) -> axum::response::Response {
+    use axum::http::{HeaderValue, StatusCode, header};
+    use axum::response::IntoResponse;
+    let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
+    let grant = server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key);
+    let Some(grant) = grant else {
+        return not_found();
+    };
+    let Ok(view) = readable_artifact(&server, grant.user, &grant.thread, &grant.artifact, grant.version).await else {
+        return not_found();
+    };
+    let Ok(hash) = view.blob.parse::<silt_types::BlobHash>() else {
+        return not_found();
+    };
+    let Ok(content) = server.shared.blobs.get(hash).await else {
+        return not_found();
+    };
+    let style = match view.style.as_deref().and_then(|style| style.parse::<silt_types::BlobHash>().ok()) {
+        Some(style) => server.shared.blobs.get(style).await.ok().map(|css| String::from_utf8_lossy(&css).into_owned()),
+        None => None,
+    };
+    let vendor = server.config().artifact_proxy.then(|| format!("{}/vendor/", server.config().public_url()));
+    let parts = silt_design::frame::FrameParts {
+        style: style.as_deref(),
+        theme: grant.theme,
+        probe: true,
+        vendor: vendor.as_deref(),
+        parent: grant.parent.as_deref(),
+        policy_meta: false,
+    };
+    let page = silt_design::frame::compose(&String::from_utf8_lossy(&content), &parts);
+    let mut response = (StatusCode::OK, page).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+    if let Ok(value) = HeaderValue::from_str(&format!("sandbox allow-scripts; {}", silt_design::frame::policy(vendor.as_deref())))
+    {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert("cross-origin-resource-policy", HeaderValue::from_static("same-site"));
+    response
+}
+
+/// A file of a frame's version; versions have none yet (ADR 0074).
+pub(crate) async fn frame_file(Path((_key, _path)): Path<(String, String)>) -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }
 
 async fn turns(
