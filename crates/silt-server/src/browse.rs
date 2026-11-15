@@ -492,7 +492,7 @@ async fn page_data(
     if let Some(read) = silt_proto::page::read(&page.docs, &request, &rules, &page.me, page.level) {
         return Ok(Json(read));
     }
-    let writes = request.writes().map_err(bad_request)?;
+    let writes = request.writes(&page.docs).map_err(bad_request)?;
     let ops =
         silt_proto::page::page_ops(artifact_id, &page.docs, writes, &rules, &page.me, page.level).map_err(crate::forbidden)?;
     let written = ops.len();

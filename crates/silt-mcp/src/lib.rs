@@ -142,8 +142,11 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
-                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch"], "description": "What to do"},
-                    "path": {"type": "string", "description": "A document's path, for get, set, update and delete"},
+                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace"], "description": "What to do"},
+                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace"},
+                    "field": {"type": "string", "description": "For str_replace: the document's text field to edit"},
+                    "old": {"type": "string", "description": "For str_replace: text that occurs once in the field"},
+                    "new": {"type": "string", "description": "For str_replace: what replaces it"},
                     "collection": {"type": "string", "description": "A collection's path, for list and query"},
                     "value": {"description": "The document, for set"},
                     "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},

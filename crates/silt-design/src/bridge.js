@@ -102,6 +102,7 @@ function database(ns) {
       set: function (value) { return ns.set({ path: path, value: value }); },
       update: function (fields) { return ns.update({ path: path, fields: fields }); },
       delete: function () { return ns['delete']({ path: path }); },
+      strReplace: function (field, old, now) { return ns.str_replace({ path: path, field: field, old: old, new: now }); },
       onSnapshot: function (fn) { return watch({ op: 'get', path: path }, fn); }
     });
   }
@@ -211,10 +212,52 @@ function assetsClient(ns) {
   });
 }
 function filesClient(ns) {
+  function list(opts) { opts = opts || {}; return ns.list({ path: opts.path || '', recursive: !!opts.recursive, cursor: opts.cursor || null }); }
+  function read(path, opts) { opts = opts || {}; return ns.read({ path: String(path), at: opts.at || null }); }
   return Object.freeze({
-    list: function (opts) { opts = opts || {}; return ns.list({ path: opts.path || '', recursive: !!opts.recursive, cursor: opts.cursor || null }); },
-    read: function (path, opts) { opts = opts || {}; return ns.read({ path: String(path), at: opts.at || null }); },
-    download: function (path) { return ns.download({ path: String(path) }); }
+    list: list,
+    read: read,
+    download: function (path) { return ns.download({ path: String(path) }); },
+    // Read again every few seconds, as the hosted app hears of no change;
+    // `fn` hears of the file whenever its revision changes.
+    watch: function (path, fn, opts) {
+      var every = Math.max(2000, (opts && opts.every) || 5000);
+      var last = null;
+      var stopped = false;
+      function look() {
+        if (stopped) return;
+        read(path).then(function (now) {
+          if (stopped || now.revision === last) return;
+          last = now.revision;
+          try { fn(now); } catch (x) {}
+        }, function () {});
+      }
+      look();
+      var timer = setInterval(look, every);
+      return function () { stopped = true; clearInterval(timer); };
+    },
+    // The thread's files as tools for `sample`, so the agent answering a
+    // page's question can look through them itself.
+    asSampleTools: function () {
+      return Promise.resolve([
+        {
+          name: 'list_files',
+          description: "Lists the thread's files under a folder, the whole tree when no path is given",
+          inputSchema: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } } },
+          execute: function (input) { return list({ path: input && input.path, recursive: input && input.recursive }); }
+        },
+        {
+          name: 'read_file',
+          description: "Reads one of the thread's files as text",
+          inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          execute: function (input) {
+            return read(String((input && input.path) || '')).then(function (file) {
+              return { path: input.path, text: String(file.text).slice(0, 60000), size: file.size };
+            });
+          }
+        }
+      ]);
+    }
   });
 }
 function dictationClient(ns) {

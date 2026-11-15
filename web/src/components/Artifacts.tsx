@@ -161,6 +161,8 @@ export function ArtifactViewer({
   const [sharing, setSharing] = useState(false)
   // What a page asks the person to agree to, such as saving a file, until they answer.
   const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
+  // Whether the page listens to the person or speaks to them now, and what stops it (ADR 0079).
+  const [voice, setVoice] = useState<{ now: 'listening' | 'speaking'; stop: () => void } | null>(null)
   const composer = useRef<(() => void) | null>(null)
   const shown = group ? versionOf(group, opened.version) : null
   // What the holder's calls act on, as the view now stands; the holder itself is made once.
@@ -192,6 +194,7 @@ export function ArtifactViewer({
       return group ? commentsOn(group, comments).map((comment) => comment.id) : []
     },
     commentsChanged: () => void current.current.onCommentsChanged(),
+    voice: (now, stop) => setVoice(now === 'idle' || !stop ? null : { now, stop }),
   }))
   const answerAsking = (agreed: boolean) => {
     asking?.answer(agreed)
@@ -366,6 +369,15 @@ export function ArtifactViewer({
           />
         </span>
         <span className="min-w-2 flex-1" />
+        {voice && (
+          <span role="status" className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent/40 bg-accent-tint py-0.5 pr-0.5 pl-2 text-xs text-fg-1" data-testid="page-voice">
+            <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+            {voice.now === 'listening' ? 'The page is listening' : 'The page is speaking'}
+            <button type="button" onClick={voice.stop} className="rounded-full px-2 py-0.5 font-medium text-accent-fg hover:bg-surface-2 max-md:min-h-11">
+              Stop
+            </button>
+          </span>
+        )}
         <span role="group" aria-label="View" className="mr-1 inline-flex shrink-0 gap-px rounded-sm bg-surface-1 p-0.5 @max-md/artifact:hidden">
           <IconButton icon="eye" label="Preview" aria-pressed={!source} onClick={() => setSource(false)} className={PRESSED} />
           {textual && <IconButton icon="code" label="Source" aria-pressed={source} onClick={() => setSource(true)} className={PRESSED} />}

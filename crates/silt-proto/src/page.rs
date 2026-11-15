@@ -239,6 +239,27 @@ mod tests {
     }
 
     #[test]
+    fn str_replace_edits_text_that_occurs_once() {
+        let docs =
+            std::collections::BTreeMap::from([("notes/n1".to_owned(), serde_json::json!({"body": "ship on Friday, then rest"}))]);
+        let asked = |old: &str| PageRequest::StrReplace {
+            path: "notes/n1".into(),
+            field: "body".into(),
+            old: old.into(),
+            new: "Monday".into(),
+        };
+        let writes = asked("Friday").writes(&docs).expect("replaced");
+        assert_eq!(
+            writes,
+            vec![PageWrite::Update { path: "notes/n1".into(), fields: serde_json::json!({"body": "ship on Monday, then rest"}) }]
+        );
+        assert!(asked("Sunday").writes(&docs).is_err(), "text that isn't there");
+        assert!(asked("").writes(&docs).is_err(), "nothing to find");
+        let twice = std::collections::BTreeMap::from([("notes/n1".to_owned(), serde_json::json!({"body": "a a"}))]);
+        assert!(asked("a").writes(&twice).is_err(), "text that occurs twice");
+    }
+
+    #[test]
     fn a_self_level_holds_for_nobody_and_a_persons_own_paths_are_theirs_alone() {
         let config = json!({"rules": [
             {"path": "signoffs", "read": "read", "write": "self"},
@@ -313,6 +334,14 @@ pub enum PageRequest {
     Batch {
         writes: Vec<PageWrite>,
     },
+    /// Replaces `old`, which occurs once in the document's text field
+    /// `field`, with `new`: an edit of long text without resending it.
+    StrReplace {
+        path: String,
+        field: String,
+        old: String,
+        new: String,
+    },
 }
 
 /// One write of a batch.
@@ -328,14 +357,33 @@ pub enum PageWrite {
 pub const BATCH_WRITES: usize = 100;
 
 impl PageRequest {
-    /// Its writes, in order; none for a read.
-    pub fn writes(self) -> Result<Vec<PageWrite>, String> {
+    /// Its writes, in order, against `docs` as they stand; none for a read.
+    pub fn writes(self, docs: &std::collections::BTreeMap<String, Value>) -> Result<Vec<PageWrite>, String> {
         let writes = match self {
             Self::Get { .. } | Self::List { .. } | Self::Query { .. } => return Ok(Vec::new()),
             Self::Set { path, value } => vec![PageWrite::Set { path, value }],
             Self::Update { path, fields } => vec![PageWrite::Update { path, fields }],
             Self::Delete { path } => vec![PageWrite::Delete { path }],
             Self::Batch { writes } => writes,
+            Self::StrReplace { path, field, old, new } => {
+                let text = docs
+                    .get(&path)
+                    .and_then(|doc| doc.get(&field))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("{path} has no text field {field}"))?;
+                if old.is_empty() {
+                    return Err("the text to replace is empty".into());
+                }
+                let mut found = text.match_indices(old.as_str());
+                let (at, _) = found.next().ok_or_else(|| format!("{field} doesn't hold that text"))?;
+                if found.next().is_some() {
+                    return Err(format!("that text occurs more than once in {field}; give more of it"));
+                }
+                let replaced = format!("{}{new}{}", &text[..at], &text[at + old.len()..]);
+                let mut fields = serde_json::Map::new();
+                fields.insert(field, Value::String(replaced));
+                vec![PageWrite::Update { path, fields: Value::Object(fields) }]
+            }
         };
         if writes.len() > BATCH_WRITES {
             return Err(format!("a batch is at most {BATCH_WRITES} writes"));

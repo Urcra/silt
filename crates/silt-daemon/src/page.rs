@@ -32,7 +32,7 @@ impl Core {
         if let Some(read) = silt_proto::page::read(&docs, &request, &rules, &me, level) {
             return Ok(read);
         }
-        let writes = request.writes().map_err(CoreError::Invalid)?;
+        let writes = request.writes(&docs).map_err(CoreError::Invalid)?;
         let ops = silt_proto::page::page_ops(artifact, &docs, writes, &rules, &me, level).map_err(CoreError::Invalid)?;
         let written = ops.len();
         for op in ops {

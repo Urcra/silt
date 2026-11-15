@@ -49,6 +49,8 @@ interface SiltDocRef<T = any> {
   /** Merges top-level fields; a null field removes it. */
   update(fields: Partial<T>): Promise<unknown>
   delete(): Promise<unknown>
+  /** Replaces `old`, which must occur once in the text field `field`, with `now`. */
+  strReplace(field: keyof T & string, old: string, now: string): Promise<unknown>
   /** Calls `fn` now and whenever the document changes; returns a function that stops it. */
   onSnapshot(fn: (doc: SiltDoc<T> | null) => void): () => void
 }
@@ -184,6 +186,13 @@ interface SiltFiles {
   read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
   /** Asks the viewer to save it. */
   download(path: string): Promise<{ saved: true }>
+  /** Calls `fn` with the file now and whenever it changes, read every
+   * `every` ms (at least 2,000; 5,000 by default); returns a function that
+   * stops it. */
+  watch(path: string, fn: (file: { text: string; size: number; revision: string }) => void, opts?: { every?: number }): () => void
+  /** `list_files` and `read_file`, as tools for `sample`, which the agent
+   * answering a question calls itself; declare `sample` too. */
+  asSampleTools(): Promise<SiltSampleTool[]>
 }
 
 // `dictation` (declare `{"dictation": {}}`): the viewer's speech as text, on
