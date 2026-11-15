@@ -15,7 +15,7 @@ pub mod view;
 /// (ADR 0059). 11: a thread's files marked seen, and the turn a person
 /// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
-/// through each server they use (ADR 0070).
+/// through each server they use (ADR 0071).
 pub const PROTOCOL: u32 = 12;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
@@ -213,7 +213,7 @@ pub struct MrSeen {
 }
 
 /// A person's own design system, as their devices sync it through each
-/// server they use (ADR 0070). The copy changed last wins; one removed
+/// server they use (ADR 0071). The copy changed last wins; one removed
 /// stays as a tombstone so the removal reaches every device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesignSystemCopy {

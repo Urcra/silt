@@ -174,7 +174,7 @@ pub struct Defaults {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, AgentDefaults>,
     /// The design system artifacts are styled with when the project names
-    /// none (ADR 0070).
+    /// none (ADR 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_system: Option<String>,
 }

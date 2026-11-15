@@ -1509,7 +1509,7 @@ fn artifact_text(api: &Api, thread: &str, artifact: &serde_json::Value) -> Strin
 /// An agent the web UI runs shows the person what it made through Silt's
 /// own tools (ADR 0068): an artifact, a new version of it under the same
 /// id, and an image in the conversation. Each is kept in the thread's
-/// history as written (ADR 0070), and served only by the blob an artifact
+/// history as written (ADR 0071), and served only by the blob an artifact
 /// names; a fork inherits them.
 #[test]
 fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
@@ -1536,7 +1536,7 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     );
     assert_eq!(first[0]["inline"], false);
     let text = artifact_text(&api, &thread, &first[0]);
-    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && text.contains(secret), "kept as written (ADR 0070): {text}");
+    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && text.contains(secret), "kept as written (ADR 0071): {text}");
     let (served, _) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{}", "ab".repeat(32)), None);
     assert!(!served, "a blob no artifact of the thread names isn't served");
 
@@ -1571,7 +1571,7 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps
-/// it, and the agent reads the latest version back (ADR 0070).
+/// it, and the agent reads the latest version back (ADR 0071).
 #[test]
 fn an_artifact_takes_the_repositorys_design_system() {
     let env = Env::new();

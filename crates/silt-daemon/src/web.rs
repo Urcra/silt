@@ -33,7 +33,7 @@ struct Web {
     codes: OneTimeCodes,
     voice: Arc<Voice>,
     /// The CDN files artifacts load through Silt, when the person turned
-    /// that on (ADR 0070).
+    /// that on (ADR 0071).
     vendor: Arc<silt_vendor::Vendor>,
 }
 
@@ -608,7 +608,7 @@ async fn set_artifact_settings(State(web): State<Web>, Json(settings): Json<crat
     ask(&web, Request::SetArtifactSettings { settings }).await
 }
 
-/// A CDN file an artifact's frame loads through Silt (ADR 0070).
+/// A CDN file an artifact's frame loads through Silt (ADR 0071).
 async fn vendor_file(State(web): State<Web>, Path((host, path)): Path<(String, String)>, request: HttpRequest) -> HttpResponse {
     let query = request.uri().query().map(str::to_owned);
     match web.vendor.get(&host, &format!("/{path}"), query.as_deref()).await {

@@ -1,4 +1,4 @@
-//! Skills Silt ships for the agents the web UI runs (ADR 0070). They live
+//! Skills Silt ships for the agents the web UI runs (ADR 0071). They live
 //! in the binary and are written out once per content, so an agent can
 //! read and run the files they name.
 

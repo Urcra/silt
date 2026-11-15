@@ -156,7 +156,7 @@ async fn browser_session(State(server): State<Server>, mut request: Request, nex
 }
 
 /// What the app asks first: where it is, and that no daemon serves it.
-/// How the app's artifact frames load libraries and fonts (ADR 0070).
+/// How the app's artifact frames load libraries and fonts (ADR 0071).
 async fn artifact_settings(State(server): State<Server>) -> Response {
     Json(json!({ "proxy": server.config().artifact_proxy })).into_response()
 }

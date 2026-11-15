@@ -268,7 +268,7 @@ impl Remote {
         Ok(())
     }
 
-    /// This person's own design systems as the server keeps them (ADR 0070).
+    /// This person's own design systems as the server keeps them (ADR 0071).
     pub async fn design_systems(&self) -> Result<Vec<silt_proto::DesignSystemCopy>, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/me/design-systems").send().await?;
         Ok(checked(response).await?.json().await?)

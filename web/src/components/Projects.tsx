@@ -74,7 +74,7 @@ function ProjectHome({ project }: { project: Project }) {
   )
 }
 
-/** The design system the project's artifacts take on this machine, above the repository's default and the workspace's (ADR 0070). */
+/** The design system the project's artifacts take on this machine, above the repository's default and the workspace's (ADR 0071). */
 function ProjectDesignSystem({ project }: { project: Project }) {
   const queries = useQueryClient()
   const clone = project.clone ?? ''

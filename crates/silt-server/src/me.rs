@@ -208,7 +208,7 @@ pub(crate) async fn change_thread(
 }
 
 /// Where the server keeps a person's own design systems, each a file
-/// (ADR 0070).
+/// (ADR 0071).
 fn design_systems_dir(server: &Server, user: crate::UserId) -> std::path::PathBuf {
     server.shared.data_dir.join("design-systems").join(user.0.to_string())
 }

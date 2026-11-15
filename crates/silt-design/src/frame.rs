@@ -1,4 +1,4 @@
-//! What an artifact's frame may load (ADR 0070): scripts from a few CDNs
+//! What an artifact's frame may load (ADR 0071): scripts from a few CDNs
 //! and fonts from Google Fonts, fetched directly or, where the person turned
 //! it on, through Silt's own vendor route, which takes only pinned files.
 

@@ -1,5 +1,5 @@
 //! The CDN files artifacts load, fetched once and kept on disk, for a frame
-//! that loads them through Silt rather than from the CDNs (ADR 0070). Only
+//! that loads them through Silt rather than from the CDNs (ADR 0071). Only
 //! pinned files of the allowlist are fetched: `silt_design::frame::vendorable`.
 
 use std::path::{Path, PathBuf};

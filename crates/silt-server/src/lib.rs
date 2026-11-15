@@ -202,7 +202,7 @@ struct Shared {
     config: Config,
     http: reqwest::Client,
     /// The CDN files artifacts load through this server, when its config
-    /// says so (ADR 0070).
+    /// says so (ADR 0071).
     vendor: silt_vendor::Vendor,
     /// Threads purged for good; their deltas are never stored again.
     purged: Mutex<std::collections::HashSet<ThreadId>>,

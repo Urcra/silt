@@ -31,7 +31,7 @@ pub struct Config {
     pub forges: Vec<Forge>,
     /// Artifacts' frames load libraries and fonts through this server,
     /// which fetches and keeps each file, rather than from the CDNs, so a
-    /// viewer never contacts one (ADR 0070).
+    /// viewer never contacts one (ADR 0071).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub artifact_proxy: bool,
 }

@@ -44,7 +44,7 @@ export function kindLabel(kind: string): string {
 
 /**
  * What an artifact's page may do: run its own inline scripts and styles, load scripts from a few CDNs and fonts from
- * Google Fonts, show what it carries inline, and connect to nothing (ADR 0070).
+ * Google Fonts, show what it carries inline, and connect to nothing (ADR 0071).
  */
 export const ARTIFACT_CSP = framePolicy(null)
 
@@ -53,7 +53,7 @@ const VENDOR_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', '
 
 /**
  * The policy a frame runs under, as `silt_design::frame::policy` writes it: the CDNs themselves, or only `vendor`, an
- * absolute URL ending in `/` that serves them through Silt (ADR 0070).
+ * absolute URL ending in `/` that serves them through Silt (ADR 0071).
  */
 export function framePolicy(vendor: string | null): string {
   const scripts = vendor ?? 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com'
@@ -79,7 +79,7 @@ export type FrameProblem = { kind: 'blocked' | 'error' | 'overflow'; text: strin
 
 /**
  * The script that runs first in an artifact's frame. It takes the viewer's theme, now and as it changes, and tells the
- * page holding the frame what text is selected, for a comment to quote, and what went wrong in it (ADR 0070).
+ * page holding the frame what text is selected, for a comment to quote, and what went wrong in it (ADR 0071).
  */
 function frameScript(theme: FrameTheme | null): string {
   return [

@@ -156,7 +156,7 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
     assert_eq!(status, "404", "a link to the conversation serves no artifact content");
 }
 
-/// A person's own design systems follow them (ADR 0070): one made on the
+/// A person's own design systems follow them (ADR 0071): one made on the
 /// laptop reaches the home machine through the server, and removing it
 /// there removes it on the laptop too.
 #[test]

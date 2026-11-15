@@ -185,7 +185,7 @@ impl Core {
         };
 
         // Not redacted: a data: URI or an SRI hash reads as a secret, and
-        // redacting it breaks the page (ADR 0070).
+        // redacting it breaks the page (ADR 0071).
         let size = bytes.len() as u64;
         let blob = self.store.blobs().put(&bytes).await?;
         let family = self.threads[&thread].family;
@@ -219,7 +219,7 @@ impl Core {
     }
 
     /// The design system a run reads before making an artifact: the one
-    /// named, else its project's default, else its workspace's (ADR 0070).
+    /// named, else its project's default, else its workspace's (ADR 0071).
     pub(crate) async fn artifact_guide(&self, token: &str, asked: Option<String>) -> Result<ArtifactGuide, CoreError> {
         let hash = blake3::hash(token.as_bytes());
         let (thread, workspace) = self

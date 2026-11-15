@@ -387,7 +387,7 @@ pub enum Request {
         artifact: NewArtifact,
     },
     /// What a run reads before making an artifact: the design system that
-    /// applies, or the one named, and the others it may use (ADR 0070);
+    /// applies, or the one named, and the others it may use (ADR 0071);
     /// only inside [`Request::Scoped`].
     ArtifactGuide {
         #[serde(default)]
@@ -803,7 +803,7 @@ pub struct ArtifactPut {
     pub dropped: Vec<String>,
 }
 
-/// How artifacts' frames load libraries and fonts (ADR 0070).
+/// How artifacts' frames load libraries and fonts (ADR 0071).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ArtifactSettings {
@@ -832,7 +832,7 @@ pub struct ArtifactRead {
     pub style: Option<String>,
 }
 
-/// Where a design system comes from (ADR 0070).
+/// Where a design system comes from (ADR 0071).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]

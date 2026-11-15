@@ -1,4 +1,4 @@
-//! The design systems an artifact is styled with (ADR 0070): a
+//! The design systems an artifact is styled with (ADR 0071): a
 //! repository's, the person's, or one built in, and the one that applies to
 //! a run's new version.
 

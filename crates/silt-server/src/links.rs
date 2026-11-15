@@ -431,7 +431,7 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
 }
 
 /// A page with its design system's CSS ahead of its own content, after its
-/// doctype, as the web UI gives it (ADR 0070).
+/// doctype, as the web UI gives it (ADR 0071).
 fn with_style(html: &[u8], css: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(html);
     let trimmed = text.trim_start();
@@ -449,7 +449,7 @@ fn with_style(html: &[u8], css: &[u8]) -> Vec<u8> {
 }
 
 /// A CDN file an artifact's frame loads through this server, when its
-/// config turns that on (ADR 0070).
+/// config turns that on (ADR 0071).
 pub(crate) async fn vendor_file(
     State(server): State<Server>,
     Path((host, path)): Path<(String, String)>,

@@ -1,6 +1,6 @@
 //! `silt_artifact_check`: renders a version as a viewer's frame shows it,
 //! at a phone's width and a desktop's, in light and dark, with a headless
-//! browser where Node and Playwright are installed (ADR 0070).
+//! browser where Node and Playwright are installed (ADR 0071).
 
 use std::fmt::Write as _;
 use std::path::Path;

@@ -345,7 +345,7 @@ async fn history(
 }
 
 /// An artifact's content, or the CSS its design system compiled to, if an
-/// artifact of the thread names the blob (ADR 0068, ADR 0070).
+/// artifact of the thread names the blob (ADR 0068, ADR 0071).
 async fn artifact_content(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,

@@ -84,7 +84,7 @@ impl DaemonTools {
     }
 
     /// The repository's and the person's skills, and Silt's own for a run
-    /// the web UI shows (ADR 0070).
+    /// the web UI shows (ADR 0071).
     fn skills(&self) -> Vec<Skill> {
         let home = silt_os::home_dir();
         let builtin = self.shows.then(|| silt_agents::builtin::builtin_skills_root(&paths::data_dir()).ok()).flatten();
@@ -346,7 +346,7 @@ fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
 }
 
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
-/// design system that applies and the others there are (ADR 0070).
+/// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
     let body = |name: &str| skills.iter().find(|skill| skill.name == name).and_then(|skill| skill.body().ok());
     let mut out = String::new();

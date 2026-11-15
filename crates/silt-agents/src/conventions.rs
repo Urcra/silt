@@ -26,7 +26,7 @@ pub enum SkillScope {
     Silt,
     Project,
     Personal,
-    /// Shipped with Silt for the agents the web UI runs (ADR 0070).
+    /// Shipped with Silt for the agents the web UI runs (ADR 0071).
     Builtin,
 }
 

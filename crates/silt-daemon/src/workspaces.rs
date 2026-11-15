@@ -400,7 +400,7 @@ impl Core {
     }
 
     /// The design system a workspace styles artifacts with when the project
-    /// names none (ADR 0070).
+    /// names none (ADR 0071).
     pub(crate) fn workspace_design_system(&self, workspace: &str) -> Option<String> {
         let id = WorkspaceId::new(workspace.to_owned()).ok()?;
         self.workspaces().get(&id)?.defaults.design_system.clone()

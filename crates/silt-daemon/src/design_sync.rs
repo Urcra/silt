@@ -1,5 +1,5 @@
 //! The person's own design systems, synced through each server they use
-//! (ADR 0070). Each system's folder under the data dir is the truth on a
+//! (ADR 0071). Each system's folder under the data dir is the truth on a
 //! machine; an index of what each held when last synced tells a change made
 //! here from one that came in, and the copy changed last wins.
 

@@ -423,7 +423,7 @@ pub struct ArtifactView {
     /// Words under an image shown in the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
-    /// The design system an HTML version was styled with (ADR 0070).
+    /// The design system an HTML version was styled with (ADR 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_system: Option<String>,
     /// The blob holding the CSS that system's tokens compiled to, which the

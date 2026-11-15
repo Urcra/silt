@@ -1,5 +1,5 @@
 //! Design systems: the tokens an artifact is styled with, and the CSS its
-//! frame is given (ADR 0070). A system is a `README.md` for the agent and a
+//! frame is given (ADR 0071). A system is a `README.md` for the agent and a
 //! `tokens.json`, compiled here into custom properties for every theme.
 
 pub mod frame;

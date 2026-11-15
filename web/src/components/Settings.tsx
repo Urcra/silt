@@ -160,7 +160,7 @@ function Appearance() {
   )
 }
 
-/** Whether artifacts' libraries and fonts load through Silt rather than from the CDNs (ADR 0070). */
+/** Whether artifacts' libraries and fonts load through Silt rather than from the CDNs (ADR 0071). */
 function ArtifactLoading() {
   const queries = useQueryClient()
   const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings })

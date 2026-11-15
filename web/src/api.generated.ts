@@ -601,7 +601,7 @@ inline: boolean,
  */
 caption?: string | null, 
 /**
- * The design system an HTML version was styled with (ADR 0070).
+ * The design system an HTML version was styled with (ADR 0071).
  */
 design_system?: string | null, 
 /**
@@ -1024,7 +1024,7 @@ export type Defaults = { agent?: string | null, preset?: Preset | null, chats_pr
 agents?: { [key in string]: AgentDefaults }, 
 /**
  * The design system artifacts are styled with when the project names
- * none (ADR 0070).
+ * none (ADR 0071).
  */
 design_system?: string | null, };
 

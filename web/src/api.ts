@@ -254,7 +254,7 @@ export const api = {
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
-  // The person's design systems and Silt's own, for a workspace's default (ADR 0070).
+  // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
   designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
