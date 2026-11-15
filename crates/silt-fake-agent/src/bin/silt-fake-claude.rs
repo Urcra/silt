@@ -463,13 +463,62 @@ fn in_tool() -> Step {
 }
 
 /// Print mode as `sample` runs it: no tools, no session, the answer streamed.
+/// Calls the first tool of the server `config` starts with `{"q": "fake"}`,
+/// and says what it answered.
+fn page_tool(config: &str) -> Result<String, Failed> {
+    use std::io::BufRead as _;
+    let config: serde_json::Value = serde_json::from_str(config).map_err(|error| Failed(2, error.to_string()))?;
+    let server = &config["mcpServers"]["page"];
+    let mut command = std::process::Command::new(server["command"].as_str().unwrap_or_default());
+    command.args(server["args"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str));
+    for (name, value) in server["env"].as_object().into_iter().flatten() {
+        command.env(name, value.as_str().unwrap_or_default());
+    }
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Failed(2, format!("could not start the page's tools: {error}")))?;
+    let mut input = child.stdin.take().ok_or_else(|| Failed(2, "no stdin".into()))?;
+    let mut lines = std::io::BufReader::new(child.stdout.take().ok_or_else(|| Failed(2, "no stdout".into()))?).lines();
+    let mut ask = |message: serde_json::Value, id: i64| -> Result<serde_json::Value, Failed> {
+        writeln!(input, "{message}").map_err(io)?;
+        input.flush().map_err(io)?;
+        for line in lines.by_ref() {
+            let reply: serde_json::Value = serde_json::from_str(&line.map_err(io)?).unwrap_or_default();
+            if reply["id"] == id {
+                return Ok(reply);
+            }
+        }
+        Err(Failed(2, "the page's tools didn't answer".into()))
+    };
+    ask(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+        1,
+    )?;
+    let listed = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), 2)?;
+    let name = listed["result"]["tools"][0]["name"].as_str().unwrap_or_default().to_owned();
+    let called =
+        ask(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": {"q": "fake"}}}), 3)?;
+    let _ = child.kill();
+    let said = called["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    Ok(format!(" [{name}: {said}]"))
+}
+
 fn print_mode(args: &[String]) -> Step {
     if let Some(logs) = env::var_os("FAKE_LOG_DIR").map(PathBuf::from) {
         write(&logs.join("claude-print"), args.join(" ").as_bytes())?;
     }
     let tools = args.iter().position(|arg| arg == "--allowedTools").and_then(|at| args.get(at + 1));
-    if tools.is_none_or(|tools| !tools.is_empty()) {
-        return Err(Failed(2, "print mode was allowed tools".into()));
+    let config = args.iter().position(|arg| arg == "--mcp-config").and_then(|at| args.get(at + 1));
+    // Print mode may use only the tools of the asker's own server.
+    let allowed = match (tools, config) {
+        (Some(tools), None) => tools.is_empty(),
+        (Some(tools), Some(_)) => !tools.is_empty() && tools.split(',').all(|tool| tool.starts_with("mcp__page__")),
+        (None, _) => false,
+    };
+    if !allowed || (config.is_some() && !args.iter().any(|arg| arg == "--strict-mcp-config")) {
+        return Err(Failed(2, "print mode was allowed tools beyond the asker's".into()));
     }
     let mut message = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut message).map_err(io)?;
@@ -481,10 +530,15 @@ fn print_mode(args: &[String]) -> Step {
         images = content.iter().filter(|part| part["type"] == "image").count();
         message = content.iter().filter_map(|part| part["text"].as_str()).collect();
     }
+    // With the asker's tools, it calls the first one, as an agent would.
+    let used = match config {
+        Some(config) => page_tool(config)?,
+        None => String::new(),
+    };
     let answer = env::var("FAKE_SAMPLE").unwrap_or_else(|_| {
         let words: Vec<&str> = message.split_whitespace().take(6).collect();
         let seen = if images > 0 { format!(" ({images} images)") } else { String::new() };
-        format!("Sampled: {}{seen}", words.join(" "))
+        format!("Sampled: {}{seen}{used}", words.join(" "))
     });
     let (first, rest) = answer.split_at(answer.find(' ').unwrap_or(answer.len()));
     let mut out = std::io::stdout().lock();

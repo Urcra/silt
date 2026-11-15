@@ -31,6 +31,12 @@ pub trait Backend {
     fn shows(&self) -> bool {
         false
     }
+
+    /// Tools of its own to offer instead of Silt's, such as those a page
+    /// gives the agent answering its question (ADR 0072).
+    fn listed(&self) -> Option<Value> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,7 +398,7 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
             "instructions": instructions(backend.shows())
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools(backend.shows()) }),
+        "tools/list" => json!({ "tools": backend.listed().unwrap_or_else(|| tools(backend.shows())) }),
         "prompts/list" => {
             let prompts: Vec<Value> = backend
                 .prompts()
@@ -411,7 +417,12 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            match check_arguments(name, &arguments, backend.shows()).and_then(|()| backend.call(name, &arguments)) {
+            let checked = match backend.listed() {
+                Some(listed) if listed.as_array().is_some_and(|listed| listed.iter().any(|tool| tool["name"] == name)) => Ok(()),
+                Some(_) => Err(format!("unknown tool {name}")),
+                None => check_arguments(name, &arguments, backend.shows()),
+            };
+            match checked.and_then(|()| backend.call(name, &arguments)) {
                 Ok(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": false}),
                 Err(text) => json!({"content": [{"type": "text", "text": bounded(text)}], "isError": true}),
             }

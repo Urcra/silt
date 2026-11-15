@@ -348,6 +348,9 @@ enum Command {
         #[arg(long)]
         ui: bool,
     },
+    /// Serve the tools a page gave its question to the agent answering it
+    #[command(hide = true)]
+    SampleTools { file: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -915,6 +918,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Compact => commands::daemon_compact(),
         },
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
+        Command::SampleTools { file } => mcp::serve_page_tools(&file),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

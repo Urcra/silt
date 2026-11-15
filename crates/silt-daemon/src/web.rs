@@ -159,6 +159,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
             post(page_assets).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
         )
         .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -826,6 +827,8 @@ struct SampleAsk {
     input: serde_json::Value,
     #[serde(default)]
     images: Vec<silt_proto::artifact::SampleImage>,
+    #[serde(default)]
+    tools: Vec<silt_proto::artifact::SampleTool>,
 }
 
 /// A page's question for this machine's agent, its answer streamed on the
@@ -835,8 +838,25 @@ async fn sample(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<SampleAsk>,
 ) -> HttpResponse {
-    ask(&web, Request::Sample { thread, artifact: Some(artifact), ask: asked.ask, input: asked.input, images: asked.images })
-        .await
+    let request = Request::Sample {
+        thread,
+        artifact: Some(artifact),
+        ask: asked.ask,
+        input: asked.input,
+        images: asked.images,
+        tools: asked.tools,
+    };
+    ask(&web, request).await
+}
+
+/// A page's answer to the agent's call of one of the tools it gave a
+/// question (ADR 0072).
+async fn sample_tool_result(
+    State(web): State<Web>,
+    Path((thread, artifact, ask_name, call)): Path<(String, String, String, u32)>,
+    Json(result): Json<crate::protocol::SampleToolResult>,
+) -> HttpResponse {
+    ask(&web, Request::SampleToolResult { thread, artifact, ask: ask_name, call, result }).await
 }
 
 /// Adds, lists or deletes the files people added to a page (ADR 0074).

@@ -162,9 +162,35 @@ function sampleClient(ns) {
           try { opts.onText({ text: d.text, delta: d.text.slice(before.length) }); } catch (x) {}
         })
       : function () {};
-    var done = function () { off(); delete sample.last[ask]; };
+    // The page's tools run here, when the agent calls one; only their names,
+    // descriptions and input schemas leave the page.
+    var tools = Array.isArray(opts.tools) ? opts.tools : [];
+    var runs = {};
+    tools.forEach(function (tool) { runs[tool.name] = tool.execute; });
+    var offTools = tools.length
+      ? ns.on('tool', function (d) {
+          if (!d || d.ask !== ask) return;
+          var run = runs[d.name];
+          Promise.resolve()
+            .then(function () {
+              if (typeof run !== 'function') throw new Error('no tool is named ' + d.name);
+              return run(d.input);
+            })
+            .then(
+              function (value) { return ns.toolResult({ ask: ask, call: d.call, ok: true, value: value === undefined ? null : value }); },
+              function (e) { return ns.toolResult({ ask: ask, call: d.call, ok: false, error: String((e && e.message) || e) }); }
+            )
+            .catch(function () {});
+        })
+      : function () {};
+    var done = function () { off(); offTools(); delete sample.last[ask]; };
     var asked = { input: input, ask: ask };
     if (opts.images) asked.images = Array.prototype.slice.call(opts.images);
+    if (tools.length) {
+      asked.tools = tools.map(function (tool) {
+        return { name: String(tool.name), description: String(tool.description || ''), inputSchema: tool.inputSchema };
+      });
+    }
     return ns.ask(asked).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
   }
   sample.last = {};

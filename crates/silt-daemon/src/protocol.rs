@@ -431,6 +431,23 @@ pub enum Request {
         input: serde_json::Value,
         #[serde(default)]
         images: Vec<silt_proto::artifact::SampleImage>,
+        #[serde(default)]
+        tools: Vec<silt_proto::artifact::SampleTool>,
+    },
+    /// The agent answering a page's question named `ask` calls one of the
+    /// page's tools, from `silt sample-tools`; answered once the page runs it.
+    SampleToolCall {
+        ask: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// The page's answer to a call of one of its tools.
+    SampleToolResult {
+        thread: String,
+        artifact: String,
+        ask: String,
+        call: u32,
+        result: SampleToolResult,
     },
     /// The files people added to an artifact's page (ADR 0074).
     PageAssets {
@@ -1683,6 +1700,15 @@ pub enum BusEvent {
     Importing { done: usize, total: usize },
     /// The answer so far to a page's `sample` question.
     Sample { ask: String, text: String },
+    /// The agent answering a page's question calls one of the tools the
+    /// page gave it, for the page to run and answer.
+    SampleTool {
+        ask: String,
+        call: u32,
+        name: String,
+        #[cfg_attr(test, ts(type = "unknown"))]
+        input: serde_json::Value,
+    },
     /// What the agent said to a room, for the web server to deliver; never
     /// sent to browsers.
     Room {
@@ -1715,12 +1741,22 @@ impl BusEvent {
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
             Self::Importing { .. } => Some("import".to_owned()),
-            Self::Sample { ask, .. } => Some(format!("sample:{ask}")),
+            Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }
     }
+}
+
+/// How a page's tool answered: its value, or why it failed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SampleToolResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// What a browser sends on `/api/events`.

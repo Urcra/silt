@@ -64,6 +64,8 @@ import type {
 } from './api.generated'
 
 /** Who views a thread's pages: their id in page data, their level, and the names of the people the thread knows. */
+/** A tool a page offers the agent answering its question; the page runs it (ADR 0072). */
+export type SampleTool = { name: string; description: string; input_schema?: unknown }
 export type PageViewer = { id: string; level: 'read' | 'comment' | 'collaborator' | 'owner'; people: Record<string, string> }
 
 export type * from './api.generated'
@@ -206,11 +208,14 @@ export const api = {
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
   /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */
+  /** A page's answer to the agent's call of a tool it gave its question. */
+  sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
+    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */
   sampleSoFar: (id: string, artifact: string, ask: string) =>
     request<{ text: string }>('GET', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`),
-  sample: (id: string, artifact: string, ask: string, input: unknown, images: { media_type: string; data: string }[] = []) =>
-    request<{ text: string; truncated: boolean }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, { ask, input, images }),
+  sample: (id: string, artifact: string, ask: string, input: unknown, images: { media_type: string; data: string }[] = [], tools: SampleTool[] = []) =>
+    request<{ text: string; truncated: boolean }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, { ask, input, images, tools }),
   /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
   artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
     request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),

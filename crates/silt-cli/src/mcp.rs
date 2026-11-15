@@ -679,6 +679,52 @@ fn edits_arg(arguments: &Value) -> Result<Vec<silt_proto::artifact::Edit>, Strin
         .collect()
 }
 
+/// How long a page's tool may take, past the daemon's own wait.
+const PAGE_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(70);
+
+/// `silt sample-tools`: the tools a page gave its question, served to the
+/// agent answering it; each call is run by the page (ADR 0072).
+struct PageTools {
+    ask: String,
+    listed: Value,
+}
+
+impl silt_mcp::Backend for PageTools {
+    fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String> {
+        let request = Request::SampleToolCall { ask: self.ask.clone(), name: tool.to_owned(), input: arguments.clone() };
+        match client::send(&paths::socket_path(), &request, Some(PAGE_TOOL_TIMEOUT)) {
+            Ok(Response::Ok { data: Value::String(text) }) => Ok(text),
+            Ok(Response::Ok { data }) => Ok(data.to_string()),
+            Ok(Response::Error { message }) => Err(message),
+            Err(error) => Err(format!("the Silt daemon is not answering: {error}")),
+        }
+    }
+
+    fn listed(&self) -> Option<Value> {
+        Some(self.listed.clone())
+    }
+}
+
+pub fn serve_page_tools(file: &std::path::Path) -> Result<(), Exn<CliError>> {
+    let text = std::fs::read_to_string(file).or_raise(|| CliError(format!("cannot read {}", file.display())))?;
+    let offered: Value = serde_json::from_str(&text).or_raise(|| CliError("the page's tools aren't JSON".into()))?;
+    let ask = offered["ask"].as_str().unwrap_or_default().to_owned();
+    let listed = offered["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            serde_json::json!({
+                "name": tool["name"],
+                "description": tool["description"],
+                "inputSchema": if tool["input_schema"].is_object() { tool["input_schema"].clone() } else { serde_json::json!({"type": "object"}) },
+            })
+        })
+        .collect();
+    let mut tools = PageTools { ask, listed: Value::Array(listed) };
+    silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools).or_raise(|| CliError("the MCP connection failed".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

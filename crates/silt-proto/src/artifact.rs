@@ -142,6 +142,51 @@ pub fn sample_images(images: &[SampleImage]) -> Result<(), String> {
     Ok(())
 }
 
+/// The most tools a page offers one question.
+pub const SAMPLE_TOOLS: usize = 16;
+
+/// A tool a page offers the agent answering its question: the page runs
+/// it, in the viewer's browser, when the agent calls it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SampleTool {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// A JSON Schema for its input; any object when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
+    pub input_schema: Option<serde_json::Value>,
+}
+
+/// Whether `tools` are ones a question may offer: few, named plainly, and
+/// described briefly.
+pub fn sample_tools(tools: &[SampleTool]) -> Result<(), String> {
+    if tools.len() > SAMPLE_TOOLS {
+        return Err(format!("a question offers at most {SAMPLE_TOOLS} tools"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for tool in tools {
+        let plain =
+            (1..=64).contains(&tool.name.len()) && tool.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !plain {
+            return Err(format!("{:?} isn't a tool's name: 1 to 64 letters, digits, _ and -", tool.name));
+        }
+        if !seen.insert(&tool.name) {
+            return Err(format!("two tools are named {}", tool.name));
+        }
+        if tool.description.chars().count() > 1000 {
+            return Err(format!("{}'s description is over 1,000 characters", tool.name));
+        }
+        if let Some(schema) = &tool.input_schema
+            && (!schema.is_object() || schema.to_string().len() > 16 * 1024)
+        {
+            return Err(format!("{}'s input schema is an object of at most 16 KiB", tool.name));
+        }
+    }
+    Ok(())
+}
+
 /// Whether a version's declaration lets its page show the agent images.
 pub fn sample_takes_images(declared: &Capabilities) -> bool {
     declared.get("sample").and_then(|sample| sample.get("images")).and_then(serde_json::Value::as_bool) == Some(true)
@@ -331,6 +376,17 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_offers_few_plainly_named_tools() {
+        let tool = |name: &str| SampleTool { name: name.into(), description: String::new(), input_schema: None };
+        assert_eq!(sample_tools(&[tool("lookup"), tool("add_row")]), Ok(()));
+        assert!(sample_tools(&[tool("bad name")]).is_err());
+        assert!(sample_tools(&[tool("twice"), tool("twice")]).is_err());
+        let listed = SampleTool { input_schema: Some(serde_json::json!(["not", "an", "object"])), ..tool("odd") };
+        assert!(sample_tools(&[listed]).is_err());
+        assert!(sample_tools(&(0..=SAMPLE_TOOLS).map(|at| tool(&format!("t{at}"))).collect::<Vec<_>>()).is_err());
+    }
 
     #[test]
     fn a_question_shows_only_images_its_page_declared_and_the_agent_reads() {

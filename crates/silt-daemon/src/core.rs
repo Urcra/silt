@@ -294,6 +294,8 @@ pub struct Core {
     pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
     /// When each artifact's page last asked `sample`, for its rate.
     pub(crate) samples: HashMap<String, Vec<Instant>>,
+    /// Questions whose pages offered tools, by name (ADR 0072).
+    pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -535,6 +537,7 @@ impl Core {
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
+            sample_calls: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
@@ -730,8 +733,14 @@ impl Core {
             Request::ArtifactFile { thread, id, version, path } => {
                 to_response(self.artifact_file(&thread, &id, version, &path).await)
             }
-            Request::Sample { thread, artifact, ask, input, images } => {
-                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images));
+            Request::Sample { thread, artifact, ask, input, images, tools } => {
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images, tools));
+            }
+            Request::SampleToolCall { ask, name, input } => {
+                return answer_later(reply, self.sample_tool_call(&ask, name, input));
+            }
+            Request::SampleToolResult { thread, artifact, ask, call, result } => {
+                to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
             }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),

@@ -261,6 +261,7 @@ impl Core {
                 ask: Some(control_ask(id)),
                 input: serde_json::Value::String(question),
                 images,
+                tools: Vec::new(),
             },
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),

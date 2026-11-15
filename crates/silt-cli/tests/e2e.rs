@@ -1690,6 +1690,18 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     let svg = serde_json::json!({"media_type": "image/svg+xml", "data": pixel});
     let (refused, said) = api.call("POST", &sample, Some(serde_json::json!({"input": "What is this?", "images": [svg]})));
     assert!(!refused && said.to_string().contains("PNG"), "only images the agent reads: {said}");
+    // A tool the page gives its question runs in the page: here the test
+    // answers the agent's call of it as the page would.
+    let tools = serde_json::json!([{"name": "lookup", "description": "Finds a row by its name"}]);
+    let answered = std::thread::scope(|scope| {
+        let asking = scope
+            .spawn(|| api.ok("POST", &sample, Some(serde_json::json!({"ask": "q3", "input": "Which row?", "tools": tools}))));
+        let call = format!("/api/threads/{thread}/artifacts/{id}/sample/q3/tools/1");
+        let ran = eventually(|| api.call("POST", &call, Some(serde_json::json!({"ok": true, "value": "row 42"}))).0);
+        assert!(ran, "the agent called the page's tool");
+        asking.join().expect("asked")
+    });
+    assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 42]", "{answered}");
     let (refused, _) = api.call(
         "POST",
         &format!("/api/threads/{thread}/artifacts/{}/sample", "0".repeat(12)),

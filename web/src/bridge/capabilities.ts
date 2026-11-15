@@ -1,7 +1,7 @@
 // The capabilities this view serves an artifact's page, by name (ADR 0072). A page that asks for one not here gets
 // null.
 
-import { api, type ArtifactView, type PageViewer } from '../api'
+import { api, type ArtifactView, type PageViewer, type SampleTool } from '../api'
 import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
@@ -372,6 +372,16 @@ function composerOnly(artifact: ArtifactView): boolean {
   return declared?.composer_only === true
 }
 
+/** The tools a page offers its question, as the daemon takes them: names, descriptions and input schemas, never code. */
+function sampleTools(given: unknown): SampleTool[] {
+  if (!Array.isArray(given)) return []
+  return given.map((tool: { name?: unknown; description?: unknown; inputSchema?: unknown }) => ({
+    name: String(tool?.name ?? ''),
+    description: typeof tool?.description === 'string' ? tool.description : '',
+    input_schema: tool?.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : undefined,
+  }))
+}
+
 /** The most images one of a page's questions shows the agent, as the daemon and server take them. */
 const SAMPLE_IMAGES = 4
 
@@ -395,11 +405,20 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       return agreed
     })())
   return {
-    methods: ['ask', 'limits'],
-    perMinute: 4,
+    methods: ['ask', 'limits', 'toolResult'],
+    // Each question asks once; its tools' answers are many.
+    perMinute: 120,
     call: async (method, args, context) => {
-      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4 }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown }
+      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: !hosted() }
+      if (method === 'toolResult') {
+        const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
+        const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
+        await api.sampleToolResult(thread, artifact.id, String(said.ask ?? ''), Number(said.call), result)
+        return null
+      }
+      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown }
+      const tools = sampleTools(given.tools)
+      if (tools.length > 0 && hosted()) throw new Refusal('unavailable', "a page's tools run only on your own computer's agent, not in the hosted app")
       const blobs = Array.isArray(given.images) ? given.images : []
       if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
       if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
@@ -410,6 +429,8 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       const unlisten = bus.listen((event) => {
         const said = event as { event?: string; ask?: string; text?: string }
         if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask, text: said.text ?? '' })
+        const called = event as { event?: string; ask?: string; call?: number; name?: string; input?: unknown }
+        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask, call: called.call, name: called.name, input: called.input })
       })
       // The hosted app has no bus: it reads what the device's agent has said so far.
       let heard = ''
@@ -424,7 +445,7 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
           }, 400)
         : null
       try {
-        return await api.sample(thread, artifact.id, ask, given.input, images)
+        return await api.sample(thread, artifact.id, ask, given.input, images, tools)
       } catch (failure) {
         throw refusalOf(failure)
       } finally {

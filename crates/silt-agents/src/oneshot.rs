@@ -39,16 +39,38 @@ pub struct Image<'a> {
     pub data: &'a str,
 }
 
+/// Tools the asker offers, through an MCP server of its own: the config
+/// that starts it, and the tools' names as the agent calls them.
+pub struct OfferedTools {
+    pub mcp_config: String,
+    pub allowed: Vec<String>,
+}
+
 /// Asks Claude Code's print mode `question` from `cwd`, a directory of its
-/// own so no project's instructions apply, showing it `images`, and telling
-/// `heard` the answer so far each time more of it arrives.
-pub fn ask_claude(question: &str, images: &[Image<'_>], cwd: &Path, mut heard: impl FnMut(&str)) -> Result<Answer, OneShotError> {
+/// own so no project's instructions apply, showing it `images` and offering
+/// it `tools` and no others, and telling `heard` the answer so far each
+/// time more of it arrives.
+pub fn ask_claude(
+    question: &str,
+    images: &[Image<'_>],
+    tools: Option<&OfferedTools>,
+    cwd: &Path,
+    mut heard: impl FnMut(&str),
+) -> Result<Answer, OneShotError> {
     if question.len() > QUESTION_BYTES {
         return Err(OneShotError::TooLarge);
     }
     let launch = Launch::new("claude");
     let mut command = Command::new(&launch.program);
-    command.args(["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", ""]);
+    command.args(["-p", "--output-format", "stream-json", "--verbose"]);
+    match tools {
+        Some(tools) => {
+            command.args(["--mcp-config", &tools.mcp_config, "--strict-mcp-config", "--allowedTools", &tools.allowed.join(",")]);
+        }
+        None => {
+            command.args(["--allowedTools", ""]);
+        }
+    }
     // Images go in a message of the stream, as plain text can't carry them.
     let message = (!images.is_empty()).then(|| {
         let mut content: Vec<Value> = images

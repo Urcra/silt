@@ -131,8 +131,21 @@ interface SiltComments {
 // time. The person agrees once per artifact; `not_granted` means they said
 // no, so hide the feature. At most 4 a minute (`rate_limited`). Call it on a
 // click, never in a loop.
+interface SiltSampleTool {
+  /** 1 to 64 letters, digits, `_` and `-`. */
+  name: string
+  description?: string
+  /** A JSON Schema object for `execute`'s input. */
+  inputSchema?: object
+  /** Runs in the page when the agent calls it; return small data, or throw. */
+  execute(input: any): unknown | Promise<unknown>
+}
 interface SiltSampleOptions {
   onText?: (said: { text: string; delta: string }) => void
+  /** Up to 16 functions of the page the agent may call while it answers.
+   * Only on this computer's agent: `limits().tools` is false in the hosted
+   * app, where a question with tools is refused (`unavailable`). */
+  tools?: SiltSampleTool[]
   /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most
    * about 3.7 MB; declare `{"sample": {"images": true}}` for them. */
   images?: Blob[]
@@ -146,7 +159,7 @@ interface SiltSample {
   json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: SiltSampleOptions): Promise<any>
   /** `images` is how many one question may show, or false when the page
    * didn't declare them. */
-  limits(): Promise<{ images: number | false; perMinute: number }>
+  limits(): Promise<{ images: number | false; perMinute: number; tools: boolean }>
 }
 
 // `assets` (declare `{"assets": {}}`, or `{"assets": {"upload": "comment"}}`
