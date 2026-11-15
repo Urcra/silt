@@ -154,6 +154,7 @@ fn id_text(id: &silt_crdt::CharId) -> String {
 pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
     let rows: Vec<String> = cells.rows.iter().map(id_text).collect();
     let columns: Vec<String> = cells.columns.iter().map(id_text).collect();
+    let positions = silt_sheet::Positions::new(&rows, &columns);
     let raw: Vec<Vec<String>> = cells
         .rows
         .iter()
@@ -161,9 +162,7 @@ pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
             cells
                 .columns
                 .iter()
-                .map(|column| {
-                    cells.cells.get(&(*row, *column)).map_or_else(String::new, |raw| silt_sheet::from_ids(raw, &rows, &columns))
-                })
+                .map(|column| cells.cells.get(&(*row, *column)).map_or_else(String::new, |raw| positions.from_ids(raw)))
                 .collect()
         })
         .collect();
@@ -265,6 +264,91 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
     book.save_to_buffer().map_err(|error| error.to_string())
 }
 
+/// How many words a doc's or a sheet's search hit shows, as the index's
+/// snippets do.
+const SNIPPET_WORDS: usize = 12;
+
+/// A doc's or a sheet's search hit: when every word of `query` begins a
+/// word of `text`, as the index matches them, a snippet around the first
+/// match with the matches in brackets.
+pub fn text_hit(text: &str, query: &str) -> Option<String> {
+    let terms: Vec<String> =
+        query.split_whitespace().map(|word| word.replace('"', "").to_lowercase()).filter(|word| !word.is_empty()).collect();
+    if terms.is_empty() {
+        return None;
+    }
+    let words = words_of(text);
+    let lowered: Vec<String> = words.iter().map(|&(start, end)| text[start..end].to_lowercase()).collect();
+    if !terms.iter().all(|term| lowered.iter().any(|word| word.starts_with(term.as_str()))) {
+        return None;
+    }
+    let matched = |word: &str| terms.iter().any(|term| word.starts_with(term.as_str()));
+    let first = lowered.iter().position(|word| matched(word))?;
+    let from = first.saturating_sub(SNIPPET_WORDS / 3);
+    let to = (from + SNIPPET_WORDS).min(words.len());
+    let mut snippet = String::new();
+    if from > 0 {
+        snippet.push('…');
+    }
+    for at in from..to {
+        let (start, end) = words[at];
+        if at > from {
+            snippet.push_str(&text[words[at - 1].1..start].split_whitespace().collect::<Vec<_>>().join(" "));
+            if text[words[at - 1].1..start].ends_with(char::is_whitespace) {
+                snippet.push(' ');
+            }
+        }
+        if matched(&lowered[at]) {
+            snippet.push('[');
+            snippet.push_str(&text[start..end]);
+            snippet.push(']');
+        } else {
+            snippet.push_str(&text[start..end]);
+        }
+    }
+    if to < words.len() {
+        snippet.push('…');
+    } else if let Some(&(_, end)) = words.last() {
+        snippet.push_str(text[end..].trim());
+    }
+    Some(snippet)
+}
+
+/// The byte ranges of `text`'s words: runs of letters and digits.
+fn words_of(text: &str) -> Vec<(usize, usize)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (at, c) in text.char_indices() {
+        match (c.is_alphanumeric(), start) {
+            (true, None) => start = Some(at),
+            (false, Some(from)) => {
+                words.push((from, at));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        words.push((from, text.len()));
+    }
+    words
+}
+
+/// What a sheet says, for search: its cells as typed, row by row.
+pub fn sheet_text(cells: &SheetCells) -> String {
+    let mut text = String::new();
+    for row in &cells.rows {
+        for column in &cells.columns {
+            if let Some(raw) = cells.cells.get(&(*row, *column)).filter(|raw| !raw.starts_with('=')) {
+                text.push_str(raw);
+                text.push('\t');
+            }
+        }
+        text.push('\n');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +401,14 @@ mod tests {
         assert_eq!(edit, DocEdit::Replace { old: "a".into(), new: "b".into() });
         let set: SheetRequest = serde_json::from_value(serde_json::json!({"op": "set", "cells": {"A1": "3"}})).expect("set");
         assert!(matches!(set, SheetRequest::Set { sheet: 0, .. }));
+    }
+
+    #[test]
+    fn a_text_hit_needs_every_word_and_brackets_each_match() {
+        let text = "Launch plan\n\nWe ship the beta on Friday, after the review of the pricing page.";
+        assert_eq!(text_hit(text, "pric beta").as_deref(), Some("…plan We ship the [beta] on Friday, after the review of the…"));
+        assert_eq!(text_hit(text, "beta tuesday"), None);
+        assert_eq!(text_hit(text, "  "), None);
+        assert_eq!(text_hit(text, "PRICING").as_deref(), Some("…the review of the [pricing] page."));
     }
 }

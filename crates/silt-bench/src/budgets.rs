@@ -108,6 +108,9 @@ pub const SYNC_PUSH: &str = "sync.push";
 pub const SYNC_PULL: &str = "sync.pull";
 pub const APP_THREADS: &str = "app.threads";
 pub const APP_HISTORY: &str = "app.history";
+pub const PAGE_FOLD: &str = "page.fold";
+pub const DOC_REPLAY: &str = "doc.replay";
+pub const SHEET_EVAL: &str = "sheet.eval";
 
 pub const BUDGETS: &[Budget] = &[
     Budget {
@@ -206,6 +209,27 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the hosted app's first page of that family's 100 MB session, the first time it's opened",
         dev: Limit::Time(Duration::from_millis(100)),
         cloud: Limit::Time(Duration::from_millis(230)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: PAGE_FOLD,
+        measures: "a page's data folded along its thread: 10,000 writes over 1,000 documents",
+        dev: Limit::Time(Duration::from_millis(10)),
+        cloud: Limit::Time(Duration::from_millis(25)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: DOC_REPLAY,
+        measures: "a doc's text replayed from 20,000 edits",
+        dev: Limit::Time(Duration::from_millis(15)),
+        cloud: Limit::Time(Duration::from_millis(40)),
+        status: Status::Enforced,
+    },
+    Budget {
+        name: SHEET_EVAL,
+        measures: "a 1,000-row sheet folded from its cells and computed, a SUM on every row",
+        dev: Limit::Time(Duration::from_millis(20)),
+        cloud: Limit::Time(Duration::from_millis(50)),
         status: Status::Enforced,
     },
 ];

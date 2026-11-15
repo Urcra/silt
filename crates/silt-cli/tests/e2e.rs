@@ -1848,6 +1848,11 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     assert_eq!(typed["text"], "# Plan\n- test\n- ship\n");
     prompt("Doc edit");
     assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- test\n- ship on Friday\n");
+    // Search finds the doc's text as it stands, words the person typed too.
+    let found = api.ok("GET", "/api/search?q=test%20frid", None);
+    let hit = found.as_array().and_then(|hits| hits.iter().find(|hit| hit["artifact"] == doc.as_str())).expect("a doc hit");
+    assert_eq!((&hit["kind"], &hit["thread"]), (&"doc".into(), &thread.as_str().into()), "{hit}");
+    assert!(hit["snippet"].as_str().is_some_and(|snippet| snippet.contains("[test]") && snippet.contains("[Friday]")), "{hit}");
 
     prompt("Artifact sheet");
     let sheet = artifacts_of(&api, &thread).last().expect("the sheet")["id"].as_str().expect("id").to_owned();
@@ -1859,6 +1864,11 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let view = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
     assert_eq!(view["raw"][3][1], "=SUM(B2:B3)", "the formula moved with its cells: {view}");
     assert_eq!(view["values"][3][1], "8", "and means the same: {view}");
+    let found = api.ok("GET", "/api/search?q=fruit", None);
+    assert!(
+        found.as_array().is_some_and(|hits| hits.iter().any(|hit| hit["artifact"] == sheet.as_str() && hit["kind"] == "sheet")),
+        "a sheet hit: {found}"
+    );
     let output = Command::new("curl")
         .args([
             "-s",

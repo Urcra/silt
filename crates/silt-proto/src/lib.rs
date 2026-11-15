@@ -566,6 +566,9 @@ pub struct SearchHit {
     pub kind: String,
     pub snippet: String,
     pub time_ms: i64,
+    /// The doc or sheet whose text it's in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

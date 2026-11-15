@@ -26,3 +26,5 @@ silt-types = { path = "../silt-types" }
 tempfile = "3.27.0"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
 uuid = { version = "1.28.0", features = ["v4"] }
+silt-proto = { version = "0.0.1", path = "../silt-proto" }
+silt-crdt = { version = "0.0.1", path = "../silt-crdt" }

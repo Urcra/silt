@@ -971,7 +971,11 @@ turn: number | null,
 /**
  * The agent compacted its context after it.
  */
-before_compaction: boolean, };
+before_compaction: boolean, 
+/**
+ * The doc or sheet whose text it's in.
+ */
+artifact: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 

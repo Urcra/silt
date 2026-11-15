@@ -1813,6 +1813,14 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     assert_eq!(alice.post(&sheet, set).await.0, StatusCode::OK);
     let (_, view) = carol.post(&sheet, serde_json::json!({"op": "read"})).await;
     assert_eq!(view["values"][1][0], "6", "{view}");
+
+    // Search finds a doc's text as it stands, for who may read the thread.
+    let (_, found) = carol.get("/search?q=launch").await;
+    let hit = &found[0];
+    assert_eq!((&hit["kind"], &hit["artifact"]), (&"doc".into(), &"0123456789ab".into()), "{found}");
+    assert_eq!(hit["snippet"], "[Launch] plan", "{found}");
+    let (_, found) = erin.get("/search?q=launch").await;
+    assert_eq!(found, serde_json::json!([]), "erin can't read the thread");
 }
 
 type RoomStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

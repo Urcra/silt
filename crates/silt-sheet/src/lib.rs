@@ -308,15 +308,32 @@ pub fn to_ids(formula: &str, rows: &[String], columns: &[String]) -> String {
 /// A kept formula as the sheet stands: each reference by ids shown as its
 /// `A1` address, or `#REF!` where its row or column is gone.
 pub fn from_ids(formula: &str, rows: &[String], columns: &[String]) -> String {
-    let row_at: HashMap<&str, usize> = rows.iter().enumerate().map(|(at, id)| (id.as_str(), at)).collect();
-    let column_at: HashMap<&str, usize> = columns.iter().enumerate().map(|(at, id)| (id.as_str(), at)).collect();
-    rewrite(formula, |token| match token {
-        Token::Id(row, column) => Some(match (row_at.get(row.as_str()), column_at.get(column.as_str())) {
-            (Some(row), Some(column)) => address(*row, *column),
-            _ => "#REF!".to_owned(),
-        }),
-        _ => None,
-    })
+    Positions::new(rows, columns).from_ids(formula)
+}
+
+/// Where each row and column id stands, to show many kept formulas of one
+/// sheet without finding them again for each.
+pub struct Positions<'a> {
+    rows: HashMap<&'a str, usize>,
+    columns: HashMap<&'a str, usize>,
+}
+
+impl<'a> Positions<'a> {
+    pub fn new(rows: &'a [String], columns: &'a [String]) -> Self {
+        let at = |ids: &'a [String]| ids.iter().enumerate().map(|(at, id)| (id.as_str(), at)).collect();
+        Self { rows: at(rows), columns: at(columns) }
+    }
+
+    /// [`from_ids`] against these positions.
+    pub fn from_ids(&self, formula: &str) -> String {
+        rewrite(formula, |token| match token {
+            Token::Id(row, column) => Some(match (self.rows.get(row.as_str()), self.columns.get(column.as_str())) {
+                (Some(row), Some(column)) => address(*row, *column),
+                _ => "#REF!".to_owned(),
+            }),
+            _ => None,
+        })
+    }
 }
 
 fn rewrite(formula: &str, change: impl Fn(&Token) -> Option<String>) -> String {

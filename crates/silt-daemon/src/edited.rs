@@ -109,7 +109,7 @@ impl Core {
         }
     }
 
-    fn doc_text(&self, thread: ThreadId, artifact: ArtifactId) -> String {
+    pub(crate) fn doc_text(&self, thread: ThreadId, artifact: ArtifactId) -> String {
         let family_id = self.threads[&thread].family;
         match self.families.get(&family_id) {
             Some(family) => family.doc_text(thread, artifact),
@@ -120,7 +120,7 @@ impl Core {
         }
     }
 
-    fn sheet_cells(&self, thread: ThreadId, artifact: ArtifactId, sheet: u16) -> silt_log::page::SheetCells {
+    pub(crate) fn sheet_cells(&self, thread: ThreadId, artifact: ArtifactId, sheet: u16) -> silt_log::page::SheetCells {
         let family_id = self.threads[&thread].family;
         match self.families.get(&family_id) {
             Some(family) => family.sheet_cells(thread, artifact, sheet),

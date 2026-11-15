@@ -526,6 +526,7 @@ impl Core {
                         time_ms: Some(hit.time_ms),
                         turn: None,
                         before_compaction: false,
+                        artifact: hit.artifact,
                     }));
                 }
                 Err(error) if !filters.is_empty() => {
@@ -613,9 +614,52 @@ impl Core {
                 repo: None,
                 turn: None,
                 before_compaction: false,
+                artifact: None,
             })
-            .collect();
-        Ok((hits, deltas))
+            .collect::<Vec<_>>();
+        // A doc's or a sheet's hit comes first: it's the text as it stands.
+        let edited = self.edited_hits(query, limit, &keep);
+        let deltas = std::iter::repeat_n(None, edited.len()).chain(deltas).collect();
+        Ok((edited.into_iter().chain(hits).collect(), deltas))
+    }
+
+    /// Hits in the current text of the docs and sheets of the threads
+    /// `keep` keeps, newest first; their text isn't in the index, as it's
+    /// the sum of every edit rather than any one delta.
+    fn edited_hits(&self, query: &str, limit: u32, keep: impl Fn(ThreadId) -> bool) -> Vec<SearchResult> {
+        let mut found = Vec::new();
+        for summary in self.thread_summaries() {
+            let Ok(thread) = self.find_thread(&summary.id) else { continue };
+            if !keep(thread) {
+                continue;
+            }
+            let entries = self.history_entries(thread);
+            for (artifact, time_ms) in silt_proto::view::latest_artifacts(entries.iter().map(|(_, entry)| entry)) {
+                let Ok(id) = artifact.id.parse::<silt_types::ArtifactId>() else { continue };
+                let text = match artifact.kind.as_str() {
+                    "doc" => self.doc_text(thread, id),
+                    "sheet" => silt_proto::edited::sheet_text(&self.sheet_cells(thread, id, 0)),
+                    _ => continue,
+                };
+                if let Some(snippet) = silt_proto::edited::text_hit(&text, query) {
+                    found.push(SearchResult {
+                        thread: summary.id.clone(),
+                        kind: artifact.kind.clone(),
+                        snippet,
+                        owner: None,
+                        status: None,
+                        repo: None,
+                        time_ms: Some(time_ms),
+                        turn: None,
+                        before_compaction: false,
+                        artifact: Some(artifact.id.clone()),
+                    });
+                }
+            }
+        }
+        found.sort_by_key(|hit| std::cmp::Reverse(hit.time_ms));
+        found.truncate(limit as usize);
+        found
     }
 
     /// When each of these deltas was made, from the families here.

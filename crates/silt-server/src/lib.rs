@@ -1050,19 +1050,22 @@ async fn search(
     .bind(limit)
     .fetch_all(&server.shared.db)
     .await?;
-    let hits = rows
-        .iter()
-        .map(|row| SearchHit {
-            thread: ThreadId(id_from(row.get("thread_id"))),
-            repo: row.get("repo"),
-            owner: row.get("owner"),
-            status: thread_status(row.get("status")),
-            branch: row.get("branch"),
-            kind: row.get("kind"),
-            snippet: row.get("snippet"),
-            time_ms: row.get("time_ms"),
-        })
-        .collect();
+    let indexed = rows.iter().map(|row| SearchHit {
+        thread: ThreadId(id_from(row.get("thread_id"))),
+        repo: row.get("repo"),
+        owner: row.get("owner"),
+        status: thread_status(row.get("status")),
+        branch: row.get("branch"),
+        kind: row.get("kind"),
+        snippet: row.get("snippet"),
+        time_ms: row.get("time_ms"),
+        artifact: None,
+    });
+    // A doc's or a sheet's hit comes first: it's the text as it stands.
+    let limit = usize::try_from(limit).unwrap_or(0);
+    let mut hits = browse::edited_hits(&server, caller.user, &query, limit).await?;
+    hits.extend(indexed);
+    hits.truncate(limit);
     Ok(Json(SearchReply { hits }))
 }
 

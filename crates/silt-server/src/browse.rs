@@ -101,17 +101,49 @@ pub(crate) struct Browsed {
     log: Vec<Delta>,
     requests: OnceLock<Vec<MergeRequest>>,
     entries: std::sync::Mutex<HashMap<ThreadId, ThreadEntries>>,
+    graph: OnceLock<silt_crdt::CausalGraph>,
+    /// Docs' and sheets' text for search, worked out once per change.
+    texts: std::sync::Mutex<HashMap<(ThreadId, silt_types::ArtifactId), Arc<str>>>,
 }
 
 type ThreadEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
 
 impl Browsed {
     pub(crate) fn new(log: Vec<Delta>) -> Self {
-        Self { log, requests: OnceLock::new(), entries: std::sync::Mutex::default() }
+        Self {
+            log,
+            requests: OnceLock::new(),
+            entries: std::sync::Mutex::default(),
+            graph: OnceLock::new(),
+            texts: std::sync::Mutex::default(),
+        }
     }
 
     fn requests(&self) -> &[MergeRequest] {
         self.requests.get_or_init(|| merge_requests_in(&self.log))
+    }
+
+    fn graph(&self) -> &silt_crdt::CausalGraph {
+        self.graph.get_or_init(|| {
+            let mut graph = silt_crdt::CausalGraph::new();
+            for delta in &self.log {
+                let _ = graph.add(delta.span, &delta.parents);
+            }
+            graph
+        })
+    }
+
+    /// What a doc or a sheet says now, for search.
+    fn edited_text(&self, thread: ThreadId, artifact: silt_types::ArtifactId, kind: &str) -> Arc<str> {
+        if let Some(text) = self.texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(thread, artifact)) {
+            return Arc::clone(text);
+        }
+        let text: Arc<str> = match kind {
+            "doc" => silt_log::doc_text_in(&self.log, self.graph(), thread, artifact).into(),
+            _ => silt_proto::edited::sheet_text(&silt_log::sheet_cells_in(&self.log, self.graph(), thread, artifact, 0)).into(),
+        };
+        self.texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((thread, artifact), Arc::clone(&text));
+        text
     }
 
     /// `thread`'s own history entries, each with the delta it came from.
@@ -1611,9 +1643,82 @@ async fn search(
                 time_ms: Some(hit.time_ms),
                 turn: None,
                 before_compaction: false,
+                artifact: hit.artifact,
             })
             .collect(),
     ))
+}
+
+/// Search hits in the current text of the docs and sheets of the threads
+/// the person can read, newest first. Their text isn't in the index, as
+/// it's the sum of every edit rather than any one delta; a branch or file
+/// filter leaves them out, as a doc has neither.
+pub(crate) async fn edited_hits(
+    server: &Server,
+    user: UserId,
+    query: &SearchQuery,
+    limit: usize,
+) -> Result<Vec<silt_proto::SearchHit>, ApiError> {
+    if query.branch.is_some() || query.file.is_some() || query.q.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let readable = Readable::load(server, user).await?;
+    let mut found = Vec::new();
+    for row in &readable.rows {
+        if query.repo.as_ref().is_some_and(|repo| *repo != row.repo)
+            || query.author.as_ref().is_some_and(|author| *author != row.owner)
+        {
+            continue;
+        }
+        let Some(browsed) = readable.deltas.get(&row.family) else { continue };
+        let entries = browsed.entries(row.id);
+        for (artifact, time_ms) in silt_proto::view::latest_artifacts(entries.iter().map(|(_, entry)| entry)) {
+            if !matches!(artifact.kind.as_str(), "doc" | "sheet")
+                || query.since.is_some_and(|since| time_ms < since)
+                || query.until.is_some_and(|until| time_ms > until)
+            {
+                continue;
+            }
+            let Ok(id) = artifact.id.parse::<silt_types::ArtifactId>() else { continue };
+            if let Some(snippet) = silt_proto::edited::text_hit(&browsed.edited_text(row.id, id, &artifact.kind), &query.q) {
+                found.push((row, artifact.kind.clone(), snippet, time_ms, artifact.id.clone()));
+            }
+        }
+    }
+    found.sort_by_key(|(.., time_ms, _)| std::cmp::Reverse(*time_ms));
+    let mut hits = Vec::new();
+    for (row, kind, snippet, time_ms, artifact) in found {
+        let thread_id = crate::id_bytes(row.id.0).to_vec();
+        let activity = sqlx::query("SELECT branch, COALESCE(merged, 0) AS merged, COALESCE(last_ms, 0) AS last_ms FROM thread_activity WHERE thread_id = ?")
+            .bind(thread_id)
+            .fetch_optional(server.db())
+            .await?;
+        use sqlx::Row as _;
+        let branch: Option<String> = activity.as_ref().and_then(|row| row.get("branch"));
+        let status = match activity {
+            Some(row) if row.get::<i64, _>("merged") == 1 => silt_proto::ThreadStatus::Merged,
+            Some(row) if row.get::<i64, _>("last_ms") >= now_ms() - silt_proto::ACTIVE_MS => silt_proto::ThreadStatus::Active,
+            _ => silt_proto::ThreadStatus::Idle,
+        };
+        if query.status.is_some_and(|wanted| wanted != status) {
+            continue;
+        }
+        hits.push(silt_proto::SearchHit {
+            thread: row.id,
+            repo: row.repo.clone(),
+            owner: row.owner.clone(),
+            status,
+            branch,
+            kind,
+            snippet,
+            time_ms,
+            artifact: Some(artifact),
+        });
+        if hits.len() >= limit {
+            break;
+        }
+    }
+    Ok(hits)
 }
 
 #[derive(Deserialize)]

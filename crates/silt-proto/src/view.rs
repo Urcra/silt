@@ -200,6 +200,9 @@ pub struct SearchResult {
     /// The agent compacted its context after it.
     #[serde(default)]
     pub before_compaction: bool,
+    /// The doc or sheet whose text it's in.
+    #[serde(default)]
+    pub artifact: Option<String>,
 }
 
 /// Server search filters (ADR 0011); dates are milliseconds since the epoch.
