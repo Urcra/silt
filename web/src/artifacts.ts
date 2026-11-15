@@ -46,11 +46,31 @@ export function kindLabel(kind: string): string {
  * What an artifact's page may do: run its own inline scripts and styles, load scripts from a few CDNs and fonts from
  * Google Fonts, show what it carries inline, and connect to nothing (ADR 0070).
  */
-export const ARTIFACT_CSP =
-  "default-src 'none'; " +
-  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com; " +
-  "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; " +
-  'img-src data: blob:; media-src data: blob:'
+export const ARTIFACT_CSP = framePolicy(null)
+
+/** The hosts Silt's vendor route fetches from, as `silt_design::frame` lists them. */
+const VENDOR_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.tailwindcss.com', 'code.jquery.com', 'fonts.googleapis.com', 'fonts.gstatic.com']
+
+/**
+ * The policy a frame runs under, as `silt_design::frame::policy` writes it: the CDNs themselves, or only `vendor`, an
+ * absolute URL ending in `/` that serves them through Silt (ADR 0070).
+ */
+export function framePolicy(vendor: string | null): string {
+  const scripts = vendor ?? 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com'
+  const styles = vendor ?? 'https://fonts.googleapis.com'
+  const fonts = vendor ?? 'https://fonts.gstatic.com'
+  return `default-src 'none'; script-src 'unsafe-inline' ${scripts}; style-src 'unsafe-inline' ${styles}; font-src data: ${fonts}; img-src data: blob:; media-src data: blob:`
+}
+
+/** `text` with every allowlisted CDN address going through `vendor`, as `silt_design::frame::through_vendor` does. */
+export function throughVendor(text: string, vendor: string): string {
+  let out = text
+  for (const host of VENDOR_HOSTS) {
+    out = out.split(`https://${host}/`).join(`${vendor}${host}/`)
+    out = out.split(`//${host}/`).join(`${vendor}${host}/`)
+  }
+  return out.split(`https:${vendor}`).join(vendor).split(`http:${vendor}`).join(vendor)
+}
 
 export type FrameTheme = 'light' | 'dark'
 
@@ -84,6 +104,8 @@ export type FrameOptions = {
   style?: string | null
   /** The viewer's theme, set on the page's root. */
   theme?: FrameTheme | null
+  /** Silt's vendor route, an absolute URL ending in `/`, when libraries and fonts load through it. */
+  vendor?: string | null
 }
 
 /**
@@ -91,11 +113,15 @@ export type FrameOptions = {
  * the frame's script and the design system's tokens before anything of its own, and its doctype kept first so it
  * renders as written.
  */
-export function sandboxedDocument(html: string, { probe = true, style = null, theme = null }: FrameOptions = {}): string {
+export function sandboxedDocument(html: string, { probe = true, style = null, theme = null, vendor = null }: FrameOptions = {}): string {
+  if (vendor) {
+    html = throughVendor(html, vendor)
+    style = style && throughVendor(style, vendor)
+  }
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html)
   const first = doctype ? doctype[0].trim() : '<!doctype html>'
   const rest = doctype ? html.slice(doctype[0].length) : html
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${framePolicy(vendor)}">`
   const script = probe ? `<script>${frameScript(theme)}</script>` : ''
   // The CSS can't close its own element, whatever a peer put in it.
   const styled = style ? `<style data-silt="design-system">${style.replace(/<\//g, '<\\/')}</style>` : ''

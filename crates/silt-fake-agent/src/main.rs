@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -473,6 +473,7 @@ async fn agent() -> Result<()> {
 
 /// Calls Silt's own tools as an agent the web UI runs would: `Show me`
 /// shows an image with `silt_show`, `Guide` reads `silt_artifact_guide`,
+/// `Read back` reads the last artifact with `silt_artifact_read`,
 /// `Artifact` makes an artifact with `silt_artifact` (`FAKE_ACP_ARTIFACT`
 /// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), and `Artifact
 /// again` adds a version of the last one. Each call is reported as a tool
@@ -495,6 +496,10 @@ async fn show(
         ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
     } else if prompt.contains("Guide") {
         ("silt_artifact_guide", serde_json::json!({"kind": "html"}))
+    } else if prompt.contains("Read back")
+        && let Some(last) = last.clone()
+    {
+        ("silt_artifact_read", serde_json::json!({"id": last}))
     } else {
         let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});

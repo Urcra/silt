@@ -393,9 +393,32 @@ pub enum Request {
         #[serde(default)]
         design_system: Option<String>,
     },
-    /// The person's design systems and Silt's own, to pick a workspace's
-    /// default from.
-    DesignSystems,
+    /// The person's design systems and Silt's own, and a clone's when one
+    /// is named, to pick a default from.
+    DesignSystems {
+        #[serde(default)]
+        clone: Option<PathBuf>,
+    },
+    /// How this machine's web UI loads artifacts' libraries and fonts.
+    ArtifactSettings,
+    SetArtifactSettings {
+        settings: ArtifactSettings,
+    },
+    /// The design system picked for each project on this machine.
+    ProjectDesignSystems,
+    /// Picks a project's design system on this machine, or drops the pick.
+    SetProjectDesignSystem {
+        repo: String,
+        #[serde(default)]
+        design_system: Option<String>,
+    },
+    /// A version of an artifact of the run's thread, the latest by default,
+    /// for the agent to revise; only inside [`Request::Scoped`].
+    ArtifactRead {
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+    },
     /// An artifact's content, by the blob a history entry of the thread names.
     ArtifactContent {
         thread: String,
@@ -778,6 +801,35 @@ pub struct ArtifactPut {
     /// What its tokens couldn't use, for the agent to fix.
     #[serde(default)]
     pub dropped: Vec<String>,
+}
+
+/// How artifacts' frames load libraries and fonts (ADR 0070).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ArtifactSettings {
+    /// Through Silt's vendor route, which fetches and keeps each file, so
+    /// the viewer's browser never contacts a CDN; else from the CDNs.
+    #[serde(default)]
+    pub proxy: bool,
+}
+
+/// What [`Request::ArtifactRead`] answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactRead {
+    pub id: String,
+    pub version: u32,
+    /// The latest version of the artifact, which may be later than this.
+    pub latest: u32,
+    pub title: String,
+    pub kind: String,
+    pub media_type: String,
+    #[serde(default)]
+    pub design_system: Option<String>,
+    /// Base64.
+    pub data: String,
+    /// The CSS its design system compiled to, which its frame is given.
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 /// Where a design system comes from (ADR 0070).
@@ -1561,6 +1613,7 @@ mod tests {
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             DesignSource::decl(&config),
+            ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),
             silt_proto::view::ArtifactContent::decl(&config),
             silt_proto::view::LinkedArtifact::decl(&config),

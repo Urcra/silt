@@ -11,7 +11,7 @@ use silt_types::{BlobHash, ThreadId};
 
 use crate::core::{Core, CoreError};
 use crate::design;
-use crate::protocol::{ArtifactGuide, ArtifactPut, DesignSystemView, NewArtifact};
+use crate::protocol::{ArtifactGuide, ArtifactPut, ArtifactRead, DesignSystemView, NewArtifact};
 
 /// The largest artifact or image kept.
 pub(crate) const ARTIFACT_BYTES: u64 = 10 << 20;
@@ -166,14 +166,14 @@ impl Core {
             .map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
         let styled = if kind == "html" {
             let workspace_default = self.workspace_design_system(&workspace);
-            let project_default = design::project_default(&checkout);
-            let name = design::chosen(
-                new.design_system.as_deref(),
-                previous.as_deref(),
-                project_default.as_deref(),
-                workspace_default.as_deref(),
-            );
-            match name {
+            let repository = design::project_default(&checkout);
+            let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
+            let defaults = design::Defaults {
+                picked: picked.as_deref(),
+                repository: repository.as_deref(),
+                workspace: workspace_default.as_deref(),
+            };
+            match design::chosen(new.design_system.as_deref(), previous.as_deref(), defaults) {
                 Some(name) => {
                     let system = design::find(&design::systems(Some(&checkout), &self.data_dir), name)?;
                     Some((system.name.to_string(), system.compiled()?))
@@ -229,13 +229,20 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
         let checkout = self.acp_run_place(thread).map(|(_, checkout)| checkout);
         let systems = design::systems(checkout.as_deref(), &self.data_dir);
-        let project_default = checkout.as_deref().and_then(design::project_default);
+        let repository = checkout.as_deref().and_then(design::project_default);
         let workspace_default = self.workspace_design_system(&workspace);
-        let (name, why) = match (asked.as_deref(), project_default.as_deref(), workspace_default.as_deref()) {
-            (Some(asked), _, _) => (design::chosen(Some(asked), None, None, None), "asked for"),
-            (None, Some(project), _) => (design::chosen(Some(project), None, None, None), "the project's default"),
-            (None, None, Some(workspace)) => (design::chosen(Some(workspace), None, None, None), "the workspace's default"),
-            (None, None, None) => (None, ""),
+        let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
+        let defaults = design::Defaults {
+            picked: picked.as_deref(),
+            repository: repository.as_deref(),
+            workspace: workspace_default.as_deref(),
+        };
+        let (name, why) = match asked.as_deref() {
+            Some(asked) => (design::chosen(Some(asked), None, defaults), "asked for"),
+            None => match defaults.first() {
+                Some((name, why)) => (design::chosen(Some(name), None, defaults), why),
+                None => (None, ""),
+            },
         };
         let system = name.map(|name| design::find(&systems, name)).transpose()?;
         Ok(ArtifactGuide {
@@ -245,9 +252,66 @@ impl Core {
         })
     }
 
-    /// The person's design systems and the built-in ones.
-    pub(crate) fn design_systems(&self) -> Vec<DesignSystemView> {
-        design::systems(None, &self.data_dir).iter().map(|system| system.view(false)).collect()
+    /// A version of an artifact of the thread `token` was made for, the
+    /// latest when `version` is none, as the agent revises it after a
+    /// handoff or a fork.
+    pub(crate) async fn artifact_read(&self, token: &str, id: &str, version: Option<u32>) -> Result<ArtifactRead, CoreError> {
+        if !valid_id(id) {
+            return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
+        }
+        let hash = blake3::hash(token.as_bytes());
+        let (thread, _) = self
+            .store
+            .run_token(hash.as_bytes())
+            .await?
+            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        let entries = self.history_entries(thread);
+        let versions: Vec<&ArtifactView> =
+            entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).filter(|artifact| artifact.id == id).collect();
+        let latest = latest_version(versions.iter().copied(), id);
+        if latest == 0 {
+            return Err(CoreError::Invalid(format!("this thread has no artifact {id}")));
+        }
+        let wanted = version.unwrap_or(latest);
+        let artifact = versions
+            .iter()
+            .find(|artifact| artifact.version == wanted)
+            .ok_or_else(|| CoreError::Invalid(format!("artifact {id} has versions 1 to {latest}, not {wanted}")))?;
+        let blob: BlobHash = artifact.blob.parse().map_err(|_| CoreError::Invalid("the version's blob doesn't read".into()))?;
+        let family = self.threads[&thread].family;
+        let bytes = self.blob(family, blob).await?;
+        let style = match artifact.style.as_deref().and_then(|style| style.parse::<BlobHash>().ok()) {
+            Some(style) => Some(String::from_utf8_lossy(&self.blob(family, style).await?).into_owned()),
+            None => None,
+        };
+        Ok(ArtifactRead {
+            id: id.to_owned(),
+            version: wanted,
+            latest,
+            title: artifact.title.clone(),
+            kind: artifact.kind.clone(),
+            media_type: artifact.media_type.clone(),
+            design_system: artifact.design_system.clone(),
+            data: BASE64.encode(bytes),
+            style,
+        })
+    }
+
+    /// The design system picked for each project on this machine.
+    pub(crate) fn project_design_systems(&self) -> std::collections::BTreeMap<String, String> {
+        design::project_choices(&self.data_dir)
+    }
+
+    /// Picks the design system a project's artifacts take on this machine,
+    /// above the repository's default and the workspace's; `None` drops it.
+    pub(crate) fn set_project_design_system(&self, repo: &str, name: Option<&str>) -> Result<&'static str, CoreError> {
+        design::set_project_choice(&self.data_dir, repo, name)?;
+        Ok("design system saved")
+    }
+
+    /// The person's design systems and the built-in ones, and a clone's own.
+    pub(crate) fn design_systems(&self, clone: Option<&std::path::Path>) -> Vec<DesignSystemView> {
+        design::systems(clone, &self.data_dir).iter().map(|system| system.view(false)).collect()
     }
 
     /// An artifact's content, if an artifact of `thread`'s history names

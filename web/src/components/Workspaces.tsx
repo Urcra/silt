@@ -32,7 +32,7 @@ export function WorkspacesSettings() {
   const view = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces })
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
   const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const designSystems = useQuery({ queryKey: keys.designSystems, queryFn: api.designSystems })
+  const designSystems = useQuery({ queryKey: keys.designSystems, queryFn: () => api.designSystems() })
   const [picked, setPicked] = useState<string>()
   const [draft, setDraft] = useState<WorkspacesFile>()
   const [error, setError] = useState<string>()

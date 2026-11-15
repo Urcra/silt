@@ -612,6 +612,13 @@ style?: string | null, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 
+export type ArtifactSettings = { 
+/**
+ * Through Silt's vendor route, which fetches and keeps each file, so
+ * the viewer's browser never contacts a CDN; else from the CDNs.
+ */
+proxy: boolean, };
+
 export type DesignSystemView = { 
 /**
  * What `design_system` takes.

@@ -1570,8 +1570,8 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
 
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
-/// its tokens compiled to is served beside the page, and a new version
-/// keeps it (ADR 0070).
+/// its tokens compiled to is served beside the page, a new version keeps
+/// it, and the agent reads the latest version back (ADR 0070).
 #[test]
 fn an_artifact_takes_the_repositorys_design_system() {
     let env = Env::new();
@@ -1607,6 +1607,10 @@ fn an_artifact_takes_the_repositorys_design_system() {
     prompt("Artifact again");
     let versions = artifacts_of(&api, &thread);
     assert_eq!((versions.len(), &versions[1]["design_system"]), (2, &"nous".into()), "a new version keeps the last one's");
+
+    let read = prompt("Read back the artifact");
+    let answer = read.iter().map(|(_, text)| text.as_str()).find(|text| text.contains("version 2 of 2")).unwrap_or_default();
+    assert!(answer.contains("styled with the nous design system") && answer.contains("<h1>Rescan benchmark</h1>"), "{read:?}");
 }
 
 /// Talks to the MCP server Silt configured for the session, the way

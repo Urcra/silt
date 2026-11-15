@@ -8,6 +8,7 @@ import { askedServer } from './workspace'
 import type {
   AgentChoices,
   ArtifactContent,
+  ArtifactSettings,
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
@@ -254,7 +255,11 @@ export const api = {
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   // The person's design systems and Silt's own, for a workspace's default (ADR 0070).
-  designSystems: () => request<DesignSystemView[]>('GET', '/api/design-systems'),
+  designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
+  setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
+  projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
+  setProjectDesignSystem: (repo: string, design_system: string | null) => request<string>('PUT', '/api/projects/design-systems', { repo, design_system }),
   setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>

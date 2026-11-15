@@ -6,12 +6,14 @@ import {
   artifactsOf,
   commentsOn,
   fileName,
+  framePolicy,
   offlineHtml,
   problemsPrompt,
   quoted,
   sandboxedDocument,
   shownImagesOf,
   textOf,
+  throughVendor,
   versionOf,
 } from './artifacts'
 
@@ -88,6 +90,22 @@ describe('artifacts', () => {
     expect(page).toContain("d.silt!=='theme'")
     expect(page).toContain("'securitypolicyviolation'")
     expect(sandboxedDocument('<p>hi</p>')).not.toContain("root.setAttribute('data-theme','")
+  })
+
+  it("loads libraries through Silt's vendor route when that's on, and only from there", () => {
+    const vendor = 'http://127.0.0.1:7777/vendor/'
+    expect(framePolicy(vendor)).toContain(`script-src 'unsafe-inline' ${vendor};`)
+    expect(framePolicy(vendor)).not.toContain('cdnjs')
+    expect(throughVendor('<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script><link href="//fonts.googleapis.com/css2?family=Inter">', vendor)).toBe(
+      `<script src="${vendor}cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script><link href="${vendor}fonts.googleapis.com/css2?family=Inter">`,
+    )
+    const page = sandboxedDocument('<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>', {
+      vendor,
+      style: '@import url("https://fonts.googleapis.com/css2?family=Inter");',
+    })
+    expect(page).toContain(`${vendor}unpkg.com/react@18.3.1/`)
+    expect(page).toContain(`@import url("${vendor}fonts.googleapis.com/css2?family=Inter")`)
+    expect(page).toContain(framePolicy(vendor))
   })
 
   it('asks the agent to fix what the frame saw go wrong', () => {

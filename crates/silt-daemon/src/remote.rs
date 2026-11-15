@@ -268,6 +268,19 @@ impl Remote {
         Ok(())
     }
 
+    /// This person's own design systems as the server keeps them (ADR 0070).
+    pub async fn design_systems(&self) -> Result<Vec<silt_proto::DesignSystemCopy>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/design-systems").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn put_design_system(&self, copy: &silt_proto::DesignSystemCopy) -> Result<(), RemoteError> {
+        let path = format!("/v1/me/design-systems/{}", copy.name);
+        let response = self.request(reqwest::Method::PUT, &path).json(copy).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
         Ok(checked(response).await?.json().await?)

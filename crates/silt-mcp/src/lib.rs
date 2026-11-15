@@ -49,10 +49,11 @@ to see who else is changing a path. silt_skills lists the repository's skills an
 pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image, call \
 silt_show; to give them a page, chart, diagram, mockup or document they can open beside the conversation, call \
 silt_artifact_guide first, follow what it says, then call silt_artifact, and call it again with the same id for a new \
-version.";
+version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools only a run watched in the web UI gets.
-pub const SHOW_TOOLS: [&str; 3] = ["silt_show", "silt_artifact_guide", "silt_artifact"];
+pub const SHOW_TOOLS: [&str; 5] =
+    ["silt_show", "silt_artifact_guide", "silt_artifact", "silt_artifact_read", "silt_artifact_check"];
 
 /// What the server says it's for, with the showing tools when offered.
 pub fn instructions(shows: bool) -> String {
@@ -69,7 +70,7 @@ pub fn tools(shows: bool) -> Value {
     tools
 }
 
-fn show_tools() -> [Value; 3] {
+fn show_tools() -> [Value; 5] {
     [
         json!({
             "name": "silt_show",
@@ -93,6 +94,30 @@ fn show_tools() -> [Value; 3] {
                     "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
                 },
                 "required": ["kind"]
+            }
+        }),
+        json!({
+            "name": "silt_artifact_check",
+            "description": "Render a version of an HTML artifact as the person's panel shows it, at a phone's width and a desktop's, in light and dark, with a headless browser where Node and Playwright are installed: says what was blocked, what failed and whether it's too wide, and where each screenshot is. Use it once before telling the person, not in a loop.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The artifact's id"},
+                    "version": {"type": "integer", "description": "A version other than the latest"}
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "silt_artifact_read",
+            "description": "Read back a version of one of this thread's artifacts, the latest by default, to revise it: its source is written to a file outside the checkout, whose path this returns, and a short source is also returned whole.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The artifact's id, as silt_artifact returned it or its card shows it"},
+                    "version": {"type": "integer", "description": "A version other than the latest"}
+                },
+                "required": ["id"]
             }
         }),
         json!({

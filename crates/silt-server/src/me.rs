@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use axum::Json;
 use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::StatusCode;
-use silt_proto::{MrSeen, SeenMark, ThreadSeen, ThreadState};
+use silt_proto::{DesignSystemCopy, MrSeen, SeenMark, ThreadSeen, ThreadState};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::{ApiError, Caller, Server, bad_request, id_bytes, not_found};
@@ -205,4 +205,70 @@ pub(crate) async fn change_thread(
     .await?;
     tx.commit().await?;
     Ok(Json(state))
+}
+
+/// Where the server keeps a person's own design systems, each a file
+/// (ADR 0070).
+fn design_systems_dir(server: &Server, user: crate::UserId) -> std::path::PathBuf {
+    server.shared.data_dir.join("design-systems").join(user.0.to_string())
+}
+
+/// The caller's own design systems, removed ones as tombstones, as their
+/// devices last sent them.
+pub(crate) async fn design_systems(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<DesignSystemCopy>>, ApiError> {
+    let dir = design_systems_dir(&server, caller.user);
+    let mut out = Vec::new();
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+        return Ok(Json(out));
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.path().extension().is_some_and(|extension| extension == "json")
+            && let Ok(bytes) = tokio::fs::read(entry.path()).await
+            && let Ok(copy) = serde_json::from_slice::<DesignSystemCopy>(&bytes)
+            && copy.valid()
+        {
+            out.push(copy);
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(out))
+}
+
+/// Keeps a copy of one of the caller's design systems unless the one kept
+/// changed later.
+pub(crate) async fn put_design_system(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(name): UrlPath<String>,
+    Json(copy): Json<DesignSystemCopy>,
+) -> Result<StatusCode, ApiError> {
+    if copy.name != name || !copy.valid() {
+        return Err(bad_request("that isn't a design system a device can take"));
+    }
+    let dir = design_systems_dir(&server, caller.user);
+    let path = dir.join(format!("{name}.json"));
+    if let Ok(bytes) = tokio::fs::read(&path).await
+        && let Ok(kept) = serde_json::from_slice::<DesignSystemCopy>(&bytes)
+        && kept.at_ms >= copy.at_ms
+    {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let json = serde_json::to_vec(&copy).map_err(|_| bad_request("the copy can't be stored"))?;
+    let stored = async {
+        tokio::fs::create_dir_all(&dir).await?;
+        let staging = dir.join(format!("{name}.json.tmp"));
+        tokio::fs::write(&staging, json).await?;
+        tokio::fs::rename(&staging, &path).await
+    };
+    if let Err(error) = stored.await {
+        tracing::error!(%error, "could not keep a design system");
+        return Err(crate::ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            silt_proto::ErrorReply::Invalid { message: "internal error".into() },
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

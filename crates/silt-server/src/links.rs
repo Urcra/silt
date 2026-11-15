@@ -404,6 +404,12 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     {
         bytes = with_style(&bytes, &css);
     }
+    let vendor =
+        (artifact.kind == "html" && server.config().artifact_proxy).then(|| format!("{}/vendor/", server.config().public_url()));
+    if let Some(vendor) = &vendor {
+        bytes = silt_design::frame::through_vendor(&String::from_utf8_lossy(&bytes), vendor).into_bytes();
+    }
+    let policy = format!("sandbox allow-scripts; {}", silt_design::frame::policy(vendor.as_deref()));
     let media_type = if artifact.media_type.starts_with("text/") {
         format!("{}; charset=utf-8", artifact.media_type)
     } else {
@@ -414,7 +420,9 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     if let Ok(value) = HeaderValue::from_str(&media_type) {
         headers.insert(header::CONTENT_TYPE, value);
     }
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(ARTIFACT_CSP));
+    if let Ok(value) = HeaderValue::from_str(&policy) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
@@ -440,15 +448,33 @@ fn with_style(html: &[u8], css: &[u8]) -> Vec<u8> {
     format!("{doctype}<style data-silt=\"design-system\">{css}</style>{rest}").into_bytes()
 }
 
-/// What an artifact's content may do when served, as in the web UI: run its
-/// own inline scripts and styles in a sandbox, load scripts from a few CDNs
-/// and fonts from Google Fonts, and connect to nothing (ADR 0070).
-const ARTIFACT_CSP: &str = concat!(
-    "sandbox allow-scripts; default-src 'none'; ",
-    "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com; ",
-    "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; ",
-    "img-src data: blob:; media-src data: blob:",
-);
+/// A CDN file an artifact's frame loads through this server, when its
+/// config turns that on (ADR 0070).
+pub(crate) async fn vendor_file(
+    State(server): State<Server>,
+    Path((host, path)): Path<(String, String)>,
+    uri: axum::http::Uri,
+) -> Response {
+    if !server.config().artifact_proxy {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match server.shared.vendor.get(&host, &format!("/{path}"), uri.query()).await {
+        Ok(fetched) => {
+            let mut response = (StatusCode::OK, fetched.bytes).into_response();
+            let headers = response.headers_mut();
+            if let Ok(value) = HeaderValue::from_str(&fetched.content_type) {
+                headers.insert(header::CONTENT_TYPE, value);
+            }
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+            headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            headers.insert("cross-origin-resource-policy", HeaderValue::from_static("cross-origin"));
+            response
+        }
+        Err(silt_vendor::VendorError::Refused(why)) => (StatusCode::FORBIDDEN, why).into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+    }
+}
 
 /// The conversation as plain text with turn markers; a fork's note says so.
 fn render(log: &[Delta], thread: ThreadId, owner: &str, frozen_at: Option<i64>) -> String {

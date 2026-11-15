@@ -151,6 +151,9 @@ export function ArtifactViewer({
     enabled: Boolean(styleBlob),
     staleTime: Infinity,
   })
+  // Libraries and fonts come through Silt's vendor route when that's on (ADR 0070).
+  const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings, staleTime: 60_000 })
+  const vendor = settings.data?.proxy ? `${window.location.origin}/vendor/` : null
   // What this viewer's frame saw go wrong in the version shown, until it's sent or dismissed.
   const [problems, setProblems] = useState<{ blob: string; seen: FrameProblem[] } | null>(null)
   const link = usePermalink(thread)
@@ -158,7 +161,7 @@ export function ArtifactViewer({
   if (!group || !shown) return <p className="px-5 py-6 text-sm text-fg-2">This artifact isn't in the thread's history.</p>
   const artifact = shown.artifact
   const styleText = style.data ? textOf(style.data) : null
-  const styled = !styleBlob || style.isSuccess || style.isError
+  const styled = (!styleBlob || style.isSuccess || style.isError) && (settings.isSuccess || settings.isError)
   const seen = problems?.blob === artifact.blob ? problems.seen : []
   const sendProblems = async () => {
     try {
@@ -307,6 +310,7 @@ export function ArtifactViewer({
             artifact={artifact}
             content={content.data}
             style={styleText}
+            vendor={vendor}
             source={source}
             zoom={zoom}
             full={Boolean(full)}
@@ -366,6 +370,7 @@ function ArtifactPage({
   artifact,
   content,
   style,
+  vendor,
   source,
   zoom,
   full,
@@ -375,6 +380,7 @@ function ArtifactPage({
   artifact: ArtifactView
   content: ArtifactContent
   style: string | null
+  vendor: string | null
   source: boolean
   zoom: number
   full: boolean
@@ -385,7 +391,7 @@ function ArtifactPage({
   const theme = useShownTheme()
   // The frame starts in the theme shown when it loads, and hears of each change after, so its page isn't reloaded.
   const [startTheme] = useState(theme)
-  const [framed] = useState(() => (artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme }) : ''))
+  const [framed] = useState(() => (artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor }) : ''))
   useEffect(() => {
     frame.current?.contentWindow?.postMessage({ silt: 'theme', theme }, '*')
   }, [theme])

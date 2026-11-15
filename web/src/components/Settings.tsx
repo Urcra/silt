@@ -155,7 +155,33 @@ function Appearance() {
           </button>
         ))}
       </div>
+      {!hosted() && <ArtifactLoading />}
     </section>
+  )
+}
+
+/** Whether artifacts' libraries and fonts load through Silt rather than from the CDNs (ADR 0070). */
+function ArtifactLoading() {
+  const queries = useQueryClient()
+  const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings })
+  if (!settings.data) return null
+  const proxy = settings.data.proxy
+  const change = (next: boolean) =>
+    api.setArtifactSettings({ proxy: next }).then(
+      () => void queries.invalidateQueries({ queryKey: keys.artifactSettings }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <label className="flex items-start gap-2 pt-2 text-sm text-fg-1">
+      <input type="checkbox" checked={proxy} onChange={(event) => void change(event.target.checked)} className="mt-1" />
+      <span className="flex flex-col gap-0.5">
+        Load artifacts' libraries and fonts through Silt
+        <span className="text-xs text-fg-2">
+          Silt fetches each file once and keeps it, so opening an artifact never contacts a CDN, and pages you've opened before work offline. Off, the page loads
+          them from the CDNs.
+        </span>
+      </span>
+    </label>
   )
 }
 

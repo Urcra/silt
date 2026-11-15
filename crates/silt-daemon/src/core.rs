@@ -574,6 +574,10 @@ impl Core {
                 let _ = reply.send(to_response(self.artifact_guide(&token, design_system).await));
                 return;
             }
+            if let Request::ArtifactRead { id, version } = *asking {
+                let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
+                return;
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -601,7 +605,16 @@ impl Core {
             Request::Scoped { .. } => Response::error("a request carries one token"),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
-            Request::DesignSystems => Response::ok(self.design_systems()),
+            Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),
+            Request::ProjectDesignSystems => Response::ok(self.project_design_systems()),
+            Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
+            Request::SetArtifactSettings { settings } => {
+                to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
+            }
+            Request::SetProjectDesignSystem { repo, design_system } => {
+                to_response(self.set_project_design_system(&repo, design_system.as_deref()))
+            }
+            Request::ArtifactRead { .. } => Response::error("only an agent's run reads its artifacts back, with its token"),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),

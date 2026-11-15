@@ -2,6 +2,8 @@
 //! frame is given (ADR 0070). A system is a `README.md` for the agent and a
 //! `tokens.json`, compiled here into custom properties for every theme.
 
+pub mod frame;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -91,6 +93,11 @@ pub struct Tokens {
     pub color: Option<Colors>,
     #[serde(default, rename = "type")]
     pub typography: Option<Typography>,
+    /// More names for tokens, such as the ones MCP Apps hosts give their
+    /// views (`color-background-primary`), so a page written for those
+    /// reads this system too.
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
     #[serde(flatten)]
     pub rest: BTreeMap<String, serde_json::Value>,
 }
@@ -331,6 +338,15 @@ pub fn compile(tokens: &Tokens, fonts: &BTreeMap<String, Vec<u8>>) -> Compiled {
         }
     }
     root.extend(plain);
+    for (alias, target) in &tokens.aliases {
+        if !valid_name(alias) || !valid_name(target) || !names.contains(target.as_str()) {
+            dropped.push(format!("the alias {alias} names no token"));
+        } else if names.contains(alias.as_str()) || root.iter().any(|(name, _)| name == alias) {
+            dropped.push(format!("the alias {alias} is a token's own name"));
+        } else {
+            root.push((alias.clone(), format!("var(--{target})")));
+        }
+    }
     if !root.is_empty() {
         css.push_str(":root {\n");
         for (name, value) in &root {
@@ -580,6 +596,9 @@ pub fn token_names(tokens: &Tokens) -> BTreeMap<String, Vec<String>> {
             out.insert(family.clone(), family_tokens.tokens.iter().map(|token| format!("--{}", token.name)).collect());
         }
     }
+    if !tokens.aliases.is_empty() {
+        out.insert("aliases".into(), tokens.aliases.iter().map(|(alias, target)| format!("--{alias} = --{target}")).collect());
+    }
     out
 }
 
@@ -722,6 +741,22 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn aliases_name_tokens_that_exist() {
+        let out = compiled(
+            r##"{"name":"t","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]},
+                "radius":{"tokens":[{"name":"radius-md","value":"4px"}]},
+                "aliases":{"color-background-primary":"bg","border-radius-md":"radius-md","gone":"missing","bg":"radius-md"}}"##,
+        );
+        assert!(
+            out.css.contains("--color-background-primary: var(--bg);")
+                && out.css.contains("--border-radius-md: var(--radius-md);"),
+            "{}",
+            out.css
+        );
+        assert_eq!(out.dropped, ["the alias bg is a token's own name", "the alias gone names no token"]);
     }
 
     #[test]

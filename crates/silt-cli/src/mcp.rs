@@ -10,8 +10,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_agents::conventions::{self, Skill};
 use silt_daemon::protocol::{
-    ArtifactGuide, ArtifactPut, DesignSource, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request, Response,
-    SearchResult, TaskView,
+    ArtifactGuide, ArtifactPut, ArtifactRead, DesignSource, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request,
+    Response, SearchResult, TaskView,
 };
 use silt_daemon::{client, paths};
 
@@ -192,6 +192,26 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 return Ok(out);
             }
+            "silt_artifact_read" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
+                let id = text_arg(arguments, "id")?;
+                let version = arguments.get("version").and_then(Value::as_u64).and_then(|version| u32::try_from(version).ok());
+                let read: ArtifactRead =
+                    ask_daemon(&Request::Scoped { token, asking: Box::new(Request::ArtifactRead { id, version }) })?;
+                return read_back(&self.thread, &read);
+            }
+            "silt_artifact_check" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs checks its artifacts")?;
+                let id = text_arg(arguments, "id")?;
+                let version = arguments.get("version").and_then(Value::as_u64).and_then(|version| u32::try_from(version).ok());
+                let read: ArtifactRead =
+                    ask_daemon(&Request::Scoped { token, asking: Box::new(Request::ArtifactRead { id, version }) })?;
+                let dir = env::temp_dir()
+                    .join("silt-artifacts")
+                    .join(short(&self.thread))
+                    .join(format!("check-{}-v{}", read.id, read.version));
+                return crate::artifact_check::check(&read, &self.checkout, &dir);
+            }
             "silt_artifact_guide" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs makes artifacts")?;
                 let kind = text_arg(arguments, "kind")?;
@@ -281,6 +301,48 @@ impl silt_mcp::Backend for DaemonTools {
             other => Err(format!("unknown tool {other}")),
         }
     }
+}
+
+/// The longest source `silt_artifact_read` returns whole, beside its file.
+const READ_INLINE_BYTES: usize = 64 << 10;
+
+/// Writes a version read back to a file of its own outside the checkout,
+/// and says where, with its source when it's short.
+fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;
+    let extension = match read.kind.as_str() {
+        "html" => "html",
+        "svg" => "svg",
+        "markdown" => "md",
+        "mermaid" => "mmd",
+        _ => read.media_type.rsplit('/').next().filter(|ext| ext.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or("bin"),
+    };
+    // The id is checked by the daemon; the thread's short form names the folder.
+    let dir = env::temp_dir().join("silt-artifacts").join(short(thread));
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!("{}-v{}.{extension}", read.id, read.version));
+    std::fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    let mut out = format!(
+        "Artifact {} \"{}\" ({}), version {} of {}, is at {}.",
+        read.id,
+        read.title,
+        read.kind,
+        read.version,
+        read.latest,
+        path.display()
+    );
+    if let Some(system) = &read.design_system {
+        let _ = write!(out, " It was styled with the {system} design system.");
+    }
+    let _ = write!(out, " Edit that file and pass its path to silt_artifact with id {} for a new version.", read.id);
+    match std::str::from_utf8(&bytes) {
+        Ok(text) if text.len() <= READ_INLINE_BYTES => {
+            let _ = write!(out, "\n\n{text}");
+        }
+        _ => {}
+    }
+    Ok(out)
 }
 
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the

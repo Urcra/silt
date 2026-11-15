@@ -13,6 +13,7 @@ mod comments;
 mod control;
 mod core;
 mod design;
+mod design_sync;
 mod disk;
 mod forks;
 mod history;

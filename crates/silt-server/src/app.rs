@@ -40,6 +40,7 @@ impl Browser {
 pub(crate) fn router(server: &Server) -> Router<Server> {
     let api = Router::new()
         .route("/app/api/status", get(status))
+        .route("/app/api/artifact-settings", get(artifact_settings))
         .merge(crate::browse::routes())
         .merge(crate::relayed::routes())
         .merge(crate::devices::browser_routes())
@@ -155,6 +156,11 @@ async fn browser_session(State(server): State<Server>, mut request: Request, nex
 }
 
 /// What the app asks first: where it is, and that no daemon serves it.
+/// How the app's artifact frames load libraries and fonts (ADR 0070).
+async fn artifact_settings(State(server): State<Server>) -> Response {
+    Json(json!({ "proxy": server.config().artifact_proxy })).into_response()
+}
+
 async fn status(State(server): State<Server>, Extension(browser): Extension<Browser>) -> Response {
     let threads = match server.viewer(browser.user).await {
         Ok(viewer) => viewer.visible_threads().count(),

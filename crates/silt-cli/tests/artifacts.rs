@@ -155,3 +155,31 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
     let (status, _, _) = fetch(&format!("{}/content", thread_link["url"].as_str().expect("link")), &[]);
     assert_eq!(status, "404", "a link to the conversation serves no artifact content");
 }
+
+/// A person's own design systems follow them (ADR 0070): one made on the
+/// laptop reaches the home machine through the server, and removing it
+/// there removes it on the laptop too.
+#[test]
+fn a_persons_design_systems_follow_them_between_machines() {
+    let world = world();
+    let on = |machine: &Machine| machine.silt_home.join("design-systems/acme");
+    fs::create_dir_all(on(&world.laptop).join("fonts")).expect("mkdir");
+    let tokens =
+        r##"{"name":"Acme","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fbfaf7","usage":"Page."}]}}"##;
+    fs::write(on(&world.laptop).join("tokens.json"), tokens).expect("tokens");
+    fs::write(on(&world.laptop).join("README.md"), "Set pages on `bg`.").expect("readme");
+    fs::write(on(&world.laptop).join("fonts/acme.woff2"), b"wOF2").expect("font");
+
+    let listed = |machine: &Machine| machine.web("GET", "/api/design-systems", None).to_string();
+    assert!(listed(&world.laptop).contains(r#""name":"acme""#), "{}", listed(&world.laptop));
+    assert!(
+        eventually(|| listed(&world.home).contains(r#""name":"acme""#)),
+        "the home machine has it: {}",
+        world.home.daemon_log()
+    );
+    assert_eq!(fs::read_to_string(on(&world.home).join("tokens.json")).expect("tokens"), tokens);
+    assert_eq!(fs::read(on(&world.home).join("fonts/acme.woff2")).expect("font"), b"wOF2");
+
+    fs::remove_dir_all(on(&world.home)).expect("remove");
+    assert!(eventually(|| !on(&world.laptop).exists()), "the removal reaches the laptop: {}", world.laptop.daemon_log());
+}

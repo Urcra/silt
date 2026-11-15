@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use silt_design::{Builtin, SystemName};
 
 use crate::core::CoreError;
-use crate::protocol::{DesignSource, DesignSystemView};
+use crate::protocol::{ArtifactSettings, DesignSource, DesignSystemView};
 
 /// A repository's systems, under its checkout.
 pub(crate) const PROJECT_DIR: &str = ".silt/design-systems";
@@ -17,6 +17,10 @@ pub(crate) const PROJECT_DIR: &str = ".silt/design-systems";
 pub(crate) const PERSONAL_DIR: &str = "design-systems";
 /// What `design_system` takes to style nothing.
 pub(crate) const NONE: &str = "none";
+/// The system the person picked for each project on this machine.
+const PROJECT_CHOICES: &str = "project-design-systems.json";
+/// How this machine's frames load libraries and fonts.
+const SETTINGS: &str = "artifacts.json";
 const README_BYTES: u64 = 256 << 10;
 const TOKENS_BYTES: u64 = 512 << 10;
 
@@ -144,20 +148,75 @@ pub(crate) fn project_default(checkout: &Path) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
+/// The systems the person picked for projects on this machine, by project.
+pub(crate) fn project_choices(data_dir: &Path) -> BTreeMap<String, String> {
+    read_capped(&data_dir.join(PROJECT_CHOICES), 1 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
+/// Picks `name` for `repo` on this machine, or drops its pick.
+pub(crate) fn set_project_choice(data_dir: &Path, repo: &str, name: Option<&str>) -> Result<(), CoreError> {
+    let mut choices = project_choices(data_dir);
+    match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) if name == NONE || name.parse::<SystemName>().is_ok() => {
+            choices.insert(repo.to_owned(), name.to_owned());
+        }
+        Some(name) => return Err(CoreError::Invalid(format!("{name:?} isn't a design system's name"))),
+        None => {
+            choices.remove(repo);
+        }
+    }
+    let json = serde_json::to_vec_pretty(&choices).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    write_atomically(&data_dir.join(PROJECT_CHOICES), &json)
+}
+
+pub(crate) fn artifact_settings(data_dir: &Path) -> ArtifactSettings {
+    read_capped(&data_dir.join(SETTINGS), 64 << 10).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
+pub(crate) fn set_artifact_settings(data_dir: &Path, settings: ArtifactSettings) -> Result<(), CoreError> {
+    let json = serde_json::to_vec_pretty(&settings).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    write_atomically(&data_dir.join(SETTINGS), &json)
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+    let staging = path.with_extension("tmp");
+    fs::write(&staging, bytes)?;
+    fs::rename(&staging, path)?;
+    Ok(())
+}
+
+/// Where the defaults below what's asked for come from, in order.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Defaults<'a> {
+    /// The person's pick for the project on this machine.
+    pub(crate) picked: Option<&'a str>,
+    /// The repository's `.silt/design-systems/default`.
+    pub(crate) repository: Option<&'a str>,
+    pub(crate) workspace: Option<&'a str>,
+}
+
+impl<'a> Defaults<'a> {
+    /// The first set, and why it applies.
+    pub(crate) fn first(&self) -> Option<(&'a str, &'static str)> {
+        [
+            (self.picked, "the one picked for this project"),
+            (self.repository, "the repository's default"),
+            (self.workspace, "the workspace's default"),
+        ]
+        .into_iter()
+        .find_map(|(name, why)| name.map(str::trim).filter(|name| !name.is_empty()).map(|name| (name, why)))
+    }
+}
+
 /// Which system a new version uses: the one asked for, else the one its
-/// last version used, else the repository's default, else the
-/// workspace's; `none` at any step styles nothing.
-pub(crate) fn chosen<'a>(
-    asked: Option<&'a str>,
-    previous: Option<&'a str>,
-    project: Option<&'a str>,
-    workspace: Option<&'a str>,
-) -> Option<&'a str> {
-    [asked, previous, project, workspace]
+/// last version used, else the defaults; `none` at any step styles nothing.
+pub(crate) fn chosen<'a>(asked: Option<&'a str>, previous: Option<&'a str>, defaults: Defaults<'a>) -> Option<&'a str> {
+    [asked, previous]
         .into_iter()
         .flatten()
         .map(str::trim)
         .find(|name| !name.is_empty())
+        .or_else(|| defaults.first().map(|(name, _)| name))
         .filter(|name| *name != NONE)
 }
 
@@ -175,13 +234,29 @@ mod tests {
 
     #[test]
     fn the_one_asked_for_wins_then_the_last_versions_then_the_defaults() {
-        assert_eq!(chosen(Some("plain"), Some("nous"), Some("acme"), Some("x")), Some("plain"));
-        assert_eq!(chosen(None, Some("nous"), Some("acme"), None), Some("nous"));
-        assert_eq!(chosen(None, None, Some("acme"), Some("x")), Some("acme"));
-        assert_eq!(chosen(None, None, None, Some("x")), Some("x"));
-        assert_eq!(chosen(Some("none"), Some("nous"), Some("acme"), None), None);
-        assert_eq!(chosen(None, Some("none"), Some("acme"), None), None, "a version styled with nothing stays so");
-        assert_eq!(chosen(Some(" "), None, None, None), None);
+        let all = Defaults { picked: Some("mine"), repository: Some("acme"), workspace: Some("x") };
+        let repo = Defaults { picked: None, repository: Some("acme"), workspace: Some("x") };
+        let workspace = Defaults { workspace: Some("x"), ..Defaults::default() };
+        assert_eq!(chosen(Some("plain"), Some("nous"), all), Some("plain"));
+        assert_eq!(chosen(None, Some("nous"), all), Some("nous"));
+        assert_eq!(chosen(None, None, all), Some("mine"));
+        assert_eq!(chosen(None, None, repo), Some("acme"));
+        assert_eq!(chosen(None, None, workspace), Some("x"));
+        assert_eq!(chosen(Some("none"), Some("nous"), all), None);
+        assert_eq!(chosen(None, Some("none"), all), None, "a version styled with nothing stays so");
+        assert_eq!(chosen(Some(" "), None, Defaults::default()), None);
+        assert_eq!(Defaults { picked: Some("none"), ..repo }.first(), Some(("none", "the one picked for this project")));
+    }
+
+    #[test]
+    fn a_projects_pick_is_kept_and_dropped() {
+        let data = tempfile::tempdir().expect("temp dir");
+        set_project_choice(data.path(), "github.com/acme/web", Some("nous")).expect("pick");
+        set_project_choice(data.path(), "github.com/acme/api", Some("none")).expect("none");
+        assert!(set_project_choice(data.path(), "github.com/acme/api", Some("../x")).is_err());
+        assert_eq!(project_choices(data.path()).get("github.com/acme/web").map(String::as_str), Some("nous"));
+        set_project_choice(data.path(), "github.com/acme/web", None).expect("drop");
+        assert_eq!(project_choices(data.path()).len(), 1);
     }
 
     #[test]
