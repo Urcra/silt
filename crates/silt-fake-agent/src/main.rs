@@ -581,6 +581,13 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
             ]});
             arguments = serde_json::json!({"title": "Planning board", "kind": "whiteboard", "content": items.to_string()});
         }
+        // Arguments written out in a file, for an artifact whose content a test authored.
+        if let Some(path) = prompt.split("Artifact from ").nth(1).map(str::trim)
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(given) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            arguments = given;
+        }
         if prompt.contains("Artifact numbers") {
             let page = serde_json::json!({"title": "Rescan benchmark", "sources": [
                 {"id": "bench", "name": "silt-bench rescan", "kind": "command", "detail": "silt-bench run --only rescan", "at": "2026-11-15T09:00:00Z"}

@@ -41,7 +41,8 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     queryFn: () => api.pageData(thread, artifact, { op: 'list', collection: 'items' }) as Promise<{ id: string; data: Item }[]>,
     refetchInterval: 4_000,
   })
-  const [view, setView] = useState({ x: 40, y: 40, scale: 0.8 })
+  // Room above the board for its toolbar, so nothing starts under it.
+  const [view, setView] = useState({ x: 48, y: 96, scale: 0.8 })
   const [moving, setMoving] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [peers, setPeers] = useState<PeerPresence[]>([])
   const room = useRef<RoomSocket | null>(null)
