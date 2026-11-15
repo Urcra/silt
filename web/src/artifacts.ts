@@ -193,12 +193,12 @@ function escape(text: string): string {
 }
 
 /**
- * A version as one HTML file that opens anywhere, with no Silt and no network: an HTML artifact as it is, under the
- * same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
+ * A version as one HTML file that opens anywhere, with no Silt and no network: an HTML artifact as it is, or as
+ * `rendered` with its diagrams drawn in, under the same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
  * content inline, on a plain page titled with the artifact's name.
  */
 export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null): string {
-  if (artifact.kind === 'html') return sandboxedDocument(textOf(content), { probe: false, style })
+  if (artifact.kind === 'html') return sandboxedDocument(rendered ?? textOf(content), { probe: false, style })
   const title = escape(`${artifact.title} · v${artifact.version}`)
   const body = rendered ?? `<img alt="${escape(artifact.title)}" src="${dataUrl(content)}">`
   return [

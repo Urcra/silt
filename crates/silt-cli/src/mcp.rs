@@ -134,15 +134,7 @@ impl silt_mcp::Backend for DaemonTools {
             "silt_use_skill" => {
                 let skill = self.skill(&text_arg(arguments, "name")?)?;
                 let body = skill.body().map_err(|error| error.to_string())?;
-                let mut files: Vec<String> = std::fs::read_dir(&skill.dir)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                            .filter(|name| name != "SKILL.md")
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let mut files = skill_files(&skill.dir);
                 files.sort();
                 let mut out = format!("Skill {} from {}.", skill.name, skill.dir.display());
                 if !files.is_empty() {
@@ -164,20 +156,33 @@ impl silt_mcp::Backend for DaemonTools {
                     caption,
                     inline: true,
                     design_system: None,
+                    edits: Vec::new(),
+                    note: None,
+                    description: None,
                 };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
             }
             "silt_artifact" => {
+                let id = arguments.get("id").and_then(Value::as_str).map(str::to_owned);
+                let text = |name: &str| arguments.get(name).and_then(Value::as_str).map(str::to_owned);
+                let (title, kind) = match (&id, text("title"), text("kind")) {
+                    (None, None, _) => return Err("missing argument title".into()),
+                    (None, _, None) => return Err("missing argument kind".into()),
+                    (_, title, kind) => (title.unwrap_or_default(), kind.unwrap_or_default()),
+                };
                 let artifact = NewArtifact {
-                    title: text_arg(arguments, "title")?,
-                    kind: text_arg(arguments, "kind")?,
-                    content: arguments.get("content").and_then(Value::as_str).map(str::to_owned),
+                    title,
+                    kind,
+                    content: text("content"),
                     path: self.path_arg(arguments),
-                    id: arguments.get("id").and_then(Value::as_str).map(str::to_owned),
+                    id,
                     caption: None,
                     inline: false,
-                    design_system: arguments.get("design_system").and_then(Value::as_str).map(str::to_owned),
+                    design_system: text("design_system"),
+                    edits: edits_arg(arguments)?,
+                    note: text("note"),
+                    description: text("description"),
                 };
                 let kept = self.show(artifact)?;
                 let mut out = format!(
@@ -470,6 +475,45 @@ fn task_line(task: &TaskView) -> String {
 fn clip(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
     if text.chars().count() > 160 { text.chars().take(160).collect::<String>() + "…" } else { text }
+}
+
+/// The files of a skill's folder other than `SKILL.md`, by their paths in
+/// it, one folder deep, as a skill's `references/` holds them.
+fn skill_files(dir: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            for inner in std::fs::read_dir(entry.path()).into_iter().flatten().flatten() {
+                if inner.file_type().is_ok_and(|kind| kind.is_file()) {
+                    files.push(format!("{name}/{}", inner.file_name().to_string_lossy()));
+                }
+            }
+        } else if name != "SKILL.md" {
+            files.push(name);
+        }
+    }
+    files
+}
+
+/// `edits`, checked here as the MCP server checks only numbers: a list of
+/// `{old, new}` strings.
+fn edits_arg(arguments: &Value) -> Result<Vec<silt_proto::artifact::Edit>, String> {
+    let Some(edits) = arguments.get("edits") else {
+        return Ok(Vec::new());
+    };
+    let edits = edits.as_array().ok_or("edits is a list of {old, new}")?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(at, edit)| {
+            let field = |name: &str| edit.get(name).and_then(Value::as_str).map(str::to_owned);
+            match (field("old"), field("new")) {
+                (Some(old), Some(new)) => Ok(silt_proto::artifact::Edit { old, new }),
+                _ => Err(format!("edit {} needs old and new text", at + 1)),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

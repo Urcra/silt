@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
+pub mod artifact;
 pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark

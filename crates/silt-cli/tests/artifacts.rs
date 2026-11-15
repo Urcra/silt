@@ -140,8 +140,20 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
 
     let (status, _, page) = fetch(url, &[]);
     assert_eq!(status, "200", "{page}");
-    assert!(page.contains("Rescan benchmark") && page.contains(r#"sandbox="allow-scripts""#), "{page}");
     assert!(!page.contains("Done: Artifact"), "nothing else of the thread: {page}");
+    // The app's own viewer shows it where the web UI was built (ADR 0073);
+    // the server's plain page does otherwise.
+    if !page.contains(r#"name="silt-link""#) {
+        assert!(page.contains("Rescan benchmark") && page.contains(r#"sandbox="allow-scripts""#), "{page}");
+    }
+    let (status, _, view) = fetch(&format!("{url}/view"), &[]);
+    assert_eq!(status, "200", "{view}");
+    let view: serde_json::Value = serde_json::from_str(&view).expect("the link's view is JSON");
+    assert_eq!(
+        (view["artifact"]["id"].as_str(), view["artifact"]["title"].as_str()),
+        (Some(id.as_str()), Some("Rescan benchmark"))
+    );
+    assert!(!view.to_string().contains("Done: Artifact"), "nothing else of the thread: {view}");
 
     let (status, headers, body) =
         fetch(&format!("{url}/content"), &["content-security-policy", "content-type", "x-content-type-options"]);

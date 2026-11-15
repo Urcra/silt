@@ -475,8 +475,9 @@ async fn agent() -> Result<()> {
 /// shows an image with `silt_show`, `Guide` reads `silt_artifact_guide`,
 /// `Read back` reads the last artifact with `silt_artifact_read`,
 /// `Artifact` makes an artifact with `silt_artifact` (`FAKE_ACP_ARTIFACT`
-/// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), and `Artifact
-/// again` adds a version of the last one. Each call is reported as a tool
+/// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), `Artifact
+/// again` adds a version of the last one, and `Artifact edit` adds one by
+/// editing the last. Each call is reported as a tool
 /// call, with what it answered as its output.
 async fn show(
     worker: &ConnectionTo<Client>,
@@ -500,6 +501,15 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_read", serde_json::json!({"id": last}))
+    } else if prompt.contains("Artifact edit")
+        && let Some(last) = last.clone()
+    {
+        // A version made by editing the last one in place (ADR 0073).
+        let edit = serde_json::json!({"old": "Rescan benchmark", "new": "Rescan benchmark, edited"});
+        (
+            "silt_artifact",
+            serde_json::json!({"id": last, "edits": [edit], "note": "Retitled", "description": "How long a rescan takes"}),
+        )
     } else {
         let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});

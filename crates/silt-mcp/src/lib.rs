@@ -122,7 +122,7 @@ fn show_tools() -> [Value; 5] {
         }),
         json!({
             "name": "silt_artifact",
-            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data. Call silt_artifact_guide before the first version.",
+            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact (give title and kind) and returns its id; with the id of one you made, it adds a version, from new content or from edits to the last one. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data. Call silt_artifact_guide before the first version.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -130,10 +130,24 @@ fn show_tools() -> [Value; 5] {
                     "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the content is"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
                     "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
-                    "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact"},
+                    "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact; title and kind then default to its last version's"},
+                    "edits": {
+                        "type": "array",
+                        "description": "With id, in place of content or path: changes to the latest version's source, applied in order, all or none; each old text must occur exactly once",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old": {"type": "string", "description": "Text copied exactly from the source"},
+                                "new": {"type": "string", "description": "What replaces it; empty deletes it"}
+                            },
+                            "required": ["old", "new"]
+                        }
+                    },
+                    "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
+                    "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},
                     "design_system": {"type": "string", "description": "The design system whose tokens an html artifact's frame gets, by name, or none; by default the last version's, else the one silt_artifact_guide says applies"}
                 },
-                "required": ["title", "kind"]
+                "required": []
             }
         }),
     ]

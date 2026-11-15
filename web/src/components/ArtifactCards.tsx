@@ -78,7 +78,9 @@ export function ArtifactCard({ entry }: { entry: HistoryEntry }) {
         <span className="truncate font-medium">{artifact.title}</span>
         <span className="text-xs text-fg-2">
           {kindLabel(artifact.kind)} · v{artifact.version}
+          {artifact.note ? ` · ${artifact.note}` : ''}
         </span>
+        {artifact.description ? <span className="line-clamp-2 text-xs text-fg-3">{artifact.description}</span> : null}
       </span>
       <span className="shrink-0 text-xs text-accent-fg">{open ? 'Open beside' : 'Open'}</span>
     </button>

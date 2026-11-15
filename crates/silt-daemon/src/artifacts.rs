@@ -134,7 +134,21 @@ impl Core {
             .map(|session| session.reference())
             .ok_or_else(|| CoreError::Invalid("the run's session isn't recorded yet".into()))?;
 
-        let title = new.title.trim().to_owned();
+        // A new version may leave its title and kind as the last version's.
+        let earlier = match new.id.as_deref() {
+            Some(id) if valid_id(id) => self
+                .history_entries(thread)
+                .iter()
+                .filter_map(|(_, entry)| entry.artifact.as_ref())
+                .filter(|artifact| artifact.id == id)
+                .max_by_key(|artifact| artifact.version)
+                .map(|artifact| (artifact.title.clone(), artifact.kind.clone())),
+            _ => None,
+        };
+        let title = match (new.title.trim(), &earlier) {
+            ("", Some((title, _))) => title.clone(),
+            (title, _) => title.to_owned(),
+        };
         if title.is_empty() || title.chars().count() > TITLE_CHARS {
             return Err(CoreError::Invalid(format!("a title is 1 to {TITLE_CHARS} characters")));
         }
@@ -142,15 +156,48 @@ impl Core {
         if caption.as_ref().is_some_and(|caption| caption.chars().count() > CAPTION_CHARS) {
             return Err(CoreError::Invalid(format!("a caption is at most {CAPTION_CHARS} characters")));
         }
-        let kind = if new.inline { "image".to_owned() } else { new.kind.trim().to_owned() };
+        let kind = match (new.inline, new.kind.trim(), &earlier) {
+            (true, _, _) => "image".to_owned(),
+            (false, "", Some((_, kind))) => kind.clone(),
+            (false, kind, _) => kind.to_owned(),
+        };
+        let note = silt_proto::artifact::short_text(new.note.as_deref(), silt_proto::artifact::NOTE_CHARS, "a note")
+            .map_err(CoreError::Invalid)?;
+        let described = silt_proto::artifact::short_text(
+            new.description.as_deref(),
+            silt_proto::artifact::DESCRIPTION_CHARS,
+            "a description",
+        )
+        .map_err(CoreError::Invalid)?;
+        let entries = self.history_entries(thread);
+        let artifacts: Vec<&ArtifactView> = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).collect();
+        let mut new = new;
+        if !new.edits.is_empty() {
+            if new.content.is_some() || new.path.is_some() {
+                return Err(CoreError::Invalid("give edits, or content or a path, not both".into()));
+            }
+            let id = new.id.as_deref().ok_or_else(|| CoreError::Invalid("edits change an artifact: give its id".into()))?;
+            let latest = artifacts
+                .iter()
+                .filter(|artifact| artifact.id == id)
+                .max_by_key(|artifact| artifact.version)
+                .ok_or_else(|| CoreError::Invalid(format!("this thread has no artifact {id}")))?;
+            if !matches!(latest.kind.as_str(), "html" | "svg" | "markdown" | "mermaid") {
+                return Err(CoreError::Invalid(format!("a {} artifact is changed by a new file, not edits", latest.kind)));
+            }
+            let hash =
+                latest.blob.parse().map_err(|_| CoreError::Invalid("the latest version's content isn't kept here".into()))?;
+            let source = String::from_utf8(self.store.blobs().get(hash).await?)
+                .map_err(|_| CoreError::Invalid("the latest version isn't text".into()))?;
+            let edited =
+                silt_proto::artifact::apply_edits(&source, &new.edits).map_err(|error| CoreError::Invalid(error.to_string()))?;
+            new.content = Some(edited);
+        }
         let file = match &new.path {
             Some(path) => Some(readable_file(path, &checkout, &self.artifact_denies(&workspace))?),
             None => None,
         };
         let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
-
-        let entries = self.history_entries(thread);
-        let artifacts: Vec<&ArtifactView> = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).collect();
         let (id, version) = match new.id.as_deref() {
             Some(id) if !valid_id(id) => return Err(CoreError::Invalid(format!("{id} isn't an artifact id"))),
             Some(id) => match latest_version(artifacts.iter().copied(), id) {
@@ -159,11 +206,9 @@ impl Core {
             },
             None => (new_id(), 1),
         };
-        let previous = artifacts
-            .iter()
-            .filter(|artifact| artifact.id == id)
-            .max_by_key(|artifact| artifact.version)
-            .map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
+        let last = artifacts.iter().filter(|artifact| artifact.id == id).max_by_key(|artifact| artifact.version);
+        let previous = last.map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
+        let description = described.or_else(|| last.and_then(|artifact| artifact.description.clone()));
         let styled = if kind == "html" {
             let workspace_default = self.workspace_design_system(&workspace);
             let repository = design::project_default(&checkout);
@@ -213,6 +258,8 @@ impl Core {
             caption,
             design_system: design_system.clone(),
             style,
+            note,
+            description,
         };
         self.record_acp(thread, &silt_agents::acp::artifact(&view)).await?;
         Ok(ArtifactPut { id, version, design_system, dropped })
@@ -366,6 +413,9 @@ mod tests {
             caption: None,
             inline: false,
             design_system: None,
+            edits: Vec::new(),
+            note: None,
+            description: None,
         }
     }
 
@@ -432,6 +482,8 @@ mod tests {
             caption: None,
             design_system: None,
             style: None,
+            note: None,
+            description: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

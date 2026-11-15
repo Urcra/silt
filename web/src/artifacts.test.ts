@@ -88,7 +88,7 @@ describe('artifacts', () => {
     expect(script).toBeGreaterThan(policy)
     expect(style).toBeGreaterThan(script)
     expect(own).toBeGreaterThan(style)
-    expect(page).toContain("d.silt!=='theme'")
+    expect(page).toContain("d.silt==='theme'")
     expect(page).toContain("'securitypolicyviolation'")
     expect(sandboxedDocument('<p>hi</p>')).not.toContain("root.setAttribute('data-theme','")
   })

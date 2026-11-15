@@ -430,6 +430,12 @@ pub struct ArtifactView {
     /// version's frame is given; read with the same route as the content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// What this version changed (ADR 0073).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// What the artifact is, as its card says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// An artifact's content, as its route answers it.

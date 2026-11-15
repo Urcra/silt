@@ -788,6 +788,17 @@ pub struct NewArtifact {
     /// The design system to style an HTML version with, or `none`.
     #[serde(default)]
     pub design_system: Option<String>,
+    /// Changes to the latest version's source, in place of `content` or
+    /// `path` (ADR 0073).
+    #[serde(default)]
+    pub edits: Vec<silt_proto::artifact::Edit>,
+    /// What this version changed.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// What the artifact is, for its card; a version without one keeps the
+    /// last.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.

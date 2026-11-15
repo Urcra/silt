@@ -1558,13 +1558,23 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     );
     assert_ne!(all[2]["id"], first[0]["id"], "an image shown is its own");
 
+    // A version made by editing the last in place, with a note, and a
+    // description later versions keep (ADR 0073).
+    api_prompt("Artifact edit");
+    let edited = artifacts_of(&api, &thread);
+    let latest = edited.iter().rfind(|artifact| artifact["id"] == first[0]["id"]).expect("the artifact");
+    assert_eq!((&latest["version"], &latest["note"]), (&3.into(), &"Retitled".into()), "{edited:?}");
+    assert_eq!(latest["description"], "How long a rescan takes");
+    let text = artifact_text(&api, &thread, latest);
+    assert!(text.starts_with("<h1>Rescan benchmark, edited</h1>") && text.contains(secret), "the rest is kept: {text}");
+
     let found = api.ok("GET", "/api/search?q=Rescan", None);
     assert!(found.to_string().contains(&thread[..12]) || found.to_string().contains(&thread), "found by its title: {found}");
 
     let forked = api.ok("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
     let fork = forked.as_str().map(str::to_owned).unwrap_or_else(|| forked["thread"].as_str().expect("fork").to_owned());
     let inherited = artifacts_of(&api, &fork);
-    assert_eq!(inherited.len(), 3, "a fork inherits what was shown: {inherited:?}");
+    assert_eq!(inherited.len(), 4, "a fork inherits what was shown: {inherited:?}");
     assert!(artifact_text(&api, &fork, &inherited[0]).starts_with("<h1>Rescan benchmark</h1>"));
 }
 

@@ -8,6 +8,7 @@ import {
   type ArtifactGroup,
   type ArtifactVersion,
   type FrameProblem,
+  type FrameTheme,
   dataUrl,
   fileName,
   kindLabel,
@@ -30,6 +31,7 @@ import { Button, Dialog, Icon, IconButton, Menu, type MenuItem, Spinner, cx, toa
 import { ArtifactCommentsButton, AskForChange } from './ArtifactComments'
 import { KindIcon, ShownImage } from './ArtifactCards'
 import { Markdown } from './Markdown'
+import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 
 /** The Artifacts tab with none open: the thread's artifacts, the one changed last first, and the images agents showed. */
 export function ArtifactList({
@@ -271,7 +273,7 @@ export function ArtifactViewer({
             triggerClassName="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 font-mono text-xs text-fg-2 hover:border-line-strong hover:text-fg-1 max-md:min-h-11"
             items={[...group.versions].reverse().map((version) => ({
               label: `v${version.artifact.version}${version.artifact.version === latestVersion ? ' · latest' : ''}`,
-              hint: ago(version.entry.time_ms, now),
+              hint: [version.artifact.note, ago(version.entry.time_ms, now)].filter(Boolean).join(' · '),
               icon: version.artifact.version === artifact.version ? 'check' : undefined,
               onSelect: () => onOpen(group.id, version.artifact.version === latestVersion ? null : version.artifact.version),
             }))}
@@ -419,9 +421,25 @@ function ArtifactPage({
   const [framed] = useState(() =>
     artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin }) : '',
   )
+  // The page's Mermaid diagrams, drawn here in the viewer's theme and sent back as images (ADR 0073).
+  const diagrams = useRef<{ i: number; text: string }[]>([])
+  const drawDiagrams = useRef((shownTheme: FrameTheme) => {
+    const target = frame.current?.contentWindow
+    for (const diagram of diagrams.current) {
+      mermaidSvg(diagram.text, `frame-mermaid-${diagram.i}`, shownTheme === 'dark' ? 'dark' : 'neutral').then(
+        (svg) => target?.postMessage({ silt: 'mermaid-drawn', i: diagram.i, src: svgUrl(svg) }, '*'),
+        () => undefined,
+      )
+    }
+  })
   useEffect(() => {
     frame.current?.contentWindow?.postMessage({ silt: 'theme', theme }, '*')
+    drawDiagrams.current(theme)
   }, [theme])
+  const shownTheme = useRef(theme)
+  useEffect(() => {
+    shownTheme.current = theme
+  })
   // A frame's page says what's selected in it and what went wrong; only messages from that frame count. The listener
   // is added once, reading the latest callbacks, so a render doesn't drop a message between removing and adding it.
   const callbacks = useRef({ onSelect, onProblems })
@@ -434,6 +452,15 @@ function ArtifactPage({
       if (event.source === null || event.source !== frame.current?.contentWindow) return
       if (said?.silt === 'selection') callbacks.current.onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
       if (said?.silt === 'problems' && Array.isArray(said.problems)) callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
+      if (said?.silt === 'mermaid' && Array.isArray((said as { diagrams?: unknown }).diagrams)) {
+        diagrams.current = ((said as { diagrams: unknown[] }).diagrams)
+          .filter((diagram): diagram is { i: number; text: string } => {
+            const candidate = diagram as { i?: unknown; text?: unknown }
+            return typeof candidate.i === 'number' && typeof candidate.text === 'string' && candidate.text.length <= 65536
+          })
+          .slice(0, 20)
+        drawDiagrams.current(shownTheme.current)
+      }
     }
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
@@ -454,6 +481,7 @@ function ArtifactPage({
           ref={frame}
           title={artifact.title}
           sandbox="allow-scripts"
+          allow="fullscreen"
           srcDoc={framed}
           referrerPolicy="no-referrer"
           style={zoomed}
@@ -474,15 +502,7 @@ function ArtifactPage({
   return page(<img src={dataUrl(content)} alt={artifact.title} className="mx-auto block max-w-full rounded-sm bg-white" />)
 }
 
-/** Draws Mermaid as SVG, shown as an image so nothing in it runs. */
-async function mermaidSvg(text: string, id: string): Promise<string> {
-  const mermaid = (await import('mermaid')).default
-  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', flowchart: { htmlLabels: false } })
-  const { svg } = await mermaid.render(id.replace(/[^a-zA-Z0-9]/g, ''), text)
-  return svg
-}
-
-function Mermaid({ text, title }: { text: string; title: string }) {
+export function Mermaid({ text, title }: { text: string; title: string }) {
   const id = `mermaid${useId()}`
   const [drawn, setDrawn] = useState<{ svg: string } | { error: string } | null>(null)
   useEffect(() => {
@@ -513,5 +533,6 @@ async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent):
     return renderToStaticMarkup(<Markdown text={textOf(content)} />)
   }
   if (artifact.kind === 'mermaid') return mermaidSvg(textOf(content), `export-${artifact.blob.slice(0, 8)}`)
+  if (artifact.kind === 'html') return withDiagramsDrawn(textOf(content))
   return undefined
 }

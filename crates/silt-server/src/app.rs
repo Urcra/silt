@@ -64,6 +64,13 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
 
 /// The page or one of its assets; someone not signed in signs in first.
 async fn page(State(server): State<Server>, headers: HeaderMap, uri: Uri) -> Response {
+    // The bundle's scripts and styles are the same for everyone, and a
+    // read-only link's page loads them before anyone signs in (ADR 0073).
+    let asset = uri.path().trim_start_matches("/app/");
+    if let Some(file) = asset.strip_prefix("assets/").and_then(|_| silt_web::Assets::get(asset)) {
+        let mime = file.metadata.mimetype().to_owned();
+        return ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response();
+    }
     if pages::signed_in(&server, &headers).await.is_none() {
         let next = pages::safe_next(Some(uri.path()));
         return Redirect::to(&format!("/login?next={}", crate::sign_in::encode(&next))).into_response();
@@ -101,6 +108,19 @@ pub(crate) async fn font(UrlPath(name): UrlPath<String>) -> Response {
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The app's page for a read-only link to one artifact, which shows it
+/// with the web UI's own viewers and nothing else (ADR 0073); `None` when
+/// the web UI wasn't built.
+pub(crate) fn link_index() -> Option<String> {
+    let file = silt_web::Assets::get("index.html")?;
+    let html = hosted_index(&String::from_utf8_lossy(&file.data));
+    Some(html.replacen(
+        "<head>",
+        r#"<head><meta name="silt-link" content="artifact" /><meta name="robots" content="noindex" />"#,
+        1,
+    ))
 }
 
 /// The app's page as the server hosts it: under `/app/`, saying the server

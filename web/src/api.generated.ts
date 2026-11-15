@@ -608,7 +608,15 @@ design_system?: string | null,
  * The blob holding the CSS that system's tokens compiled to, which the
  * version's frame is given; read with the same route as the content.
  */
-style?: string | null, };
+style?: string | null, 
+/**
+ * What this version changed (ADR 0073).
+ */
+note?: string | null, 
+/**
+ * What the artifact is, as its card says.
+ */
+description?: string | null, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 

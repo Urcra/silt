@@ -142,9 +142,16 @@ pub const FIRST_SCRIPT_START: &str = "(function(){var root=document.documentElem
 
 /// The rest of the first script: it follows the theme the page holding the
 /// frame sends, and tells that page what text is selected, for a comment to
-/// quote, what went wrong, and when the page has settled (ADR 0071).
-pub const FIRST_SCRIPT_END: &str = "addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||d.silt!=='theme')return;\
-if(d.theme==='light'||d.theme==='dark')root.setAttribute('data-theme',d.theme)});\
+/// quote, what went wrong, and when the page has settled (ADR 0071). It
+/// hands the page's Mermaid diagrams to the holding page, which draws them
+/// and sends back images, so no library loads and nothing in them runs
+/// (ADR 0073).
+pub const FIRST_SCRIPT_END: &str = "addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d)return;\
+if(d.silt==='theme'&&(d.theme==='light'||d.theme==='dark'))root.setAttribute('data-theme',d.theme);\
+if(d.silt==='mermaid-drawn'&&typeof d.src==='string'&&d.src.indexOf('data:image/svg+xml')===0){\
+var at=document.querySelector('[data-silt-mermaid=\"'+(d.i|0)+'\"]');if(!at)return;var img=document.createElement('img');\
+img.src=d.src;img.alt=at.getAttribute('aria-label')||'Diagram';img.setAttribute('data-silt-mermaid',String(d.i|0));\
+img.setAttribute('aria-label',img.alt);img.style.maxWidth='100%';at.replaceWith(img)}});\
 document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();parent.postMessage({silt:'selection',text:t.slice(0,500)},to)});\
 var seen={},problems=[];\
 function report(kind,text){text=String(text).slice(0,300);if(seen[kind+text]||problems.length>=20)return;seen[kind+text]=1;\
@@ -153,7 +160,10 @@ document.addEventListener('securitypolicyviolation',function(e){report('blocked'
 addEventListener('error',function(e){if(e.message)report('error',e.message+(e.lineno?' (line '+e.lineno+')':''))});\
 addEventListener('unhandledrejection',function(e){var r=e.reason;report('error','Unhandled rejection: '+(r&&r.message||r))});\
 addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,v=root.clientWidth;\
-if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');parent.postMessage({silt:'checked'},to)},300)});})();";
+if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');parent.postMessage({silt:'checked'},to)},300);\
+var pres=document.querySelectorAll('pre.mermaid'),list=[];for(var i=0;i<pres.length&&i<20;i++){var t=pres[i].textContent||'';\
+if(t.length>65536)continue;pres[i].setAttribute('data-silt-mermaid',String(i));list.push({i:i,text:t})}\
+if(list.length)parent.postMessage({silt:'mermaid',diagrams:list},to)});})();";
 
 /// Whether `origin` is a bare `http(s)://host[:port]`, safe to write into
 /// the first script as the target of its messages.

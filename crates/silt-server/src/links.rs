@@ -35,7 +35,10 @@ pub(crate) fn device_routes() -> Router<Server> {
 }
 
 pub(crate) fn page_routes() -> Router<Server> {
-    Router::new().route("/r/{token}", get(read)).route("/r/{token}/content", get(read_content))
+    Router::new()
+        .route("/r/{token}", get(read))
+        .route("/r/{token}/view", get(read_view))
+        .route("/r/{token}/content", get(read_content))
 }
 
 /// The thread `selector` names among those `user` owns: only an owner
@@ -273,11 +276,50 @@ async fn read(State(server): State<Server>, Path(token): Path<String>) -> Respon
     }
 }
 
+/// What a link to one artifact shows, for the app's page at `/r/<token>`:
+/// the version, who shared it and until when, and nothing else of the
+/// thread.
+async fn read_view(State(server): State<Server>, Path(token): Path<String>) -> Response {
+    if pausing(&server) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let opened = match opened(&server, &token).await {
+        Ok(Some(opened)) => opened,
+        Ok(None) => {
+            missed(&server);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not read a read-only link");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let Some((id, version)) = &opened.artifact else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(artifact) = linked_artifact(&opened.log, opened.thread, id, *version) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let body = serde_json::json!({
+        "artifact": artifact,
+        "owner": opened.owner,
+        "frozen_ms": opened.frozen.then_some(opened.created_ms),
+        "expires_ms": opened.expires_ms,
+    });
+    let mut response = axum::Json(body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
+    response
+}
+
 /// What a working link opens: its thread's log up to where it was frozen.
 struct Opened {
     thread: ThreadId,
     owner: String,
     created_ms: i64,
+    expires_ms: i64,
     frozen: bool,
     artifact: Option<(String, Option<u32>)>,
     log: Vec<Delta>,
@@ -315,7 +357,15 @@ async fn opened(server: &Server, token: &str) -> Result<Option<Opened>, sqlx::Er
         None => Vec::new(),
     };
     let artifact = link.artifact_id.map(|id| (id, link.artifact_version.and_then(|version| u32::try_from(version).ok())));
-    Ok(Some(Opened { thread, owner: link.owner, created_ms: link.created_ms, frozen: link.frozen_at.is_some(), artifact, log }))
+    Ok(Some(Opened {
+        thread,
+        owner: link.owner,
+        created_ms: link.created_ms,
+        expires_ms: link.expires_ms,
+        frozen: link.frozen_at.is_some(),
+        artifact,
+        log,
+    }))
 }
 
 async fn shown(server: &Server, token: &str) -> Result<Option<String>, sqlx::Error> {
@@ -327,6 +377,9 @@ async fn shown(server: &Server, token: &str) -> Result<Option<String>, sqlx::Err
         let Some(artifact) = linked_artifact(&opened.log, opened.thread, id, *version) else {
             return Ok(None);
         };
+        if let Some(page) = crate::app::link_index() {
+            return Ok(Some(page));
+        }
         let text = match artifact.kind.as_str() {
             "markdown" | "mermaid" => server
                 .shared

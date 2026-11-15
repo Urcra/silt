@@ -529,6 +529,8 @@ mod tests {
             caption: None,
             design_system: Some("nous".into()),
             style: Some("cd".repeat(32)),
+            note: Some("Darker axis".into()),
+            description: Some("How long a rescan takes".into()),
         };
         let read = read_line(&artifact(&shown));
         assert_eq!(read.entries, vec![Entry::Artifact(shown.clone())]);
