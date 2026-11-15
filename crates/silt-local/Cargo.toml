@@ -12,8 +12,13 @@ workspace = true
 
 [dependencies]
 agent-client-protocol = { version = "3.4", features = ["stdio"] }
+regex = "1.13.1"
 reqwest = { version = "0.13.5", features = ["json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.54.0", features = ["fs", "io-util", "macros", "rt", "sync"] }
+tokio = { version = "1.54.0", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 uuid = { version = "1.28.0", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }

@@ -5,6 +5,7 @@ mod agent;
 mod conversation;
 mod model;
 mod stream;
+mod tools;
 
-pub use agent::{CHAT, serve};
-pub use conversation::{Conversation, Entry, Message, Role, is_session_id};
+pub use agent::{CHAT, FIRST_MODE, MODES, serve};
+pub use conversation::{Call, Conversation, Entry, Message, Role, is_session_id};

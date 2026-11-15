@@ -241,6 +241,7 @@ impl Machine {
             .env("FAKE_LOG_DIR", self.agents.join("logs"))
             .env("SILT_LLAMA_SERVER", fake_agent("llama"))
             .env("FAKE_MODEL_LOG", self.agents.join("logs/model-requests.jsonl"))
+            .env("FAKE_MODEL_TOOLS_FILE", self.agents.join("logs/model-tools.json"))
             .env("HOME", self.agents.parent().expect("the machine's home"))
             .envs(envs.iter().copied());
         command

@@ -5240,9 +5240,11 @@ name = "silt-local"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

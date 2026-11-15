@@ -32,7 +32,17 @@ pub struct Piece {
     /// What a reasoning model thinks before it answers.
     pub thought: Option<String>,
     pub usage: Option<Usage>,
+    /// Pieces of the tool calls being written, by their place in the list.
+    pub calls: Vec<CallPiece>,
     pub done: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallPiece {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -53,6 +63,17 @@ pub fn piece(payload: &str) -> Piece {
     Piece {
         text: nonempty(&delta["content"]),
         thought: nonempty(&delta["reasoning_content"]).or_else(|| nonempty(&delta["reasoning"])),
+        calls: delta["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|call| CallPiece {
+                index: call["index"].as_u64().and_then(|index| usize::try_from(index).ok()).unwrap_or(0),
+                id: nonempty(&call["id"]),
+                name: nonempty(&call["function"]["name"]),
+                arguments: call["function"]["arguments"].as_str().map(str::to_owned),
+            })
+            .collect(),
         usage: chunk["usage"].is_object().then(|| Usage {
             prompt: chunk["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
             completion: chunk["usage"]["completion_tokens"].as_u64().unwrap_or(0),
@@ -87,5 +108,18 @@ mod tests {
         assert!(piece("[DONE]").done);
         assert_eq!(piece("garbage"), Piece::default());
         assert_eq!(piece(r#"{"choices":[{"delta":{"content":""}}]}"#).text, None);
+    }
+
+    #[test]
+    fn a_tool_call_comes_in_pieces() {
+        let first = piece(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}"#,
+        );
+        let expected =
+            CallPiece { index: 0, id: Some("c1".into()), name: Some("read_file".into()), arguments: Some(r#"{"pa"#.into()) };
+        assert_eq!(first.calls, [expected]);
+        let more = piece(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":1}"}}]}}]}"#);
+        assert_eq!(more.calls[0].arguments.as_deref(), Some(r#"th":1}"#));
+        assert_eq!(more.calls[0].id, None);
     }
 }

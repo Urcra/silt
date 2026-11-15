@@ -34,7 +34,7 @@ fn said(machine: &Machine, thread: &str, text: &str) -> bool {
 }
 
 /// What the fake server was asked to complete, in order.
-fn asked(log: &Path) -> Vec<Value> {
+fn requests(log: &Path) -> Vec<Value> {
     fs::read_to_string(log)
         .unwrap_or_default()
         .lines()
@@ -64,14 +64,14 @@ fn a_chat_with_the_local_agent_answers_on_the_local_model_and_picks_up_again() {
         laptop.web("POST", "/api/agents/start", Some(json!({"agent": "local", "chat": true, "prompt": "What failed?"})));
     let thread = started.as_str().expect("the new chat").to_owned();
     assert!(said(&laptop, &thread, "Heard: What failed?"), "the local model answered");
-    let first = asked(&log);
+    let first = requests(&log);
     assert_eq!(first.len(), 1);
     assert_eq!(first[0]["model"], "Tiny.gguf", "the fake server saw the model it loaded");
     assert_eq!(first[0]["body"]["model"], "tiny");
 
     laptop.web("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(json!({"text": "And then?"})));
     assert!(said(&laptop, &thread, "Heard: And then?"));
-    let conversation = asked(&log).last().expect("a second request")["body"]["messages"].clone();
+    let conversation = requests(&log).last().expect("a second request")["body"]["messages"].clone();
     let texts: Vec<&str> =
         conversation.as_array().expect("messages").iter().filter_map(|message| message["content"].as_str()).collect();
     assert_eq!(texts[1..], ["What failed?", "Heard: What failed?", "And then?"], "the conversation goes along");
@@ -86,7 +86,7 @@ fn a_chat_with_the_local_agent_answers_on_the_local_model_and_picks_up_again() {
         laptop.web("GET", &format!("/api/threads/{thread}/history"), None),
         laptop.daemon_log()
     );
-    let resumed = asked(&log).last().expect("a third request")["body"]["messages"].clone();
+    let resumed = requests(&log).last().expect("a third request")["body"]["messages"].clone();
     assert_eq!(resumed.as_array().map(Vec::len), Some(1 + 5), "its session loaded again, all of it: {resumed}");
 }
 
@@ -146,4 +146,66 @@ fn claude_code_runs_on_a_local_model_through_the_gateway() {
     let refused = laptop.run(&["claude", "--model", "local:nope"]);
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("there's no local model nope here"));
+}
+
+fn said_like(machine: &Machine, thread: &str, start: &str) -> bool {
+    eventually(|| {
+        let history = machine.web("GET", &format!("/api/threads/{thread}/history"), None);
+        let said = history["entries"].as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| entry["text"].as_str().is_some_and(|text| text.starts_with(start)))
+        });
+        said && machine.web("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "idle"
+    })
+}
+
+#[test]
+fn the_local_agent_works_with_its_tools_and_asks_before_it_writes() {
+    let root = common::temp_root("silt-local-tools");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    let script = json!([{"name": "write", "arguments": {"path": "notes.md", "content": "disk full at 03:12"}}]);
+    fs::write(laptop.agents.join("logs/model-tools.json"), script.to_string()).expect("the script");
+
+    let start = json!({"agent": "local", "chat": true, "prompt": "Note what failed", "preset": "ask_for_everything"});
+    let thread = laptop.web("POST", "/api/agents/start", Some(start)).as_str().expect("the new chat").to_owned();
+    let mut asked = Value::Null;
+    assert!(eventually(|| {
+        let live = laptop.web("GET", &format!("/api/threads/{thread}/live"), None);
+        asked = live["agent"]["permissions"][0].clone();
+        !asked.is_null()
+    }));
+    assert_eq!(asked["title"], "Write notes.md", "{asked}");
+    let answer = json!({"id": asked["id"], "option": "allow"});
+    laptop.web("POST", &format!("/api/threads/{thread}/agent/answer"), Some(answer));
+    assert!(said_like(&laptop, &thread, "Done: Wrote"), "{}", laptop.web("GET", &format!("/api/threads/{thread}/history"), None));
+
+    let folder = fs::read_dir(laptop.silt_home.join("chats")).expect("chats").next().expect("one chat").expect("entry").path();
+    assert_eq!(fs::read_to_string(folder.join("notes.md")).expect("the note"), "disk full at 03:12");
+    let history = laptop.web("GET", &format!("/api/threads/{thread}/history"), None).to_string();
+    assert!(history.contains("Write notes.md"), "the tool call is in the history: {history}");
+    let sent = requests(&laptop.agents.join("logs/model-requests.jsonl"));
+    let tools = &sent[0]["body"]["tools"];
+    assert!(tools.as_array().is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "grep")), "{tools}");
+}
+
+#[test]
+fn in_chat_mode_the_local_agent_is_offered_no_tools() {
+    let root = common::temp_root("silt-local-chat");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let model = root.path().join("Tiny.gguf");
+    fs::write(&model, gguf("Tiny")).expect("write");
+    laptop.silt(&["model", "pull", &model.to_string_lossy()]);
+    let script = json!([{"name": "run", "arguments": {"command": "touch should-not-exist"}}]);
+    fs::write(laptop.agents.join("logs/model-tools.json"), script.to_string()).expect("the script");
+    let start = json!({"agent": "local", "chat": true, "prompt": "Just talk", "mode": "chat"});
+    let thread = laptop.web("POST", "/api/agents/start", Some(start)).as_str().expect("the new chat").to_owned();
+    assert!(said(&laptop, &thread, "Heard: Just talk"));
+    let sent = requests(&laptop.agents.join("logs/model-requests.jsonl"));
+    assert!(sent.iter().all(|request| request["body"]["tools"].is_null()));
 }

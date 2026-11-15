@@ -374,8 +374,8 @@ pub(crate) fn agents_here(data_dir: &Path) -> Vec<AgentInfo> {
 }
 
 impl Core {
-    /// What `local` offers: Chat, and the models downloaded here. It isn't
-    /// asked, as the daemon knows.
+    /// What `local` offers: its modes, and the models downloaded here. It
+    /// isn't asked, as the daemon knows.
     fn local_offer(&self) -> Seen {
         let models = self.models.installed_now();
         let choices: Vec<crate::protocol::AgentChoiceItem> = models
@@ -386,13 +386,16 @@ impl Core {
                 description: None,
             })
             .collect();
-        let chat = crate::protocol::AgentChoiceItem {
-            id: silt_local::CHAT.to_owned(),
-            name: "Chat".to_owned(),
-            description: Some("Only talks: no tools".to_owned()),
-        };
+        let available = silt_local::MODES
+            .iter()
+            .map(|(id, name, description)| crate::protocol::AgentChoiceItem {
+                id: (*id).to_owned(),
+                name: (*name).to_owned(),
+                description: Some((*description).to_owned()),
+            })
+            .collect();
         Seen {
-            modes: Some(crate::protocol::AgentModes { current: silt_local::CHAT.to_owned(), available: vec![chat], plan: None }),
+            modes: Some(crate::protocol::AgentModes { current: silt_local::FIRST_MODE.to_owned(), available, plan: None }),
             settings: choices
                 .first()
                 .map(|first| crate::protocol::AgentSetting {

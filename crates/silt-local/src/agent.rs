@@ -1,6 +1,6 @@
 //! `silt agent local` as an ACP agent: sessions it keeps in files of its
 //! own so they load again, a model setting from the gateway's models, and
-//! Chat mode, where it only talks.
+//! modes from Chat, where it only talks, to full access.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,22 +10,38 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, EmbeddedResourceResource, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    PromptCapabilities, PromptRequest, PromptResponse, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode, SessionModeState, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse,
-    StopReason, TextContent, UsageUpdate,
+    PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Stdio};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 
-use crate::conversation::{Conversation, Entry, Message, Role, is_session_id};
+use crate::conversation::{Call, Conversation, Entry, Message, Role, is_session_id};
 use crate::model::{Ended, Gateway, Listed};
+use crate::tools::{self, Kind, Leeway, Planned};
 
 pub const CHAT: &str = "chat";
+/// A new session's mode until the daemon chooses one by its preset.
+pub const FIRST_MODE: &str = "default";
+/// Each mode's id, name and what it lets `local` do, as Claude Code's ids
+/// say, so the daemon maps them to presets (ADR 0048).
+pub const MODES: [(&str, &str, &str); 4] = [
+    (CHAT, "Chat", "Only talks: no tools"),
+    ("default", "Ask for everything", "Reads freely; asks before edits and commands"),
+    ("acceptEdits", "Ask before commands", "Reads and edits freely; asks before commands"),
+    ("bypassPermissions", "Full access", "Asks only before touching a path outside the project"),
+];
+/// Model calls in one turn, at most, so a model stuck calling tools ends.
+const MOST_STEPS: usize = 40;
 const NO_MODEL: &str = "No local model is downloaded yet. Download one in Settings › Local models, or with `silt model pull`.";
 
 struct Session {
+    cwd: PathBuf,
     file: PathBuf,
     conversation: Conversation,
     cancel: Option<watch::Sender<bool>>,
@@ -51,8 +67,9 @@ fn notify(connection: &ConnectionTo<Client>, session: &SessionId, update: Sessio
     connection.send_notification(SessionNotification::new(session.clone(), update))
 }
 
-fn modes() -> SessionModeState {
-    SessionModeState::new(CHAT.to_owned(), vec![SessionMode::new(CHAT, "Chat").description("Only talks: no tools")])
+fn modes(current: &str) -> SessionModeState {
+    let available = MODES.iter().map(|(id, name, description)| SessionMode::new(*id, *name).description(*description)).collect();
+    SessionModeState::new(current.to_owned(), available)
 }
 
 fn settings(models: &[Listed], current: &str) -> Vec<SessionConfigOption> {
@@ -123,8 +140,8 @@ fn internal(error: impl std::fmt::Display) -> Error {
 
 pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
     let state: Shared = Arc::new(Mutex::new(State { home, gateway: Gateway::from_env(), sessions: HashMap::new() }));
-    let (created, loading, configured, prompted, cancelled) =
-        (state.clone(), state.clone(), state.clone(), state.clone(), state.clone());
+    let (created, loading, moded, configured, prompted, cancelled) =
+        (state.clone(), state.clone(), state.clone(), state.clone(), state.clone(), state.clone());
     Agent
         .builder()
         .name("silt-local")
@@ -143,7 +160,7 @@ pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: NewSessionRequest, responder, _connection| {
+            async move |request: NewSessionRequest, responder, _connection| {
                 let (home, gateway) = {
                     let state = created.lock().expect("lock");
                     (state.home.clone(), state.gateway.clone())
@@ -158,9 +175,12 @@ pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
                     conversation.apply(entry);
                 }
                 let current = conversation.model.clone().unwrap_or_default();
-                created.lock().expect("lock").sessions.insert(id.clone(), Session { file, conversation, cancel: None });
+                let session = Session { cwd: request.cwd, file, conversation, cancel: None };
+                created.lock().expect("lock").sessions.insert(id.clone(), session);
                 responder.respond(
-                    NewSessionResponse::new(SessionId::new(id)).modes(modes()).config_options(settings(&models, &current)),
+                    NewSessionResponse::new(SessionId::new(id))
+                        .modes(modes(FIRST_MODE))
+                        .config_options(settings(&models, &current)),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -180,26 +200,39 @@ pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
                     return responder.respond_with_error(Error::invalid_params().data("no such session"));
                 };
                 let conversation = Conversation::replay(&lines);
-                for message in &conversation.said {
+                for message in conversation.said.iter().filter(|message| !message.text.is_empty()) {
                     let chunk = text(message.text.clone());
                     let update = match message.role {
                         Role::User => SessionUpdate::UserMessageChunk(chunk),
                         Role::Assistant => SessionUpdate::AgentMessageChunk(chunk),
+                        Role::Tool => continue,
                     };
                     notify(&connection, &request.session_id, update)?;
                 }
                 let models = listed(gateway.as_ref()).await;
                 let current = chosen(&models, conversation.model.as_deref()).map(|model| model.id.clone()).unwrap_or_default();
-                loading.lock().expect("lock").sessions.insert(id, Session { file, conversation, cancel: None });
-                responder.respond(LoadSessionResponse::new().modes(modes()).config_options(settings(&models, &current)))
+                let mode = conversation.mode.clone().unwrap_or_else(|| FIRST_MODE.to_owned());
+                let session = Session { cwd: request.cwd, file, conversation, cancel: None };
+                loading.lock().expect("lock").sessions.insert(id, session);
+                responder.respond(LoadSessionResponse::new().modes(modes(&mode)).config_options(settings(&models, &current)))
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: SetSessionModeRequest, responder, _connection| {
-                if request.mode_id.to_string() != CHAT {
+                let mode = request.mode_id.to_string();
+                if !MODES.iter().any(|(id, _, _)| *id == mode) {
                     return responder.respond_with_error(Error::invalid_params().data("no such mode"));
                 }
+                let file = {
+                    let mut state = moded.lock().expect("lock");
+                    let Some(session) = state.sessions.get_mut(&request.session_id.to_string()) else {
+                        return responder.respond_with_error(Error::invalid_params().data("no such session"));
+                    };
+                    session.conversation.apply(Entry::Mode { id: mode.clone() });
+                    session.file.clone()
+                };
+                append(&file, &Entry::Mode { id: mode }).await.map_err(internal)?;
                 responder.respond(SetSessionModeResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
@@ -254,7 +287,8 @@ pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
         .await
 }
 
-/// One prompt and the model's answer to it.
+/// One prompt, and the model's work on it: its answer, and the tools it
+/// calls on the way when the mode offers them.
 async fn turn(
     state: &Shared,
     connection: &ConnectionTo<Client>,
@@ -262,7 +296,7 @@ async fn turn(
 ) -> agent_client_protocol::Result<StopReason> {
     let id = request.session_id.to_string();
     let said = prompt_text(&request.prompt);
-    let (receiver, file, gateway, conversation) = {
+    let (receiver, file, cwd, gateway, conversation) = {
         let mut state = state.lock().expect("lock");
         let gateway = state.gateway.clone();
         let Some(session) = state.sessions.get_mut(&id) else {
@@ -270,64 +304,165 @@ async fn turn(
         };
         let (sender, receiver) = watch::channel(false);
         session.cancel = Some(sender);
-        session.conversation.apply(Entry::Said(Message { role: Role::User, text: said.clone() }));
-        (receiver, session.file.clone(), gateway, session.conversation.clone())
+        session.conversation.apply(Entry::Said(Message::said(Role::User, said.clone())));
+        (receiver, session.file.clone(), session.cwd.clone(), gateway, session.conversation.clone())
     };
-    append(&file, &Entry::Said(Message { role: Role::User, text: said })).await.map_err(internal)?;
+    append(&file, &Entry::Said(Message::said(Role::User, said))).await.map_err(internal)?;
     let models = listed(gateway.as_ref()).await;
     let (Some(gateway), Some(model)) = (gateway, chosen(&models, conversation.model.as_deref()).cloned()) else {
         notify(connection, &request.session_id, SessionUpdate::AgentMessageChunk(text(NO_MODEL)))?;
         return Ok(StopReason::EndTurn);
     };
+    let leeway = Leeway::of_mode(conversation.mode.as_deref().unwrap_or(FIRST_MODE));
+    let offered = (leeway != Leeway::None).then(tools::definitions);
     let session = request.session_id.clone();
-    let streamed = gateway
-        .stream(&conversation.request(&model.id), receiver, |piece| {
-            if let Some(thought) = &piece.thought {
-                let _ = notify(connection, &session, SessionUpdate::AgentThoughtChunk(text(thought.clone())));
+    let mut conversation = conversation;
+    let mut stop = StopReason::EndTurn;
+    for _ in 0..MOST_STEPS {
+        let streamed = gateway
+            .stream(&conversation.request(&model.id, offered.as_ref()), receiver.clone(), |piece| {
+                if let Some(thought) = &piece.thought {
+                    let _ = notify(connection, &session, SessionUpdate::AgentThoughtChunk(text(thought.clone())));
+                }
+                if let Some(more) = &piece.text {
+                    let _ = notify(connection, &session, SessionUpdate::AgentMessageChunk(text(more.clone())));
+                }
+            })
+            .await;
+        let (reply, calls, usage) = match streamed {
+            Ok(Ended::Done { text, calls, usage }) => (text, calls, usage),
+            Ok(Ended::Cancelled { text }) => {
+                stop = StopReason::Cancelled;
+                (text, Vec::new(), None)
             }
-            if let Some(more) = &piece.text {
-                let _ = notify(connection, &session, SessionUpdate::AgentMessageChunk(text(more.clone())));
+            Err(why) => {
+                notify(connection, &session, SessionUpdate::AgentMessageChunk(text(format!("The local model failed: {why}"))))?;
+                break;
             }
-        })
-        .await;
-    let (reply, usage, stop) = match streamed {
-        Ok(Ended::Done { text, usage }) => (text, usage, StopReason::EndTurn),
-        Ok(Ended::Cancelled { text }) => (text, None, StopReason::Cancelled),
-        Err(why) => {
-            notify(
-                connection,
-                &request.session_id,
-                SessionUpdate::AgentMessageChunk(text(format!("The local model failed: {why}"))),
-            )?;
-            return Ok(StopReason::EndTurn);
-        }
-    };
-    let entry = Entry::Said(Message { role: Role::Assistant, text: reply });
-    append(&file, &entry).await.map_err(internal)?;
-    let conversation = {
-        let mut state = state.lock().expect("lock");
-        let Some(session) = state.sessions.get_mut(&id) else {
-            return Ok(stop);
         };
-        session.cancel = None;
-        session.conversation.apply(entry);
-        session.conversation.clone()
-    };
-    if let Some(usage) = usage {
-        let used = usage.prompt + usage.completion;
-        notify(connection, &request.session_id, SessionUpdate::UsageUpdate(UsageUpdate::new(used, model.context)))?;
-        if conversation.should_compact(used, model.context)
-            && let Some(ask) = conversation.compaction_request(&model.id)
-            && let Ok(summary) = gateway.complete(&ask).await
-        {
-            let compacted = conversation.compacted(summary);
-            append(&file, &compacted).await.map_err(internal)?;
-            if let Some(session) = state.lock().expect("lock").sessions.get_mut(&id) {
-                session.conversation.apply(compacted);
+        conversation =
+            keep(state, &id, &file, Message { role: Role::Assistant, text: reply, calls: calls.clone(), answers: None }).await?;
+        if let Some(usage) = usage {
+            let used = usage.prompt + usage.completion;
+            notify(connection, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(used, model.context)))?;
+            if conversation.should_compact(used, model.context)
+                && let Some(ask) = conversation.compaction_request(&model.id)
+                && let Ok(summary) = gateway.complete(&ask).await
+            {
+                let compacted = conversation.compacted(summary);
+                append(&file, &compacted).await.map_err(internal)?;
+                if let Some(kept) = state.lock().expect("lock").sessions.get_mut(&id) {
+                    kept.conversation.apply(compacted.clone());
+                }
+                conversation.apply(compacted);
             }
+        }
+        if calls.is_empty() || stop == StopReason::Cancelled {
+            break;
+        }
+        for call in &calls {
+            let result = if *receiver.borrow() {
+                tools::Outcome::failed("not run: the turn was cancelled")
+            } else {
+                use_tool(connection, &session, call, &cwd, leeway, receiver.clone()).await?
+            };
+            conversation = keep(state, &id, &file, Message::result(&call.id, result.text)).await?;
+        }
+        if *receiver.borrow() {
+            stop = StopReason::Cancelled;
+            break;
         }
     }
+    if let Some(kept) = state.lock().expect("lock").sessions.get_mut(&id) {
+        kept.cancel = None;
+    }
     Ok(stop)
+}
+
+/// Keeps a message in the session and its file, and answers with the
+/// conversation as it now is.
+async fn keep(state: &Shared, id: &str, file: &Path, message: Message) -> agent_client_protocol::Result<Conversation> {
+    let entry = Entry::Said(message);
+    append(file, &entry).await.map_err(internal)?;
+    let mut state = state.lock().expect("lock");
+    let session = state.sessions.get_mut(id).ok_or_else(|| Error::invalid_params().data("no such session"))?;
+    session.conversation.apply(entry);
+    Ok(session.conversation.clone())
+}
+
+fn kind(kind: Kind) -> ToolKind {
+    match kind {
+        Kind::Read => ToolKind::Read,
+        Kind::Search => ToolKind::Search,
+        Kind::Edit => ToolKind::Edit,
+        Kind::Execute => ToolKind::Execute,
+    }
+}
+
+/// One tool call, shown to the person as it goes: asked for when the mode
+/// says so, then run, then its result.
+async fn use_tool(
+    connection: &ConnectionTo<Client>,
+    session: &SessionId,
+    call: &Call,
+    cwd: &Path,
+    leeway: Leeway,
+    cancel: watch::Receiver<bool>,
+) -> agent_client_protocol::Result<tools::Outcome> {
+    let planned: Planned = match tools::plan(call, cwd) {
+        Ok(planned) => planned,
+        Err(why) => {
+            let shown = ToolCall::new(call.id.clone(), call.name.clone())
+                .status(ToolCallStatus::Failed)
+                .raw_output(serde_json::json!(why));
+            notify(connection, session, SessionUpdate::ToolCall(shown))?;
+            return Ok(tools::Outcome::failed(why));
+        }
+    };
+    let shown = ToolCall::new(call.id.clone(), planned.title.clone())
+        .kind(kind(planned.kind))
+        .status(ToolCallStatus::Pending)
+        .locations(planned.paths.iter().map(|path| ToolCallLocation::new(path.clone())).collect())
+        .raw_input(planned.input.clone());
+    notify(connection, session, SessionUpdate::ToolCall(shown))?;
+    if planned.needs_asking(leeway) {
+        let options = vec![
+            PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+        ];
+        let asked = RequestPermissionRequest::new(
+            session.clone(),
+            ToolCallUpdate::new(call.id.clone(), ToolCallUpdateFields::new().title(planned.title.clone())),
+            options,
+        );
+        let answer = connection.send_request(asked).block_task().await?;
+        let allowed =
+            matches!(&answer.outcome, RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() == "allow");
+        if !allowed {
+            let refused = ToolCallUpdateFields::new().status(ToolCallStatus::Failed).raw_output(serde_json::json!("declined"));
+            notify(connection, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call.id.clone(), refused)))?;
+            return Ok(tools::Outcome::failed("The person declined this; don't try it again unasked."));
+        }
+    }
+    let running = ToolCallUpdateFields::new().status(ToolCallStatus::InProgress);
+    notify(connection, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call.id.clone(), running)))?;
+    let outcome = tools::run(&planned, &call.name, cwd, cancel).await;
+    let mut content: Vec<ToolCallContent> = Vec::new();
+    if let Some((path, before, after)) = &outcome.diff {
+        content.push(ToolCallContent::Diff(
+            agent_client_protocol::schema::v1::Diff::new(path.clone(), after.clone()).old_text(before.clone()),
+        ));
+    } else {
+        content.push(ToolCallContent::from(text_block(&outcome.text)));
+    }
+    let status = if outcome.failed { ToolCallStatus::Failed } else { ToolCallStatus::Completed };
+    let done = ToolCallUpdateFields::new().status(status).content(content).raw_output(serde_json::json!(outcome.text));
+    notify(connection, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call.id.clone(), done)))?;
+    Ok(outcome)
+}
+
+fn text_block(said: &str) -> ContentBlock {
+    ContentBlock::Text(TextContent::new(said.to_owned()))
 }
 
 #[cfg(test)]

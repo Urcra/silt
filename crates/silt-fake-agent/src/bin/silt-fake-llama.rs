@@ -6,7 +6,11 @@
 //! - `FAKE_MODEL_FAILS` fails to load;
 //! - `FAKE_MODEL_LOG` names a file each request is appended to, as a JSON
 //!   line with the model's file name, the path and the body;
-//! - `FAKE_DEVICES` replaces what `--list-devices` prints.
+//! - `FAKE_DEVICES` replaces what `--list-devices` prints;
+//! - `FAKE_MODEL_TOOLS_FILE` names a file that, while it holds a JSON list of
+//!   `{"name", "arguments"}`, makes a chat completion offered tools call
+//!   those after a prompt, then answer `Done: <the last result>` once their
+//!   results come back.
 
 use std::convert::Infallible;
 use std::env;
@@ -143,7 +147,31 @@ fn last_prompt(body: &Value) -> String {
 }
 
 fn reply_to(body: &Value) -> String {
+    let last = body["messages"].as_array().and_then(|messages| messages.last());
+    if let Some(result) = last.filter(|message| message["role"] == "tool") {
+        return format!("Done: {}", result["content"].as_str().unwrap_or_default());
+    }
     env::var("FAKE_MODEL_REPLY").unwrap_or_else(|_| format!("Heard: {}", last_prompt(body)))
+}
+
+/// The calls the script makes, when the request offers tools and its last
+/// message is a prompt.
+fn scripted_calls(body: &Value) -> Vec<Value> {
+    let last_is_prompt =
+        body["messages"].as_array().and_then(|messages| messages.last()).is_some_and(|message| message["role"] == "user");
+    if !body["tools"].is_array() || !last_is_prompt {
+        return Vec::new();
+    }
+    let script = env::var_os("FAKE_MODEL_TOOLS_FILE").and_then(|file| std::fs::read(file).ok());
+    let calls: Vec<Value> = script.and_then(|script| serde_json::from_slice(&script).ok()).unwrap_or_default();
+    calls
+        .iter()
+        .enumerate()
+        .map(|(index, call)| {
+            json!({"index": index, "id": format!("call_{index}"), "type": "function",
+            "function": {"name": call["name"], "arguments": call["arguments"].to_string()}})
+        })
+        .collect()
 }
 
 fn words(text: &str) -> Vec<String> {
@@ -167,7 +195,8 @@ async fn chat(State(served): State<Arc<Served>>, request: Request) -> Response {
         Ok(body) => body,
         Err(status) => return status.into_response(),
     };
-    let reply = reply_to(&body);
+    let calls = scripted_calls(&body);
+    let reply = if calls.is_empty() { reply_to(&body) } else { String::new() };
     let usage = json!({"prompt_tokens": 10, "completion_tokens": words(&reply).len(), "total_tokens": 10 + words(&reply).len()});
     if body["stream"] != true {
         return axum::Json(json!({
@@ -186,9 +215,13 @@ async fn chat(State(served): State<Arc<Served>>, request: Request) -> Response {
         format!("data: {chunk}\n\n")
     };
     let mut events = vec![chunk(json!({"role": "assistant", "content": ""}), Value::Null)];
-    events.extend(words(&reply).into_iter().map(|word| chunk(json!({"content": word}), Value::Null)));
+    if !reply.is_empty() {
+        events.extend(words(&reply).into_iter().map(|word| chunk(json!({"content": word}), Value::Null)));
+    }
+    events.extend(calls.iter().map(|call| chunk(json!({"tool_calls": [call]}), Value::Null)));
+    let finish = if calls.is_empty() { "stop" } else { "tool_calls" };
     let mut last: Value =
-        serde_json::from_str(chunk(json!({}), json!("stop")).trim_start_matches("data: ").trim()).expect("json");
+        serde_json::from_str(chunk(json!({}), json!(finish)).trim_start_matches("data: ").trim()).expect("json");
     last["usage"] = usage;
     events.push(format!("data: {last}\n\n"));
     events.push("data: [DONE]\n\n".to_owned());
