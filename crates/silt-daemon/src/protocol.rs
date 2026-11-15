@@ -434,6 +434,21 @@ pub enum Request {
         #[serde(default)]
         tools: Vec<silt_proto::artifact::SampleTool>,
     },
+    /// A doc as a PDF, printed from `html`, the page the browser drew of
+    /// it, by this machine's headless browser.
+    DocPdf {
+        thread: String,
+        artifact: String,
+        html: String,
+    },
+    /// Keeps a doc, a sheet or a whiteboard as it stands as its next
+    /// version, from the person's Save version.
+    SaveEditedVersion {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
     /// The agent answering a page's question named `ask` calls one of the
     /// page's tools, from `silt sample-tools`; answered once the page runs it.
     SampleToolCall {

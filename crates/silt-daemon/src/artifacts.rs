@@ -207,6 +207,50 @@ impl Core {
         self.put_version(thread, "", reference, checkout, new, Recorded::ByPage(by)).await
     }
 
+    /// Keeps a doc, a sheet or a whiteboard as it stands as its next
+    /// version, from the person's Save version, with their note (ADR 0077).
+    pub(crate) async fn save_edited_version(
+        &mut self,
+        thread: &str,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<ArtifactPut, CoreError> {
+        let thread = self.find_thread(thread)?;
+        if !valid_id(id) {
+            return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
+        }
+        let latest = self
+            .history_entries(thread)
+            .iter()
+            .filter_map(|(_, entry)| entry.artifact.as_ref())
+            .filter(|artifact| artifact.id == id)
+            .max_by_key(|artifact| artifact.version)
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid(format!("this thread has no artifact {id}")))?;
+        if !silt_proto::edited::is_edited(&latest.kind) {
+            return Err(CoreError::Invalid("only a doc, a sheet or a whiteboard is saved as it stands".into()));
+        }
+        if !self.may_write(thread) {
+            return Err(CoreError::Invalid("only the thread's owner and collaborators save its artifacts' versions".into()));
+        }
+        let note = note.map(|note| note.trim().chars().take(silt_proto::artifact::NOTE_CHARS).collect::<String>());
+        let reference = self
+            .artifact_session(thread, id)
+            .ok_or_else(|| CoreError::Invalid(format!("no session recorded artifact {id} here")))?;
+        let by = match self.own_user(thread) {
+            user if user.is_empty() => "you".to_owned(),
+            user => user,
+        };
+        let new = NewArtifact {
+            title: latest.title.clone(),
+            kind: latest.kind.clone(),
+            id: Some(id.to_owned()),
+            note: Some(note.filter(|note| !note.is_empty()).unwrap_or_else(|| format!("Saved by {by}"))),
+            ..NewArtifact::default()
+        };
+        self.put_version(thread, "", reference, None, new, Recorded::ByPage(by)).await
+    }
+
     /// A version's files: the last version's, with `changes` and `edited`
     /// made, each new one kept as a blob and marked as added. Only an HTML
     /// page has files.

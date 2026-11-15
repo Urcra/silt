@@ -1677,6 +1677,14 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await expect(doc.getByText('Saved')).toBeVisible()
   await doc.getByRole('button', { name: 'Read' }).click()
   await expect(doc.getByText('review')).toBeVisible()
+  // The first version against the doc now, then the doc kept as a version of its own.
+  await doc.getByRole('button', { name: 'Compare with a version' }).click()
+  await page.getByRole('menuitem', { name: /^v1/ }).click()
+  await expect(doc.getByTestId('doc-compare')).toContainText('added: - review')
+  await doc.getByRole('button', { name: 'Save version' }).click()
+  await doc.getByLabel('what this version is').fill('Reviewed')
+  await doc.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Saved as v2')).toBeVisible()
 
   await page.getByLabel('draft').fill('Artifact sheet')
   await page.getByLabel('draft').press('Enter')

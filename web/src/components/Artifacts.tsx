@@ -434,6 +434,7 @@ export function ArtifactViewer({
             onSelect={(text) => setQuote(text || null)}
             onProblems={(found) => setProblems({ blob: artifact.blob, seen: found })}
             holder={holder}
+            versions={group?.versions.map((version) => version.artifact) ?? []}
           />
         ) : content.error ? (
           <p className="px-5 py-6 text-sm text-danger">{message(content.error)}</p>
@@ -515,9 +516,12 @@ function ArtifactPage({
   onSelect,
   onProblems,
   holder,
+  versions,
 }: {
   thread: string
   artifact: ArtifactView
+  /** Every version of the artifact, oldest first, for a doc to compare with. */
+  versions: ArtifactView[]
   content: ArtifactContent
   style: string | null
   vendor: string | null
@@ -671,7 +675,7 @@ function ArtifactPage({
   if (artifact.kind === 'canvas') return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} />)
   if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
-  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} />)
+  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
   if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)
   if (artifact.kind === 'whiteboard') return typed(<WhiteboardView thread={thread} artifact={artifact.id} title={artifact.title} />)
   // A kind this UI doesn't know shows as its source rather than failing as an image.
@@ -710,7 +714,7 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
 
 /** What an offline copy shows for an artifact that isn't a page of its own: Markdown's markup, a diagram's SVG. */
 async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent): Promise<string | undefined> {
-  if (artifact.kind === 'markdown') {
+  if (artifact.kind === 'markdown' || artifact.kind === 'doc') {
     const { renderToStaticMarkup } = await import('react-dom/server')
     return renderToStaticMarkup(<Markdown text={textOf(content)} />)
   }

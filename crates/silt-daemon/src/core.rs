@@ -736,6 +736,37 @@ impl Core {
             Request::Sample { thread, artifact, ask, input, images, tools } => {
                 return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images, tools));
             }
+            Request::DocPdf { thread, artifact, html } => {
+                let printable =
+                    self.find_thread(&thread).and_then(|thread| self.edited_artifact(thread, &artifact, "doc")).and_then(|id| {
+                        if html.len() > DOC_PDF_HTML_BYTES {
+                            return Err(CoreError::Invalid("the doc's page is too large to print".into()));
+                        }
+                        Ok(self.data_dir.join("pdf").join(id.to_string()))
+                    });
+                return answer_later(
+                    reply,
+                    printable.map(|dir| async move {
+                        use base64::Engine as _;
+                        let printed = tokio::task::spawn_blocking(move || crate::thumbnails::pdf(&html, &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| {
+                                CoreError::Invalid(
+                                    "this computer has no headless browser (Node with Playwright) to print a PDF".into(),
+                                )
+                            })?;
+                        Ok(silt_proto::view::ArtifactContent {
+                            media_type: "application/pdf".into(),
+                            data: base64::engine::general_purpose::STANDARD.encode(printed),
+                        })
+                    }),
+                );
+            }
+            Request::SaveEditedVersion { thread, artifact, note } => {
+                to_response(self.save_edited_version(&thread, &artifact, note).await)
+            }
             Request::SampleToolCall { ask, name, input } => {
                 return answer_later(reply, self.sample_tool_call(&ask, name, input));
             }
@@ -2611,6 +2642,9 @@ pub(crate) fn redactor(data_dir: &Path) -> Redactor {
 
 /// Answers `reply` once `call`, a call to the server, is done, off the event
 /// loop: a slow server then holds up only this request.
+/// The most of a doc's page printed to a PDF, in bytes.
+const DOC_PDF_HTML_BYTES: usize = 8 << 20;
+
 fn answer_later<T, F>(reply: oneshot::Sender<Response>, call: Result<F, CoreError>)
 where
     T: serde::Serialize,

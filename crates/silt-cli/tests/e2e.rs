@@ -1889,6 +1889,33 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     assert_eq!((&hit["kind"], &hit["thread"]), (&"doc".into(), &thread.as_str().into()), "{hit}");
     assert!(hit["snippet"].as_str().is_some_and(|snippet| snippet.contains("[test]") && snippet.contains("[Friday]")), "{hit}");
 
+    // Save version keeps the doc as it stands, with the person's note.
+    let before = artifacts_of(&api, &thread).len();
+    let saved = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{doc}/versions"),
+        Some(serde_json::json!({"note": "Plan agreed"})),
+    );
+    let versions = artifacts_of(&api, &thread);
+    let kept = versions.last().expect("a version");
+    assert_eq!(
+        (versions.len(), &kept["version"], &saved["version"]),
+        (before + 1, &kept["version"], &kept["version"]),
+        "{saved}"
+    );
+    assert_eq!((&kept["note"], &kept["id"]), (&"Plan agreed".into(), &doc.as_str().into()), "{kept}");
+    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n");
+    // A PDF of it, printed where there's a headless browser.
+    let page = serde_json::json!({"html": "<!doctype html><h1>Plan</h1><ul><li>test</li></ul>"});
+    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/doc.pdf"), Some(page));
+    if printed {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["data"].as_str().expect("data")).expect("base64");
+        assert!(pdf["media_type"] == "application/pdf" && bytes.starts_with(b"%PDF"), "a PDF");
+    } else {
+        assert!(pdf.to_string().contains("headless"), "{pdf}");
+    }
+
     prompt("Artifact sheet");
     let sheet = artifacts_of(&api, &thread).last().expect("the sheet")["id"].as_str().expect("id").to_owned();
     let said = prompt("Sheet set");
