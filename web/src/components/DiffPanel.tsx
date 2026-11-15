@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { type View, VIEWS, baseOf } from '../diffSpec'
+import { useHideGit } from '../hideGit'
 import { message } from '../query'
 import { keptView } from '../reviewView'
 import { itemOf, useReview } from '../review'
@@ -57,8 +58,12 @@ export const DiffPanel = memo(function DiffPanel({
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
   const base = baseOf(view, other, commit)
+  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0069).
+  const [hideGitSetting, setHideGit] = useHideGit()
+  const hideGit = hideGitSetting && view !== 'main'
+  const of = { base, hideGit }
   const review = useReview(thread)
-  const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, { base }, review, onCommented, agent)
+  const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, of, review, onCommented, agent)
   const shownReviewed = text !== undefined && reviewed !== undefined
   useEffect(() => {
     if (shownReviewed) document.getElementById(`file-${reviewed}`)?.scrollIntoView({ block: 'start' })
@@ -72,6 +77,7 @@ export const DiffPanel = memo(function DiffPanel({
   const controls = (
     <>
       <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
+      <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
       <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
     </>
   )
@@ -98,7 +104,12 @@ export const DiffPanel = memo(function DiffPanel({
       <OutdatedDrafts drafts={outdated} review={review} />
       {error && <p className="text-sm text-danger">{message(error)}</p>}
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
-      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={{ base }} commenting={commenting} />}
+      {hideGit && (
+        <p role="note" className="text-xs text-fg-2">
+          Without what git rewrote, as a checkout, pull or stash does; what's on disk may differ.
+        </p>
+      )}
+      {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={commenting} />}
       {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} anchors={reviewed !== undefined} />}
       {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
@@ -108,6 +119,25 @@ export const DiffPanel = memo(function DiffPanel({
     </section>
   )
 })
+
+/** Leaves out of the diffs what git itself rewrote, as a checkout, pull or stash does (ADR 0069). */
+export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
+  return (
+    <label
+      className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11"
+      title={disabled ? 'Against main, the diff is git’s own' : 'A checkout, pull, merge, rebase, reset or stash the agent ran'}
+    >
+      <input
+        type="checkbox"
+        checked={on && !disabled}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="accent-[var(--accent)] max-md:h-5 max-md:w-5"
+      />
+      Hide git’s changes
+    </label>
+  )
+}
 
 /** How wide the panel must be for a diff side by side, in pixels. */
 const SPLIT_WIDTH = 760

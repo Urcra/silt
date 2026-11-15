@@ -13,7 +13,8 @@ pub mod view;
 /// sign-in, asked and answered from the web UI (ADR 0056). 10: chats, kept
 /// out of every org, and moved into the project their folder becomes
 /// (ADR 0059). 11: a thread's files marked seen, and the turn a person
-/// reviewed it through (ADR 0067).
+/// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
+/// diff may leave out (ADR 0069).
 pub const PROTOCOL: u32 = 11;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
@@ -1234,6 +1235,9 @@ pub enum RemoteCommand {
     /// which need the family's code.
     MrShow {
         mr: String,
+        /// Leave out what git itself rewrote (ADR 0069).
+        #[serde(default)]
+        hide_git: bool,
     },
     /// Marks one of a merge request's files seen, or not, as it is now.
     MrSeen {

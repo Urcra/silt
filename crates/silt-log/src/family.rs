@@ -741,6 +741,17 @@ impl Family {
         })
     }
 
+    /// The file's content as of the version holding exactly the ids
+    /// `contains` takes, which needn't be causally closed (ADR 0069).
+    pub fn file_where(&self, inode: InodeId, contains: impl Fn(DeltaId) -> bool) -> Option<FileView> {
+        let (_, content) = self.files.get(&inode)?.content_at(&contains)?;
+        Some(match content {
+            FileContent::Text(doc) => FileView::Text(doc.text_where(contains)),
+            FileContent::GitText(oid) => FileView::GitText(*oid),
+            FileContent::Blob(hash) => FileView::Blob(*hash),
+        })
+    }
+
     /// The file at `path` as of `at`, for a permalink into `thread`. `None`
     /// unless `at` is within the thread's history, so a link to one thread
     /// never shows another thread's work, or when no file was there then.

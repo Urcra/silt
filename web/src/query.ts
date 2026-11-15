@@ -1,5 +1,5 @@
-import type { DiffSpec } from './api'
 import { QueryClient } from '@tanstack/react-query'
+import type { DiffSpec } from './api'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,7 +25,7 @@ export const keys = {
   graph: (query: object) => ['graph', query] as const,
   comments: (id: string) => ['thread', id, 'comments'] as const,
   queue: (id: string) => ['thread', id, 'queue'] as const,
-  diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,
+  diff: (id: string, options: DiffSpec) => ['thread', id, 'diff', options] as const,
   diffPages: (id: string, spec: DiffSpec) => ['thread', id, 'diff-pages', spec] as const,
   diffStats: (id: string, options: DiffSpec) => ['thread', id, 'diff-stats', options] as const,
   diffFile: (id: string, options: DiffSpec, path: string) => ['thread', id, 'diff-file', options, path] as const,
@@ -33,6 +33,7 @@ export const keys = {
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   mr: (id: string) => ['mrs', id] as const,
+  mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   voice: ['voice'] as const,

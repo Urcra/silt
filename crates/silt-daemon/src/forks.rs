@@ -216,7 +216,7 @@ impl Core {
         }
     }
 
-    pub(crate) fn mr_show(&self, selector: &str) -> Result<MrDetails, CoreError> {
+    pub(crate) fn mr_show(&self, selector: &str, hide_git: bool) -> Result<MrDetails, CoreError> {
         let (family_id, request) = self.find_mr(selector)?;
         let family = &self.families[&family_id];
         let graph = family.graph();
@@ -229,8 +229,12 @@ impl Core {
         let theirs = self.changes(family_id, &base, &offered);
         let conflicts = conflicts(&ours, &theirs);
         let mr = request.id.to_string();
+        // Seen marks keep to the files as they are, git's edits and all.
+        let shown = if hide_git { self.changes_without_git(family_id, &base, &offered) } else { theirs.clone() };
+        let shown_paths: HashSet<&str> = shown.iter().map(FileChange::path).collect();
         let files = file_hashes(&theirs)
             .into_iter()
+            .filter(|(path, _)| shown_paths.contains(path.as_str()))
             .map(|(path, hash)| MrFile { seen: self.personal.has_seen(&mr, &path, &hash), path })
             .collect();
         let conversation = self.show_items(
@@ -244,7 +248,7 @@ impl Core {
         );
         Ok(MrDetails {
             mr: mr_summary(family, &request),
-            diff: crate::views::render_diff(&theirs),
+            diff: crate::views::render_diff(&shown),
             conflicts,
             conversation,
             files,

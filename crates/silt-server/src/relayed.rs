@@ -93,27 +93,39 @@ async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, com
     Err(Refused(StatusCode::CONFLICT, last))
 }
 
+/// Whose view of which merge request, with git's rewrites left out or not
+/// (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct MrView {
+    user: crate::UserId,
+    mr: String,
+    hide_git: bool,
+}
+
 /// A merge request as the server holds it, with its files and diff from
 /// one of the person's devices when one is online (ADR 0026).
 async fn mr_details(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
+    Query(query): Query<silt_proto::view::GitQuery>,
 ) -> Result<Json<Value>, Refused> {
+    let hide_git = query.hide_git();
     let Json(own) = crate::browse::merge_request(State(server.clone()), Extension(browser), Path(id.clone())).await?;
     let mut details = serde_json::to_value(&own).map_err(crate::ServerError::from)?;
     if !browser.capabilities.review {
         return Ok(Json(details));
     }
     let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
-    let key = (browser.user, request.id.to_string());
+    let key = MrView { user: browser.user, mr: request.id.to_string(), hide_git };
     let cached =
         server.shared.mr_views.lock().await.get(&key).filter(|(at, _)| at.elapsed() < MR_VIEW_FOR).map(|(_, view)| view.clone());
     let view = match cached {
         Some(view) => Some(view),
         None => {
             let asked =
-                ask_any_device(&server, browser, request.target, RemoteCommand::MrShow { mr: request.id.to_string() }).await;
+                ask_any_device(&server, browser, request.target, RemoteCommand::MrShow { mr: request.id.to_string(), hide_git })
+                    .await;
             let view = asked.ok();
             if let Some(view) = &view {
                 server.shared.mr_views.lock().await.insert(key, (std::time::Instant::now(), view.clone()));
@@ -145,7 +157,11 @@ async fn mr_seen(
     let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
     let command = RemoteCommand::MrSeen { mr: request.id.to_string(), path: body.path, seen: body.seen };
     let answer = ask_any_device(&server, browser, request.target, command).await?;
-    server.shared.mr_views.lock().await.remove(&(browser.user, request.id.to_string()));
+    let mut views = server.shared.mr_views.lock().await;
+    for hide_git in [false, true] {
+        views.remove(&MrView { user: browser.user, mr: request.id.to_string(), hide_git });
+    }
+    drop(views);
     Ok(Json(answer))
 }
 

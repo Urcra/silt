@@ -24,7 +24,7 @@ impl Core {
         base: Option<&str>,
         only: Only<'_>,
     ) -> Result<Vec<FileTurns>, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, only)?;
+        let changes = self.diff_changes(thread, turns, base, only, false)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
         let to = diff_range(family, thread, turns, base)?.to().clone();
@@ -52,7 +52,7 @@ impl Core {
         turns: TurnRange,
         base: Option<&str>,
     ) -> Result<ThreadSeenView, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, Only::default())?;
+        let changes = self.diff_changes(thread, turns, base, Only::default(), false)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
         let to = diff_range(family, thread, turns, base)?.to().clone();

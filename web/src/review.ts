@@ -41,6 +41,8 @@ export interface Draft {
   base?: string
   /** The daemon's anchor for its lines, taken when it was written, so it follows their text (ADR 0066). */
   anchor?: string
+  /** Numbered as the diff showed them with git's rewrites left out (ADR 0069). */
+  hideGit?: boolean
 }
 
 export interface Review {
@@ -68,9 +70,9 @@ export function useReview(thread: string) {
   return {
     review,
     /** Adds a draft, and says its id. */
-    add: (at: Lines, text: string, quote: string[], base?: string): string => {
+    add: (at: Lines, text: string, quote: string[], base?: string, hideGit?: boolean): string => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      update((before) => ({ ...before, drafts: [...before.drafts, { id, at, text, quote, base }] }))
+      update((before) => ({ ...before, drafts: [...before.drafts, { id, at, text, quote, base, ...(hideGit ? { hideGit } : {}) }] }))
       return id
     },
     setAnchor: (id: string, anchor: string) =>

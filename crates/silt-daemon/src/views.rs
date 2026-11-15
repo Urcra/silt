@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitMade, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_store::ThreadRecord;
 use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
@@ -262,14 +262,21 @@ impl Core {
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
+        hide_git: bool,
     ) -> Result<String, CoreError> {
-        Ok(render_diff(&self.diff_changes(thread, turns, base, only)?))
+        Ok(render_diff(&self.diff_changes(thread, turns, base, only, hide_git)?))
     }
 
     /// [`Self::diff`]'s files, each with its counts and how long its part of
     /// the diff is, so a page can ask for one file at a time.
-    pub(crate) fn diff_stats(&self, thread: ThreadId, turns: TurnRange, base: Option<&str>) -> Result<Vec<DiffStat>, CoreError> {
-        Ok(self.diff_changes(thread, turns, base, Only::default())?.iter().map(diff_stat).collect())
+    pub(crate) fn diff_stats(
+        &self,
+        thread: ThreadId,
+        turns: TurnRange,
+        base: Option<&str>,
+        hide_git: bool,
+    ) -> Result<Vec<DiffStat>, CoreError> {
+        Ok(self.diff_changes(thread, turns, base, Only::default(), hide_git)?.iter().map(diff_stat).collect())
     }
 
     /// The family a thread's diff reads, here.
@@ -282,17 +289,23 @@ impl Core {
         Ok((family_id, family))
     }
 
+    /// The files a diff of `thread` changes; with `hide_git`, without what
+    /// git itself rewrote (ADR 0069).
     pub(crate) fn diff_changes(
         &self,
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
+        hide_git: bool,
     ) -> Result<Vec<FileChange>, CoreError> {
         let (family_id, family) = self.diff_family(thread)?;
         Ok(match diff_range(family, thread, turns, base)? {
             DiffRange::Git { head, rev } => self.diff_against_git(family_id, &head, rev, only)?,
-            DiffRange::Versions { from, to } => self.changes_in(family_id, &from, &to, only),
+            DiffRange::Versions { from, to } => {
+                let git_made = hide_git.then(|| GitMade::of(family.log()));
+                self.changes_in(family_id, &from, &to, only, git_made.as_ref())
+            }
         })
     }
 
@@ -389,18 +402,44 @@ impl Core {
 
     /// How the family's files differ between two versions.
     pub(crate) fn changes(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Vec<FileChange> {
-        self.changes_in(family_id, before, after, Only::default())
+        self.changes_in(family_id, before, after, Only::default(), None)
     }
 
-    /// [`Self::changes`], in path order, only those `only` names.
-    fn changes_in(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector, only: Only<'_>) -> Vec<FileChange> {
+    /// [`Self::changes`] with the edits git made left out on both sides
+    /// (ADR 0069).
+    pub(crate) fn changes_without_git(
+        &self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+    ) -> Vec<FileChange> {
+        let git_made = self.families().get(&family_id).map(|family| GitMade::of(family.log()));
+        self.changes_in(family_id, before, after, Only::default(), git_made.as_ref())
+    }
+
+    /// [`Self::changes`], in path order, only those `only` names, without
+    /// the edits in `git_made`.
+    fn changes_in(
+        &self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+        only: Only<'_>,
+        git_made: Option<&GitMade>,
+    ) -> Vec<FileChange> {
         let Some(family) = self.families().get(&family_id) else {
             return Vec::new();
         };
         let repo = self.family_repo(family_id).ok();
         let mut bases = repo.as_ref().map(RepoBases);
+        let git_made = git_made.filter(|made| !made.is_empty());
+        let seen = |vv: &VersionVector, id: DeltaId| vv.contains(id) && !git_made.is_some_and(|made| made.contains(id));
+        let file_at = |inode: InodeId, vv: &VersionVector| match git_made {
+            Some(_) => family.file_where(inode, |id| seen(vv, id)),
+            None => family.file_at(inode, vv),
+        };
         let files_at = |vv: &VersionVector| -> BTreeMap<InodeId, String> {
-            let tree = family.tree().at(|id| vv.contains(id));
+            let tree = family.tree().at(|id| seen(vv, id));
             tree.paths()
                 .into_iter()
                 .filter(|(_, inode)| tree.kind(*inode) == Some(InodeKind::File))
@@ -423,8 +462,8 @@ impl Core {
         let mut changed = Vec::new();
         for inode in inodes {
             let (old_path, new_path) = (before_files.get(&inode).cloned(), after_files.get(&inode).cloned());
-            let old = old_path.as_ref().and_then(|_| family.file_at(inode, before));
-            let new = new_path.as_ref().and_then(|_| family.file_at(inode, after));
+            let old = old_path.as_ref().and_then(|_| file_at(inode, before));
+            let new = new_path.as_ref().and_then(|_| file_at(inode, after));
             if old == new && old_path == new_path {
                 continue;
             }

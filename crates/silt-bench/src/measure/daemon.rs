@@ -197,6 +197,7 @@ async fn changed(home: &Home, thread: &str, file: &str) -> Result<(), Exn<BenchE
             base: None,
             files: None,
             path: None,
+            hide_git: false,
         })?;
         if diff.as_str().is_some_and(|diff| diff.contains(file)) {
             return Ok(());

@@ -85,6 +85,10 @@ pub enum Request {
         /// Only the file at this path, new or old.
         #[serde(default)]
         path: Option<String>,
+        /// Leave out what git itself rewrote, as a checkout, pull or stash
+        /// does (ADR 0069); not against a branch, which is git's already.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -95,6 +99,8 @@ pub enum Request {
         to_turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
+        #[serde(default)]
+        hide_git: bool,
     },
     /// For [`Request::Diff`]'s files the person marked seen, whether each is
     /// as they saw it, and the lines new since (ADR 0067).
@@ -214,6 +220,9 @@ pub enum Request {
     },
     MrShow {
         mr: String,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     MrApprove {
         mr: String,
@@ -317,6 +326,10 @@ pub enum Request {
         /// A diff base to place code comments in too, such as `last-turn`.
         #[serde(default)]
         base: Option<String>,
+        /// Place code comments as a diff with git's rewrites left out shows
+        /// the lines (ADR 0069).
+        #[serde(default)]
+        hide_git: bool,
         cwd: PathBuf,
     },
     /// Anchors lines for a pending review comment, recording nothing

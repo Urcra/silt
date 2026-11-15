@@ -122,9 +122,18 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
         }),
         "the server has the thread, and refuses an artifact it doesn't have"
     );
-    let id = shown[0]["id"].as_str().expect("id");
-    let link =
-        laptop.web("POST", &format!("/api/threads/{thread}/links"), Some(serde_json::json!({"days": 1, "artifact": {"id": id}})));
+    let id = shown[0]["id"].as_str().expect("id").to_owned();
+    // The artifact reaches the server after the thread does.
+    let mut link = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            let body = serde_json::json!({"days": 1, "artifact": {"id": id}});
+            let (status, answer) = laptop.web_answer("POST", &format!("/api/threads/{thread}/links"), Some(body));
+            link = serde_json::from_str(&answer).unwrap_or_default();
+            status == "200"
+        }),
+        "the server takes a link to the artifact once it has it: {link}"
+    );
     let url = link["url"].as_str().expect("the link");
     assert!(url.starts_with(&world.server.url), "{url}");
     assert_eq!(link["artifact"]["id"], id);

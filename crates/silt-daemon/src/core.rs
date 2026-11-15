@@ -637,14 +637,18 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, to_turn, base, files, path } => {
+            Request::Diff { thread, turn, to_turn, base, files, path, hide_git } => {
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only)))
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide_git)),
+                )
             }
-            Request::DiffStats { thread, turn, to_turn, base } => {
+            Request::DiffStats { thread, turn, to_turn, base, hide_git } => {
                 let turns = TurnRange { turn, to_turn };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref())))
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide_git)),
+                )
             }
             Request::ThreadSeen { thread, turn, to_turn, base } => {
                 let turns = TurnRange { turn, to_turn };
@@ -713,7 +717,7 @@ impl Core {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
-            Request::MrShow { mr } => to_response(self.mr_show(&mr)),
+            Request::MrShow { mr, hide_git } => to_response(self.mr_show(&mr, hide_git)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
@@ -754,7 +758,9 @@ impl Core {
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
+            Request::Comments { thread, base, hide_git, cwd } => {
+                to_response(self.list_comments(&thread, base.as_deref(), hide_git, &cwd).await)
+            }
             Request::AnchorLines { thread, on, cwd } => to_response(self.anchor_lines(&thread, on, &cwd).await),
             Request::PlaceAnchors { thread, place, cwd } => to_response(self.place_anchors(&thread, place, &cwd).await),
             Request::CommentsSent { thread, comments, cwd } => to_response(self.comments_sent(&thread, &comments, &cwd).await),
@@ -1007,7 +1013,40 @@ impl Core {
 
     pub(crate) async fn rescan(&mut self, checkout: CheckoutId) -> Result<(), CoreError> {
         let root = self.checkout(checkout)?.record.path.clone();
-        self.ingest_paths(checkout, vec![root]).await
+        self.ingest_paths(checkout, vec![root]).await?;
+        self.note_git_since(checkout).await
+    }
+
+    /// When git moved the checkout's refs since its thread last looked,
+    /// other than by a commit, the edits recorded as the person's since
+    /// then are git's, as a `git pull` run by hand between turns makes
+    /// (ADR 0069). A tool call that ran git is the tool's (`note_git`).
+    async fn note_git_since(&mut self, checkout_id: CheckoutId) -> Result<(), CoreError> {
+        let checkout = self.checkout(checkout_id)?;
+        let (family_id, thread, now) = (checkout.family, checkout.record.thread, checkout.repo.git_state());
+        let Some(family) = self.families.get(&family_id) else {
+            return Ok(());
+        };
+        let head = family.thread_head(thread);
+        let looked = self.store.checkout_git_state(checkout_id, thread).await?;
+        self.store.put_checkout_git_state(checkout_id, thread, &now.to_string(), &head.to_string()).await?;
+        let Some((state, since)) = looked else {
+            return Ok(());
+        };
+        let (Ok(state), Ok(since)) = (state.parse::<silt_git::GitState>(), since.parse::<Frontier>()) else {
+            return Ok(());
+        };
+        if !self.checkout(checkout_id)?.repo.rewritten_since(&state) {
+            return Ok(());
+        }
+        let family = &self.families[&family_id];
+        let spans = silt_log::GitMade::persons_edits_since(family.log(), thread, &family.graph().version_vector(&since));
+        if spans.is_empty() {
+            return Ok(());
+        }
+        let head = family.thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Git(GitOp::Made { spans })).await?;
+        Ok(())
     }
 
     /// Records changes under `paths` (absolute; directories are scanned).

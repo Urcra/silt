@@ -255,11 +255,16 @@ before: LineSpan | null, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, } | { "on": "anchored", anchor: string, };
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, 
+/**
+ * The lines are numbered as a diff with git's rewrites left out
+ * shows them (ADR 0069).
+ */
+hide_git?: boolean, } | { "on": "anchored", anchor: string, };
 
 export type PendingAnchor = { anchor: string, };
 
-export type PlaceAnchors = { base: string | null, anchors: Array<string>, };
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**

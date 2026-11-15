@@ -234,7 +234,7 @@ impl Core {
             RemoteCommand::Preset { preset: chosen } => Request::AgentPreset { thread, preset: preset(chosen)? },
             RemoteCommand::Mode { mode } => Request::AcpMode { thread, mode },
             RemoteCommand::Setting { id, value } => Request::AcpSetting { thread, id, value },
-            RemoteCommand::MrShow { mr } => Request::MrShow { mr },
+            RemoteCommand::MrShow { mr, hide_git } => Request::MrShow { mr, hide_git },
             RemoteCommand::MrSeen { mr, path, seen } => Request::MrSeen { mr, path, seen },
             RemoteCommand::FileAt { path, at } => Request::FileAt { thread, query: silt_proto::view::FileQuery { path, at } },
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },

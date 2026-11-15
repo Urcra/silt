@@ -116,11 +116,13 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`. */
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`; with
+ * `hideGit`, without what git itself rewrote (ADR 0069). */
 export interface DiffSpec {
   turn?: number
   toTurn?: number
   base?: string
+  hideGit?: boolean
 }
 
 const diffParams = (options: DiffSpec) => {
@@ -128,6 +130,7 @@ const diffParams = (options: DiffSpec) => {
   if (options.turn !== undefined) params.set('turn', String(options.turn))
   if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
+  if (options.hideGit) params.set('git', 'hide')
   return params
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
@@ -179,8 +182,13 @@ export const api = {
   /** For the diff's files, the turns that last wrote their new lines. */
   diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string) =>
-    request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  comments: (id: string, base?: string, hideGit = false) => {
+    const params = new URLSearchParams()
+    if (base) params.set('base', base)
+    if (hideGit) params.set('git', 'hide')
+    const query = params.toString()
+    return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
+  },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
@@ -294,7 +302,8 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string) => request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}`),
+  mergeRequest: (id: string, hideGit = false) =>
+    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),

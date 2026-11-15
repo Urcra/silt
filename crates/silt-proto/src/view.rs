@@ -663,6 +663,10 @@ pub enum CommentOn {
         end: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        /// The lines are numbered as a diff with git's rewrites left out
+        /// shows them (ADR 0069).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hide_git: bool,
     },
     /// Lines held by an anchor a pending review comment took when it was
     /// written, so it lands where its text is now (ADR 0066).
@@ -678,13 +682,16 @@ pub struct PendingAnchor {
 }
 
 /// Anchors of pending review comments to place in the thread as it is now,
-/// and at `base` too, as comments are.
+/// and at `base` too, as comments are; with `hide_git`, as a diff without
+/// git's rewrites numbers the lines (ADR 0069).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PlaceAnchors {
     #[serde(default)]
     pub base: Option<String>,
     pub anchors: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_git: bool,
 }
 
 /// One of the person's signed-in devices (ADR 0026).
@@ -801,6 +808,20 @@ pub struct FileQuery {
     pub path: String,
     #[serde(default)]
     pub at: Option<String>,
+}
+
+/// A diff's query: `git=hide` leaves out what git itself rewrote, as a
+/// checkout, pull or stash does (ADR 0069).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitQuery {
+    #[serde(default)]
+    pub git: Option<String>,
+}
+
+impl GitQuery {
+    pub fn hide_git(&self) -> bool {
+        self.git.as_deref() == Some("hide")
+    }
 }
 
 /// One file of a diff, without the diff: what a page lists before it asks
