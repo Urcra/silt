@@ -501,6 +501,15 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_read", serde_json::json!({"id": last}))
+    } else if prompt.contains("Artifact deck more")
+        && let Some(last) = last.clone()
+    {
+        // A slide added by a patch of the deck (ADR 0076).
+        let slide = serde_json::json!({"title": "Next", "html": "<h1>What next</h1>", "notes": "Close here."});
+        (
+            "silt_artifact",
+            serde_json::json!({"id": last, "patch": [{"op": "add", "path": "/slides/-", "value": slide}], "note": "A closing slide"}),
+        )
     } else if prompt.contains("Artifact files edit")
         && let Some(last) = last.clone()
     {
@@ -536,6 +545,30 @@ silt.use('db').then(function(db){if(!db){document.getElementById('count').textCo
 db.collection('tasks').onSnapshot(function(docs){document.getElementById('count').textContent='tasks: '+docs.length});\
 document.getElementById('add').onclick=function(){db.collection('tasks').add({done:false})}});</script>";
             arguments = serde_json::json!({"title": "Checklist", "kind": "html", "content": page, "capabilities": {"db": {}}});
+        }
+        if prompt.contains("Artifact deck") {
+            let deck = serde_json::json!({"aspect": "16:9", "style": "h1{font:64px sans-serif}", "slides": [
+                {"title": "Rescans", "html": "<h1>Rescans got 3x faster</h1>", "notes": "Open with the headline."},
+                {"title": "Why", "html": "<h1>One walk</h1>"}
+            ]});
+            arguments = serde_json::json!({"title": "Rescan talk", "kind": "slides", "content": deck.to_string()});
+        }
+        if prompt.contains("Artifact numbers") {
+            let page = serde_json::json!({"title": "Rescan benchmark", "sources": [
+                {"id": "bench", "name": "silt-bench rescan", "kind": "command", "detail": "silt-bench run --only rescan", "at": "2026-11-15T09:00:00Z"}
+            ], "blocks": [
+                {"type": "stat", "label": "p50", "value": 412, "unit": "ms", "change": -0.62, "source": "bench"},
+                {"type": "chart", "chart": "line", "title": "p50 by commit", "source": "bench", "series": [{"name": "p50", "points": [["a1", 1080], ["b2", 640], ["c3", 412]]}]}
+            ]});
+            arguments = serde_json::json!({"title": "Rescan numbers", "kind": "data", "content": page.to_string()});
+        }
+        if prompt.contains("Artifact boards") {
+            let board = |id: &str, width: u32, height: u32| serde_json::json!({"id": id, "name": id, "width": width, "height": height, "html": format!("<p>{id}</p>")});
+            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), board("Phone", 390, 844)]});
+            arguments = serde_json::json!({"title": "Settings screen", "kind": "canvas", "content": canvas.to_string()});
+        }
+        if prompt.contains("Artifact bad deck") {
+            arguments = serde_json::json!({"title": "Empty", "kind": "slides", "content": "{\"slides\": []}"});
         }
         if prompt.contains("Artifact files") {
             // A page built from files beside it, that takes uploads and reads the thread's files (ADR 0074, 0078).

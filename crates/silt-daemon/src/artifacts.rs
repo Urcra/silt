@@ -25,6 +25,7 @@ fn text_media_type(kind: &str) -> Option<&'static str> {
         "svg" => Some("image/svg+xml"),
         "markdown" => Some("text/markdown"),
         "mermaid" => Some("text/vnd.mermaid"),
+        kind if silt_proto::artifact_types::is_type(kind) => Some("application/json"),
         _ => None,
     }
 }
@@ -100,14 +101,18 @@ fn content_of(new: &NewArtifact, kind: &str, file: Option<&Path>) -> Result<(Vec
             image_media_type(&bytes).ok_or_else(|| CoreError::Invalid("an image must be PNG, JPEG, GIF, WebP or SVG".into()))?;
         return Ok((bytes, media_type));
     }
-    let media_type = text_media_type(kind)
-        .ok_or_else(|| CoreError::Invalid(format!("an artifact's kind is html, svg, markdown, mermaid or image, not {kind}")))?;
+    let media_type = text_media_type(kind).ok_or_else(|| {
+        CoreError::Invalid(format!(
+            "an artifact's kind is html, svg, markdown, mermaid, image, slides, canvas or data, not {kind}"
+        ))
+    })?;
     if std::str::from_utf8(&bytes).is_err() {
         return Err(CoreError::Invalid(format!("a {kind} artifact is text, and this isn't UTF-8")));
     }
     if kind == "svg" && !looks_like_svg(std::str::from_utf8(&bytes).unwrap_or_default()) {
         return Err(CoreError::Invalid("this isn't SVG".into()));
     }
+    silt_proto::artifact_types::validate(kind, std::str::from_utf8(&bytes).unwrap_or_default()).map_err(CoreError::Invalid)?;
     Ok((bytes, media_type))
 }
 
@@ -409,6 +414,21 @@ impl Core {
                 .map_err(|error| CoreError::Invalid(format!("{path}: {error}")))?;
             edited_files.insert(path, edited);
         }
+        if let Some(patch) = new.patch.take() {
+            if new.content.is_some() || new.path.is_some() || !new.edits.is_empty() {
+                return Err(CoreError::Invalid("give a patch, or content, a path or edits, not more than one".into()));
+            }
+            let latest = latest_of(new.id.as_deref())
+                .ok_or_else(|| CoreError::Invalid("a patch changes an artifact: give its id".into()))?;
+            if !silt_proto::artifact_types::is_type(&latest.kind) {
+                return Err(CoreError::Invalid(format!("a {} artifact is changed by edits, not a patch", latest.kind)));
+            }
+            let hash =
+                latest.blob.parse().map_err(|_| CoreError::Invalid("the latest version's content isn't kept here".into()))?;
+            let source = String::from_utf8(self.store.blobs().get(hash).await?)
+                .map_err(|_| CoreError::Invalid("the latest version isn't text".into()))?;
+            new.content = Some(silt_proto::artifact_types::apply_patch(&source, &patch).map_err(CoreError::Invalid)?);
+        }
         if !new.edits.is_empty() {
             if new.content.is_some() || new.path.is_some() {
                 return Err(CoreError::Invalid("give edits, or content or a path, not both".into()));
@@ -693,6 +713,7 @@ fn file_name(kind: &str, media_type: &str) -> &'static str {
         ("svg", _) | (_, "image/svg+xml") => "image.svg",
         ("markdown", _) => "index.md",
         ("mermaid", _) => "diagram.mmd",
+        (_, "application/json") => "content.json",
         (_, "image/png") => "image.png",
         (_, "image/jpeg") => "image.jpg",
         (_, "image/gif") => "image.gif",
@@ -720,6 +741,7 @@ mod tests {
             description: None,
             capabilities: None,
             files: Default::default(),
+            patch: None,
         }
     }
 

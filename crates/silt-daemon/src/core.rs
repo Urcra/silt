@@ -570,7 +570,7 @@ impl Core {
         }
         if let Request::Scoped { token, asking } = request {
             if let Request::PutArtifact { artifact } = *asking {
-                let _ = reply.send(to_response(self.put_artifact(&token, artifact).await));
+                let _ = reply.send(to_response(self.put_artifact(&token, *artifact).await));
                 return;
             }
             if let Request::ArtifactGuide { design_system } = *asking {

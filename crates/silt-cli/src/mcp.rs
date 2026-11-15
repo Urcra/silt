@@ -74,7 +74,7 @@ impl DaemonTools {
     /// Asks the daemon to keep what `silt_show` or `silt_artifact` shows.
     fn show(&self, artifact: NewArtifact) -> Result<ArtifactPut, String> {
         let token = self.token.clone().ok_or("only an agent the web UI runs can show the person something")?;
-        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact }) })
+        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact: Box::new(artifact) }) })
     }
 
     /// `path` as the agent meant it: relative to where it runs.
@@ -161,6 +161,7 @@ impl silt_mcp::Backend for DaemonTools {
                     description: None,
                     capabilities: None,
                     files: Default::default(),
+                    patch: None,
                 };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
@@ -191,6 +192,7 @@ impl silt_mcp::Backend for DaemonTools {
                         Some(_) => return Err("capabilities is an object of names and configs".into()),
                     },
                     files: self.files_arg(arguments)?,
+                    patch: arguments.get("patch").filter(|patch| !patch.is_null()).cloned(),
                 };
                 let kept = self.show(artifact)?;
                 let mut out = format!(
@@ -396,9 +398,24 @@ names. The artifact-diagramming skill says what a diagram should show.\n",
             "Silt renders Markdown in its own styles, with no raw HTML. Lead with the point, use headings a reader can \
 scan, and tables for comparisons.\n",
         ),
+        kind if silt_proto::artifact_types::is_type(kind) => {
+            if let Some(text) = body(&format!("artifact-{kind}")) {
+                out.push_str(&text);
+            }
+            if let Some((schema, example)) = silt_proto::artifact_types::guide(kind) {
+                let pretty = |value: &Value| serde_json::to_string_pretty(value).unwrap_or_default();
+                let _ = write!(
+                    out,
+                    "\n# The content's schema\n\nGive `content` as JSON that fits this schema; a version that doesn't is refused \
+with why. Revise one with `patch`, an RFC 6902 JSON Patch, rather than resending it.\n\n```json\n{}\n```\n\n# An example\n\n```json\n{}\n```\n",
+                    pretty(&schema),
+                    pretty(&example)
+                );
+            }
+        }
         _ => out.push_str("An image shows as it is; give it a short title.\n"),
     }
-    if kind != "html" {
+    if !matches!(kind, "html" | "slides" | "canvas") {
         return out;
     }
     let source = |source: DesignSource| match source {

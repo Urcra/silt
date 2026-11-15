@@ -1770,6 +1770,43 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
     assert!(!outside, "a file outside its globs is refused");
 }
 
+/// A deck is a type whose content is JSON Silt checks (ADR 0076): one that
+/// fits its schema is kept, a patch adds a slide in place, and one that
+/// doesn't fit is refused.
+#[test]
+fn a_deck_is_checked_against_its_schema_and_revised_by_a_patch() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact deck"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact deck");
+    let made = artifacts_of(&api, &thread);
+    assert_eq!((&made[0]["kind"], &made[0]["media_type"]), (&"slides".into(), &"application/json".into()), "{made:?}");
+
+    let prompt = |text: &str| {
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+        settled_history(&api, &thread, &format!("Done: {text}"))
+    };
+    prompt("Artifact deck more");
+    let all = artifacts_of(&api, &thread);
+    let latest = all.last().expect("a version");
+    assert_eq!(latest["version"], 2, "{all:?}");
+    let deck: serde_json::Value = serde_json::from_str(&artifact_text(&api, &thread, latest)).expect("json");
+    assert_eq!(deck["slides"].as_array().map(Vec::len), Some(3));
+    assert_eq!(deck["slides"][2]["title"], "Next");
+
+    let said = prompt("Artifact bad deck");
+    assert_eq!(artifacts_of(&api, &thread).len(), 2, "a deck with no slides isn't kept");
+    assert!(said.iter().any(|(_, text)| text.contains("at least one slide")), "the agent hears why: {said:?}");
+}
+
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps

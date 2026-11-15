@@ -90,7 +90,7 @@ fn show_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the artifact will be"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources"},
                     "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
                 },
                 "required": ["kind"]
@@ -145,7 +145,7 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "A short name, such as \"Rescan benchmark\""},
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the content is"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
                     "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
                     "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact; title and kind then default to its last version's"},
@@ -162,6 +162,7 @@ fn show_tools() -> Vec<Value> {
                             "required": ["old", "new"]
                         }
                     },
+                    "patch": {"type": "array", "description": "With id, for slides, canvas or data: an RFC 6902 JSON Patch of the latest version's content, such as [{\"op\": \"add\", \"path\": \"/slides/-\", \"value\": {...}}]", "items": {"type": "object"}},
                     "files": {"type": "object", "description": "For an html page: files beside it, by relative path such as data.json or css/site.css, each {content}, {base64} or {path}, or null to remove one; the page fetches them relative to itself. The last version's files are kept unless named"},
                     "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
                     "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},

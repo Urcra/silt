@@ -46,7 +46,16 @@ export function versionOf(group: ArtifactGroup, version: number | null): Artifac
   return group.versions.find((candidate) => candidate.artifact.version === version) ?? latest(group)
 }
 
-const KINDS: Record<string, string> = { html: 'HTML page', svg: 'SVG', markdown: 'Document', mermaid: 'Diagram', image: 'Image' }
+const KINDS: Record<string, string> = {
+  html: 'HTML page',
+  svg: 'SVG',
+  markdown: 'Document',
+  mermaid: 'Diagram',
+  image: 'Image',
+  slides: 'Slides',
+  canvas: 'Canvas',
+  data: 'Data',
+}
 
 export function kindLabel(kind: string): string {
   return KINDS[kind] ?? kind

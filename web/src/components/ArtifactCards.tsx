@@ -52,7 +52,8 @@ function sizeOf(bytes: number): string {
 }
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {
-  return <Icon name={kind === 'image' || kind === 'svg' ? 'image' : kind === 'mermaid' ? 'graph' : 'file'} className={className} />
+  const name = kind === 'image' || kind === 'svg' || kind === 'canvas' ? 'image' : kind === 'mermaid' ? 'graph' : kind === 'slides' ? 'play' : kind === 'data' ? 'list' : 'file'
+  return <Icon name={name} className={className} />
 }
 
 /** An artifact version as the conversation shows it where the agent made it: a card that opens it beside the conversation. */

@@ -38,6 +38,9 @@ pub const BUILTIN_SKILLS: &[BuiltinSkill] = &[
         files: &[("SKILL.md", include_str!("../skills/artifact-diagramming/SKILL.md"))],
     },
     BuiltinSkill { name: "design-system", files: &[("SKILL.md", include_str!("../skills/design-system/SKILL.md"))] },
+    BuiltinSkill { name: "artifact-slides", files: &[("SKILL.md", include_str!("../skills/artifact-slides/SKILL.md"))] },
+    BuiltinSkill { name: "artifact-canvas", files: &[("SKILL.md", include_str!("../skills/artifact-canvas/SKILL.md"))] },
+    BuiltinSkill { name: "artifact-data", files: &[("SKILL.md", include_str!("../skills/artifact-data/SKILL.md"))] },
 ];
 
 pub fn builtin_skill(name: &str) -> Option<&'static BuiltinSkill> {

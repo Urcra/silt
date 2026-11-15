@@ -36,6 +36,7 @@ import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 import { Broker, callOf } from '../bridge/broker'
 import { handlersFor, type Holder } from '../bridge/capabilities'
+import { CanvasView, DataView, SlidesView } from './TypedArtifact'
 import { lastSnapshot, rememberSnapshot } from '../bridge/hot'
 import { keep, keptFor } from '../bridge/storage'
 
@@ -636,6 +637,17 @@ function ArtifactPage({
   )
   if (artifact.kind === 'markdown') return page(<Markdown text={textOf(content)} />)
   if (artifact.kind === 'mermaid') return page(<Mermaid text={textOf(content)} title={artifact.title} />)
+  // Types Silt draws from the version's JSON (ADR 0076).
+  if (artifact.kind === 'slides') return <SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />
+  if (artifact.kind === 'canvas') return <CanvasView text={textOf(content)} style={style} theme={startTheme} />
+  if (artifact.kind === 'data') return <DataView text={textOf(content)} theme={theme} />
+  // A kind this UI doesn't know shows as its source rather than failing as an image.
+  if (!artifact.media_type.startsWith('image/'))
+    return (
+      <pre className="h-full overflow-auto px-4 pt-4 pb-6 font-mono text-xs leading-5 whitespace-pre-wrap text-fg-1" data-testid="artifact-source">
+        {textOf(content)}
+      </pre>
+    )
   return page(<img src={dataUrl(content)} alt={artifact.title} className="mx-auto block max-w-full rounded-sm bg-white" />)
 }
 

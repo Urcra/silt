@@ -384,7 +384,7 @@ pub enum Request {
     /// What an agent's run shows the person (ADR 0068); only inside
     /// [`Request::Scoped`], for the thread its token was made for.
     PutArtifact {
-        artifact: NewArtifact,
+        artifact: Box<NewArtifact>,
     },
     /// What a run reads before making an artifact: the design system that
     /// applies, or the one named, and the others it may use (ADR 0071);
@@ -897,6 +897,10 @@ pub struct NewArtifact {
     /// version's are kept.
     #[serde(default)]
     pub files: std::collections::BTreeMap<String, Option<NewFile>>,
+    /// An RFC 6902 JSON Patch of the latest version of a type's content
+    /// (ADR 0076), in place of content, a path or edits.
+    #[serde(default)]
+    pub patch: Option<serde_json::Value>,
 }
 
 /// A file of a version, as text, as base64, or read from a file of the

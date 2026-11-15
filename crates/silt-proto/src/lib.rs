@@ -6,6 +6,7 @@ use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
 pub mod artifact;
+pub mod artifact_types;
 pub mod frames;
 pub mod page;
 pub mod view;
