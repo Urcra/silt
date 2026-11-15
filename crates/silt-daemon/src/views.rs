@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, HistoryItem, HistorySource, Op, TurnMark};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitMade, GitOp, HistoryItem, HistorySource, Op, TurnMark};
 use silt_store::ThreadRecord;
 use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
@@ -259,11 +259,12 @@ impl Core {
     pub(crate) fn diff(
         &self,
         thread: ThreadId,
-        turn: Option<usize>,
+        turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
+        hide_git: bool,
     ) -> Result<String, CoreError> {
-        Ok(render_diff(&self.diff_changes(thread, turn, base, only)?))
+        Ok(render_diff(&self.diff_changes(thread, turns, base, only, hide_git)?))
     }
 
     /// [`Self::diff`]'s files, each with its counts and how long its part of
@@ -271,45 +272,41 @@ impl Core {
     pub(crate) fn diff_stats(
         &self,
         thread: ThreadId,
-        turn: Option<usize>,
+        turns: TurnRange,
         base: Option<&str>,
+        hide_git: bool,
     ) -> Result<Vec<DiffStat>, CoreError> {
-        Ok(self.diff_changes(thread, turn, base, Only::default())?.iter().map(diff_stat).collect())
+        Ok(self.diff_changes(thread, turns, base, Only::default(), hide_git)?.iter().map(diff_stat).collect())
     }
 
-    fn diff_changes(
-        &self,
-        thread: ThreadId,
-        turn: Option<usize>,
-        base: Option<&str>,
-        only: Only<'_>,
-    ) -> Result<Vec<FileChange>, CoreError> {
+    /// The family a thread's diff reads, here.
+    pub(crate) fn diff_family(&self, thread: ThreadId) -> Result<(FamilyId, &Family), CoreError> {
         let family_id = self.thread_records()[&thread].family;
         let family = self
             .families()
             .get(&family_id)
             .ok_or_else(|| CoreError::Invalid("the thread isn't on this machine yet; use `silt resume`".into()))?;
-        let graph = family.graph();
-        let head = family.thread_head(thread);
-        if turn.is_none()
-            && let Some(rev) = base.and_then(git_base)
-        {
-            return self.diff_against_git(family_id, &graph.version_vector(&head), rev, only);
-        }
-        let (from, to) = match (turn, base) {
-            (Some(turn), _) => {
-                let marks = prompt_marks(family, thread);
-                let start = turn
-                    .checked_sub(1)
-                    .and_then(|index| marks.get(index))
-                    .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))?;
-                let next = marks.get(turn).cloned().unwrap_or_else(|| head.clone());
-                let end = turn_end(family, thread, start, &next).unwrap_or(next);
-                (graph.version_vector(start), graph.version_vector(&end))
+        Ok((family_id, family))
+    }
+
+    /// The files a diff of `thread` changes; with `hide_git`, without what
+    /// git itself rewrote (ADR 0069).
+    pub(crate) fn diff_changes(
+        &self,
+        thread: ThreadId,
+        turns: TurnRange,
+        base: Option<&str>,
+        only: Only<'_>,
+        hide_git: bool,
+    ) -> Result<Vec<FileChange>, CoreError> {
+        let (family_id, family) = self.diff_family(thread)?;
+        Ok(match diff_range(family, thread, turns, base)? {
+            DiffRange::Git { head, rev } => self.diff_against_git(family_id, &head, rev, only)?,
+            DiffRange::Versions { from, to } => {
+                let git_made = hide_git.then(|| GitMade::of(family.log()));
+                self.changes_in(family_id, &from, &to, only, git_made.as_ref())
             }
-            (None, base) => (diff_base(family, thread, base)?, graph.version_vector(&head)),
-        };
-        Ok(self.changes_in(family_id, &from, &to, only))
+        })
     }
 
     /// How the files at `head` differ from a commit's tree in this machine's
@@ -405,18 +402,44 @@ impl Core {
 
     /// How the family's files differ between two versions.
     pub(crate) fn changes(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector) -> Vec<FileChange> {
-        self.changes_in(family_id, before, after, Only::default())
+        self.changes_in(family_id, before, after, Only::default(), None)
     }
 
-    /// [`Self::changes`], in path order, only those `only` names.
-    fn changes_in(&self, family_id: FamilyId, before: &VersionVector, after: &VersionVector, only: Only<'_>) -> Vec<FileChange> {
+    /// [`Self::changes`] with the edits git made left out on both sides
+    /// (ADR 0069).
+    pub(crate) fn changes_without_git(
+        &self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+    ) -> Vec<FileChange> {
+        let git_made = self.families().get(&family_id).map(|family| GitMade::of(family.log()));
+        self.changes_in(family_id, before, after, Only::default(), git_made.as_ref())
+    }
+
+    /// [`Self::changes`], in path order, only those `only` names, without
+    /// the edits in `git_made`.
+    fn changes_in(
+        &self,
+        family_id: FamilyId,
+        before: &VersionVector,
+        after: &VersionVector,
+        only: Only<'_>,
+        git_made: Option<&GitMade>,
+    ) -> Vec<FileChange> {
         let Some(family) = self.families().get(&family_id) else {
             return Vec::new();
         };
         let repo = self.family_repo(family_id).ok();
         let mut bases = repo.as_ref().map(RepoBases);
+        let git_made = git_made.filter(|made| !made.is_empty());
+        let seen = |vv: &VersionVector, id: DeltaId| vv.contains(id) && !git_made.is_some_and(|made| made.contains(id));
+        let file_at = |inode: InodeId, vv: &VersionVector| match git_made {
+            Some(_) => family.file_where(inode, |id| seen(vv, id)),
+            None => family.file_at(inode, vv),
+        };
         let files_at = |vv: &VersionVector| -> BTreeMap<InodeId, String> {
-            let tree = family.tree().at(|id| vv.contains(id));
+            let tree = family.tree().at(|id| seen(vv, id));
             tree.paths()
                 .into_iter()
                 .filter(|(_, inode)| tree.kind(*inode) == Some(InodeKind::File))
@@ -439,8 +462,8 @@ impl Core {
         let mut changed = Vec::new();
         for inode in inodes {
             let (old_path, new_path) = (before_files.get(&inode).cloned(), after_files.get(&inode).cloned());
-            let old = old_path.as_ref().and_then(|_| family.file_at(inode, before));
-            let new = new_path.as_ref().and_then(|_| family.file_at(inode, after));
+            let old = old_path.as_ref().and_then(|_| file_at(inode, before));
+            let new = new_path.as_ref().and_then(|_| file_at(inode, after));
             if old == new && old_path == new_path {
                 continue;
             }
@@ -826,6 +849,73 @@ pub(crate) enum GitBase<'a> {
     Rev(&'a str),
 }
 
+/// Which turns a diff covers: one, or `turn` to `to_turn`; none for the
+/// diff from a base.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TurnRange {
+    pub(crate) turn: Option<usize>,
+    pub(crate) to_turn: Option<usize>,
+}
+
+/// The versions a diff runs between, or a branch as git has it against the
+/// thread's head.
+pub(crate) enum DiffRange<'a> {
+    Versions { from: VersionVector, to: VersionVector },
+    Git { head: VersionVector, rev: GitBase<'a> },
+}
+
+impl DiffRange<'_> {
+    /// Whether it runs between versions of the thread, rather than against
+    /// a branch, which is git's already.
+    pub(crate) fn is_versions(&self) -> bool {
+        matches!(self, Self::Versions { .. })
+    }
+
+    /// The version whose files the diff's new side shows.
+    pub(crate) fn to(&self) -> &VersionVector {
+        match self {
+            Self::Versions { to, .. } => to,
+            Self::Git { head, .. } => head,
+        }
+    }
+}
+
+/// The versions a diff of `thread` runs between: a range of its turns,
+/// from the first's prompt to where the last ended, else from `base` to its
+/// head.
+pub(crate) fn diff_range<'a>(
+    family: &Family,
+    thread: ThreadId,
+    turns: TurnRange,
+    base: Option<&'a str>,
+) -> Result<DiffRange<'a>, CoreError> {
+    let graph = family.graph();
+    let head = family.thread_head(thread);
+    let Some(first) = turns.turn else {
+        if turns.to_turn.is_some() {
+            return Err(CoreError::Invalid("a range of turns needs its first turn".into()));
+        }
+        return Ok(match base.and_then(git_base) {
+            Some(rev) => DiffRange::Git { head: graph.version_vector(&head), rev },
+            None => DiffRange::Versions { from: diff_base(family, thread, base)?, to: graph.version_vector(&head) },
+        });
+    };
+    let last = turns.to_turn.unwrap_or(first);
+    if last < first {
+        return Err(CoreError::Invalid(format!("turn {last} comes before turn {first}")));
+    }
+    let marks = prompt_marks(family, thread);
+    let at = |turn: usize| {
+        turn.checked_sub(1)
+            .and_then(|index| marks.get(index))
+            .ok_or_else(|| CoreError::Invalid(format!("thread has {} turns", marks.len())))
+    };
+    let (start, last_start) = (at(first)?, at(last)?);
+    let next = marks.get(last).cloned().unwrap_or_else(|| head.clone());
+    let end = turn_end(family, thread, last_start, &next).unwrap_or(next);
+    Ok(DiffRange::Versions { from: graph.version_vector(start), to: graph.version_vector(&end) })
+}
+
 pub(crate) fn git_base(base: &str) -> Option<GitBase<'_>> {
     match base {
         "main" => Some(GitBase::Main),
@@ -912,7 +1002,7 @@ fn turn_end(family: &Family, thread: ThreadId, start: &Frontier, next: &Frontier
     Some(graph.minimize(std::iter::once(in_turn[stop]).chain(late).map(|delta| delta.span.last())))
 }
 
-fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
+pub(crate) fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
     family
         .conversation(thread)
         .filter(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })))

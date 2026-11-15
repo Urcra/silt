@@ -12,7 +12,7 @@
 //! optional box for an answer of one's own, and none required. A prompt saying `Ponder` makes it think for a while between its
 //! edit and a read. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
-//! stops, as v1 can't. `Detached` makes it leave a shell running and read
+//! stops, as v1 can't. `Show me` and `Artifact` call Silt's own tools (see `show`). `Detached` makes it leave a shell running and read
 //! it once the turn is over, as Copilot does. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
@@ -24,6 +24,7 @@
 //! from it, as Claude's sign-in does, and makes the file when given `good`;
 //! given anything else, it says so and waits, as Claude's does.
 
+mod mcp;
 mod v2;
 
 use std::collections::HashMap;
@@ -48,6 +49,10 @@ struct State {
     said: HashMap<String, Vec<(bool, String)>>,
     mode: HashMap<String, String>,
     model: HashMap<String, String>,
+    /// The MCP servers each session was given.
+    mcp: HashMap<String, Vec<agent_client_protocol::schema::v1::McpServer>>,
+    /// The artifact each session made last, to add a version of.
+    artifact: HashMap<String, String>,
 }
 
 fn has_modes() -> bool {
@@ -189,6 +194,7 @@ async fn agent() -> Result<()> {
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd);
+                state.mcp.insert(id.clone(), request.mcp_servers);
                 responder.respond(NewSessionResponse::new(SessionId::new(id.clone())).modes(modes("code")).config_options(settings("fast")))?;
                 if !has_modes() {
                     return Ok(());
@@ -236,6 +242,7 @@ async fn agent() -> Result<()> {
                         return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such session"));
                     };
                     state.cwd.insert(id.clone(), request.cwd.clone());
+                    state.mcp.insert(id.clone(), request.mcp_servers.clone());
                     let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
                     let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
                     (said, mode, model)
@@ -393,6 +400,9 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
+                    if prompt.contains("Show me") || prompt.contains("Artifact") {
+                        show(&worker, &session, &state, &cwd, &prompt).await?;
+                    }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                     let later = prompt.contains("Later");
@@ -459,6 +469,55 @@ async fn agent() -> Result<()> {
         )
         .connect_to(Stdio::new())
         .await
+}
+
+/// Calls Silt's own tools as an agent the web UI runs would: `Show me`
+/// shows an image with `silt_show`, `Artifact` makes an artifact with
+/// `silt_artifact` (`FAKE_ACP_ARTIFACT` its HTML), and `Artifact again` adds
+/// a version of the last one. Each call is reported as a tool call.
+async fn show(
+    worker: &ConnectionTo<Client>,
+    session: &SessionId,
+    state: &Arc<Mutex<State>>,
+    cwd: &std::path::Path,
+    prompt: &str,
+) -> Result<()> {
+    let id = session.to_string();
+    let (servers, last) = {
+        let state = state.lock().expect("lock");
+        (state.mcp.get(&id).cloned().unwrap_or_default(), state.artifact.get(&id).cloned())
+    };
+    let (tool, arguments) = if prompt.contains("Show me") {
+        let path = cwd.join("pixel.png");
+        tokio::fs::write(&path, mcp::PIXEL_PNG).await.ok();
+        ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
+    } else {
+        let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
+        let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});
+        if prompt.contains("again")
+            && let Some(last) = last
+        {
+            arguments["id"] = serde_json::json!(last);
+        }
+        ("silt_artifact", arguments)
+    };
+    let call = ToolCall::new("show-1", tool).kind(ToolKind::Other).raw_input(arguments.clone());
+    notify(worker, session, SessionUpdate::ToolCall(call))?;
+    let cwd = cwd.to_owned();
+    let answer = tokio::task::spawn_blocking(move || mcp::call(&servers, &cwd, tool, arguments))
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+    if let Ok(text) = &answer
+        && let Some(made) = text.split_whitespace().nth(1).filter(|word| word.len() == 12)
+    {
+        state.lock().expect("lock").artifact.insert(id, made.to_owned());
+    }
+    let (status, text) = match answer {
+        Ok(text) => (ToolCallStatus::Completed, text),
+        Err(text) => (ToolCallStatus::Failed, text),
+    };
+    let fields = ToolCallUpdateFields::new().status(status).raw_output(serde_json::json!(text));
+    notify(worker, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("show-1", fields)))
 }
 
 /// The edit a prompt makes: `FAKE_ACP_CONTENT` replaces `src/main.rs`, else

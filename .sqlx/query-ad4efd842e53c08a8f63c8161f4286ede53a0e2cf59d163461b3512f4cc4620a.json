@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id, path, hash, version, seen, at_ms, pending FROM thread_seen_marks",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "seen",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "seen"
+          }
+        }
+      },
+      {
+        "name": "at_ms",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "at_ms"
+          }
+        }
+      },
+      {
+        "name": "pending",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_seen_marks",
+            "name": "pending"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ad4efd842e53c08a8f63c8161f4286ede53a0e2cf59d163461b3512f4cc4620a"
+}

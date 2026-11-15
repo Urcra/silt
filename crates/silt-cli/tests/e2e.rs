@@ -224,6 +224,19 @@ fn the_clone_is_the_person_s_again_once_its_agent_finishes_until_the_next_turn()
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(env.stdout(&["diff", &thread]), before, "nor once a restarted daemon rescans the clone");
 
+    next_prompt(&env, "one more");
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")),
+        "the next turn takes in what changed meanwhile:\n{}",
+        env.stdout(&["show", &thread])
+    );
+    let show = env.stdout(&["show", &thread]);
+    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "the person's, not the agent's: {show}");
+}
+
+/// Submits the next prompt of the session, as Claude Code's hook does, which
+/// takes in what changed in the clone since the last turn.
+fn next_prompt(env: &Env, prompt: &str) {
     let session = env.transcript().file_stem().expect("named").to_string_lossy().into_owned();
     let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
         .args(["hook", "UserPromptSubmit"])
@@ -234,16 +247,9 @@ fn the_clone_is_the_person_s_again_once_its_agent_finishes_until_the_next_turn()
         .stdout(std::process::Stdio::null())
         .spawn()
         .expect("silt runs");
-    let input = format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit","prompt":"one more"}}"#);
-    hook.stdin.take().expect("piped").write_all(input.as_bytes()).expect("hook input");
+    let input = serde_json::json!({"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": prompt});
+    hook.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).expect("hook input");
     assert!(hook.wait().expect("hook ran").success());
-    assert!(
-        eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")),
-        "the next turn takes in what changed meanwhile:\n{}",
-        env.stdout(&["show", &thread])
-    );
-    let show = env.stdout(&["show", &thread]);
-    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "the person's, not the agent's: {show}");
 }
 
 #[test]
@@ -414,6 +420,125 @@ fn a_session_recorded_without_the_daemon_projects_as_one_recorded_by_it() {
         assert!(recorded_alone.contains(&format!("✎ {file}")), "{tool}'s edit of {file} is credited to it:\n{recorded_alone}");
     }
     assert!(recorded_alone.contains("outside tool calls: src/helper.rs +1"), "the edit by hand:\n{recorded_alone}");
+}
+
+#[test]
+fn what_git_rewrote_in_a_tool_call_can_be_left_out_of_the_diff() {
+    git_left_out("git", true);
+}
+
+#[test]
+fn what_git_rewrote_between_turns_can_be_left_out_of_the_diff() {
+    git_left_out("git-by-hand", false);
+}
+
+#[test]
+fn what_a_stash_apply_wrote_can_be_left_out_of_the_diff() {
+    let env = Env::with_claude("git");
+    fs::write(env.repo.join("lib.rs"), "fn lib() {}\n").expect("write");
+    git(&env.repo, &["add", "."]);
+    git(&env.repo, &["commit", "-q", "-m", "lib"]);
+    fs::write(env.repo.join("lib.rs"), "fn stashed() {}\nfn lib() {}\n").expect("write");
+    git(&env.repo, &["stash", "-q"]);
+    let ran = env.run_with(&["claude"], &[("FAKE_GIT", "stash apply -q")]);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let thread = env.thread();
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).contains("+fn stashed() {}")),
+        "the diff has what the stash brought back:\n{}",
+        env.stdout(&["diff", &thread])
+    );
+    let mine = env.stdout(&["diff", &thread, "--hide-git"]);
+    assert!(mine.contains("+fn mine() {}") && mine.contains("+fn after() {}") && !mine.contains("fn stashed"), "{mine}");
+}
+
+/// The stand-in's `script` edits `src/main.rs`, merges `upstream` (a new
+/// `pulled.rs` and a line atop `lib.rs`) and edits `lib.rs`: `--hide-git`
+/// shows its edits alone, numbered without git's line, with the daemon and
+/// without.
+fn git_left_out(script: &'static str, in_one_turn: bool) {
+    for daemonless in [false, true] {
+        let env = Env::with_claude(script);
+        fs::write(env.repo.join("lib.rs"), "fn lib() {}\n").expect("write");
+        git(&env.repo, &["add", "."]);
+        git(&env.repo, &["commit", "-q", "-m", "lib"]);
+        git(&env.repo, &["checkout", "-q", "-b", "upstream"]);
+        fs::write(env.repo.join("pulled.rs"), "fn theirs() {}\n").expect("write");
+        fs::write(env.repo.join("lib.rs"), "fn upstream() {}\nfn lib() {}\n").expect("write");
+        git(&env.repo, &["add", "."]);
+        git(&env.repo, &["commit", "-q", "-m", "upstream"]);
+        git(&env.repo, &["checkout", "-q", "main"]);
+        let capture: &[(&str, &str)] = if daemonless { &[("SILT_DAEMONLESS_CAPTURE", "1")] } else { &[] };
+        let ran = env.run_with(&["claude"], capture);
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        let thread = env.thread();
+        assert!(
+            eventually(|| {
+                let diff = env.stdout(&["diff", &thread]);
+                diff.contains("+fn mine() {}") && diff.contains("+fn theirs() {}") && diff.contains("+fn after() {}")
+            }),
+            "the diff has both the agent's edits and git's:\n{}",
+            env.stdout(&["diff", &thread])
+        );
+        let mine = env.stdout(&["diff", &thread, "--hide-git"]);
+        assert!(mine.contains("+fn mine() {}") && !mine.contains("pulled.rs"), "daemonless: {daemonless}\n{mine}");
+        assert!(mine.contains("+fn after() {}") && !mine.contains("fn upstream"), "daemonless: {daemonless}\n{mine}");
+        if in_one_turn {
+            let turn = env.stdout(&["diff", &thread, "--turn", "1", "--hide-git"]);
+            assert!(turn.contains("+fn mine() {}") && !turn.contains("pulled.rs"), "daemonless: {daemonless}\n{turn}");
+        }
+
+        // `fn after` is line 2 without git's line above it, and line 3 on disk.
+        env.silt(&["comment", &thread, "--file", "lib.rs", "--lines", "2", "--hide-git", "why", "after?"]);
+        let on_disk = env.stdout(&["comments", &thread]);
+        assert!(on_disk.contains("lib.rs:3"), "daemonless: {daemonless}\n{on_disk}");
+        let without_git = env.stdout(&["comments", &thread, "--hide-git"]);
+        assert!(without_git.contains("lib.rs:2"), "daemonless: {daemonless}\n{without_git}");
+
+        // A pending comment's anchor, taken without git's line, is placed as each diff numbers it.
+        let api = Api::open(&env);
+        let lines = serde_json::json!({"on": "lines", "path": "lib.rs", "start": 2, "end": 2, "hide_git": true});
+        let (ok, pending) = api.call("POST", &format!("/api/threads/{thread}/comments/anchor"), Some(lines));
+        assert!(ok, "{pending}");
+        let place = |hide_git: bool| {
+            let body = serde_json::json!({"base": null, "anchors": [pending["anchor"]], "hide_git": hide_git});
+            let (ok, placed) = api.call("POST", &format!("/api/threads/{thread}/comments/place"), Some(body));
+            assert!(ok, "{placed}");
+            placed[0]["start"].clone()
+        };
+        assert_eq!(place(true), 2, "daemonless: {daemonless}");
+        assert_eq!(place(false), 3, "daemonless: {daemonless}");
+
+        // The expanded review numbers the turn that wrote a line, and the lines new since Seen, as its diff does.
+        let turn_runs = |git: &str| {
+            let (ok, files) = api.call("GET", &format!("/api/threads/{thread}/diff/turns?git={git}"), None);
+            assert!(ok, "{files}");
+            let lib = files.as_array().expect("files").iter().find(|file| file["path"] == "lib.rs").cloned();
+            lib.map(|lib| lib["runs"].clone()).unwrap_or_default()
+        };
+        let starts = |runs: serde_json::Value| -> Vec<u64> {
+            runs.as_array().map(|runs| runs.iter().filter_map(|run| run["start"].as_u64()).collect()).unwrap_or_default()
+        };
+        assert_eq!(starts(turn_runs("hide")), vec![2], "daemonless: {daemonless}");
+        let shown = starts(turn_runs("show"));
+        assert!(shown.contains(&3) && !shown.contains(&2), "git's line above moves it to 3: {shown:?}, daemonless: {daemonless}");
+        let seen = |git: &str| {
+            let (ok, seen) = api.call("GET", &format!("/api/threads/{thread}/seen?git={git}"), None);
+            assert!(ok, "{seen}");
+            seen
+        };
+        let head = seen("show")["head"].as_str().expect("head").to_owned();
+        let mark = serde_json::json!({"path": "lib.rs", "seen": true, "at": head});
+        let (ok, marked) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(mark));
+        assert!(ok, "{marked}");
+        assert_eq!(seen("hide")["files"][0]["seen"], "seen", "the box takes no tick away; daemonless: {daemonless}");
+        let lib = env.repo.join("lib.rs");
+        fs::write(&lib, fs::read_to_string(&lib).expect("read") + "fn later() {}\n").expect("write");
+        next_prompt(&env, "one more");
+        assert!(eventually(|| seen("show")["files"][0]["seen"] == "changed"), "daemonless: {daemonless}");
+        assert_eq!(seen("show")["files"][0]["new_lines"], serde_json::json!([{"start": 4, "end": 4}]));
+        assert_eq!(seen("hide")["files"][0]["new_lines"], serde_json::json!([{"start": 3, "end": 3}]));
+    }
 }
 
 #[test]
@@ -1360,6 +1485,89 @@ fn a_file_gone_and_back_elsewhere_moments_later_is_a_rename() {
     assert!(!diff.contains("/dev/null"), "a rename, not a delete and a create: {diff}");
 }
 
+/// The artifacts of a thread's history, in order.
+fn artifacts_of(api: &Api, thread: &str) -> Vec<serde_json::Value> {
+    let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+    history["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter(|entry| entry["kind"] == "artifact")
+        .map(|entry| entry["artifact"].clone())
+        .collect()
+}
+
+/// An artifact's content, as the web UI reads it.
+fn artifact_text(api: &Api, thread: &str, artifact: &serde_json::Value) -> String {
+    use base64::Engine as _;
+    let blob = artifact["blob"].as_str().expect("blob");
+    let content = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{blob}"), None);
+    let bytes = base64::engine::general_purpose::STANDARD.decode(content["data"].as_str().expect("data")).expect("base64");
+    String::from_utf8(bytes).expect("utf-8")
+}
+
+/// An agent the web UI runs shows the person what it made through Silt's
+/// own tools (ADR 0068): an artifact, a new version of it under the same
+/// id, and an image in the conversation. Each is kept in the thread's
+/// history, redacted, and served only by the blob an artifact names; a
+/// fork inherits them.
+#[test]
+fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let html = format!("<h1>Rescan benchmark</h1><p>{secret}</p>");
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake, "env": {"FAKE_ACP_ARTIFACT": html}}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact please"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let said = settled_history(&api, &thread, "Done: Artifact please");
+
+    let first = artifacts_of(&api, &thread);
+    assert_eq!(first.len(), 1, "{said:?}");
+    assert_eq!(
+        (&first[0]["title"], &first[0]["kind"], &first[0]["version"]),
+        (&"Rescan benchmark".into(), &"html".into(), &1.into())
+    );
+    assert_eq!(first[0]["inline"], false);
+    let text = artifact_text(&api, &thread, &first[0]);
+    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && !text.contains(secret), "kept redacted: {text}");
+    let (served, _) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{}", "ab".repeat(32)), None);
+    assert!(!served, "a blob no artifact of the thread names isn't served");
+
+    let sent =
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "Artifact again"})));
+    assert!(sent == "sent" || sent == "queued", "{sent}");
+    settled_history(&api, &thread, "Done: Artifact again");
+    let api_prompt = |text: &str| {
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+        settled_history(&api, &thread, &format!("Done: {text}"));
+    };
+    api_prompt("Show me the pixel");
+    let all = artifacts_of(&api, &thread);
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert_eq!((&all[1]["id"], &all[1]["version"]), (&first[0]["id"], &2.into()), "a version of the same artifact");
+    assert_eq!(
+        (&all[2]["inline"], &all[2]["media_type"], &all[2]["caption"]),
+        (&true.into(), &"image/png".into(), &"One pixel".into())
+    );
+    assert_ne!(all[2]["id"], first[0]["id"], "an image shown is its own");
+
+    let found = api.ok("GET", "/api/search?q=Rescan", None);
+    assert!(found.to_string().contains(&thread[..12]) || found.to_string().contains(&thread), "found by its title: {found}");
+
+    let forked = api.ok("POST", &format!("/api/threads/{thread}/fork"), Some(serde_json::json!({})));
+    let fork = forked.as_str().map(str::to_owned).unwrap_or_else(|| forked["thread"].as_str().expect("fork").to_owned());
+    let inherited = artifacts_of(&api, &fork);
+    assert_eq!(inherited.len(), 3, "a fork inherits what was shown: {inherited:?}");
+    assert!(artifact_text(&api, &fork, &inherited[0]).starts_with("<h1>Rescan benchmark</h1>"));
+}
+
 /// Talks to the MCP server Silt configured for the session, the way
 /// Claude Code would.
 struct McpClient {
@@ -1437,6 +1645,14 @@ fn an_agent_reads_what_was_decided_before_compaction() {
     let decision = whole.find("Decision:").expect("decision listed");
     let compaction = whole.find("compaction").expect("compaction listed");
     assert!(decision < compaction, "the decision came before the compaction: {whole}");
+
+    let listed = mcp.request("tools/list", serde_json::json!({}));
+    let names: Vec<&str> =
+        listed["result"]["tools"].as_array().expect("tools").iter().filter_map(|tool| tool["name"].as_str()).collect();
+    assert!(
+        names.contains(&"silt_history_read") && !names.contains(&"silt_show") && !names.contains(&"silt_artifact"),
+        "{names:?}"
+    );
 
     let history = mcp.tool("silt_file_history", serde_json::json!({"path": "src/main.rs"}));
     assert!(history.contains("tool call toolu_1") && history.contains("Please add a farewell line"), "{history}");
@@ -1548,6 +1764,102 @@ fn diffs_start_from_the_base_asked_for() {
     assert!(against_first.contains("+fn later() {}") && against_first.contains("+fn farewell() {}"), "{against_first}");
     let nowhere = env.run(&["diff", &thread, "--base", "branch:nowhere"]);
     assert!(String::from_utf8_lossy(&nowhere.stderr).contains("names no commit"));
+}
+
+#[test]
+fn a_diff_covers_a_range_of_turns_and_says_which_turn_wrote_each_line() {
+    let env = Env::with_claude("tools");
+    env.silt(&["claude"]);
+    let thread = env.thread();
+    assert!(eventually(|| env.stdout(&["diff", &thread, "--turn", "2"]).contains("+# Notes")));
+    let both = env.stdout(&["diff", &thread, "--turn", "1", "--to-turn", "2"]);
+    assert!(both.contains("+fn farewell() {}") && both.contains("+pub fn help() {}") && both.contains("+# Notes"), "{both}");
+    let second = env.stdout(&["diff", &thread, "--turn", "2"]);
+    assert!(!second.contains("farewell"), "{second}");
+    let backwards = env.run(&["diff", &thread, "--turn", "2", "--to-turn", "1"]);
+    assert!(String::from_utf8_lossy(&backwards.stderr).contains("comes before turn 2"));
+
+    let api = Api::open(&env);
+    let (ok, turns) = api.call("GET", &format!("/api/threads/{thread}/diff/turns"), None);
+    assert!(ok, "{turns}");
+    let runs =
+        |path: &str| turns.as_array().expect("files").iter().find(|file| file["path"] == path).map(|file| file["runs"].clone());
+    // The first line came from git, so no turn wrote it.
+    assert_eq!(runs("src/main.rs"), Some(serde_json::json!([{"start": 2, "end": 2, "turn": 1}])));
+    assert_eq!(runs("NOTES.md"), Some(serde_json::json!([{"start": 1, "end": 1, "turn": 2}])));
+    let (_, second) = api.call("GET", &format!("/api/threads/{thread}/diff/turns?turn=2"), None);
+    assert_eq!(second.as_array().map(Vec::len), Some(1), "{second}");
+}
+
+#[test]
+fn a_file_marked_seen_comes_back_with_the_lines_written_since() {
+    let env = Env::new();
+    env.silt(&["claude", "--isolated"]);
+    let thread = env.thread();
+    let checkout = env.isolated_checkout();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    let api = Api::open(&env);
+    let seen = || {
+        let (ok, view) = api.call("GET", &format!("/api/threads/{thread}/seen"), None);
+        assert!(ok, "{view}");
+        view
+    };
+    assert_eq!(seen()["files"], serde_json::json!([]));
+    let head = seen()["head"].as_str().expect("a version").to_owned();
+    let mark = serde_json::json!({"path": "src/main.rs", "seen": true, "at": head});
+    let (ok, marked) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(mark));
+    assert!(ok, "{marked}");
+    assert_eq!(seen()["files"], serde_json::json!([{"path": "src/main.rs", "seen": "seen", "new_lines": []}]));
+
+    // The file changes after: it comes back, with the line written since.
+    let main = checkout.join("src/main.rs");
+    fs::write(&main, fs::read_to_string(&main).expect("read") + "fn later() {}\n").expect("write");
+    assert!(eventually(|| seen()["files"][0]["seen"] == "changed"));
+    assert_eq!(seen()["files"][0]["new_lines"], serde_json::json!([{"start": 3, "end": 3}]));
+
+    // A version that isn't the thread's is refused.
+    let elsewhere = serde_json::json!({"path": "src/main.rs", "seen": true, "at": "not a version"});
+    let (ok, _) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(elsewhere));
+    assert!(!ok);
+}
+
+#[test]
+fn a_pending_comments_anchor_follows_its_text_until_it_lands() {
+    let env = Env::new();
+    env.silt(&["claude", "--isolated"]);
+    let thread = env.thread();
+    let checkout = env.isolated_checkout();
+    assert!(eventually(|| env.stdout(&["diff", &thread]).contains("+fn farewell() {}")));
+    let api = Api::open(&env);
+    let lines = serde_json::json!({"on": "lines", "path": "src/main.rs", "start": 2, "end": 2});
+    let (ok, pending) = api.call("POST", &format!("/api/threads/{thread}/comments/anchor"), Some(lines));
+    assert!(ok, "{pending}");
+    let anchor = pending["anchor"].as_str().expect("an anchor").to_owned();
+    let place = || {
+        let body = serde_json::json!({"base": null, "anchors": [anchor]});
+        let (ok, placed) = api.call("POST", &format!("/api/threads/{thread}/comments/place"), Some(body));
+        assert!(ok, "{placed}");
+        placed[0].clone()
+    };
+    assert_eq!(place()["start"], 2);
+    let (_, recorded) = api.call("GET", &format!("/api/threads/{thread}/comments"), None);
+    assert_eq!(recorded, serde_json::json!([]), "nothing is recorded until the review is sent");
+
+    // A line written above it moves it down with its text.
+    let main = checkout.join("src/main.rs");
+    fs::write(&main, format!("// header\n{}", fs::read_to_string(&main).expect("read"))).expect("write");
+    assert!(eventually(|| place()["start"] == 3));
+    let comment = serde_json::json!({"on": {"on": "anchored", "anchor": anchor}, "text": "name it better"});
+    let (ok, made) = api.call("POST", &format!("/api/threads/{thread}/comments"), Some(comment));
+    assert!(ok, "{made}");
+    assert_eq!(made["location"]["start"], 3, "{made}");
+
+    // Once its text is gone it's outdated; an anchor that isn't this thread's isn't placed.
+    fs::write(&main, "// header\nfn main() {}\n").expect("write");
+    assert!(eventually(|| place()["outdated"] == true));
+    let body = serde_json::json!({"base": null, "anchors": ["{\"Code\":{}}", "not json"]});
+    let (_, placed) = api.call("POST", &format!("/api/threads/{thread}/comments/place"), Some(body));
+    assert_eq!(placed, serde_json::json!([{"at": "unknown"}, {"at": "unknown"}]));
 }
 
 #[test]

@@ -1,12 +1,13 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { type ReactNode, type RefObject, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AGENTS, api, short, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
+import { useHideGit } from '../hideGit'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -32,6 +33,7 @@ import {
   Icon,
   type IconName,
   Input,
+  Kbd,
   KeyValue,
   Popover,
   Select,
@@ -53,11 +55,18 @@ import { Mock } from './Mock'
 import { mocksOn } from '../mocks'
 import { DrawerButton, Page } from './Page'
 import { ShareDialog } from './ShareDialog'
+import { ArtifactCard, ShownImage } from './ArtifactCards'
+import { ArtifactActions, type Opened } from '../artifactActions'
+import { artifactsOf, shownImagesOf } from '../artifacts'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
 import { unrecorded } from '../unrecorded'
 import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
 import { keepDraft, threadDraft, useDraft } from '../drafts'
+
+// The panel's viewer and list load only once there is an artifact to show.
+const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactViewer })))
+const ArtifactList = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactList })))
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -282,6 +291,7 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
   if (entry.kind === 'user')
     return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
+  if (entry.kind === 'artifact' && entry.artifact) return <ShownArtifact entry={entry} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
     // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.
     const [, said, summary] = /^([^:]*?from fork \S+): ([\s\S]+)$/.exec(entry.text) ?? [null, entry.text, null]
@@ -559,17 +569,19 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
+  const [hideGit] = useHideGit()
+  const of = { turn: turn.number, hideGit }
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
-    queryKey: keys.diffStats(thread, { turn: turn.number }),
-    queryFn: () => api.diffStats(thread, { turn: turn.number }),
+    queryKey: keys.diffStats(thread, of),
+    queryFn: () => api.diffStats(thread, of),
     staleTime: Infinity,
   })
   const files = stats.data ?? null
   const whole = files !== null && readWhole(files)
   const diff = useQuery({
-    queryKey: keys.diff(thread, { turn: turn.number }),
-    queryFn: () => api.diff(thread, { turn: turn.number }),
+    queryKey: keys.diff(thread, of),
+    queryFn: () => api.diff(thread, of),
     staleTime: Infinity,
     enabled: open && whole,
   })
@@ -658,7 +670,7 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
         </span>
       </div>
       {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
-      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={{ turn: turn.number }} />}
+      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={of} />}
     </div>
   )
 }
@@ -694,9 +706,17 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
   )
 }
 
-/** What the person decided, a question they answered or a plan put to them, stays out of the fold. */
+/** What the person decided, a question they answered or a plan put to them, stays out of the fold, as does what the agent showed them. */
 function decided(piece: Piece): boolean {
+  if (piece.kind === 'entry') return piece.entry.kind === 'artifact'
   return piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
+}
+
+/** What an agent showed the person where it showed it: an image, or a card opening an artifact beside the conversation. */
+function ShownArtifact({ entry }: { entry: HistoryEntry }) {
+  const actions = useContext(ArtifactActions)
+  if (entry.artifact?.inline) return actions ? <ShownImage thread={actions.thread} entry={entry} /> : null
+  return <ArtifactCard entry={entry} />
 }
 
 /**
@@ -1213,7 +1233,7 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
 }
 
 /** The thread's header (ADR 0044): its title and where it is, then Fork, Share, Changes, and the rest behind More. */
-function ThreadHeader({
+export function ThreadHeader({
   thread,
   summary,
   people,
@@ -1226,6 +1246,8 @@ function ThreadHeader({
   onDetail,
   grouping,
   onGrouping,
+  onConversation,
+  onExpand,
 }: {
   thread: string
   summary: ThreadSummary | undefined
@@ -1241,6 +1263,10 @@ function ThreadHeader({
   onChanges: () => void
   /** Opens the details, beside the conversation or as a sheet on a phone. */
   onDetails: () => void
+  /** Back to the conversation, from the expanded review, in place of the panel's toggle. */
+  onConversation?: () => void
+  /** Opens the review across the page, beside the panel's toggle. */
+  onExpand?: () => void
 }) {
   const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
   const branch = commits.data?.findLast((commit) => commit.branch)?.branch
@@ -1305,7 +1331,17 @@ function ThreadHeader({
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
-        {/* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */}
+        {onExpand && (
+          <Button variant="ghost" aria-label="Expand the review" onClick={onExpand} title="The changes across the page, to review (⇧D)">
+            <Icon name="expand" className="h-4 w-4" />
+          </Button>
+        )}
+        {onConversation ? (
+          <Button icon="collapse" onClick={onConversation} title="Back to the conversation (Esc)">
+            Conversation <Kbd>Esc</Kbd>
+          </Button>
+        ) : (
+        /* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */
         <Button
           variant="ghost"
           aria-label="Changes"
@@ -1317,6 +1353,7 @@ function ThreadHeader({
           <Icon name="panel" className="h-4 w-4" />
           {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
         </Button>
+        )}
       </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
@@ -1586,7 +1623,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'changes' | 'details' | 'lineage'
+type InspectorTab = 'changes' | 'artifacts' | 'details' | 'lineage'
 
 function ThreadBody({
   thread,
@@ -1614,6 +1651,9 @@ function ThreadBody({
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
   const desktop = useMedia('(min-width: 1024px)')
   const [sheet, setSheet] = useState(false)
+  // The artifact the panel shows (ADR 0068), and whether it takes the conversation's space too.
+  const [opened, setOpened] = useState<Opened | null>(null)
+  const [full, setFull] = useState(false)
   const [draft, setDraft] = useDraft(threadDraft(thread))
   const [detail, setDetail] = useDetailChoice()
   const [grouping, setGrouping] = useGroupingChoice()
@@ -1658,15 +1698,52 @@ function ThreadBody({
   }, [agentState, thread, waitingPrompts, setDraft])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
+    ...(desktop && !hosted() ? [{ id: 'review', label: 'Expand the review', keys: 'shift+d', run: () => openReview() }] : []),
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
     ...GROUPINGS.filter((choice) => choice.id !== grouping).map((choice) => ({ id: `grouping:${choice.id}`, label: `Group the work ${choice.label.toLowerCase()}`, run: () => setGrouping(choice.id) })),
     { id: 'thoughts', label: thoughts.open ? 'Close every thought' : 'Open every thought', keys: 'shift+t', run: toggleThoughts },
+    ...(opened && desktop ? [{ id: 'artifact-full', label: full ? 'Leave the full view' : 'Full view of the artifact', keys: 'f', run: () => setFull(!full) }] : []),
   ])
+  const groups = useMemo(() => artifactsOf(entries), [entries])
+  const images = useMemo(() => shownImagesOf(entries), [entries])
+  const openArtifact = useCallback(
+    (id: string, version: number | null = null) => {
+      const group = groups.find((candidate) => candidate.id === id)
+      const newest = group?.versions[group.versions.length - 1]?.artifact.version
+      setOpened({ id, version: version === newest ? null : version })
+      setTab('artifacts')
+      if (window.matchMedia('(max-width: 1023px)').matches) setSheet(true)
+      else setPanel(true)
+    },
+    [groups],
+  )
+  const closeArtifact = () => {
+    setOpened(null)
+    setFull(false)
+    setSheet(false)
+  }
+  const artifactActions = useMemo(() => ({ thread, open: openArtifact, opened }), [thread, openArtifact, opened])
+  // A link to an artifact opens it; one made while the person watches opens by itself on a desktop, unless another is open.
+  const seenArtifacts = useRef<number | null>(null)
+  useEffect(() => {
+    if (entries.length < total) return
+    const newest = groups[0] && groups[0].versions[groups[0].versions.length - 1].entry.index
+    const before = seenArtifacts.current
+    seenArtifacts.current = newest ?? -1
+    if (before === null) {
+      const linked = /^#?artifact-([0-9a-f]{12})$/.exec(hash)
+      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1])
+      return
+    }
+    if (newest === undefined || newest <= before || !desktop) return
+    if (opened && opened.id !== groups[0].id) return
+    openArtifact(groups[0].id)
+  }, [entries.length, total, groups, hash, desktop, opened, openArtifact])
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
   useEffect(() => {
-    if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true }).catch(() => undefined)
+    if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true, reviewed_turn: null }).catch(() => undefined)
   }, [thread, unseen])
 
   // A plan call's own output is the plan again, then the agent's note that it was approved; the plan card shows it once.
@@ -1749,6 +1826,9 @@ function ThreadBody({
     },
   }
 
+  // The review across the page, where there's room for it and a daemon to read the diff from.
+  const openReview = () => void navigate({ to: '/t/$id/review', params: { id: thread } })
+  const roomy = desktop && !hosted()
   // Where the changes panel puts what it compares and how, so the inspector keeps one row of tabs.
   const [diffControls, setDiffControls] = useState<HTMLElement | null>(null)
   const showChanges = () => {
@@ -1771,6 +1851,7 @@ function ThreadBody({
   const thoughtCarded = agent?.state === 'working' && grouping === 'turn' && lastRow?.kind === 'turn' && sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
 
   return (
+    <ArtifactActions.Provider value={artifactActions}>
     <TasksContext.Provider value={tasks}>
     <StoppableTasks.Provider value={stoppable}>
     <SessionLive.Provider value={live}>
@@ -1792,9 +1873,33 @@ function ThreadBody({
       inspectorLabel="thread details"
       inspectorWidth={480}
       columnRef={column}
-      sheet={{ open: sheet, onClose: () => setSheet(false) }}
+      sheet={{ open: sheet, onClose: () => setSheet(false), bare: tab === 'artifacts' && opened !== null }}
+      full={full && tab === 'artifacts' && opened !== null}
       inspector={
-        (panel || sheet) && (
+        (panel || sheet) &&
+        (tab === 'artifacts' && opened ? (
+          <Suspense fallback={null}>
+          <ArtifactViewer
+            thread={thread}
+            groups={groups}
+            opened={opened}
+            onOpen={openArtifact}
+            onBack={() => {
+              setOpened(null)
+              setFull(false)
+            }}
+            onClose={() => {
+              closeArtifact()
+              setPanel(false)
+            }}
+            full={full}
+            onFull={() => setFull(!full)}
+            comments={comments.data ?? []}
+            onCommentsChanged={reloadComments}
+            phone={!desktop}
+          />
+          </Suspense>
+        ) : (
         <div className="flex flex-col">
           <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
             <Tabs
@@ -1808,6 +1913,9 @@ function ThreadBody({
                     </>
                   ),
                 },
+                ...(groups.length > 0 || images.length > 0
+                  ? [{ id: 'artifacts' as const, label: <>Artifacts <span className="font-mono text-2xs text-accent-fg">{groups.length + images.length}</span></> }]
+                  : []),
                 { id: 'details', label: 'Details' },
                 { id: 'lineage', label: 'Lineage' },
               ]}
@@ -1816,7 +1924,11 @@ function ThreadBody({
             />
             {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
           </div>
-          {tab === 'lineage' ? (
+          {tab === 'artifacts' ? (
+            <Suspense fallback={null}>
+              <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
+            </Suspense>
+          ) : tab === 'lineage' ? (
             <div className="flex flex-col gap-6 px-5 py-5">
               {summary && (
                 <InspectorSection
@@ -1845,11 +1957,11 @@ function ThreadBody({
           ) : (
             <div className="px-4 py-4">
               <Unwritten thread={thread} />
-              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} wide controlsIn={diffControls} />
+              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} working={busy} wide controlsIn={diffControls} />
             </div>
           )}
         </div>
-        )
+        ))
       }
     >
       <ThreadHeader
@@ -1864,6 +1976,7 @@ function ThreadBody({
         grouping={grouping}
         onGrouping={setGrouping}
         onChanges={showChanges}
+        onExpand={roomy ? openReview : undefined}
         onDetails={() => {
           setTab('details')
           setPanel(true)
@@ -1932,7 +2045,7 @@ function ThreadBody({
               files &&
               files.length > 0 &&
               totals &&
-              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={showChanges} />
+              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={roomy ? openReview : showChanges} />
             }
           />
         </div>
@@ -1947,6 +2060,7 @@ function ThreadBody({
     </SessionLive.Provider>
     </StoppableTasks.Provider>
     </TasksContext.Provider>
+    </ArtifactActions.Provider>
   )
 }
 

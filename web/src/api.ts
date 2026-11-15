@@ -7,17 +7,20 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  ArtifactContent,
   ChatSettings,
   CloudLaunch,
+  CommentLocation,
   CommentOn,
   CommentView,
   CommitView,
   DaemonStatus,
-  DiffStat,
-  FileAt,
-  FoundFolder,
   DeviceChange,
   DeviceView,
+  DiffStat,
+  FileAt,
+  FileTurns,
+  FoundFolder,
   GraphQuery,
   GraphRow,
   HistoryPage,
@@ -25,13 +28,16 @@ import type {
   InboxRead,
   KindSetting,
   LiveState,
+  MarkSeen,
   Mine,
   MrDetails,
   MrSummary,
   NewLink,
   OrgChange,
   OrgInfo,
+  PendingAnchor,
   PhonePairing,
+  PlaceAnchors,
   PresenceReply,
   Preset,
   Project,
@@ -44,6 +50,7 @@ import type {
   StartOptions,
   StateChange,
   ThreadLink,
+  ThreadSeenView,
   ThreadSummary,
   TurnInfo,
   VoiceStatus,
@@ -109,10 +116,21 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-const diffParams = (options: { turn?: number; base?: string }) => {
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`; with
+ * `hideGit`, without what git itself rewrote (ADR 0069). */
+export interface DiffSpec {
+  turn?: number
+  toTurn?: number
+  base?: string
+  hideGit?: boolean
+}
+
+const diffParams = (options: DiffSpec) => {
   const params = new URLSearchParams()
   if (options.turn !== undefined) params.set('turn', String(options.turn))
+  if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
+  if (options.hideGit) params.set('git', 'hide')
   return params
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
@@ -128,6 +146,8 @@ export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
+  /** An artifact's content, by the blob a version of it names (ADR 0068). */
+  artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
     request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
@@ -145,7 +165,7 @@ export const api = {
     return request<GraphRow[]>('GET', `/api/graph?${params}`)
   },
   /** What the thread changed; with `limit`, only that many files from the `offset`th, in path order; with `path`, only that file. */
-  diff: (id: string, options: { turn?: number; base?: string; offset?: number; limit?: number; path?: string } = {}) => {
+  diff: (id: string, options: DiffSpec & { offset?: number; limit?: number; path?: string } = {}) => {
     const params = diffParams(options)
     if (options.limit !== undefined) {
       params.set('offset', String(options.offset ?? 0))
@@ -155,14 +175,27 @@ export const api = {
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
   /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
-  diffStats: (id: string, options: { turn?: number; base?: string } = {}) =>
-    request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
+  diffStats: (id: string, options: DiffSpec = {}) => request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
+  /** The diff's files this person marked seen: each as they saw it, or changed since, with the lines new since (ADR 0067). */
+  threadSeen: (id: string, options: DiffSpec = {}) => request<ThreadSeenView>('GET', `${thread(id)}/seen?${diffParams(options)}`),
+  markThreadSeen: (id: string, mark: MarkSeen) => request<string>('PUT', `${thread(id)}/seen`, mark),
+  /** For the diff's files, the turns that last wrote their new lines. */
+  diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string) =>
-    request<CommentView[]>('GET', `${thread(id)}/comments${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  comments: (id: string, base?: string, hideGit = false) => {
+    const params = new URLSearchParams()
+    if (base) params.set('base', base)
+    if (hideGit) params.set('git', 'hide')
+    const query = params.toString()
+    return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
+  },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
   addComment: (id: string, on: CommentOn, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
+  /** Anchors lines for a pending review comment, recording nothing, so it follows their text (ADR 0066). */
+  anchorLines: (id: string, on: CommentOn) => request<PendingAnchor>('POST', `${thread(id)}/comments/anchor`, on),
+  /** Where pending review comments' anchors are now, and at `base`, as comments are placed. */
+  placeAnchors: (id: string, place: PlaceAnchors) => request<CommentLocation[]>('POST', `${thread(id)}/comments/place`, place),
   reply: (id: string, comment: string, text: string) =>
     request<CommentView>('POST', `${thread(id)}/comments/${encodeURIComponent(comment)}/replies`, { text }),
   resolveComment: (id: string, comment: string) =>
@@ -269,7 +302,8 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string) => request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}`),
+  mergeRequest: (id: string, hideGit = false) =>
+    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),

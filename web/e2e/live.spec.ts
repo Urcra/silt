@@ -136,10 +136,17 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await bob.getByLabel('draft').fill('mind the tests')
   await expect(alice.getByTestId('drafts')).toContainText('bob is drafting: mind the tests')
 
+  // The preset picked counts at once, even while the daemon is still taking it: starting the agent then starts it there.
+  await alice.route('**/agent/preset', async (route) => {
+    const taken = await route.fetch()
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await route.fulfill({ response: taken })
+  })
   await alice.getByLabel('permissions').selectOption('ask_for_everything')
   await alice.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await alice.getByLabel('draft').press('Enter')
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await alice.unrouteAll({ behavior: 'wait' })
   await expect(bob.getByTestId('agent-state')).toHaveText("alice's Fake agent is ready")
 
   // A prompt the daemon refuses comes back to the draft rather than stay shown as sent.
@@ -161,7 +168,8 @@ test('an agent started from the web UI takes everyone\'s drafts and asks before 
   await expect(alice.getByText('not now')).toHaveCount(0)
   await alice.unroute('**/agent/prompt')
   const asked = alice.getByRole('group', { name: 'permission' })
-  await expect(asked).toContainText('Edit src/main.rs')
+  // The prompt was held back 2 s above, and a loaded machine takes a while more to bring the agent's ask.
+  await expect(asked).toContainText('Edit src/main.rs', { timeout: 15000 })
   await expect(alice.getByTestId('agent-state')).toHaveText('Fake agent is waiting for your permission')
   await expect(alice.getByRole('region', { name: 'needs you' })).toContainText('asks to run')
   await asked.getByRole('button', { name: 'Allow' }).click()
@@ -338,6 +346,8 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
 })
 
 test("another of Alice's machines directs the agent running on the first, through the server", async ({ browser }) => {
+  // Its waits for the second machine to hear the agent through the server take up to 20 s of a test's 30 under load.
+  test.slow()
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('permissions').selectOption('ask_for_everything')
@@ -780,6 +790,45 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await expect(createPr).toHaveAttribute('title', /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)
 })
 
+test('what an agent shows opens beside the thread: an artifact in a sandbox, its versions, full view, comments to the agent, and images', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact please')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact please')).toBeVisible()
+  // Made while the person watches, it opens by itself, in a frame that can reach nothing.
+  const viewer = page.getByTestId('artifact-viewer')
+  await expect(viewer).toBeVisible()
+  await expect(viewer.getByTestId('artifact-frame')).toHaveAttribute('sandbox', 'allow-scripts')
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' })).toBeVisible()
+  await expect(page.getByTestId('artifact-card')).toBeVisible()
+
+  await viewer.getByRole('button', { name: 'Full view (F)' }).click()
+  await expect(page.getByLabel('draft')).toBeHidden()
+  await viewer.getByRole('button', { name: 'Leave the full view (F)' }).click()
+  await expect(page.getByLabel('draft')).toBeVisible()
+
+  await page.getByLabel('draft').fill('Artifact again')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact again')).toBeVisible()
+  await expect(viewer.getByRole('button', { name: 'Versions' })).toHaveText(/v2/)
+  await viewer.getByRole('button', { name: 'Versions' }).click()
+  await page.getByRole('menuitem', { name: /^v1/ }).click()
+  await expect(viewer.getByRole('button', { name: 'Versions' })).toHaveText(/v1/)
+
+  await viewer.getByRole('button', { name: 'Comments' }).click()
+  await page.getByLabel('comment on the artifact').fill('Make the bars blue')
+  await page.getByRole('button', { name: /^Send to the agent/ }).click()
+  await expect(page.getByText(/Done: Comments on the artifact "Rescan benchmark"/)).toBeVisible()
+
+  await page.getByLabel('draft').fill('Show me the pixel')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByTestId('shown-image').first()).toBeVisible()
+  await viewer.getByRole('button', { name: 'Artifacts', exact: true }).click()
+  const list = page.getByTestId('artifact-list')
+  await expect(list).toContainText('2 versions')
+  await expect(list.getByTestId('shown-image')).toBeVisible()
+})
+
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')
@@ -1033,11 +1082,13 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
   await page.getByRole('button', { name: 'Add review comment' }).click()
   await expect(changes.getByRole('group', { name: 'pending comment' })).toHaveCount(2)
 
-  const review = changes.getByRole('region', { name: 'review' })
+  const review = changes.getByRole('group', { name: 'review' })
   await expect(review).toContainText('2 pending')
   await review.getByRole('button', { name: 'Finish review' }).click()
-  await review.getByLabel('review note').fill('Nearly there.')
-  await review.getByRole('button', { name: /^Send 2 comments to / }).click()
+  const finish = page.getByRole('dialog', { name: 'finish review' })
+  await finish.getByLabel('review note').fill('Nearly there.')
+  await expect(finish.getByRole('radio', { name: 'Request changes' })).toBeChecked()
+  await finish.getByRole('button', { name: 'Request changes', exact: true }).click()
   await expect(review).toBeHidden()
   await expect(
     page.getByTestId('entry').filter({
@@ -1053,6 +1104,110 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
 
   await page.getByLabel('compare').selectOption({ label: 'Against main' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
+})
+
+test('the review expands across the page, split, and its keys move through the diff', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  const thread = new URL(page.url()).pathname.split('/')[2]
+  // Keys without a modifier are the composer's while it has the focus.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+
+  await page.keyboard.press('Shift+D')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}/review$`))
+  const changes = page.getByRole('region', { name: 'changes' })
+  await expect(changes.getByTestId('diff')).toContainText('fn acp() {}')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Split' })).toHaveAttribute('aria-selected', 'true')
+  // The conversation's composer isn't part of it.
+  await expect(page.getByLabel('draft')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'files' })).toContainText('src/main.rs')
+
+  // n puts the cursor on the first hunk, and c opens a comment on what it changed; Esc there only closes the box.
+  await page.keyboard.press('n')
+  await expect(changes.locator('[data-hunk="src/main.rs#0"]')).toHaveClass(/ring-accent/)
+  await page.keyboard.press('c')
+  await expect(page.getByLabel('code comment')).toBeFocused()
+  await page.getByLabel('code comment').fill('a better name')
+  await page.getByRole('button', { name: 'Start a review' }).click()
+  await expect(page.getByRole('group', { name: 'review' })).toContainText('1 pending')
+
+  // s switches the layout; Esc goes back to the conversation, the pending comment kept.
+  await page.keyboard.press('s')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Unified' })).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}$`))
+  await expect(page.getByLabel('draft')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' })).toHaveCount(1)
+  await page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' }).getByRole('button', { name: 'delete' }).click()
+  // Away from the review, n is New thread again.
+  await page.keyboard.press('n')
+  await expect(page).not.toHaveURL(/\/t\//)
+})
+
+test("the review names the turn that wrote each hunk, and shows one turn's changes alone", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
+  const thread = new URL(page.url()).pathname.split('/')[2]
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  const changes = page.getByRole('region', { name: 'changes' })
+  await expect(changes.locator('[data-hunk]').first()).toContainText(/turns? \d/)
+  const turns = page.getByRole('group', { name: 'turns' })
+  await turns.getByRole('button', { name: '1', exact: true }).click()
+  await expect(turns.getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(changes.locator('[data-hunk]').first()).toContainText('turn 1 · add a function')
+  await expect(changes.getByText(/^turn 2/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'All changes' }).click()
+  await expect(page.getByLabel('compare')).toBeVisible()
+
+  // t opens the hunk's turn in the conversation.
+  await page.keyboard.press('n')
+  await page.keyboard.press('t')
+  await expect(page).toHaveURL(new RegExp(`/t/${thread}#turn-\\d+$`))
+})
+
+test('a file marked seen comes back when the agent changes it, and the next review starts after the turn reviewed', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('add a function')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: add a function')).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  const files = page.getByRole('navigation', { name: 'files' })
+  const main = files.getByRole('checkbox', { name: 'seen src/main.rs' })
+  await main.check()
+  await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
+  // Nothing to change: the review is marked reviewed through the turn.
+  await page.getByRole('button', { name: 'Finish review' }).click()
+  await page.getByRole('dialog', { name: 'finish review' }).getByRole('button', { name: 'Mark reviewed' }).click()
+  await expect(page.getByText('Reviewed through turn 1', { exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: /^Conversation/ }).click()
+  await page.getByLabel('draft').fill('Rewrite main')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Rewrite main')).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Shift+D')
+
+  // The review starts after the turn reviewed, and the file seen before comes back half-ticked.
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '2', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(files).toContainText(/new since you saw it|changed since you saw it/)
+  await expect(main).not.toBeChecked()
+  await expect(page.getByTestId('seen-count')).toHaveText('0/1 seen')
+  // v ticks it off again.
+  await page.keyboard.press('j')
+  await page.keyboard.press('v')
+  await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
 })
 
 /** Starts the fake agent in a new thread of the project whose name matches, asking before everything. */

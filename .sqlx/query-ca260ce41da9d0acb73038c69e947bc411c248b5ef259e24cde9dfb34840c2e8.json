@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO thread_links (token_hash, thread_id, owner_id, created_ms, expires_ms, frozen_at)\n         VALUES (?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "query": "INSERT INTO thread_links (token_hash, thread_id, owner_id, created_ms, expires_ms, frozen_at, artifact_id, artifact_version)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 6
+      "Right": 8
     },
     "nullable": [
       null
     ]
   },
-  "hash": "9a6135ca2888995f6bfe438f8123b1ef524e17e7ee500042897893689caa1c11"
+  "hash": "ca260ce41da9d0acb73038c69e947bc411c248b5ef259e24cde9dfb34840c2e8"
 }

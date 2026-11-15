@@ -74,6 +74,9 @@ pub enum Request {
     Diff {
         thread: String,
         turn: Option<usize>,
+        /// With `turn`, the last of a range of turns.
+        #[serde(default)]
+        to_turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
         /// Only these of the changed files, in path order: a page of them.
@@ -82,6 +85,10 @@ pub enum Request {
         /// Only the file at this path, new or old.
         #[serde(default)]
         path: Option<String>,
+        /// Leave out what git itself rewrote, as a checkout, pull or stash
+        /// does (ADR 0069); not against a branch, which is git's already.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -89,7 +96,46 @@ pub enum Request {
         thread: String,
         turn: Option<usize>,
         #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
         base: Option<String>,
+        #[serde(default)]
+        hide_git: bool,
+    },
+    /// For [`Request::Diff`]'s files the person marked seen, whether each is
+    /// as they saw it, and the lines new since (ADR 0067).
+    ThreadSeen {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
+    },
+    /// Marks a file of the thread seen, or not, at a version the review read.
+    MarkThreadSeen {
+        thread: String,
+        mark: silt_proto::view::MarkSeen,
+    },
+    /// For [`Request::Diff`]'s files, the turn that last wrote each of their
+    /// new lines.
+    DiffTurns {
+        thread: String,
+        turn: Option<usize>,
+        #[serde(default)]
+        to_turn: Option<usize>,
+        #[serde(default)]
+        base: Option<String>,
+        #[serde(default)]
+        files: Option<FilePage>,
+        #[serde(default)]
+        path: Option<String>,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -180,6 +226,9 @@ pub enum Request {
     },
     MrShow {
         mr: String,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     MrApprove {
         mr: String,
@@ -283,6 +332,23 @@ pub enum Request {
         /// A diff base to place code comments in too, such as `last-turn`.
         #[serde(default)]
         base: Option<String>,
+        /// Place code comments as a diff with git's rewrites left out shows
+        /// the lines (ADR 0069).
+        #[serde(default)]
+        hide_git: bool,
+        cwd: PathBuf,
+    },
+    /// Anchors lines for a pending review comment, recording nothing
+    /// (ADR 0066).
+    AnchorLines {
+        thread: String,
+        on: CommentOn,
+        cwd: PathBuf,
+    },
+    /// Where pending review comments' anchors are now, and at `base`.
+    PlaceAnchors {
+        thread: String,
+        place: silt_proto::view::PlaceAnchors,
         cwd: PathBuf,
     },
     /// Marks comments as sent to the thread's agent (ADR 0055).
@@ -314,6 +380,16 @@ pub enum Request {
     OnServer {
         server: String,
         asking: Box<Request>,
+    },
+    /// What an agent's run shows the person (ADR 0068); only inside
+    /// [`Request::Scoped`], for the thread its token was made for.
+    PutArtifact {
+        artifact: NewArtifact,
+    },
+    /// An artifact's content, by the blob a history entry of the thread names.
+    ArtifactContent {
+        thread: String,
+        blob: String,
     },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
@@ -657,6 +733,34 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// The program a daemon runs, as `Request::DaemonBuild` answers: replaced
 /// since it started, as installing Silt again does, it still runs the old
 /// build and serves the old web UI.
+/// What `silt_show` or `silt_artifact` asks to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewArtifact {
+    pub title: String,
+    /// `html`, `svg`, `markdown`, `mermaid` or `image`.
+    pub kind: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    /// A file holding the content, relative to the run's checkout.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// An artifact of the thread's, to add a version of.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// An image shown in the conversation rather than beside it.
+    #[serde(default)]
+    pub inline: bool,
+}
+
+/// The artifact a [`Request::PutArtifact`] kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactPut {
+    pub id: String,
+    pub version: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonBuild {
     pub exe: Option<PathBuf>,
@@ -1370,9 +1474,17 @@ mod tests {
             CommentLocation::decl(&config),
             LineSpan::decl(&config),
             CommentOn::decl(&config),
+            silt_proto::view::PendingAnchor::decl(&config),
+            silt_proto::view::PlaceAnchors::decl(&config),
             CommentView::decl(&config),
             CommitView::decl(&config),
             silt_proto::view::DiffStat::decl(&config),
+            silt_proto::view::FileTurns::decl(&config),
+            silt_proto::view::TurnRun::decl(&config),
+            silt_proto::view::Seen::decl(&config),
+            silt_proto::view::FileSeen::decl(&config),
+            silt_proto::view::ThreadSeenView::decl(&config),
+            silt_proto::view::MarkSeen::decl(&config),
             silt_proto::view::FileAt::decl(&config),
             silt_proto::view::GraphQuery::decl(&config),
             silt_proto::view::GraphRow::decl(&config),
@@ -1391,6 +1503,9 @@ mod tests {
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
+            silt_proto::view::ArtifactView::decl(&config),
+            silt_proto::view::ArtifactContent::decl(&config),
+            silt_proto::view::LinkedArtifact::decl(&config),
             UsageView::decl(&config),
             PlanStepView::decl(&config),
             TaskView::decl(&config),

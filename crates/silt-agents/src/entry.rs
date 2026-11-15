@@ -54,6 +54,8 @@ pub enum Entry {
     },
     /// News of a subagent or a background command the agent started.
     Task(Task),
+    /// What the agent showed the person through Silt (ADR 0068).
+    Artifact(silt_proto::view::ArtifactView),
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {
         kind: String,
@@ -80,6 +82,7 @@ impl Entry {
             Self::Compaction { .. } => "compaction",
             Self::Woke { .. } => "wake",
             Self::Task(_) => "task",
+            Self::Artifact(_) => "artifact",
             Self::Other { kind } => kind,
         }
     }
@@ -94,6 +97,7 @@ impl Entry {
             Self::Plan { steps } => Some(plan_text(steps)),
             Self::Compaction { summary } => summary.clone(),
             Self::Task(task) => task.summary.clone(),
+            Self::Artifact(artifact) => Some(artifact.title.clone()),
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }
@@ -108,6 +112,7 @@ impl Entry {
             Self::ToolCall { name, input, .. } => Some(call_text(&name, &input)),
             Self::Plan { steps } => Some(plan_text(&steps)),
             Self::Compaction { summary } | Self::Task(Task { summary, .. }) => summary,
+            Self::Artifact(artifact) => Some(artifact.title),
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }

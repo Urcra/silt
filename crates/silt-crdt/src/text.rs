@@ -402,6 +402,69 @@ impl TextDoc {
         text
     }
 
+    /// The text as of the version holding exactly the ids `contains` takes,
+    /// which needn't be causally closed: with some edits left out, such as
+    /// those git made (ADR 0069), the others still read in place.
+    pub fn text_where(&self, contains: impl Fn(DeltaId) -> bool) -> String {
+        let mut text = String::with_capacity(self.len());
+        for fragment in self.fragments.iter() {
+            let chars = self.chars_of(fragment);
+            text.extend(chars.iter().zip(visible_where(fragment, &contains)).filter(|(_, shown)| *shown).map(|(ch, _)| *ch));
+        }
+        text
+    }
+
+    /// An anchor at `pos` in [`Self::text_where`]'s text.
+    pub fn anchor_where(&self, contains: impl Fn(DeltaId) -> bool, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
+        let shown: Vec<CharId> = self
+            .fragments
+            .iter()
+            .flat_map(|fragment| {
+                let first = fragment.first_char();
+                visible_where(fragment, &contains)
+                    .zip(0..)
+                    .filter(|(shown, _)| *shown)
+                    .map(move |(_, offset)| first.offset(offset))
+            })
+            .collect();
+        let len = shown.len();
+        if pos > len {
+            return Err(TextError::AnchorOutOfBounds { pos, len });
+        }
+        let char_id = match bias {
+            Bias::Left if pos == 0 => None,
+            Bias::Left => Some(shown[pos - 1]),
+            Bias::Right if pos == len => None,
+            Bias::Right => Some(shown[pos]),
+        };
+        Ok(Anchor { char_id, bias })
+    }
+
+    /// Where `anchor` is in [`Self::text_where`]'s text.
+    pub fn resolve_where(&self, contains: impl Fn(DeltaId) -> bool, anchor: &Anchor) -> Result<ResolvedAnchor, TextError> {
+        let Some(char_id) = anchor.char_id else {
+            let pos = match anchor.bias {
+                Bias::Left => 0,
+                Bias::Right => {
+                    self.fragments.iter().map(|fragment| visible_where(fragment, &contains).filter(|shown| *shown).count()).sum()
+                }
+            };
+            return Ok(ResolvedAnchor { pos, outdated: false });
+        };
+        let (locator, offset) = locate(&self.insertions, char_id).ok_or(TextError::UnknownAnchor(char_id))?;
+        let mut before = 0;
+        for fragment in self.fragments.iter() {
+            let mut shown = visible_where(fragment, &contains);
+            if fragment.locator == locator {
+                let preceding = shown.by_ref().take(offset as usize).filter(|shown| *shown).count();
+                let visible = shown.next().unwrap_or(false);
+                return Ok(place(before + preceding, 0, visible, anchor.bias));
+            }
+            before += shown.filter(|shown| *shown).count();
+        }
+        Err(TextError::UnknownAnchor(char_id))
+    }
+
     /// An anchor at `pos` in the current text.
     pub fn anchor(&self, pos: usize, bias: Bias) -> Result<Anchor, TextError> {
         let len = self.len();
@@ -515,6 +578,25 @@ impl TextDoc {
             let first = fragment.first_char();
             let visible = &self.chars_of(fragment)[..fragment.visible_len_at(vv)];
             attribution.extend(visible.iter().zip(0..).map(|(ch, offset)| (*ch, first.offset(offset))));
+        }
+        attribution
+    }
+
+    /// The character id of each character of [`Self::text_where`]'s text,
+    /// in order.
+    pub fn attribution_where(&self, contains: impl Fn(DeltaId) -> bool) -> Vec<(char, CharId)> {
+        let mut attribution = Vec::new();
+        for fragment in self.fragments.iter() {
+            let first = fragment.first_char();
+            let shown = visible_where(fragment, &contains);
+            attribution.extend(
+                self.chars_of(fragment)
+                    .iter()
+                    .zip(shown)
+                    .zip(0..)
+                    .filter(|((_, shown), _)| *shown)
+                    .map(|((ch, _), offset)| (*ch, first.offset(offset))),
+            );
         }
         attribution
     }
@@ -986,6 +1068,20 @@ impl TextDoc {
 
 fn run_len(len: usize) -> u32 {
     u32::try_from(len).expect("runs are shorter than 4 GiB of chars")
+}
+
+/// Whether each of `fragment`'s characters shows in the version holding
+/// exactly the ids `contains` takes: inserted there, and deleted by none of
+/// its deletes there.
+fn visible_where(fragment: &Fragment, contains: impl Fn(DeltaId) -> bool) -> impl Iterator<Item = bool> {
+    let first = fragment.first_char();
+    (0..fragment.len).map(move |offset| {
+        let inserted = match first.offset(offset) {
+            CharId::Base { source, .. } => contains(source),
+            CharId::Delta(id) => contains(id),
+        };
+        inserted && !fragment.deleted_by.iter().any(|by| contains(DeltaId::new(by.actor, by.lamport.offset(u64::from(offset)))))
+    })
 }
 
 fn place(before: usize, offset: usize, target_visible: bool, bias: Bias) -> ResolvedAnchor {

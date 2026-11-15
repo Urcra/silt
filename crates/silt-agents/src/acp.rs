@@ -171,6 +171,13 @@ fn unfenced(output: String) -> String {
     }
 }
 
+/// What the agent showed the person, recorded by Silt itself (ADR 0068).
+pub fn artifact(artifact: &silt_proto::view::ArtifactView) -> String {
+    let mut record = serde_json::to_value(artifact).unwrap_or_else(|_| json!({}));
+    record["t"] = json!("artifact");
+    record.to_string()
+}
+
 pub fn tool_result(id: &str, status: &str, output: Option<&str>) -> String {
     json!({"t": "tool_result", "id": id, "status": status, "output": output}).to_string()
 }
@@ -308,6 +315,11 @@ pub fn read_line(line: &str) -> Read {
                 })
                 .collect();
             read.entries.push(Entry::Plan { steps });
+        }
+        "artifact" => {
+            if let Ok(artifact) = serde_json::from_value::<silt_proto::view::ArtifactView>(record.clone()) {
+                read.entries.push(Entry::Artifact(artifact));
+            }
         }
         "usage" => read.entries.push(Entry::Usage {
             message: field("id"),
@@ -501,6 +513,26 @@ mod tests {
                 Entry::Image { media_type: "image/png".into(), data: "AAAA".into() }
             ]
         );
+    }
+
+    #[test]
+    fn an_artifact_record_reads_back_as_the_artifact_and_searches_by_title() {
+        let shown = silt_proto::view::ArtifactView {
+            id: "0123456789ab".into(),
+            version: 2,
+            title: "Rescan benchmark".into(),
+            kind: "html".into(),
+            media_type: "text/html".into(),
+            blob: "ab".repeat(32),
+            size: 12,
+            inline: false,
+            caption: None,
+        };
+        let read = read_line(&artifact(&shown));
+        assert_eq!(read.entries, vec![Entry::Artifact(shown.clone())]);
+        assert_eq!(read.entries[0].searchable_text().as_deref(), Some("Rescan benchmark"));
+        let entry = crate::tool::shown(read.entries[0].clone()).expect("shown");
+        assert_eq!((entry.kind.as_str(), entry.artifact), ("artifact", Some(shown)));
     }
 
     #[test]

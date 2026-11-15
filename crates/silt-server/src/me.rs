@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use axum::Json;
 use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::StatusCode;
-use silt_proto::{MrSeen, SeenMark, ThreadState};
+use silt_proto::{MrSeen, SeenMark, ThreadSeen, ThreadState};
 use silt_types::{DeltaId, ThreadId};
 
 use crate::{ApiError, Caller, Server, bad_request, id_bytes, not_found};
@@ -39,6 +39,7 @@ pub(crate) async fn seen(
             hash: row.hash,
             seen: row.seen != 0,
             at_ms: row.at_ms,
+            version: None,
         });
     }
     let mut out = Vec::new();
@@ -73,6 +74,79 @@ pub(crate) async fn mark_seen(
         mr,
         mark.path,
         mark.hash,
+        seen,
+        mark.at_ms,
+    )
+    .execute(server.db())
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The longest path, hash or version a mark may carry, which a person's
+/// device sends and the server keeps.
+const MARK_FIELD_MAX: usize = 4096;
+
+/// The caller's seen marks on the files of every thread they still see
+/// (ADR 0067).
+pub(crate) async fn thread_seen(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<ThreadSeen>>, ApiError> {
+    let viewer = server.viewer(caller.user).await?;
+    let rows = sqlx::query!(
+        "SELECT thread_id, path, hash, version, seen, at_ms FROM thread_seen WHERE user_id = ? ORDER BY thread_id",
+        caller.user
+    )
+    .fetch_all(server.db())
+    .await?;
+    let mut by_thread: BTreeMap<u128, Vec<SeenMark>> = BTreeMap::new();
+    for row in rows {
+        let Ok(bytes) = <[u8; 16]>::try_from(row.thread_id.as_slice()) else {
+            continue;
+        };
+        by_thread.entry(u128::from_be_bytes(bytes)).or_default().push(SeenMark {
+            path: row.path,
+            hash: row.hash,
+            seen: row.seen != 0,
+            at_ms: row.at_ms,
+            version: row.version,
+        });
+    }
+    Ok(Json(
+        by_thread
+            .into_iter()
+            .map(|(thread, marks)| ThreadSeen { thread: ThreadId(thread), marks })
+            .filter(|seen| viewer.sees_thread(seen.thread))
+            .collect(),
+    ))
+}
+
+/// Keeps a mark on a thread's file unless the one stored is newer.
+pub(crate) async fn mark_thread_seen(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(thread): UrlPath<String>,
+    Json(mark): Json<SeenMark>,
+) -> Result<StatusCode, ApiError> {
+    let thread = ThreadId::from_str(&thread).map_err(|_| bad_request("invalid thread id"))?;
+    let long = |field: &str| field.len() > MARK_FIELD_MAX;
+    if long(&mark.path) || long(&mark.hash) || mark.version.as_deref().is_some_and(long) {
+        return Err(bad_request("the mark is too long"));
+    }
+    if !server.viewer(caller.user).await?.sees_thread(thread) {
+        return Err(not_found());
+    }
+    let (key, seen) = (id_bytes(thread.0), i64::from(mark.seen));
+    sqlx::query!(
+        "INSERT INTO thread_seen (user_id, thread_id, path, hash, version, seen, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, thread_id, path) DO UPDATE SET hash = excluded.hash, version = excluded.version,
+             seen = excluded.seen, at_ms = excluded.at_ms
+         WHERE excluded.at_ms > thread_seen.at_ms OR (excluded.at_ms = thread_seen.at_ms AND excluded.seen > thread_seen.seen)",
+        caller.user,
+        key,
+        mark.path,
+        mark.hash,
+        mark.version,
         seen,
         mark.at_ms,
     )

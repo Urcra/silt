@@ -22,7 +22,7 @@ use crate::load::{self, Loaded};
 use crate::protocol::{Mount, Request, Response};
 use crate::remote::{self, Remote};
 use crate::sessions::{self, PendingSession, Session};
-use crate::views::Only;
+use crate::views::{Only, TurnRange};
 use crate::watch::{Watched, Watchers};
 
 pub enum Event {
@@ -566,6 +566,10 @@ impl Core {
             return;
         }
         if let Request::Scoped { token, asking } = request {
+            if let Request::PutArtifact { artifact } = *asking {
+                let _ = reply.send(to_response(self.put_artifact(&token, artifact).await));
+                return;
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -591,6 +595,8 @@ impl Core {
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Scoped { .. } => Response::error("a request carries one token"),
+            Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
+            Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
@@ -631,12 +637,32 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, base, files, path } => {
+            Request::Diff { thread, turn, to_turn, base, files, path, hide_git } => {
                 let only = Only { files, path: path.as_deref() };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turn, base.as_deref(), only)))
+                let turns = TurnRange { turn, to_turn };
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide_git)),
+                )
             }
-            Request::DiffStats { thread, turn, base } => {
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turn, base.as_deref())))
+            Request::DiffStats { thread, turn, to_turn, base, hide_git } => {
+                let turns = TurnRange { turn, to_turn };
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide_git)),
+                )
+            }
+            Request::ThreadSeen { thread, turn, to_turn, base, hide_git } => {
+                let turns = TurnRange { turn, to_turn };
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide_git)),
+                )
+            }
+            Request::MarkThreadSeen { thread, mark } => to_response(self.mark_thread_seen(&thread, mark).await),
+            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git } => {
+                let only = Only { files, path: path.as_deref() };
+                let turns = TurnRange { turn, to_turn };
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide_git)),
+                )
             }
             Request::Search { query, limit, filters } => {
                 to_response(self.search(&query, limit, &filters).await.map(|results| self.scoped_results(results)))
@@ -695,7 +721,7 @@ impl Core {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
-            Request::MrShow { mr } => to_response(self.mr_show(&mr)),
+            Request::MrShow { mr, hide_git } => to_response(self.mr_show(&mr, hide_git)),
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
@@ -736,7 +762,11 @@ impl Core {
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, base, cwd } => to_response(self.list_comments(&thread, base.as_deref(), &cwd).await),
+            Request::Comments { thread, base, hide_git, cwd } => {
+                to_response(self.list_comments(&thread, base.as_deref(), hide_git, &cwd).await)
+            }
+            Request::AnchorLines { thread, on, cwd } => to_response(self.anchor_lines(&thread, on, &cwd).await),
+            Request::PlaceAnchors { thread, place, cwd } => to_response(self.place_anchors(&thread, place, &cwd).await),
             Request::CommentsSent { thread, comments, cwd } => to_response(self.comments_sent(&thread, &comments, &cwd).await),
             Request::ResolveComment { thread, comment, cwd } => to_response(self.resolve_comment(&thread, &comment, &cwd).await),
             Request::Reply { thread, comment, text, cwd } => to_response(self.reply(&thread, &comment, text, &cwd).await),
@@ -987,7 +1017,40 @@ impl Core {
 
     pub(crate) async fn rescan(&mut self, checkout: CheckoutId) -> Result<(), CoreError> {
         let root = self.checkout(checkout)?.record.path.clone();
-        self.ingest_paths(checkout, vec![root]).await
+        self.ingest_paths(checkout, vec![root]).await?;
+        self.note_git_since(checkout).await
+    }
+
+    /// When git moved the checkout's refs since its thread last looked,
+    /// other than by a commit, the edits recorded as the person's since
+    /// then are git's, as a `git pull` run by hand between turns makes
+    /// (ADR 0069). A tool call that ran git is the tool's (`note_git`).
+    async fn note_git_since(&mut self, checkout_id: CheckoutId) -> Result<(), CoreError> {
+        let checkout = self.checkout(checkout_id)?;
+        let (family_id, thread, now) = (checkout.family, checkout.record.thread, checkout.repo.git_state());
+        let Some(family) = self.families.get(&family_id) else {
+            return Ok(());
+        };
+        let head = family.thread_head(thread);
+        let looked = self.store.checkout_git_state(checkout_id, thread).await?;
+        self.store.put_checkout_git_state(checkout_id, thread, &now.to_string(), &head.to_string()).await?;
+        let Some((state, since)) = looked else {
+            return Ok(());
+        };
+        let (Ok(state), Ok(since)) = (state.parse::<silt_git::GitState>(), since.parse::<Frontier>()) else {
+            return Ok(());
+        };
+        if !self.checkout(checkout_id)?.repo.rewritten_since(&state) {
+            return Ok(());
+        }
+        let family = &self.families[&family_id];
+        let spans = silt_log::GitMade::persons_edits_since(family.log(), thread, &family.graph().version_vector(&since));
+        if spans.is_empty() {
+            return Ok(());
+        }
+        let head = family.thread_head(thread);
+        self.append_op(family_id, thread, head, Op::Git(GitOp::Made { spans })).await?;
+        Ok(())
     }
 
     /// Records changes under `paths` (absolute; directories are scanned).

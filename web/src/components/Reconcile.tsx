@@ -74,7 +74,7 @@ export function Reconcile() {
       (failure: unknown) => toast(message(failure), 'danger'),
     )
   const setAside = () =>
-    api.setThreadState(found.recovery, { pinned: null, snooze: null, settled: true, seen: false }).then(
+    api.setThreadState(found.recovery, { pinned: null, snooze: null, settled: true, seen: false, reviewed_turn: null }).then(
       () => toast('The recovery thread is settled; its work stays in its history', 'ok'),
       (failure: unknown) => toast(message(failure), 'danger'),
     )

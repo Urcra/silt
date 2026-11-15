@@ -192,11 +192,18 @@ enum Command {
         /// Only the changes made in this turn (1-based)
         #[arg(long, conflicts_with = "base")]
         turn: Option<usize>,
+        /// With --turn, the changes of every turn from it to this one
+        #[arg(long, requires = "turn")]
+        to_turn: Option<usize>,
         /// Diff from merge-base (with the fork's source), last-commit,
         /// last-turn or commit:<sha>; by default from the thread's start.
         /// Or against a branch as git has it now: main or branch:<name>
         #[arg(long)]
         base: Option<String>,
+        /// Leave out what git itself rewrote in a tool call, as a checkout,
+        /// pull, merge, rebase, reset or stash does; not against a branch
+        #[arg(long)]
+        hide_git: bool,
     },
     /// Search conversations: your team's through the server when connected
     Search {
@@ -254,6 +261,9 @@ enum Command {
         /// thread deleted
         #[arg(long, requires = "lines")]
         base: Option<String>,
+        /// Number --lines as `silt diff --hide-git` shows them
+        #[arg(long, requires = "lines")]
+        hide_git: bool,
         /// Answer this comment, by its id as `silt comments` shows it
         #[arg(long, conflicts_with_all = ["file", "entry"])]
         reply: Option<String>,
@@ -268,6 +278,9 @@ enum Command {
         /// Also say where comments on code are at this diff base
         #[arg(long, conflicts_with = "resolve")]
         base: Option<String>,
+        /// Number lines as `silt diff --hide-git` shows them
+        #[arg(long, conflicts_with = "resolve")]
+        hide_git: bool,
     },
     /// Other threads changing a file or directory of this repository
     InFlight {
@@ -323,6 +336,10 @@ enum Command {
         /// The run's token, which limits answers to its workspace
         #[arg(long)]
         token: Option<String>,
+        /// A person watches the run in the web UI: offer the tools that show
+        /// them images and artifacts
+        #[arg(long)]
+        ui: bool,
     },
 }
 
@@ -357,7 +374,12 @@ enum MrCommand {
     /// List merge requests, all or those of one thread
     List { thread: Option<String> },
     /// Show a merge request: summary, conflict hints, diff and the fork's conversation
-    Show { mr: String },
+    Show {
+        mr: String,
+        /// Leave out what git itself rewrote in the fork's tool calls
+        #[arg(long)]
+        hide_git: bool,
+    },
     /// Merge it into its target (on the device working on the target)
     Approve { mr: String },
     /// Decline it; both threads carry on
@@ -750,7 +772,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Mr { command } => match command {
             MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
             MrCommand::List { thread } => commands::mr_list(thread),
-            MrCommand::Show { mr } => commands::mr_show(&mr),
+            MrCommand::Show { mr, hide_git } => commands::mr_show(&mr, hide_git),
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
             MrCommand::RequestChanges { mr, reason } => commands::mr_request_changes(&mr, &reason.join(" ")),
@@ -830,7 +852,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Log { commit: None } => commands::log(),
         Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
-        Command::Diff { thread, turn, base } => commands::diff(&thread, turn, base),
+        Command::Diff { thread, turn, to_turn, base, hide_git } => commands::diff(&thread, turn, to_turn, base, hide_git),
         Command::Search { query, repo, author, status, branch, file, since, until } => {
             commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
         }
@@ -838,15 +860,15 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Blame { file, notes } => commands::blame(&file, notes),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment { thread, file, lines, entry, base: _, reply: Some(comment), text }
+        Command::Comment { thread, file, lines, entry, base: _, hide_git: _, reply: Some(comment), text }
             if file.is_none() && lines.is_none() && entry.is_none() =>
         {
             commands::reply(&thread, &comment, &text.join(" "))
         }
-        Command::Comment { thread, file, lines, entry, base, reply: _, text } => {
-            commands::comment(&thread, file, lines, entry, base, &text.join(" "))
+        Command::Comment { thread, file, lines, entry, base, hide_git, reply: _, text } => {
+            commands::comment(&thread, file, lines, entry, (base, hide_git), &text.join(" "))
         }
-        Command::Comments { thread, resolve, base } => commands::comments(&thread, resolve.as_deref(), base),
+        Command::Comments { thread, resolve, base, hide_git } => commands::comments(&thread, resolve.as_deref(), base, hide_git),
         Command::Server { command } => match command {
             ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {
                 admin::server_init(admin::InitOptions {
@@ -884,7 +906,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Status => commands::daemon_status(),
             DaemonCommand::Compact => commands::daemon_compact(),
         },
-        Command::Mcp { thread, checkout, token } => mcp::serve(&thread, checkout, token),
+        Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

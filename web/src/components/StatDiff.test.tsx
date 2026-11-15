@@ -45,3 +45,23 @@ test('a diff too large to read whole lists its files and reads only the one open
   // Querying 400 buttons by role, and drawing the opened file, take jsdom
   // seconds under the whole suite's load.
 }, 20_000)
+
+test("with git's changes hidden, a file is read without them", async () => {
+  const asked: string[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      asked.push(path)
+      return new Response(JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn mine() {}\n'))
+    }),
+  )
+  const stats: DiffStat[] = [{ path: 'src/a.rs', old_path: null, added: 1, removed: 1, binary: false, size: 80 }]
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <FilesByStats thread={THREAD} stats={stats} of={{ base: '', hideGit: true }} />
+    </QueryClientProvider>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'open src/a.rs' }))
+  await waitFor(() => expect(screen.getByText('fn mine() {}')).toBeInTheDocument())
+  expect(asked).toEqual([`/api/threads/${THREAD}/diff?git=hide&path=src%2Fa.rs`])
+})

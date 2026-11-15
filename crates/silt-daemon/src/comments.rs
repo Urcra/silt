@@ -1,11 +1,13 @@
 //! Comments on code lines and conversation entries (ADR 0011). Code
-//! comments hold CRDT anchors, so they follow their lines through edits.
+//! comments hold CRDT anchors, so they follow their lines through edits;
+//! a pending review comment takes its anchors when written (ADR 0066).
 
 use std::path::Path;
 
-use silt_crdt::{Anchor, Bias, TextDoc, VersionVector};
+use silt_crdt::{Anchor, Bias, InodeId, TextDoc, VersionVector};
 use silt_git::Repo;
-use silt_log::{CommentOp, CommentTarget, Op};
+use silt_log::{CommentOp, CommentTarget, Family, GitMade, Op};
+use silt_proto::view::{PendingAnchor, PlaceAnchors};
 use silt_store::ThreadRecord;
 use silt_types::{FamilyId, ThreadId};
 
@@ -60,6 +62,7 @@ impl Core {
         let thread = self.find_thread(selector)?;
         let family_id = self.threads[&thread].family;
         self.ensure_projected(family_id, cwd).await?;
+        let hide_git = matches!(on, CommentOn::Lines { hide_git: true, .. });
         let target = match on {
             CommentOn::Entry { index } => {
                 let entries = self.history_entries(thread);
@@ -68,8 +71,12 @@ impl Core {
                     .ok_or_else(|| CoreError::Invalid(format!("the thread has {} history entries", entries.len())))?;
                 CommentTarget::Message { delta: *delta }
             }
-            CommentOn::Lines { path, start, end, base } => {
-                self.code_target(family_id, thread, &path, start, end, base.as_deref())?
+            CommentOn::Lines { path, start, end, base, hide_git } => {
+                self.code_target(family_id, thread, &path, (start, end), base.as_deref(), hide_git)?
+            }
+            CommentOn::Anchored { anchor } => {
+                let (inode, start, end) = self.held_anchor(family_id, thread, &anchor)?;
+                CommentTarget::Code { inode, start, end }
             }
         };
         let by = match self.own_user(thread) {
@@ -78,30 +85,38 @@ impl Core {
         };
         let head = self.families[&family_id].thread_head(thread);
         let delta = self.append_op(family_id, thread, head, Op::Comment(CommentOp::Added { target, text, by })).await?;
-        self.comments(selector, None)?
+        self.comments(selector, None, hide_git)?
             .into_iter()
             .find(|comment| comment.id == short_mr(delta.span.first()))
             .ok_or_else(|| CoreError::Invalid("the comment was not recorded".into()))
     }
 
     /// Anchors for lines `start..=end` (1-based) of `path` as the thread
-    /// sees it now, or as it was at the diff base `base`.
+    /// sees it now, or as it was at the diff base `base`; with `hide_git`,
+    /// numbered without git's rewrites (ADR 0069).
     fn code_target(
         &mut self,
         family_id: FamilyId,
         thread: ThreadId,
         path: &str,
-        start: usize,
-        end: usize,
+        (start, end): (usize, usize),
         base: Option<&str>,
+        hide_git: bool,
     ) -> Result<CommentTarget, CoreError> {
         let repo = self.family_repo(family_id)?;
         let family = self.families.get_mut(&family_id).expect("projected above");
         let path = path.trim_start_matches("./");
+        let git_made = hide_git.then(|| GitMade::of(family.log())).filter(|made| !made.is_empty());
         let (version, inode) = match base {
-            None => {
+            None if git_made.is_none() => {
                 let version = family.graph().version_vector(&family.thread_head(thread));
                 (version, family.thread_view(thread).paths().get(path).copied())
+            }
+            None => {
+                let version = family.graph().version_vector(&family.thread_head(thread));
+                let made = git_made.as_ref().expect("checked above");
+                let inode = family.tree().at(|id| version.contains(id) && !made.contains(id)).paths().get(path).copied();
+                (version, inode)
             }
             Some(base) if git_base(base).is_some() => {
                 return Err(CoreError::Invalid(format!(
@@ -110,18 +125,86 @@ impl Core {
             }
             Some(base) => {
                 let version = diff_base(family, thread, Some(base))?;
-                let inode = family.tree().at(|id| version.contains(id)).paths().get(path).copied();
+                let shown = |id| version.contains(id) && !git_made.as_ref().is_some_and(|made| made.contains(id));
+                let inode = family.tree().at(shown).paths().get(path).copied();
                 (version, inode)
             }
         };
         let inode = inode.ok_or_else(|| CoreError::Invalid(format!("{path} is not a file of this thread")))?;
         family.text_doc_or_base(inode, &mut RepoBases(&repo))?;
         let doc = family.text_doc(inode).expect("made a text document above");
-        let text = doc.text_at_vv(&version);
+        let shown = |id| version.contains(id) && !git_made.as_ref().is_some_and(|made| made.contains(id));
+        let text = if git_made.is_some() { doc.text_where(shown) } else { doc.text_at_vv(&version) };
         let (from, to) = line_span(&text, start, end)
             .ok_or_else(|| CoreError::Invalid(format!("{path} has {} lines", text.lines().count())))?;
-        let anchor = |pos, bias| -> Result<Anchor, CoreError> { Ok(doc.anchor_at_vv(&version, pos, bias)?) };
+        let anchor = |pos, bias| -> Result<Anchor, CoreError> {
+            Ok(if git_made.is_some() { doc.anchor_where(shown, pos, bias)? } else { doc.anchor_at_vv(&version, pos, bias)? })
+        };
         Ok(CommentTarget::Code { inode, start: anchor(from, Bias::Right)?, end: anchor(to, Bias::Left)? })
+    }
+
+    /// Anchors lines for a pending review comment, as a comment on them
+    /// would be, without recording anything (ADR 0066).
+    pub(crate) async fn anchor_lines(&mut self, selector: &str, on: CommentOn, cwd: &Path) -> Result<PendingAnchor, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let family_id = self.threads[&thread].family;
+        self.ensure_projected(family_id, cwd).await?;
+        let CommentOn::Lines { path, start, end, base, hide_git } = on else {
+            return Err(CoreError::Invalid("only lines of code take an anchor".into()));
+        };
+        let target = self.code_target(family_id, thread, &path, (start, end), base.as_deref(), hide_git)?;
+        let anchor = serde_json::to_string(&target).map_err(|error| CoreError::Invalid(error.to_string()))?;
+        Ok(PendingAnchor { anchor })
+    }
+
+    /// Where pending review comments' anchors are in the thread now, and at
+    /// the diff base asked for, as [`Self::comments`] places comments; an
+    /// anchor that isn't this thread's is `Unknown`.
+    pub(crate) async fn place_anchors(
+        &mut self,
+        selector: &str,
+        place: PlaceAnchors,
+        cwd: &Path,
+    ) -> Result<Vec<CommentLocation>, CoreError> {
+        let thread = self.find_thread(selector)?;
+        let family_id = self.threads[&thread].family;
+        let _ = self.ensure_projected(family_id, cwd).await;
+        if !self.families.contains_key(&family_id) || place.anchors.len() > MAX_PLACED {
+            return Ok(vec![CommentLocation::Unknown; place.anchors.len().min(MAX_PLACED)]);
+        }
+        let held: Vec<Option<(InodeId, Anchor, Anchor)>> =
+            place.anchors.iter().map(|anchor| self.held_anchor(family_id, thread, anchor).ok()).collect();
+        let family = &self.families[&family_id];
+        let places = Places::new(family, thread, place.base.as_deref(), place.hide_git);
+        Ok(held
+            .into_iter()
+            .map(|held| held.map_or(CommentLocation::Unknown, |(inode, start, end)| places.locate(inode, &start, &end)))
+            .collect())
+    }
+
+    /// The anchors an untrusted anchor from a browser names, once they're
+    /// known to be lines of one of this family's text files.
+    fn held_anchor(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        anchor: &str,
+    ) -> Result<(InodeId, Anchor, Anchor), CoreError> {
+        let invalid = || CoreError::Invalid("that isn't an anchor of this thread's lines".into());
+        if anchor.len() > MAX_ANCHOR {
+            return Err(invalid());
+        }
+        let Ok(CommentTarget::Code { inode, start, end }) = serde_json::from_str::<CommentTarget>(anchor) else {
+            return Err(invalid());
+        };
+        let repo = self.family_repo(family_id)?;
+        let family = self.families.get_mut(&family_id).ok_or_else(invalid)?;
+        let head = family.graph().version_vector(&family.thread_head(thread));
+        let doc = family.text_doc_or_base(inode, &mut RepoBases(&repo)).map_err(|_| invalid())?;
+        if doc.resolve_at_vv(&head, &start).is_err() || doc.resolve_at_vv(&head, &end).is_err() {
+            return Err(invalid());
+        }
+        Ok((inode, start, end))
     }
 
     /// Records that `comments` went to the thread's agent (ADR 0055).
@@ -140,7 +223,7 @@ impl Core {
         }
         let head = self.families[&family_id].thread_head(thread);
         self.append_op(family_id, thread, head, Op::Comment(CommentOp::Sent { comments: ids })).await?;
-        self.comments(selector, None)
+        self.comments(selector, None, false)
     }
 
     pub(crate) async fn resolve_comment(&mut self, selector: &str, comment: &str, cwd: &Path) -> Result<CommentView, CoreError> {
@@ -190,7 +273,7 @@ impl Core {
     }
 
     fn comment_view(&mut self, selector: &str, id: silt_types::DeltaId) -> Result<CommentView, CoreError> {
-        self.comments(selector, None)?
+        self.comments(selector, None, false)?
             .into_iter()
             .find(|found| found.id == short_mr(id))
             .ok_or_else(|| CoreError::Invalid("the comment disappeared".into()))
@@ -202,17 +285,19 @@ impl Core {
         &mut self,
         selector: &str,
         base: Option<&str>,
+        hide_git: bool,
         cwd: &Path,
     ) -> Result<Vec<CommentView>, CoreError> {
         let thread = self.find_thread(selector)?;
         // Without a clone there's nothing to place code comments in yet.
         let _ = self.ensure_projected(self.threads[&thread].family, cwd).await;
-        self.comments(selector, base)
+        self.comments(selector, base, hide_git)
     }
 
     /// The thread's comments, placed in the thread as it is now, and at the
-    /// diff base `base` where it names a version of the thread.
-    pub(crate) fn comments(&mut self, selector: &str, base: Option<&str>) -> Result<Vec<CommentView>, CoreError> {
+    /// diff base `base` where it names a version of the thread; with
+    /// `hide_git`, as a diff without git's rewrites numbers the lines.
+    pub(crate) fn comments(&mut self, selector: &str, base: Option<&str>, hide_git: bool) -> Result<Vec<CommentView>, CoreError> {
         let thread = self.find_thread(selector)?;
         let family_id = self.threads[&thread].family;
         if !self.families.contains_key(&family_id) {
@@ -221,11 +306,7 @@ impl Core {
         self.materialize_commented(family_id, thread);
         let family = &self.families[&family_id];
         let entries = self.history_entries(thread);
-        let view = family.thread_view(thread);
-        let paths = view.paths();
-        let head = family.graph().version_vector(&family.thread_head(thread));
-        let before = base.filter(|base| git_base(base).is_none()).and_then(|base| diff_base(family, thread, Some(base)).ok());
-        let base_paths = before.as_ref().map(|version| family.tree().at(|id| version.contains(id)).paths());
+        let places = Places::new(family, thread, base, hide_git);
         Ok(family
             .comments(thread)
             .into_iter()
@@ -236,25 +317,7 @@ impl Core {
                             CommentLocation::Entry { index: entry.index, excerpt: entry.text.chars().take(120).collect() }
                         })
                     }
-                    CommentTarget::Code { inode, start, end } => {
-                        let named = |paths: &std::collections::BTreeMap<String, silt_crdt::InodeId>| {
-                            paths.iter().find(|(_, found)| **found == inode).map(|(path, _)| path.clone())
-                        };
-                        let path = named(&paths).or_else(|| base_paths.as_ref().and_then(named));
-                        let doc = family.text_doc(inode);
-                        let now = doc.and_then(|doc| place(doc, &head, &start, &end));
-                        let then = doc
-                            .zip(before.as_ref())
-                            .and_then(|(doc, version)| place(doc, version, &start, &end))
-                            .filter(|(.., outdated)| !outdated)
-                            .map(|(start, end, _)| LineSpan { start, end });
-                        match (path, now) {
-                            (Some(path), Some((start_line, end_line, outdated))) => {
-                                CommentLocation::Lines { path, start: start_line, end: end_line, outdated, before: then }
-                            }
-                            _ => CommentLocation::Unknown,
-                        }
-                    }
+                    CommentTarget::Code { inode, start, end } => places.locate(inode, &start, &end),
                 };
                 CommentView {
                     id: short_mr(comment.id),
@@ -291,12 +354,73 @@ impl Core {
     }
 }
 
-/// Where anchored lines are at `version`: first and last line (1-based)
-/// and whether the commented text is gone.
-fn place(doc: &TextDoc, version: &VersionVector, start: &Anchor, end: &Anchor) -> Option<(usize, usize, bool)> {
-    let text = doc.text_at_vv(version);
-    let start = doc.resolve_at_vv(version, start).ok()?;
-    let end = doc.resolve_at_vv(version, end).ok()?;
+/// The longest anchor a browser may hand back, and how many it may ask to
+/// place at once: a pending review's are a few hundred bytes each.
+const MAX_ANCHOR: usize = 4096;
+const MAX_PLACED: usize = 500;
+
+/// What placing a thread's anchored lines needs: its files' paths now and
+/// at a diff base, both versions, and git's edits when a diff leaves them
+/// out (ADR 0069).
+struct Places<'a> {
+    family: &'a Family,
+    git_made: Option<GitMade>,
+    paths: std::sync::Arc<std::collections::BTreeMap<String, InodeId>>,
+    head: VersionVector,
+    before: Option<VersionVector>,
+    base_paths: Option<std::collections::BTreeMap<String, InodeId>>,
+}
+
+impl<'a> Places<'a> {
+    fn new(family: &'a Family, thread: ThreadId, base: Option<&str>, hide_git: bool) -> Self {
+        let paths = family.thread_view(thread).paths();
+        let head = family.graph().version_vector(&family.thread_head(thread));
+        let before = base.filter(|base| git_base(base).is_none()).and_then(|base| diff_base(family, thread, Some(base)).ok());
+        let base_paths = before.as_ref().map(|version| family.tree().at(|id| version.contains(id)).paths());
+        let git_made = hide_git.then(|| GitMade::of(family.log())).filter(|made| !made.is_empty());
+        Self { family, git_made, paths, head, before, base_paths }
+    }
+
+    /// Where lines anchored in `inode` are now, outdated once their text is
+    /// gone, and where they were at the base when they're there.
+    fn locate(&self, inode: InodeId, start: &Anchor, end: &Anchor) -> CommentLocation {
+        let named = |paths: &std::collections::BTreeMap<String, InodeId>| {
+            paths.iter().find(|(_, found)| **found == inode).map(|(path, _)| path.clone())
+        };
+        let path = named(&self.paths).or_else(|| self.base_paths.as_ref().and_then(named));
+        let doc = self.family.text_doc(inode);
+        let now = doc.and_then(|doc| place(doc, &self.head, self.git_made.as_ref(), start, end));
+        let then = doc
+            .zip(self.before.as_ref())
+            .and_then(|(doc, version)| place(doc, version, self.git_made.as_ref(), start, end))
+            .filter(|(.., outdated)| !outdated)
+            .map(|(start, end, _)| LineSpan { start, end });
+        match (path, now) {
+            (Some(path), Some((start_line, end_line, outdated))) => {
+                CommentLocation::Lines { path, start: start_line, end: end_line, outdated, before: then }
+            }
+            _ => CommentLocation::Unknown,
+        }
+    }
+}
+
+/// Where anchored lines are at `version`, without the edits in
+/// `git_made`: first and last line (1-based) and whether the commented
+/// text is gone.
+fn place(
+    doc: &TextDoc,
+    version: &VersionVector,
+    git_made: Option<&GitMade>,
+    start: &Anchor,
+    end: &Anchor,
+) -> Option<(usize, usize, bool)> {
+    let (text, start, end) = match git_made {
+        None => (doc.text_at_vv(version), doc.resolve_at_vv(version, start).ok()?, doc.resolve_at_vv(version, end).ok()?),
+        Some(made) => {
+            let shown = |id| version.contains(id) && !made.contains(id);
+            (doc.text_where(shown), doc.resolve_where(shown, start).ok()?, doc.resolve_where(shown, end).ok()?)
+        }
+    };
     let line_of = |pos: usize| text.chars().take(pos).filter(|ch| *ch == '\n').count() + 1;
     let first = line_of(start.pos);
     let last = line_of(end.pos.max(start.pos)).max(first);

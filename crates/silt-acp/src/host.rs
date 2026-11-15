@@ -22,6 +22,15 @@ use crate::prompt::{Accepts, Attachment};
 /// What Silt calls itself to agents.
 pub(crate) const NAME: &str = "silt";
 
+/// How the agent starts Silt's MCP server: the agent's own environment is
+/// only what the daemon passes it, so the server is told where Silt's data is.
+#[derive(Debug, Clone)]
+pub struct McpStart {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
 /// How to start the agent.
 #[derive(Debug, Clone)]
 pub struct Start {
@@ -29,8 +38,8 @@ pub struct Start {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub cwd: PathBuf,
-    /// Silt's MCP server: command and arguments.
-    pub mcp: Option<(PathBuf, Vec<String>)>,
+    /// Silt's MCP server.
+    pub mcp: Option<McpStart>,
     /// A session to load instead of starting a new one, when the agent can.
     pub load: Option<String>,
     /// A sign-in method of the agent's own to ask it to follow before the

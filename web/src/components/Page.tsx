@@ -47,6 +47,7 @@ export function Page({
   sheet,
   inspectorWidth = 360,
   columnRef,
+  full = false,
 }: {
   title?: ReactNode
   meta?: ReactNode
@@ -61,8 +62,10 @@ export function Page({
   label?: string
   /** The body sets its own padding, such as a list running edge to edge. */
   flush?: boolean
-  /** Below the desktop width, the inspector opens over the page as a sheet, only while `open`. */
-  sheet?: { open: boolean; onClose: () => void }
+  /** Below the desktop width, the inspector opens over the page as a sheet, only while `open`; `bare`, with a close of its own. */
+  sheet?: { open: boolean; onClose: () => void; bare?: boolean }
+  /** On a desktop, the inspector takes the body's space too; the body stays mounted, hidden. */
+  full?: boolean
   /** The inspector's width until the person drags it. */
   inspectorWidth?: number
   /** The body's own column, which scrolls beside an inspector: for a view that renders only what's in view, above where `MainScroll` says so. */
@@ -95,7 +98,7 @@ export function Page({
     // Grows with its content, never under it, so the header stays stuck however long the body is.
     <MainScroll.Provider value={split ? own : outer}>
     <div className={cx('flex shrink-0 grow flex-col lg:flex-row', split ? 'h-full min-h-0 overflow-hidden' : 'min-h-full')}>
-      <div ref={own} className={cx('flex min-w-0 flex-1 flex-col', split && 'relative overflow-y-auto')} data-page={label}>
+      <div ref={own} className={cx('flex min-w-0 flex-1 flex-col', split && 'relative overflow-y-auto', split && full && 'lg:hidden')} data-page={label}>
         {(title || actions) && (
           <header className="sticky top-0 z-10 flex min-h-12 shrink-0 items-center bg-bg gap-x-2.5 gap-y-0.5 border-b border-line-subtle px-4 max-md:flex-wrap max-md:py-1.5 md:h-12 md:pr-3 md:pl-5">
             <DrawerButton />
@@ -108,7 +111,7 @@ export function Page({
         )}
         <div className={cx('w-full flex-1', column, flush ? 'flex flex-col' : 'px-4 py-4 pb-8 md:px-6')}>{children}</div>
       </div>
-      {inspector && (
+      {inspector && !(split && full) && (
         <div
           {...panel.handle}
           aria-label={`resize ${inspectorLabel}`}
@@ -120,7 +123,8 @@ export function Page({
           aria-label={inspectorLabel}
           style={{ '--inspector': `${panel.width}px` } as CSSProperties}
           className={cx(
-            'flex w-full shrink-0 flex-col border-line lg:h-full lg:w-(--inspector) lg:max-w-[50vw] lg:overflow-y-auto lg:border-l',
+            'flex w-full shrink-0 flex-col border-line lg:h-full lg:overflow-y-auto',
+            split && full ? 'lg:flex-1 lg:shrink' : 'lg:w-(--inspector) lg:max-w-[50vw] lg:border-l',
             sheet
               ? sheet.open
                 ? 'fixed inset-x-0 top-0 bottom-0 z-30 overflow-y-auto bg-bg lg:sticky lg:z-auto'
@@ -128,7 +132,7 @@ export function Page({
               : 'border-t lg:border-t-0',
           )}
         >
-          {sheet?.open && (
+          {sheet?.open && !sheet.bare && (
             <div className="flex justify-end border-b border-line px-2 lg:hidden">
               <button type="button" onClick={sheet.onClose} className="inline-flex min-h-11 items-center gap-1.5 px-3 text-sm text-fg-2">
                 Close
