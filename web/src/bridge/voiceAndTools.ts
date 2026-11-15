@@ -43,6 +43,7 @@ export function dictationHandler(thread: string, artifact: ArtifactView, holder:
           ended: (reason) => {
             take = null
             listening = false
+            holder.voice?.('idle', null)
             state('idle', reason)
           },
         })
@@ -50,6 +51,7 @@ export function dictationHandler(thread: string, artifact: ArtifactView, holder:
         listening = false
         throw new Refusal('unavailable', failure instanceof Error ? failure.message : String(failure))
       }
+      holder.voice?.('listening', () => void take?.stop())
       state('listening')
       return null
     },
@@ -64,7 +66,7 @@ export function dictationServed(): boolean {
 type Line = { text: string; voice?: string; rate?: number; language?: string; id?: string }
 
 /** `tts`: text spoken to the viewer in the browser's own voices, a reading at a time. */
-export function ttsHandler(): CapabilityHandler {
+export function ttsHandler(holder: Holder): CapabilityHandler {
   let rate = 1
   let reading: { cancel: () => void } | null = null
   const voiceFor = (named: string | undefined, language: string | undefined) => {
@@ -107,6 +109,7 @@ export function ttsHandler(): CapabilityHandler {
           cancel: () => {
             stopped = true
             speechSynthesis.cancel()
+            holder.voice?.('idle', null)
             state('idle', 'viewer_stopped')
             fail(new Refusal('refused', 'viewer_stopped'))
           },
@@ -118,11 +121,13 @@ export function ttsHandler(): CapabilityHandler {
           if (voice) utterance.voice = voice
           if (line.language) utterance.lang = line.language
           utterance.onstart = () => {
+            holder.voice?.('speaking', () => reading?.cancel())
             state('speaking')
             context.emit('tts', 'line', { line: index, id: line.id ?? null })
           }
           utterance.onend = () => {
             if (index === lines.length - 1 && !stopped) {
+              holder.voice?.('idle', null)
               state('idle', 'completed')
               done(null)
             }

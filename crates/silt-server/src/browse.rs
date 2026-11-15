@@ -45,6 +45,8 @@ pub(crate) fn routes() -> Router<Server> {
             "/app/api/threads/{id}/artifacts/{artifact}/assets",
             post(page_assets).layer(axum::extract::DefaultBodyLimit::max(PAGE_FILE_BODY)),
         )
+        .route("/app/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/artifacts", get(artifact_listing))
         .route("/app/api/threads/{id}/artifacts/{artifact}/thumbnail", get(artifact_thumbnail))
@@ -490,7 +492,7 @@ async fn page_data(
     if let Some(read) = silt_proto::page::read(&page.docs, &request, &rules, &page.me, page.level) {
         return Ok(Json(read));
     }
-    let writes = request.writes().map_err(bad_request)?;
+    let writes = request.writes(&page.docs).map_err(bad_request)?;
     let ops =
         silt_proto::page::page_ops(artifact_id, &page.docs, writes, &rules, &page.me, page.level).map_err(crate::forbidden)?;
     let written = ops.len();
@@ -570,6 +572,11 @@ async fn page_assets(
             if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
                 return Err(bad_request("the file is larger than a page keeps"));
             }
+            let limit = server.config().artifact_assets_mib.saturating_mul(1 << 20);
+            let taken: u64 = silt_proto::page::assets(&page.docs).iter().map(|kept| kept.size).sum();
+            if taken.saturating_add(bytes.len() as u64) > limit {
+                return Err(bad_request(format!("this page's files would take more than this server's {} MiB", limit >> 20)));
+            }
             let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the file couldn't be kept"))?;
             let asset = format!("{:032x}", uuid::Uuid::new_v4().as_u128())[..12].to_owned();
             let size = bytes.len() as u64;
@@ -636,9 +643,32 @@ async fn publish_artifact(
     if bytes.len() as u64 > silt_proto::artifact::ARTIFACT_BYTES {
         return Err(bad_request("the page is larger than an artifact keeps"));
     }
+    let note = format!("Saved by the page, for {}", readable.me);
+    let version =
+        write_version(&server, browser, &viewer, row, latest, "text/html", "index.html", bytes, note, readable.me.clone())
+            .await?;
+    Ok(Json(serde_json::json!({ "id": artifact, "version": version })))
+}
+
+/// Writes `bytes` as artifact `latest`'s next version, recorded in the
+/// session that made it, as the person; answers the new version's number.
+#[expect(clippy::too_many_arguments, reason = "the parts of one version")]
+async fn write_version(
+    server: &Server,
+    browser: Browser,
+    viewer: &Viewer,
+    row: &Row,
+    latest: ArtifactView,
+    media_type: &str,
+    file: &str,
+    bytes: Vec<u8>,
+    note: String,
+    by: String,
+) -> Result<u32, ApiError> {
+    let artifact = latest.id.clone();
     let session = {
         let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
-        let browsed = slot.browsed(row.family, &viewer);
+        let browsed = slot.browsed(row.family, viewer);
         let needle = format!("\"id\":\"{artifact}\"");
         browsed.log.iter().rev().find_map(|delta| match &delta.op {
             Op::Conv(silt_log::ConvOp::Native { session, line, .. })
@@ -651,22 +681,111 @@ async fn publish_artifact(
     }
     .ok_or_else(not_found)?;
     let version = latest.version + 1;
-    let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the page couldn't be kept"))?;
-    let name = format!("artifact/{artifact}/v{version}/index.html");
+    let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the version couldn't be kept"))?;
+    let name = format!("artifact/{artifact}/v{version}/{file}");
     let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
-    crate::writes::write_as_with(&server, browser, row.family, row.id, None, attachment).await?;
+    crate::writes::write_as_with(server, browser, row.family, row.id, None, attachment).await?;
     let view = ArtifactView {
         version,
-        media_type: "text/html".into(),
+        media_type: media_type.into(),
         blob: blob.to_string(),
         size: bytes.len() as u64,
-        note: Some(format!("Saved by the page, for {}", readable.me)),
-        by: Some(readable.me.clone()),
+        note: Some(note),
+        by: Some(by),
         ..latest
     };
     let line = silt_agents::acp::artifact(&view);
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
-    crate::writes::write_as_with(&server, browser, row.family, row.id, None, native).await?;
+    crate::writes::write_as_with(server, browser, row.family, row.id, None, native).await?;
+    Ok(version)
+}
+
+/// One of the files people added to a page, for a view Silt draws itself,
+/// such as a whiteboard's images (ADR 0081).
+async fn page_asset_content(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact, asset)): Path<(String, String, String)>,
+) -> Result<Json<ArtifactContent>, ApiError> {
+    use base64::Engine as _;
+    if !silt_proto::page::asset_id_ok(&asset) {
+        return Err(not_found());
+    }
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    let doc = page.docs.get(&format!("_assets/{asset}")).ok_or_else(not_found)?;
+    let blob: silt_types::BlobHash = doc["blob"].as_str().and_then(|blob| blob.parse().ok()).ok_or_else(not_found)?;
+    let media_type = doc["media_type"].as_str().unwrap_or("application/octet-stream").to_owned();
+    let bytes = server.shared.blobs.get(blob).await.map_err(|_| not_found())?;
+    Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
+}
+
+#[derive(Deserialize)]
+struct SaveVersion {
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Keeps a doc, a sheet or a whiteboard as it stands as its next version,
+/// from the person's Save version (ADR 0077).
+async fn save_edited_version(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(save): Json<SaveVersion>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let row = readable.row(&id)?;
+    let latest = readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !silt_proto::edited::is_edited(&latest.kind) {
+        return Err(bad_request("only a doc, a sheet or a whiteboard is saved as it stands"));
+    }
+    let collaborator = readable.collaborators.get(&row.id).is_some_and(|names| names.contains(&readable.me));
+    if row.owner != readable.me && !collaborator {
+        return Err(crate::forbidden("only the thread's owner and collaborators save its artifacts' versions"));
+    }
+    let artifact_id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let snapshot = {
+        let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
+        let browsed = slot.browsed(row.family, &viewer);
+        match latest.kind.as_str() {
+            "doc" => silt_log::doc_text_in(&browsed.log, browsed.graph(), row.id, artifact_id),
+            "sheet" => {
+                let cells = silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, artifact_id, 0);
+                serde_json::json!({ "rows": silt_proto::edited::sheet_view(&cells, 0.0).raw }).to_string()
+            }
+            _ => {
+                let docs = silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact_id);
+                let items: Vec<&serde_json::Value> = docs
+                    .iter()
+                    .filter(|(path, _)| path.split('/').count() == 2 && path.starts_with("items/"))
+                    .map(|(_, doc)| doc)
+                    .collect();
+                serde_json::json!({ "items": items }).to_string()
+            }
+        }
+    };
+    let (media_type, file) =
+        if latest.kind == "doc" { (latest.media_type.clone(), "content") } else { ("application/json".into(), "content.json") };
+    let note = save
+        .note
+        .map(|note| note.trim().chars().take(silt_proto::artifact::NOTE_CHARS).collect::<String>())
+        .filter(|note| !note.is_empty());
+    let note = note.unwrap_or_else(|| format!("Saved by {}", readable.me));
+    let version = write_version(
+        &server,
+        browser,
+        &viewer,
+        row,
+        latest,
+        &media_type,
+        file,
+        snapshot.into_bytes(),
+        note,
+        readable.me.clone(),
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "id": artifact, "version": version })))
 }
 

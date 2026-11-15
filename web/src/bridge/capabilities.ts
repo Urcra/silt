@@ -21,6 +21,8 @@ export type Holder = {
   commentIds: () => string[]
   /** Shows what a page's reply or resolve changed. */
   commentsChanged: () => void
+  /** Shows, outside the page, that it listens or speaks, with what stops it (ADR 0079). */
+  voice?: (now: 'listening' | 'speaking' | 'idle', stop: (() => void) | null) => void
 }
 
 export function handlersFor(thread: string, artifact: ArtifactView, holder: Holder): Record<string, CapabilityHandler> {
@@ -34,7 +36,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     assets: assetsHandler(thread, artifact),
     files: filesHandler(thread, artifact, holder),
     ...(dictationServed() ? { dictation: dictationHandler(thread, artifact, holder) } : {}),
-    ...(ttsServed() ? { tts: ttsHandler() } : {}),
+    ...(ttsServed() ? { tts: ttsHandler(holder) } : {}),
     mcp: mcpHandler(thread, artifact, holder),
     room: roomHandler(thread, artifact),
     permissions: permissionsHandler(thread, artifact, holder),

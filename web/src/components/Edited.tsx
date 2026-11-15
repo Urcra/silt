@@ -3,11 +3,14 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { api, type CommentView, type SheetView } from '../api'
+import { api, type ArtifactView, type CommentView, type SheetView } from '../api'
+import { offlineHtml, textOf } from '../artifacts'
 import { useTopic } from '../bus'
+import { lineDiff } from '../lineDiff'
 import { keys, message } from '../query'
+import { hosted } from '../served'
 import { columnName, splice } from '../typed'
-import { Button, IconButton, Textarea, cx, toast } from '../ui'
+import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { Markdown } from './Markdown'
 
@@ -60,12 +63,54 @@ function DocComments({
   )
 }
 
-export function DocEditor({ thread, artifact }: { thread: string; artifact: string }) {
+/** Hands the viewer a file the doc made. */
+function saveFile(bytes: BlobPart, type: string, name: string) {
+  const url = URL.createObjectURL(new Blob([bytes], { type }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** The doc's text against one of its versions, line by line. */
+function DocCompare({ thread, version, text }: { thread: string; version: ArtifactView; text: string }) {
+  const kept = useQuery({ queryKey: keys.artifact(thread, version.blob), queryFn: () => api.artifact(thread, version.blob), staleTime: Infinity })
+  if (kept.error) return <p className="px-6 py-4 text-sm text-danger">{message(kept.error)}</p>
+  if (!kept.data) return null
+  const lines = lineDiff(textOf(kept.data), text)
+  if (!lines) return <p className="px-6 py-4 text-sm text-fg-2">These versions are too long to compare here.</p>
+  return (
+    <div className="min-h-0 flex-1 overflow-auto" data-testid="doc-compare">
+      <p className="mx-auto max-w-3xl px-6 pt-4 text-xs text-fg-2">
+        v{version.version} against the doc now{version.note ? ` · ${version.note}` : ''}
+      </p>
+      <pre className="mx-auto max-w-3xl px-6 pt-2 pb-10 font-mono text-xs leading-5 whitespace-pre-wrap">
+        {lines.map((line, at) => (
+          <div
+            key={at}
+            className={cx(line.kind === 'added' && 'bg-ok-tint text-fg-1', line.kind === 'removed' && 'bg-danger-tint text-fg-2 line-through', line.kind === 'same' && 'text-fg-2')}
+          >
+            <span aria-hidden="true" className="inline-block w-4 select-none">
+              {line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' '}
+            </span>
+            <span className="sr-only">{line.kind === 'added' ? 'added: ' : line.kind === 'removed' ? 'removed: ' : ''}</span>
+            {line.text || ' '}
+          </div>
+        ))}
+      </pre>
+    </div>
+  )
+}
+
+export function DocEditor({ thread, artifact, title, versions }: { thread: string; artifact: string; title: string; versions: ArtifactView[] }) {
   useTopic(`thread:${thread}`)
   const queries = useQueryClient()
   const key = ['doc', thread, artifact]
   const doc = useQuery({ queryKey: key, queryFn: () => api.docData(thread, artifact, { op: 'read' }), refetchInterval: 5_000 })
-  const [view, setView] = useState<'write' | 'read'>('read')
+  const [view, setView] = useState<'write' | 'read' | 'compare'>('read')
+  const [comparing, setComparing] = useState<ArtifactView | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
   const comments = useQuery({ queryKey: keys.comments(thread), queryFn: () => api.comments(thread) })
   const commentsHere = (comments.data ?? []).filter((comment) => comment.location.at === 'doc' && comment.location.artifact === artifact)
@@ -128,6 +173,33 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
     pending.current = window.setTimeout(() => void send(text), 400)
   }
   const text = draft ?? doc.data?.text ?? ''
+  const saveVersion = async () => {
+    try {
+      const saved = await api.saveVersion(thread, artifact, saving ?? '')
+      setSaving(null)
+      await queries.invalidateQueries({ queryKey: keys.history(thread) })
+      toast(`Saved as v${saved.version}`, 'ok')
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
+  const named = title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'doc'
+  const page = async () => {
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const shown = versions.at(-1)
+    const rendered = renderToStaticMarkup(<Markdown text={text} />)
+    return shown ? offlineHtml(shown, { media_type: 'text/markdown', data: '' }, rendered) : rendered
+  }
+  const pdf = async () => {
+    try {
+      // The printed page's margins are the page's own, as a deck's slides have none.
+      const printable = (await page()).replace('</head>', '<style>@page{margin:18mm 16mm}</style></head>')
+      const printed = await api.artifactPdf(thread, artifact, printable)
+      saveFile(Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0)), 'application/pdf', `${named}.pdf`)
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   if (doc.error) return <p className="px-5 py-6 text-sm text-danger">{message(doc.error)}</p>
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="doc-editor">
@@ -138,7 +210,33 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
         <Button size="sm" variant={view === 'write' ? 'secondary' : 'ghost'} aria-pressed={view === 'write'} onClick={() => setView('write')}>
           Edit
         </Button>
+        {versions.length > 0 && (
+          <Menu
+            label="Compare with a version"
+            align="left"
+            trigger={<span className={cx('rounded-sm px-2 py-1 text-xs', view === 'compare' ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}>Compare</span>}
+            items={[...versions].reverse().map((version) => ({
+              label: `v${version.version}${version.note ? ` · ${version.note}` : ''}`,
+              onSelect: () => {
+                setComparing(version)
+                setView('compare')
+              },
+            }))}
+          />
+        )}
         <span className="flex-1" />
+        <Button size="sm" variant="ghost" onClick={() => setSaving(saving === null ? '' : null)}>
+          Save version
+        </Button>
+        <Menu
+          label="Download the doc"
+          trigger={<Icon name="download" className="h-4 w-4" />}
+          items={[
+            { label: 'Markdown', onSelect: () => saveFile(text, 'text/markdown', `${named}.md`) },
+            { label: 'HTML', onSelect: () => void page().then((html) => saveFile(html, 'text/html', `${named}.html`)) },
+            ...(hosted() ? [] : [{ label: 'PDF', hint: 'printed on this computer', onSelect: () => void pdf() }]),
+          ]}
+        />
         {view === 'write' && (
           <Button size="sm" variant="ghost" icon="comment" disabled={!chosen} title={chosen ? undefined : 'Select some text first'} onClick={() => setComposing(true)}>
             Comment
@@ -146,6 +244,20 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
         )}
         <span className="font-mono text-2xs text-fg-3">{draft !== null ? 'Saving…' : 'Saved'}</span>
       </div>
+      {saving !== null && (
+        <form
+          className="flex shrink-0 items-center gap-1.5 border-b border-line-subtle px-3 py-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void saveVersion()
+          }}
+        >
+          <Input aria-label="what this version is" value={saving} onChange={(event) => setSaving(event.target.value)} placeholder="What this version is (optional)" autoFocus className="min-w-0 flex-1" />
+          <Button type="submit" size="sm" variant="primary">
+            Save
+          </Button>
+        </form>
+      )}
       {view === 'write' && chosen && composing && (
         <form
           className="flex shrink-0 flex-col gap-1.5 border-b border-line-subtle px-3 py-2"
@@ -165,7 +277,9 @@ export function DocEditor({ thread, artifact }: { thread: string; artifact: stri
           </div>
         </form>
       )}
-      {view === 'write' ? (
+      {view === 'compare' && comparing ? (
+        <DocCompare thread={thread} version={comparing} text={text} />
+      ) : view === 'write' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <textarea
             ref={editor}

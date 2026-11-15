@@ -161,6 +161,8 @@ export function ArtifactViewer({
   const [sharing, setSharing] = useState(false)
   // What a page asks the person to agree to, such as saving a file, until they answer.
   const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
+  // Whether the page listens to the person or speaks to them now, and what stops it (ADR 0079).
+  const [voice, setVoice] = useState<{ now: 'listening' | 'speaking'; stop: () => void } | null>(null)
   const composer = useRef<(() => void) | null>(null)
   const shown = group ? versionOf(group, opened.version) : null
   // What the holder's calls act on, as the view now stands; the holder itself is made once.
@@ -192,6 +194,7 @@ export function ArtifactViewer({
       return group ? commentsOn(group, comments).map((comment) => comment.id) : []
     },
     commentsChanged: () => void current.current.onCommentsChanged(),
+    voice: (now, stop) => setVoice(now === 'idle' || !stop ? null : { now, stop }),
   }))
   const answerAsking = (agreed: boolean) => {
     asking?.answer(agreed)
@@ -366,6 +369,15 @@ export function ArtifactViewer({
           />
         </span>
         <span className="min-w-2 flex-1" />
+        {voice && (
+          <span role="status" className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent/40 bg-accent-tint py-0.5 pr-0.5 pl-2 text-xs text-fg-1" data-testid="page-voice">
+            <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+            {voice.now === 'listening' ? 'The page is listening' : 'The page is speaking'}
+            <button type="button" onClick={voice.stop} className="rounded-full px-2 py-0.5 font-medium text-accent-fg hover:bg-surface-2 max-md:min-h-11">
+              Stop
+            </button>
+          </span>
+        )}
         <span role="group" aria-label="View" className="mr-1 inline-flex shrink-0 gap-px rounded-sm bg-surface-1 p-0.5 @max-md/artifact:hidden">
           <IconButton icon="eye" label="Preview" aria-pressed={!source} onClick={() => setSource(false)} className={PRESSED} />
           {textual && <IconButton icon="code" label="Source" aria-pressed={source} onClick={() => setSource(true)} className={PRESSED} />}
@@ -434,6 +446,7 @@ export function ArtifactViewer({
             onSelect={(text) => setQuote(text || null)}
             onProblems={(found) => setProblems({ blob: artifact.blob, seen: found })}
             holder={holder}
+            versions={group?.versions.map((version) => version.artifact) ?? []}
           />
         ) : content.error ? (
           <p className="px-5 py-6 text-sm text-danger">{message(content.error)}</p>
@@ -515,9 +528,12 @@ function ArtifactPage({
   onSelect,
   onProblems,
   holder,
+  versions,
 }: {
   thread: string
   artifact: ArtifactView
+  /** Every version of the artifact, oldest first, for a doc to compare with. */
+  versions: ArtifactView[]
   content: ArtifactContent
   style: string | null
   vendor: string | null
@@ -667,11 +683,22 @@ function ArtifactPage({
   if (artifact.kind === 'mermaid') return page(<Mermaid text={textOf(content)} title={artifact.title} />)
   const typed = (viewer: ReactNode) => <Suspense fallback={null}>{viewer}</Suspense>
   // Types Silt draws from the version's JSON (ADR 0076).
-  if (artifact.kind === 'slides') return typed(<SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />)
-  if (artifact.kind === 'canvas') return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} />)
+  if (artifact.kind === 'slides')
+    return typed(
+      <SlidesView
+        text={textOf(content)}
+        style={style}
+        theme={startTheme}
+        title={artifact.title}
+        onComment={(quote) => holder.openComposer(quote)}
+        onPrint={(html) => void printDeck(thread, artifact, html)}
+      />,
+    )
+  if (artifact.kind === 'canvas')
+    return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} onComment={(quote) => holder.openComposer(quote)} />)
   if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
-  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} />)
+  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
   if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)
   if (artifact.kind === 'whiteboard') return typed(<WhiteboardView thread={thread} artifact={artifact.id} title={artifact.title} />)
   // A kind this UI doesn't know shows as its source rather than failing as an image.
@@ -709,8 +736,23 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
 }
 
 /** What an offline copy shows for an artifact that isn't a page of its own: Markdown's markup, a diagram's SVG. */
+/** A deck printed to a PDF by this computer's headless browser, handed to the person to save. */
+async function printDeck(thread: string, artifact: ArtifactView, html: string) {
+  try {
+    const printed = await api.artifactPdf(thread, artifact.id, html)
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0))], { type: 'application/pdf' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${artifact.title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'deck'}.pdf`
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (failure) {
+    toast(message(failure), 'danger')
+  }
+}
+
 async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent): Promise<string | undefined> {
-  if (artifact.kind === 'markdown') {
+  if (artifact.kind === 'markdown' || artifact.kind === 'doc') {
     const { renderToStaticMarkup } = await import('react-dom/server')
     return renderToStaticMarkup(<Markdown text={textOf(content)} />)
   }

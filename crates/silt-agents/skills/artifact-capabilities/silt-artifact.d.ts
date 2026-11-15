@@ -206,6 +206,13 @@ interface SiltDocRef<T = any> {
   update(fields: Partial<T>): Promise<SiltWritten>
   delete(): Promise<SiltWritten>
   /**
+   * Replaces `old` with `now` in the text field `field`, sending only the
+   * change. `old` must be non-empty and occur exactly once in the field;
+   * otherwise it rejects `invalid` and nothing is written. Under the same
+   * write rules as `update`.
+   */
+  strReplace(field: keyof T & string, old: string, now: string): Promise<SiltWritten>
+  /**
    * Calls `fn` with the document now and again whenever it changes (null
    * while there's none). Returns a function that stops it. A watch that's
    * refused never calls `fn`, so time-limit the loading state yourself.
@@ -451,6 +458,21 @@ interface SiltFiles {
   read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
   /** Saves the file as text once the viewer confirms it, every time; runnable types are refused. */
   download(path: string): Promise<{ saved: true }>
+  /**
+   * Reads `path` now and again every `every` ms (at least 2,000; 5,000 by
+   * default), calling `fn` each time its revision changes. A failed read is
+   * skipped silently and tried again at the next tick. Returns a function
+   * that stops it; stop it when the page no longer shows the file.
+   */
+  watch(path: string, fn: (file: { path: string; text: string; size: number; revision: string }) => void, opts?: { every?: number }): () => void
+  /**
+   * Two tools for `sample`: `list_files {path?, recursive?}` and
+   * `read_file {path}` (its text cut at 60,000 characters), so the agent
+   * answering a question reads the thread's files itself. Pass them as
+   * `tools`; the page must declare `sample` too, and tools only run on the
+   * daemon, not in the hosted app.
+   */
+  asSampleTools(): Promise<SiltSampleTool[]>
 }
 
 // ---------------------------------------------------------------------------

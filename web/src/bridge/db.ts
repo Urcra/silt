@@ -6,7 +6,7 @@ import { bus } from '../bus'
 import { type CapabilityHandler, Refusal } from './broker'
 
 const READS = ['get', 'list', 'query']
-const WRITES = ['set', 'update', 'delete', 'batch']
+const WRITES = ['set', 'update', 'delete', 'batch', 'str_replace']
 
 /** The most watches one page keeps. */
 const WATCHES = 32

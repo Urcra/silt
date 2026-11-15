@@ -1782,6 +1782,19 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
         Some(serde_json::json!({"op": "add", "name": "x.html", "media_type": "text/html", "data": png})),
     );
     assert!(!refused, "a page's files are never pages");
+    // The agent reads a file someone added, as text when it is text.
+    let csv = base64::engine::general_purpose::STANDARD.encode(b"name,score\nada,9\n");
+    let table = api.ok(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "scores.csv", "media_type": "text/csv", "data": csv})),
+    );
+    let asset = table["id"].as_str().expect("an id");
+    let text = format!("Read asset {asset}");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+    let said = settled_history(&api, &thread, &format!("Done: {text}"));
+    assert!(said.iter().any(|(_, said)| said.contains("ada,9") && said.contains("text/csv")), "the agent read it: {said:?}");
+    api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": asset})));
     let listed = api.ok("POST", &assets, Some(serde_json::json!({"op": "list"})));
     assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
     api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": added["id"]})));
@@ -1832,6 +1845,21 @@ fn a_deck_is_checked_against_its_schema_and_revised_by_a_patch() {
     let deck: serde_json::Value = serde_json::from_str(&artifact_text(&api, &thread, latest)).expect("json");
     assert_eq!(deck["slides"].as_array().map(Vec::len), Some(3));
     assert_eq!(deck["slides"][2]["title"], "Next");
+    // The deck prints a slide a page, where there's a headless browser.
+    let id = latest["id"].as_str().expect("id");
+    let page = serde_json::json!({"html": "<!doctype html><style>@page{size:1280px 720px;margin:0}section{height:720px;break-after:page}</style><section>One</section><section>Two</section>"});
+    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{id}/pdf"), Some(page));
+    if printed {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["data"].as_str().expect("data")).expect("base64");
+        let pages = bytes
+            .windows(b"/Type /Page\n".len())
+            .filter(|window| window.starts_with(b"/Type /Page") && !window.starts_with(b"/Type /Pages"))
+            .count();
+        assert!(bytes.starts_with(b"%PDF") && pages >= 2, "a page a slide: {pages}");
+    } else {
+        assert!(pdf.to_string().contains("headless"), "{pdf}");
+    }
 
     let said = prompt("Artifact bad deck");
     assert_eq!(artifacts_of(&api, &thread).len(), 2, "a deck with no slides isn't kept");
@@ -1888,6 +1916,33 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let hit = found.as_array().and_then(|hits| hits.iter().find(|hit| hit["artifact"] == doc.as_str())).expect("a doc hit");
     assert_eq!((&hit["kind"], &hit["thread"]), (&"doc".into(), &thread.as_str().into()), "{hit}");
     assert!(hit["snippet"].as_str().is_some_and(|snippet| snippet.contains("[test]") && snippet.contains("[Friday]")), "{hit}");
+
+    // Save version keeps the doc as it stands, with the person's note.
+    let before = artifacts_of(&api, &thread).len();
+    let saved = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{doc}/versions"),
+        Some(serde_json::json!({"note": "Plan agreed"})),
+    );
+    let versions = artifacts_of(&api, &thread);
+    let kept = versions.last().expect("a version");
+    assert_eq!(
+        (versions.len(), &kept["version"], &saved["version"]),
+        (before + 1, &kept["version"], &kept["version"]),
+        "{saved}"
+    );
+    assert_eq!((&kept["note"], &kept["id"]), (&"Plan agreed".into(), &doc.as_str().into()), "{kept}");
+    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n");
+    // A PDF of it, printed where there's a headless browser.
+    let page = serde_json::json!({"html": "<!doctype html><h1>Plan</h1><ul><li>test</li></ul>"});
+    let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/pdf"), Some(page));
+    if printed {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["data"].as_str().expect("data")).expect("base64");
+        assert!(pdf["media_type"] == "application/pdf" && bytes.starts_with(b"%PDF"), "a PDF");
+    } else {
+        assert!(pdf.to_string().contains("headless"), "{pdf}");
+    }
 
     prompt("Artifact sheet");
     let sheet = artifacts_of(&api, &thread).last().expect("the sheet")["id"].as_str().expect("id").to_owned();

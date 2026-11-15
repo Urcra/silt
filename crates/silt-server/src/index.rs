@@ -44,6 +44,9 @@ pub(crate) struct Index {
     conversations: HashMap<ThreadId, Conversation>,
     /// Each thread's own history, as the hosted app pages through it.
     histories: HashMap<ThreadId, History>,
+    /// The files people added to each artifact's page, by their ids, with
+    /// their sizes (ADR 0074).
+    assets: HashMap<(ThreadId, silt_types::ArtifactId), HashMap<String, u64>>,
 }
 
 /// A thread's own history entries, its turns and what reverts rewound,
@@ -136,6 +139,19 @@ impl Index {
         if let Op::Merge { mr: None, .. } = delta.op {
             self.histories.entry(thread).or_default().pulled = true;
         }
+        match &delta.op {
+            Op::Page(silt_log::PageOp::Asset { artifact, asset, size, .. }) => {
+                self.assets.entry((thread, *artifact)).or_default().insert(asset.clone(), *size);
+            }
+            Op::Page(silt_log::PageOp::Deleted { artifact, path }) => {
+                if let Some(asset) = path.strip_prefix("_assets/")
+                    && let Some(kept) = self.assets.get_mut(&(thread, *artifact))
+                {
+                    kept.remove(asset);
+                }
+            }
+            _ => {}
+        }
         let time_ms = delta.time_ms;
         let mut rows = vec![Row::Activity { thread, time_ms, branch: None }];
         let stamp = (delta.span.first().lamport, delta.span.actor);
@@ -224,6 +240,12 @@ impl Index {
             rows.push(Row::Touch { thread, path, time_ms });
         }
         rows
+    }
+
+    /// How many bytes the files people added to `artifact`'s page in
+    /// `thread` take.
+    pub(crate) fn asset_bytes(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> u64 {
+        self.assets.get(&(thread, artifact)).map_or(0, |kept| kept.values().sum())
     }
 
     /// Who took part in the comment a reply to `parent` joins, by name.

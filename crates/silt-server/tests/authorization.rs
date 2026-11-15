@@ -1822,6 +1822,12 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     let (_, found) = erin.get("/search?q=launch").await;
     assert_eq!(found, serde_json::json!([]), "erin can't read the thread");
 
+    // Save version keeps the doc as it stands, for its owner and collaborators.
+    let versions = format!("/threads/{THREAD}/artifacts/0123456789ab/versions");
+    assert_eq!(carol.post(&versions, serde_json::json!({})).await.0, StatusCode::FORBIDDEN, "carol only comments");
+    let (status, saved) = alice.post(&versions, serde_json::json!({"note": "First draft"})).await;
+    assert_eq!((status, &saved["version"]), (StatusCode::OK, &2.into()), "{saved}");
+
     // A comment on the doc's text follows it through edits.
     let comments = format!("/threads/{THREAD}/comments");
     let on =

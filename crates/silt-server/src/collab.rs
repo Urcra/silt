@@ -90,7 +90,9 @@ pub(crate) async fn admit(
             let declared = pushed_capabilities(&deltas, thread, artifact)
                 .or_else(|| index.artifact_capabilities(thread, &artifact.to_string()));
             ledger.pages.insert((thread, artifact), declared);
+            ledger.asset_bytes.insert((thread, artifact), index.asset_bytes(thread, artifact));
         }
+        ledger.asset_limit = server.config().artifact_assets_mib.saturating_mul(1 << 20);
     }
     let viewer = server.viewer(user).await?;
     let (admitted, claims) = admission(user, family, deltas, &ledger, &viewer)?;
@@ -127,6 +129,10 @@ struct Ledger {
     threads: HashMap<ThreadId, Registered>,
     /// What each artifact a push writes page data of declares (ADR 0072).
     pages: HashMap<(ThreadId, silt_types::ArtifactId), Option<silt_proto::artifact::Capabilities>>,
+    /// What the files people added to each of those pages take already, in
+    /// bytes, and the most they may (ADR 0074).
+    asset_bytes: HashMap<(ThreadId, silt_types::ArtifactId), u64>,
+    asset_limit: u64,
     /// The pushing person's id in page data.
     me: String,
 }
@@ -189,9 +195,21 @@ fn admission<'d>(
     {
         return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
     }
+    // A push's own files count toward their page's room as they come.
+    let mut asset_bytes = ledger.asset_bytes.clone();
     for delta in &admitted {
         if let Op::Page(op) = &delta.op {
             page_allowed(user, delta.thread, op, ledger, viewer)?;
+            if let silt_log::PageOp::Asset { artifact, size, .. } = op {
+                let taken = asset_bytes.entry((delta.thread, *artifact)).or_default();
+                *taken = taken.saturating_add(*size);
+                if *taken > ledger.asset_limit {
+                    return Err(forbidden(format!(
+                        "artifact {artifact}'s files would take more than this server's {} MiB for one page",
+                        ledger.asset_limit >> 20
+                    )));
+                }
+            }
         }
     }
     for delta in admitted.iter().filter(|delta| !matches!(delta.op, Op::Comment(_) | Op::Page(_))) {
@@ -358,6 +376,32 @@ mod tests {
         let admit = |viewer: &Viewer| admission(ME, FAMILY, vec![&comment(1, 11)], &threads, viewer).is_ok();
         assert!(admit(&Viewer::seeing([ThreadId(11)])));
         assert!(!admit(&Viewer::default()));
+    }
+
+    #[test]
+    fn a_pages_files_stay_within_the_servers_room_for_one_page() {
+        let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+        let mut threads = ledger(vec![(10, 7, ME, false)]);
+        let declared = silt_proto::artifact::Capabilities::from([("assets".to_owned(), serde_json::json!({}))]);
+        threads.pages.insert((ThreadId(10), artifact), Some(declared));
+        threads.asset_bytes.insert((ThreadId(10), artifact), 300);
+        threads.asset_limit = 1_000;
+        let asset = |id: &str, size| {
+            let blob = silt_types::BlobHash([1; 32]);
+            let op = silt_log::PageOp::Asset {
+                artifact,
+                asset: id.into(),
+                blob,
+                name: "photo.png".into(),
+                media_type: "image/png".into(),
+                size,
+            };
+            delta(1, 10, Op::Page(op))
+        };
+        let sees = Viewer::seeing([ThreadId(10)]);
+        assert!(admission(ME, FAMILY, vec![&asset("a1", 600)], &threads, &sees).is_ok());
+        let (first, second) = (asset("a1", 600), asset("a2", 200));
+        assert!(admission(ME, FAMILY, vec![&first, &second], &threads, &sees).is_err(), "a push's own files count too");
     }
 
     #[test]

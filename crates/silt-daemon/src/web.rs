@@ -159,6 +159,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
             post(page_assets).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
         )
         .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
+        .route("/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/pdf",
+            post(artifact_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
         .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
@@ -847,6 +853,46 @@ async fn sample(
         tools: asked.tools,
     };
     ask(&web, request).await
+}
+
+/// One of the files people added to a page, for a view Silt draws itself,
+/// such as a whiteboard's images (ADR 0081).
+async fn page_asset_content(
+    State(web): State<Web>,
+    Path((thread, artifact, asset)): Path<(String, String, String)>,
+) -> HttpResponse {
+    ask(&web, Request::PageAsset { thread, artifact, asset }).await
+}
+
+#[derive(Deserialize)]
+struct DocPage {
+    html: String,
+}
+
+/// A doc or a deck printed to a PDF by this machine's headless browser
+/// (ADRs 0076, 0077).
+async fn artifact_pdf(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(page): Json<DocPage>,
+) -> HttpResponse {
+    ask(&web, Request::ArtifactPdf { thread, artifact, html: page.html }).await
+}
+
+#[derive(Deserialize)]
+struct SaveVersion {
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Keeps a doc, a sheet or a whiteboard as it stands as its next version
+/// (ADR 0077).
+async fn save_edited_version(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(save): Json<SaveVersion>,
+) -> HttpResponse {
+    ask(&web, Request::SaveEditedVersion { thread, artifact, note: save.note }).await
 }
 
 /// A page's answer to the agent's call of one of the tools it gave a

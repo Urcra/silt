@@ -125,12 +125,13 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_read",
-            "description": "Read back a version of one of this thread's artifacts, the latest by default, to revise it: its source is written to a file outside the checkout, whose path this returns, and a short source is also returned whole.",
+            "description": "Read back a version of one of this thread's artifacts, the latest by default, to revise it: its source is written to a file outside the checkout, whose path this returns, and a short source is also returned whole. With asset, it reads a file someone added to the page instead, such as a photo or a CSV, the same way.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id, as silt_artifact returned it or its card shows it"},
-                    "version": {"type": "integer", "description": "A version other than the latest"}
+                    "version": {"type": "integer", "description": "A version other than the latest"},
+                    "asset": {"type": "string", "description": "Instead, a file someone added to the page, by the id its page data names it with (_assets/<id>)"}
                 },
                 "required": ["id"]
             }
@@ -142,8 +143,11 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
-                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch"], "description": "What to do"},
-                    "path": {"type": "string", "description": "A document's path, for get, set, update and delete"},
+                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace"], "description": "What to do"},
+                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace"},
+                    "field": {"type": "string", "description": "For str_replace: the document's text field to edit"},
+                    "old": {"type": "string", "description": "For str_replace: text that occurs once in the field"},
+                    "new": {"type": "string", "description": "For str_replace: what replaces it"},
                     "collection": {"type": "string", "description": "A collection's path, for list and query"},
                     "value": {"description": "The document, for set"},
                     "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},

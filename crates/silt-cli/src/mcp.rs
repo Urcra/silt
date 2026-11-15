@@ -280,6 +280,14 @@ impl silt_mcp::Backend for DaemonTools {
                     None => sheet_text(&read),
                 });
             }
+            "silt_artifact_read" if arguments.get("asset").is_some() => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
+                let id = text_arg(arguments, "id")?;
+                let asset = text_arg(arguments, "asset")?;
+                let asking = Request::PageAsset { thread: String::new(), artifact: id.clone(), asset: asset.clone() };
+                let read: silt_proto::view::ArtifactContent = ask_daemon(&Request::Scoped { token, asking: Box::new(asking) })?;
+                return asset_back(&self.thread, &id, &asset, &read);
+            }
             "silt_artifact_read" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
                 let id = text_arg(arguments, "id")?;
@@ -396,6 +404,51 @@ const READ_INLINE_BYTES: usize = 64 << 10;
 
 /// Writes a version read back to a file of its own outside the checkout,
 /// and says where, with its source when it's short.
+/// A file someone added to a page, written outside the checkout for the
+/// agent to open; short text is returned whole too (ADR 0074).
+fn asset_back(thread: &str, artifact: &str, asset: &str, read: &silt_proto::view::ArtifactContent) -> Result<String, String> {
+    use base64::Engine as _;
+    if !silt_proto::page::asset_id_ok(asset) {
+        return Err(format!("{asset} isn't an asset's id"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;
+    let extension = read
+        .media_type
+        .split(';')
+        .next()
+        .and_then(|kind| kind.rsplit('/').next())
+        .map(|ext| {
+            if ext == "svg+xml" {
+                "svg"
+            } else if ext == "plain" {
+                "txt"
+            } else {
+                ext
+            }
+        })
+        .filter(|ext| ext.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .unwrap_or("bin");
+    let dir = env::temp_dir().join("silt-artifacts").join(short(thread));
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!("{artifact}-asset-{asset}.{extension}"));
+    std::fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    let mut out = format!(
+        "The file {asset} on artifact {artifact}'s page ({}, {} bytes) is at {}.",
+        read.media_type,
+        bytes.len(),
+        path.display()
+    );
+    if read.media_type.starts_with("text/") || read.media_type.starts_with("application/json") {
+        match std::str::from_utf8(&bytes) {
+            Ok(text) if text.len() <= READ_INLINE_BYTES => {
+                let _ = write!(out, "\n\n{text}");
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
     use base64::Engine as _;
     let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;

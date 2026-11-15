@@ -38,15 +38,45 @@ const job = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 })().catch((error) => { console.log(JSON.stringify({ failed: String(error && error.message || error).slice(0, 500) })); process.exit(2); });
 "#;
 
+/// A document printed with its scripts off: to A4 for a doc (ADR 0077), or
+/// at the size its `@page` rule gives, as a deck's slides do (ADR 0076).
+const PDF_SCRIPT: &str = r#"const fs = require('fs');
+let playwright;
+try { playwright = require('playwright'); } catch (e) { console.log(JSON.stringify({ missing: true })); process.exit(0); }
+const job = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+(async () => {
+  const launch = process.env.SILT_CHROMIUM ? { executablePath: process.env.SILT_CHROMIUM } : {};
+  const browser = await playwright.chromium.launch(launch);
+  const context = await browser.newContext({ javaScriptEnabled: false, offline: true });
+  const page = await context.newPage();
+  await page.setContent(job.page, { waitUntil: 'load' });
+  await page.pdf({ path: job.out, format: 'A4', preferCSSPageSize: true, printBackground: true });
+  await browser.close();
+  console.log(JSON.stringify({ done: true }));
+})().catch((error) => { console.log(JSON.stringify({ failed: String(error && error.message || error).slice(0, 500) })); process.exit(2); });
+"#;
+
 /// Renders `html`, styled with `style`, to a JPEG in `dir`; none where
 /// there's no headless browser.
 pub(crate) fn render(html: &str, style: Option<&str>, dir: &Path) -> Result<Option<Vec<u8>>, String> {
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let page = silt_design::frame::checked_document(html, style, silt_design::frame::Theme::Light);
-    let (job, out, script) = (dir.join("job.json"), dir.join("thumbnail.jpg"), dir.join("thumbnail.cjs"));
+    run(SCRIPT, &page, dir, "thumbnail.jpg")
+}
+
+/// Prints the document `page` to a PDF in `dir`; none where there's no
+/// headless browser.
+pub(crate) fn pdf(page: &str, dir: &Path) -> Result<Option<Vec<u8>>, String> {
+    run(PDF_SCRIPT, page, dir, "printed.pdf")
+}
+
+/// Runs `script` on `page` in Node with Playwright, which writes `name` in
+/// `dir`; none where either is missing.
+fn run(script_text: &str, page: &str, dir: &Path, name: &str) -> Result<Option<Vec<u8>>, String> {
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let (job, out, script) = (dir.join("job.json"), dir.join(name), dir.join(format!("{name}.cjs")));
     let _ = std::fs::remove_file(&out);
     std::fs::write(&job, serde_json::json!({"page": page, "out": out}).to_string()).map_err(|error| error.to_string())?;
-    std::fs::write(&script, SCRIPT).map_err(|error| error.to_string())?;
+    std::fs::write(&script, script_text).map_err(|error| error.to_string())?;
     let mut command = Command::new("node");
     command.arg(&script).arg(&job).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     if let Some(global) = npm_root() {
@@ -59,7 +89,7 @@ pub(crate) fn render(html: &str, style: Option<&str>, dir: &Path) -> Result<Opti
             Ok(Some(_)) => break,
             Ok(None) if started.elapsed() > RENDER_TIMEOUT => {
                 let _ = child.kill();
-                return Err("the thumbnail took too long".into());
+                return Err(format!("rendering {name} took too long"));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(error) => return Err(error.to_string()),
