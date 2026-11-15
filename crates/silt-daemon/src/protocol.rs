@@ -436,6 +436,27 @@ pub enum Request {
         artifact: String,
         asked: silt_proto::page::AssetRequest,
     },
+    /// A view joins a page's room (ADR 0081); the answer is who hears what.
+    RoomJoin {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    RoomSend {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+        sent: silt_proto::rooms::Sent,
+    },
+    RoomLeave {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    /// The thread's agent emits to a page's room and reads what was said.
+    RoomAgent {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        emit: Option<(String, serde_json::Value)>,
+    },
     /// The MCP servers this machine lists for pages (ADR 0080).
     PageConnectors,
     SetPageConnectors {
@@ -1642,6 +1663,12 @@ pub enum BusEvent {
     Importing { done: usize, total: usize },
     /// The answer so far to a page's `sample` question.
     Sample { ask: String, text: String },
+    /// What the agent said to a room, for the web server to deliver; never
+    /// sent to browsers.
+    Room {
+        #[cfg_attr(test, ts(type = "unknown"))]
+        deliveries: serde_json::Value,
+    },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1669,6 +1696,7 @@ impl BusEvent {
             Self::Mrs => Some("mrs".to_owned()),
             Self::Importing { .. } => Some("import".to_owned()),
             Self::Sample { ask, .. } => Some(format!("sample:{ask}")),
+            Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }

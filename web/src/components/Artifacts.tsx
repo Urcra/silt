@@ -2,7 +2,7 @@
 // artifact cards there, and the panel that shows an artifact beside it.
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { api, type ArtifactContent, type ArtifactView, type CommentView } from '../api'
 import {
   type ArtifactGroup,
@@ -36,12 +36,18 @@ import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 import { Broker, callOf } from '../bridge/broker'
 import { handlersFor, type Holder } from '../bridge/capabilities'
-import { DocEditor, SheetGrid } from './Edited'
-import { CanvasView, DataView, SlidesView } from './TypedArtifact'
 import { lastSnapshot, rememberSnapshot } from '../bridge/hot'
 import { keep, keptFor } from '../bridge/storage'
 
 /** The Artifacts tab with none open: the thread's artifacts, the one changed last first, and the images agents showed. */
+// The types' viewers load when one is opened, so a thread's page doesn't carry them (ADR 0076).
+const SlidesView = lazy(() => import('./TypedArtifact').then((module) => ({ default: module.SlidesView })))
+const CanvasView = lazy(() => import('./TypedArtifact').then((module) => ({ default: module.CanvasView })))
+const DataView = lazy(() => import('./TypedArtifact').then((module) => ({ default: module.DataView })))
+const DocEditor = lazy(() => import('./Edited').then((module) => ({ default: module.DocEditor })))
+const SheetGrid = lazy(() => import('./Edited').then((module) => ({ default: module.SheetGrid })))
+const WhiteboardView = lazy(() => import('./Whiteboard').then((module) => ({ default: module.WhiteboardView })))
+
 export function ArtifactList({
   thread,
   groups,
@@ -638,13 +644,15 @@ function ArtifactPage({
   )
   if (artifact.kind === 'markdown') return page(<Markdown text={textOf(content)} />)
   if (artifact.kind === 'mermaid') return page(<Mermaid text={textOf(content)} title={artifact.title} />)
+  const typed = (viewer: ReactNode) => <Suspense fallback={null}>{viewer}</Suspense>
   // Types Silt draws from the version's JSON (ADR 0076).
-  if (artifact.kind === 'slides') return <SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />
-  if (artifact.kind === 'canvas') return <CanvasView text={textOf(content)} style={style} theme={startTheme} />
-  if (artifact.kind === 'data') return <DataView text={textOf(content)} theme={theme} />
+  if (artifact.kind === 'slides') return typed(<SlidesView text={textOf(content)} style={style} theme={startTheme} title={artifact.title} />)
+  if (artifact.kind === 'canvas') return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} />)
+  if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
-  if (artifact.kind === 'doc') return <DocEditor thread={thread} artifact={artifact.id} />
-  if (artifact.kind === 'sheet') return <SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />
+  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} />)
+  if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)
+  if (artifact.kind === 'whiteboard') return typed(<WhiteboardView thread={thread} artifact={artifact.id} title={artifact.title} />)
   // A kind this UI doesn't know shows as its source rather than failing as an image.
   if (!artifact.media_type.startsWith('image/'))
     return (

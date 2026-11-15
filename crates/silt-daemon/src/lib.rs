@@ -41,6 +41,7 @@ pub mod remote;
 mod resume;
 mod revert;
 mod review;
+mod rooms;
 mod sample;
 mod server;
 mod sessions;

@@ -53,6 +53,7 @@ mod presence;
 mod projects;
 mod push;
 mod relayed;
+mod rooms;
 mod session_store;
 mod sign_in;
 mod visibility;
@@ -222,6 +223,8 @@ struct Shared {
     bridge: Option<bridge::Jobs>,
     /// What each frame key opens (ADR 0074).
     frames: std::sync::Mutex<silt_proto::frames::FrameKeys<browse::FrameGrant>>,
+    /// The rooms of the pages people view in the hosted app (ADR 0081).
+    page_rooms: std::sync::Mutex<rooms::Rooms>,
 }
 
 #[derive(Clone)]
@@ -305,6 +308,7 @@ impl Server {
                 passwords: accounts::PasswordChecks::default(),
                 bridge,
                 frames: std::sync::Mutex::default(),
+                page_rooms: std::sync::Mutex::default(),
                 config,
                 http,
             }),

@@ -61,6 +61,7 @@ pub const SHOW_TOOLS: &[&str] = &[
     "silt_artifact_data",
     "silt_artifact_doc",
     "silt_artifact_sheet",
+    "silt_artifact_room",
 ];
 
 /// What the server says it's for, with the showing tools when offered.
@@ -98,7 +99,7 @@ fn show_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources, doc a document people edit with you, sheet a grid with formulas"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources, doc a document people edit with you, sheet a grid with formulas, whiteboard notes and arrows people arrange together live"},
                     "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
                 },
                 "required": ["kind"]
@@ -147,6 +148,19 @@ fn show_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "silt_artifact_room",
+            "description": "Speak in, or listen to, the room of a page that declares room (ADR 0081): the people viewing it on this machine right now. Emit a moment to a topic, and read the last 100 moments and who's present. Nothing in a room is kept; lasting changes go in page data or a new version.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The artifact's id"},
+                    "topic": {"type": "string", "description": "A topic to emit to, with data"},
+                    "data": {"description": "What to emit, JSON"}
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
             "name": "silt_artifact_doc",
             "description": "Read or edit a doc artifact's text, which people may be editing at the same moment (ADR 0077): each edit merges with theirs. Make the doc first with silt_artifact, kind doc and Markdown content; then change it here, not by a new version. Each edit's old text must occur exactly once in the doc as it is now; read it first.",
             "inputSchema": {
@@ -180,7 +194,7 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "A short name, such as \"Rescan benchmark\""},
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes; doc (Markdown) and sheet ({\"rows\": [[...]]}) are edited in place afterwards with silt_artifact_doc and silt_artifact_sheet"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes; doc (Markdown) and sheet ({\"rows\": [[...]]}) are edited in place afterwards with silt_artifact_doc and silt_artifact_sheet"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
                     "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
                     "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact; title and kind then default to its last version's"},

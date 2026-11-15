@@ -1,8 +1,7 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { LinkedArtifact } from './components/LinkedArtifact'
 import { linkToken } from './links'
 import { takeTokenFromUrl } from './api'
 import { legacyPath } from './legacy'
@@ -15,10 +14,14 @@ if (moved) window.history.replaceState(null, '', moved)
 
 // A read-only link to one artifact is this bundle too, with nothing of the app but the artifact (ADR 0073).
 const linked = document.querySelector('meta[name="silt-link"]') ? linkToken(window.location.pathname) : null
+// Loaded only for a link, so the app's first screen doesn't carry the artifact viewer.
+const LinkedArtifact = lazy(() => import('./components/LinkedArtifact').then((module) => ({ default: module.LinkedArtifact })))
 if (linked) {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <LinkedArtifact token={linked} />
+      <Suspense fallback={null}>
+        <LinkedArtifact token={linked} />
+      </Suspense>
     </StrictMode>,
   )
 } else {

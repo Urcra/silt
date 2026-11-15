@@ -43,6 +43,7 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
         .route("/app/api/artifact-settings", get(artifact_settings))
         .merge(crate::browse::routes())
         .merge(crate::relayed::routes())
+        .merge(crate::rooms::routes())
         .merge(crate::devices::browser_routes())
         .merge(crate::writes::routes())
         .merge(crate::push::browser_routes())

@@ -10,6 +10,7 @@ pub mod artifact_types;
 pub mod edited;
 pub mod frames;
 pub mod page;
+pub mod rooms;
 pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark

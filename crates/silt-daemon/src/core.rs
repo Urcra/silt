@@ -288,6 +288,8 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// The rooms of the pages open on this machine (ADR 0081).
+    pub(crate) rooms: silt_proto::rooms::Hub,
     /// The page connectors' running MCP clients (ADR 0080).
     pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
     /// When each artifact's page last asked `sample`, for its rate.
@@ -534,6 +536,7 @@ impl Core {
             adopted: HashSet::new(),
             samples: HashMap::new(),
             page_clients: std::sync::Arc::default(),
+            rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
@@ -586,6 +589,20 @@ impl Core {
             }
             if let Request::PageData { artifact, asked, .. } = *asking {
                 let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked).await));
+                return;
+            }
+            if let Request::RoomAgent { artifact, emit, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
+                        // What the agent said reaches the open views through the web server.
+                        let _ = self.bus.send(crate::protocol::BusEvent::Room {
+                            deliveries: serde_json::to_value(deliveries).unwrap_or_default(),
+                        });
+                        heard
+                    }),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
                 return;
             }
             if let Request::DocData { artifact, asked, .. } = *asking {
@@ -652,6 +669,10 @@ impl Core {
             Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
             Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
             Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
+            Request::RoomAgent { .. } => Response::error("only an agent's run speaks in a room, with its token"),
+            Request::RoomJoin { key, peer } => to_response(self.room_join(key, peer, false)),
+            Request::RoomSend { key, peer, sent } => Response::ok(self.room_send(&key, &peer, sent)),
+            Request::RoomLeave { key, peer } => Response::ok(self.room_leave(&key, &peer)),
             Request::PageConnectors => Response::ok(crate::connectors::connectors(&self.data_dir)),
             Request::SetPageConnectors { connectors } => {
                 to_response(crate::connectors::set_connectors(&self.data_dir, &connectors).map(|()| "saved"))

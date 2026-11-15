@@ -470,16 +470,21 @@ async fn page_data(
 /// An artifact's page as a person sees it: what its latest version
 /// declares, its documents along the thread's lineage, and the person's id
 /// and level there (ADR 0072).
-struct PageOf {
-    family: silt_types::FamilyId,
-    thread: silt_types::ThreadId,
-    declared: silt_proto::artifact::Capabilities,
-    docs: silt_log::page::Documents,
-    me: String,
-    level: silt_proto::page::Level,
+pub(crate) struct PageOf {
+    pub(crate) family: silt_types::FamilyId,
+    pub(crate) thread: silt_types::ThreadId,
+    pub(crate) declared: silt_proto::artifact::Capabilities,
+    pub(crate) docs: silt_log::page::Documents,
+    pub(crate) me: String,
+    pub(crate) level: silt_proto::page::Level,
 }
 
-async fn page_of(server: &Server, user: UserId, id: &str, artifact: silt_types::ArtifactId) -> Result<PageOf, ApiError> {
+pub(crate) async fn page_of(
+    server: &Server,
+    user: UserId,
+    id: &str,
+    artifact: silt_types::ArtifactId,
+) -> Result<PageOf, ApiError> {
     use silt_proto::page::Level;
     let viewer = server.viewer(user).await?;
     let readable = Readable::rows(server, user, &viewer).await?;

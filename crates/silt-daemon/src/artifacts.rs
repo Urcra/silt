@@ -27,7 +27,7 @@ fn text_media_type(kind: &str) -> Option<&'static str> {
         "mermaid" => Some("text/vnd.mermaid"),
         kind if silt_proto::artifact_types::is_type(kind) => Some("application/json"),
         "doc" => Some("text/markdown"),
-        "sheet" => Some("application/json"),
+        "sheet" | "whiteboard" => Some("application/json"),
         _ => None,
     }
 }
@@ -321,6 +321,12 @@ impl Core {
             let read = self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Read).await?;
             return Ok(read["text"].as_str().unwrap_or_default().to_owned());
         }
+        if kind == "whiteboard" {
+            let items =
+                self.page_data(&thread_id, id, silt_proto::page::PageRequest::List { collection: "items".into() }).await?;
+            let items: Vec<serde_json::Value> = items.as_array().into_iter().flatten().map(|doc| doc["data"].clone()).collect();
+            return Ok(serde_json::json!({ "items": items }).to_string());
+        }
         let read = self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Read { sheet: 0, range: None }).await?;
         Ok(serde_json::json!({ "rows": read["raw"] }).to_string())
     }
@@ -332,6 +338,24 @@ impl Core {
             if !content.is_empty() {
                 let edit = silt_proto::edited::DocEdit::Splice { pos: 0, delete: 0, insert: content.to_owned() };
                 self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Edit { edits: vec![edit] }).await?;
+            }
+            return Ok(());
+        }
+        if kind == "whiteboard" {
+            let board: serde_json::Value = serde_json::from_str(content).unwrap_or_default();
+            let writes: Vec<serde_json::Value> = board["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| {
+                    Some(serde_json::json!({"op": "set", "path": format!("items/{}", item["id"].as_str()?), "value": item}))
+                })
+                .collect();
+            if !writes.is_empty() {
+                let request: silt_proto::page::PageRequest =
+                    serde_json::from_value(serde_json::json!({"op": "batch", "writes": writes}))
+                        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+                self.page_data(&thread_id, id, request).await?;
             }
             return Ok(());
         }
@@ -555,6 +579,11 @@ impl Core {
             _ if silt_proto::edited::is_edited(&kind) => {
                 let mut declared = capabilities.unwrap_or_default();
                 declared.insert("edit".into(), serde_json::json!({}));
+                // A whiteboard keeps its items in page data, and its cursors in a room (ADR 0081).
+                if kind == "whiteboard" {
+                    declared.entry("db".to_owned()).or_insert_with(|| serde_json::json!({}));
+                    declared.entry("room".to_owned()).or_insert_with(|| serde_json::json!({}));
+                }
                 Some(declared)
             }
             other => other,

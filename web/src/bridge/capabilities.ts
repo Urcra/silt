@@ -5,6 +5,7 @@ import { api, type ArtifactView, type PageViewer } from '../api'
 import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
+import { RoomSocket } from '../rooms'
 import { dbHandler } from './db'
 import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } from './voiceAndTools'
 
@@ -29,6 +30,47 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     ...(dictationServed() ? { dictation: dictationHandler(thread, artifact, holder) } : {}),
     ...(ttsServed() ? { tts: ttsHandler() } : {}),
     mcp: mcpHandler(thread, artifact, holder),
+    room: roomHandler(thread, artifact),
+  }
+}
+
+/** `room`: moments between the people viewing the page now, one socket per room joined (ADR 0081). */
+function roomHandler(thread: string, artifact: ArtifactView): CapabilityHandler {
+  const sockets = new Map<string, RoomSocket>()
+  const open = (name: string, context: Parameters<CapabilityHandler['call']>[2]) => {
+    let socket = sockets.get(name)
+    if (!socket) {
+      socket = new RoomSocket(thread, artifact.id, name)
+      socket.listen((heard) => {
+        if (heard.event === 'moment') context.emit('room', 'moment', { room: name, topic: heard.topic, data: heard.data, from: heard.from })
+        else if (heard.event === 'peers')
+          context.emit('room', 'peers', { room: name, peers: heard.peers.map((peer) => ({ ...peer, you: peer.peer === socket!.me })) })
+        else if (heard.event === 'refused') context.emit('room', 'refused', { room: name, reason: heard.reason })
+      })
+      sockets.set(name, socket)
+    }
+    return socket
+  }
+  return {
+    methods: ['emit', 'presence', 'join', 'leave'],
+    perMinute: 1800,
+    dispose: () => {
+      for (const socket of sockets.values()) socket.close()
+      sockets.clear()
+    },
+    call: async (method, args, context) => {
+      const given = (args ?? {}) as { room?: unknown; topic?: unknown; data?: unknown; state?: unknown }
+      const name = typeof given.room === 'string' ? given.room.slice(0, 64) : ''
+      if (method === 'leave') {
+        sockets.get(name)?.close()
+        sockets.delete(name)
+        return null
+      }
+      const socket = open(name, context)
+      if (method === 'emit') socket.emit(String(given.topic ?? ''), given.data ?? null)
+      if (method === 'presence') socket.presence(given.state ?? null)
+      return null
+    },
   }
 }
 

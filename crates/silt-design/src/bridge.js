@@ -233,9 +233,31 @@ function mcpClient(ns) {
     }
   });
 }
+// A room's moments and presence (ADR 0081); `join(name)` gives a sub-room
+// with the same functions. Presence is sent whole, as the latest state.
+function roomClient(ns) {
+  function room(name) {
+    var state = {};
+    ns.presence({ room: name, state: null });
+    return Object.freeze({
+      emit: function (topic, data) { return ns.emit({ room: name, topic: String(topic), data: data === undefined ? null : data }); },
+      on: function (topic, fn) {
+        return ns.on('moment', function (d) { if (d && d.room === name && d.topic === topic) fn(d.data, d.from); });
+      },
+      presence: function (patch) {
+        for (var k in patch || {}) if (Object.prototype.hasOwnProperty.call(patch, k)) state[k] = patch[k];
+        return ns.presence({ room: name, state: state });
+      },
+      onPeers: function (fn) { return ns.on('peers', function (d) { if (d && d.room === name) fn(d.peers); }); },
+      join: function (sub) { return room(String(sub)); },
+      leave: function () { return ns.leave({ room: name }); }
+    });
+  }
+  return room('');
+}
 var clients = {
   db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient,
-  dictation: dictationClient, tts: ttsClient, mcp: mcpClient
+  dictation: dictationClient, tts: ttsClient, mcp: mcpClient, room: roomClient
 };
 var made = {};
 window.silt = Object.freeze({

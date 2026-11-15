@@ -37,6 +37,8 @@ struct Web {
     vendor: Arc<silt_vendor::Vendor>,
     /// What each frame key opens (ADR 0074).
     frames: Arc<Mutex<crate::frames::FrameKeys>>,
+    /// Each room socket's way to its browser, by peer (ADR 0081).
+    room_peers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -105,9 +107,11 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         voice: Arc::new(Voice::new()),
         vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
         frames: Arc::default(),
+        room_peers: Arc::default(),
     };
     let api = Router::new()
         .route("/api/events", get(events_socket))
+        .route("/api/rooms", get(rooms_socket))
         .route("/api/status", get(status))
         .route("/api/threads", get(threads))
         .route("/api/threads/{id}/history", get(history))
@@ -368,6 +372,85 @@ async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Req
 async fn events_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
     let bus = web.bus.subscribe();
     upgrade.on_upgrade(move |socket| serve_events(socket, bus))
+}
+
+async fn rooms_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve_room(socket, web))
+}
+
+#[derive(Deserialize)]
+struct Join {
+    thread: String,
+    artifact: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// Hands each delivery to its peer's socket.
+fn deliver(web: &Web, deliveries: &serde_json::Value) {
+    let peers = web.room_peers.lock().expect("lock");
+    for pair in deliveries.as_array().into_iter().flatten() {
+        let (Some(peer), Some(heard)) = (pair.get(0).and_then(serde_json::Value::as_str), pair.get(1)) else { continue };
+        if let Some(sender) = peers.get(peer) {
+            let _ = sender.send(heard.to_string());
+        }
+    }
+}
+
+/// One view in one room (ADR 0081): it joins with its first message, then
+/// what it sends goes through the hub, and what others say comes back.
+async fn serve_room(mut socket: WebSocket, web: Web) {
+    let Some(Ok(Message::Text(first))) = socket.recv().await else { return };
+    let Ok(join) = serde_json::from_str::<Join>(&first) else { return };
+    let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
+    let peer = uuid::Uuid::new_v4().simple().to_string();
+    let (sender, mut heard) = mpsc::unbounded_channel();
+    web.room_peers.lock().expect("lock").insert(peer.clone(), sender);
+    let mut bus = web.bus.subscribe();
+    match answer(&web, Request::RoomJoin { key: key.clone(), peer: peer.clone() }).await {
+        Ok(deliveries) => {
+            let _ = socket.send(Message::Text(json!({"event": "joined", "peer": peer}).to_string().into())).await;
+            deliver(&web, &deliveries);
+        }
+        Err(failed) => {
+            let _ = socket.send(Message::Text(json!({"event": "refused", "reason": failed.message}).to_string().into())).await;
+            web.room_peers.lock().expect("lock").remove(&peer);
+            return;
+        }
+    }
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    let Ok(sent) = serde_json::from_str::<silt_proto::rooms::Sent>(&text) else { continue };
+                    if let Ok(deliveries) = answer(&web, Request::RoomSend { key: key.clone(), peer: peer.clone(), sent }).await {
+                        deliver(&web, &deliveries);
+                    }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            out = heard.recv() => match out {
+                Some(text) => if socket.send(Message::Text(text.into())).await.is_err() { break },
+                None => break,
+            },
+            event = bus.recv() => {
+                // What the thread's agent said, for this view if it's addressed here.
+                if let Ok(BusEvent::Room { deliveries }) = event {
+                    let mine: Vec<&serde_json::Value> = deliveries.as_array().into_iter().flatten().filter(|pair| pair.get(0).and_then(serde_json::Value::as_str) == Some(peer.as_str())).collect();
+                    for pair in mine {
+                        if let Some(heard) = pair.get(1) && socket.send(Message::Text(heard.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    web.room_peers.lock().expect("lock").remove(&peer);
+    if let Ok(deliveries) = answer(&web, Request::RoomLeave { key, peer }).await {
+        deliver(&web, &deliveries);
+    }
 }
 
 /// Sends the socket the events of the topics it subscribed to, until it
@@ -1624,6 +1707,7 @@ mod tests {
             voice: Arc::new(Voice::new()),
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
             frames: Arc::default(),
+            room_peers: Arc::default(),
         };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");

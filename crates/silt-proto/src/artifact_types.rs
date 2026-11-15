@@ -82,6 +82,8 @@ struct Source {
     at: String,
 }
 
+/// What a whiteboard's items are.
+pub const WHITEBOARD_ITEMS: &[&str] = &["block", "arrow", "section", "stroke", "image"];
 const CHARTS: &[&str] = &["line", "area", "bar", "dot", "scatter", "heatmap", "segmented"];
 const SOURCE_KINDS: &[&str] = &["query", "file", "command", "agent", "manual"];
 
@@ -139,6 +141,32 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             parts(page.blocks.len(), "block")?;
             for (at, block) in page.blocks.iter().enumerate() {
                 data_block(block, &sources).map_err(|why| format!("block {}: {why}", at + 1))?;
+            }
+            Ok(())
+        }
+        "whiteboard" => {
+            let board: Value = serde_json::from_str(text).map_err(refused)?;
+            let items = board.get("items").and_then(Value::as_array).ok_or("a whiteboard has items")?;
+            if items.len() > 2000 {
+                return Err("a whiteboard has at most 2,000 items".into());
+            }
+            let mut ids = std::collections::HashSet::new();
+            for item in items {
+                let id = item.get("id").and_then(Value::as_str).ok_or("each item has an id")?;
+                if id.is_empty()
+                    || id.len() > 64
+                    || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    || !ids.insert(id)
+                {
+                    return Err(format!("item ids are unique, 1 to 64 letters, digits, - or _: {id}"));
+                }
+                let kind = item.get("type").and_then(Value::as_str).ok_or("each item has a type")?;
+                if !WHITEBOARD_ITEMS.contains(&kind) {
+                    return Err(format!("an item is a {}", WHITEBOARD_ITEMS.join(", ")));
+                }
+                if item.to_string().len() > crate::artifact::FILE_BYTES as usize / 256 {
+                    return Err(format!("item {id} is too large"));
+                }
             }
             Ok(())
         }

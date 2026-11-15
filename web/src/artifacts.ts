@@ -57,6 +57,7 @@ const KINDS: Record<string, string> = {
   data: 'Data',
   doc: 'Doc',
   sheet: 'Sheet',
+  whiteboard: 'Whiteboard',
 }
 
 export function kindLabel(kind: string): string {

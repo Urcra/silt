@@ -1814,3 +1814,73 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     let (_, view) = carol.post(&sheet, serde_json::json!({"op": "read"})).await;
     assert_eq!(view["values"][1][0], "6", "{view}");
 }
+
+type RoomStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next thing a room's socket hears that isn't the list of peers.
+async fn next(socket: &mut RoomStream) -> serde_json::Value {
+    use futures_util::StreamExt as _;
+    loop {
+        let message = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("in time")
+            .expect("open")
+            .expect("a message");
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            let heard: serde_json::Value = serde_json::from_str(&text).expect("json");
+            if heard["event"] != "peers" {
+                return heard;
+            }
+        }
+    }
+}
+
+/// A page's room in the hosted app (ADR 0081): only someone who can read the
+/// thread joins, moments reach the others, and a topic needs its level.
+#[tokio::test]
+async fn a_rooms_moments_reach_its_peers_by_level() {
+    use futures_util::SinkExt as _;
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest as _};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Board", "kind": "whiteboard",
+        "media_type": "application/json", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"room": {"topics": {"cursor": "comment"}}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let op = Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() });
+    let recorded = applied(family, family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op));
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let open = |browser: &Browser| {
+        let mut request =
+            format!("{}/app/api/rooms", browser.base.replacen("http", "ws", 1)).into_client_request().expect("a request");
+        request.headers_mut().insert("cookie", browser.cookie.parse().expect("a cookie"));
+        async move {
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.expect("connects");
+            let join = serde_json::json!({"thread": THREAD.to_string(), "artifact": "0123456789ab"});
+            socket.send(Message::Text(join.to_string().into())).await.expect("joins");
+            socket
+        }
+    };
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let mut alice_room = open(&alice).await;
+    assert_eq!(next(&mut alice_room).await["event"], "joined");
+    let mut carol_room = open(&carol).await;
+    assert_eq!(next(&mut carol_room).await["event"], "joined");
+    let mut erin_room = open(&erin).await;
+    assert_eq!(next(&mut erin_room).await["reason"], "not_found", "erin can't read the thread");
+
+    alice_room.send(Message::Text(r#"{"op": "emit", "topic": "move", "data": {"x": 1}}"#.into())).await.expect("sends");
+    let heard = next(&mut carol_room).await;
+    assert_eq!((&heard["topic"], &heard["data"]["x"]), (&"move".into(), &1.into()), "{heard}");
+    carol_room.send(Message::Text(r#"{"op": "emit", "topic": "move", "data": 2}"#.into())).await.expect("sends");
+    assert_eq!(next(&mut carol_room).await["reason"], "not_granted", "move needs a collaborator");
+    carol_room.send(Message::Text(r#"{"op": "emit", "topic": "cursor", "data": [3, 4]}"#.into())).await.expect("sends");
+    assert_eq!(next(&mut alice_room).await["data"], serde_json::json!([3, 4]), "the declaration opens cursor to commenters");
+}

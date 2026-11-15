@@ -222,6 +222,19 @@ impl silt_mcp::Backend for DaemonTools {
                 })?;
                 return Ok(serde_json::to_string_pretty(&answer).unwrap_or_default());
             }
+            "silt_artifact_room" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs speaks in a room")?;
+                let artifact = text_arg(arguments, "id")?;
+                let emit = arguments
+                    .get("topic")
+                    .and_then(Value::as_str)
+                    .map(|topic| (topic.to_owned(), arguments.get("data").cloned().unwrap_or(Value::Null)));
+                let heard: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::RoomAgent { thread: String::new(), artifact, emit }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&heard).unwrap_or_default());
+            }
             "silt_artifact_doc" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs edits its docs")?;
                 let artifact = text_arg(arguments, "id")?;
@@ -463,6 +476,14 @@ HTML out: it shows as text.\n",
 {\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
 silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
 change it, and keep one table per sheet with one header row.\n",
+        ),
+        "whiteboard" => out.push_str(
+            "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
+`content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
+\"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \
+(a note; colour yellow, blue, green, pink or gray), arrow (from and to item ids, an optional label), section (a labelled \
+frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
+and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n",
         ),
         _ => out.push_str("An image shows as it is; give it a short title.\n"),
     }

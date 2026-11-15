@@ -10,7 +10,7 @@ use silt_log::{Axis, PageOp};
 use silt_types::ArtifactId;
 
 /// The kinds edited in place.
-pub const EDITED: &[&str] = &["doc", "sheet"];
+pub const EDITED: &[&str] = &["doc", "sheet", "whiteboard"];
 /// The longest doc, in bytes.
 pub const DOC_TEXT_BYTES: usize = 1 << 20;
 

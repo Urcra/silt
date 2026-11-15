@@ -573,6 +573,14 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
             let mcp = serde_json::json!({"servers": [{"server": "silt", "tools": ["silt_history_search"]}]});
             arguments = serde_json::json!({"title": "History finder", "kind": "html", "content": "<!doctype html><h1>Finder</h1>", "capabilities": {"mcp": mcp}});
         }
+        if prompt.contains("Artifact board") {
+            let items = serde_json::json!({"items": [
+                {"id": "goal", "type": "block", "x": 0, "y": 0, "w": 160, "h": 100, "text": "Ship rooms", "color": "yellow"},
+                {"id": "risk", "type": "block", "x": 240, "y": 0, "w": 160, "h": 100, "text": "Latency", "color": "pink"},
+                {"id": "a1", "type": "arrow", "from": "goal", "to": "risk", "label": "watch"}
+            ]});
+            arguments = serde_json::json!({"title": "Planning board", "kind": "whiteboard", "content": items.to_string()});
+        }
         if prompt.contains("Artifact numbers") {
             let page = serde_json::json!({"title": "Rescan benchmark", "sources": [
                 {"id": "bench", "name": "silt-bench rescan", "kind": "command", "detail": "silt-bench run --only rescan", "at": "2026-11-15T09:00:00Z"}

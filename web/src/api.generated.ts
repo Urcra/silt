@@ -234,7 +234,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "room", deliveries: unknown, } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 

@@ -196,3 +196,26 @@ interface SiltMcp {
   describeTool(server: string, tool: string): Promise<{ name: string; description: string | null; read_only: boolean; input_schema: unknown }>
   listTools(server: string): Promise<string[]>
 }
+
+// `room` (declare `{"room": {}}`, or `{"room": {"topics": {"cursor": "comment"}}}`):
+// the people viewing this page now. Moments drop and nothing persists: state
+// a late joiner needs is a `db` document. Topics need a collaborator unless
+// the declaration opens one; presence is open to all and never authority.
+interface SiltRoomPeer {
+  peer: string
+  user: string
+  kind: 'person' | 'agent'
+  state: unknown
+  you: boolean
+}
+
+interface SiltRoom {
+  emit(topic: string, data: unknown): Promise<null>
+  on(topic: string, fn: (data: unknown, from: { peer: string; user: string; kind: string }) => void): () => void
+  /** Merges `patch` into this view's state, sent whole: a cursor, a selection. */
+  presence(patch: object): Promise<null>
+  onPeers(fn: (peers: SiltRoomPeer[]) => void): () => void
+  /** A sub-room with the same functions, heard only by those who join it. */
+  join(name: string): SiltRoom
+  leave(): Promise<null>
+}
