@@ -274,6 +274,12 @@ export function CanvasView({
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 40, y: 60, scale: 0.4 });
   const drag = useRef<{ x: number; y: number; from: typeof view } | null>(null);
+  // The fingers on the canvas, for a pinch to zoom around their middle.
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ distance: number; middle: [number, number]; from: typeof view } | null>(null);
+  // Two boards shown side by side at one scale, chosen by their names.
+  const [comparing, setComparing] = useState<string[] | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const extent = useMemo(
     () => ({
       width: Math.max(1, ...placed.map((board) => board.x + board.width)),
@@ -301,6 +307,7 @@ export function CanvasView({
     const element = box.current
     if (!element) return
     const observer = new ResizeObserver(() => {
+      setSize({ width: element.clientWidth, height: element.clientHeight })
       if (!moved.current) fit()
     })
     observer.observe(element)
@@ -335,13 +342,40 @@ export function CanvasView({
         This canvas's content isn't one Silt can draw.
       </p>
     );
+  const local = (event: { clientX: number; clientY: number }) => {
+    const rect = box.current?.getBoundingClientRect();
+    return { x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) };
+  };
+  const pinchOf = () => {
+    const [a, b] = [...pointers.current.values()];
+    return { distance: Math.hypot(a.x - b.x, a.y - b.y), middle: [(a.x + b.x) / 2, (a.y + b.y) / 2] as [number, number] };
+  };
   const down = (event: ReactPointerEvent) => {
     if ((event.target as HTMLElement).closest("[data-board-label]")) return;
     moved.current = true
-    drag.current = { x: event.clientX, y: event.clientY, from: view };
+    pointers.current.set(event.pointerId, local(event));
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    if (pointers.current.size === 2) {
+      drag.current = null;
+      pinch.current = { ...pinchOf(), from: view };
+      return;
+    }
+    drag.current = { x: event.clientX, y: event.clientY, from: view };
   };
   const move = (event: ReactPointerEvent) => {
+    if (pointers.current.has(event.pointerId)) pointers.current.set(event.pointerId, local(event));
+    const pinching = pinch.current;
+    if (pinching && pointers.current.size === 2) {
+      const now = pinchOf();
+      const scale = Math.min(Math.max(pinching.from.scale * (now.distance / Math.max(pinching.distance, 1)), 0.05), 4);
+      const [px, py] = pinching.middle;
+      setView({
+        scale,
+        x: now.middle[0] - ((px - pinching.from.x) * scale) / pinching.from.scale,
+        y: now.middle[1] - ((py - pinching.from.y) * scale) / pinching.from.scale,
+      });
+      return;
+    }
     const from = drag.current;
     if (from)
       setView({
@@ -349,6 +383,19 @@ export function CanvasView({
         x: from.from.x + event.clientX - from.x,
         y: from.from.y + event.clientY - from.y,
       });
+  };
+  const lift = (event: ReactPointerEvent) => {
+    pointers.current.delete(event.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    drag.current = null;
+  };
+  // A board well off screen keeps its place but not its frame, so a large canvas stays light.
+  const onScreen = (board: (typeof placed)[number]) => {
+    if (size.width === 0) return true;
+    const margin = 400;
+    const [left, top] = [view.x + board.x * view.scale, view.y + board.y * view.scale];
+    const [right, bottom] = [left + board.width * view.scale, top + board.height * view.scale];
+    return right > -margin && bottom > -margin && left < size.width + margin && top < size.height + margin;
   };
   const zoomTo = (board: (typeof placed)[number]) => {
     const element = box.current;
@@ -370,8 +417,8 @@ export function CanvasView({
         className="absolute inset-0 cursor-grab touch-none active:cursor-grabbing"
         onPointerDown={down}
         onPointerMove={move}
-        onPointerUp={() => (drag.current = null)}
-        onPointerCancel={() => (drag.current = null)}
+        onPointerUp={lift}
+        onPointerCancel={lift}
       >
         <div
           className="absolute top-0 left-0 origin-top-left"
@@ -405,6 +452,24 @@ export function CanvasView({
                   {board.width}×{board.height}
                   {board.caption ? ` · ${board.caption}` : ""}
                 </span>
+                {placed.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setComparing((was) => {
+                        const chosen = [...(was ?? []).filter((name) => name !== board.name), board.name];
+                        return chosen.slice(-2);
+                      })
+                    }
+                    className={cx(
+                      "hover:underline",
+                      comparing?.includes(board.name) ? "text-accent-fg" : "text-fg-2 hover:text-fg-1",
+                    )}
+                    aria-pressed={comparing?.includes(board.name) ?? false}
+                  >
+                    Compare
+                  </button>
+                )}
                 {onComment && (
                   <button
                     type="button"
@@ -416,20 +481,28 @@ export function CanvasView({
                   </button>
                 )}
               </figcaption>
-              <iframe
-                title={board.name}
-                sandbox="allow-scripts"
-                srcDoc={partDocument(
-                  board.html,
-                  canvas.style,
-                  board.width,
-                  board.height,
-                  style,
-                  theme,
-                )}
-                className="pointer-events-auto block border-0 bg-white shadow-overlay"
-                style={{ width: board.width, height: board.height }}
-              />
+              {onScreen(board) ? (
+                <iframe
+                  title={board.name}
+                  sandbox="allow-scripts"
+                  srcDoc={partDocument(
+                    board.html,
+                    canvas.style,
+                    board.width,
+                    board.height,
+                    style,
+                    theme,
+                  )}
+                  className="pointer-events-auto block border-0 bg-white shadow-overlay"
+                  style={{ width: board.width, height: board.height }}
+                />
+              ) : (
+                <div
+                  className="bg-white/60 shadow-overlay"
+                  style={{ width: board.width, height: board.height }}
+                  data-testid="board-unloaded"
+                />
+              )}
             </figure>
           ))}
         </div>
@@ -458,6 +531,76 @@ export function CanvasView({
         <Button size="sm" variant="ghost" onClick={fit}>
           Fit all
         </Button>
+      </div>
+      {comparing && comparing.length === 2 && (
+        <BoardsCompared
+          boards={comparing.map((name) => placed.find((board) => board.name === name)).filter((board) => board !== undefined)}
+          shared={canvas.style}
+          style={style}
+          theme={theme}
+          onDone={() => setComparing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Two boards side by side at one scale, each whole, to tell them apart. */
+function BoardsCompared({
+  boards,
+  shared,
+  style,
+  theme,
+  onDone,
+}: {
+  boards: { name: string; width: number; height: number; html: string }[];
+  shared: string | undefined;
+  style: string | null;
+  theme: FrameTheme;
+  onDone: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const measure = () => setRoom({ width: element.clientWidth, height: element.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const gap = 32;
+  const widths = boards.reduce((sum, board) => sum + board.width, 0);
+  const tallest = Math.max(...boards.map((board) => board.height));
+  const scale = Math.max(Math.min((room.width - gap * 3) / widths, (room.height - 80) / tallest, 1), 0.05);
+  return (
+    <div className="absolute inset-0 z-10 flex flex-col bg-surface-1" data-testid="boards-compared">
+      <div className="flex shrink-0 items-center gap-2 border-b border-line-subtle bg-elevated px-3 py-1.5 text-sm">
+        <span className="min-w-0 flex-1 truncate text-fg-1">
+          {boards[0]?.name} and {boards[1]?.name}, at {Math.round(scale * 100)}%
+        </span>
+        <Button size="sm" variant="ghost" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+      <div ref={box} className="flex min-h-0 flex-1 items-start justify-center overflow-hidden pt-6" style={{ gap }}>
+        {boards.map((board) => (
+          <figure key={board.name} className="m-0 flex flex-col gap-2">
+            <figcaption className="text-xs text-fg-2">
+              {board.name} · {board.width}×{board.height}
+            </figcaption>
+            <div style={{ width: board.width * scale, height: board.height * scale }} className="overflow-hidden shadow-overlay">
+              <iframe
+                title={`${board.name}, compared`}
+                sandbox="allow-scripts"
+                srcDoc={partDocument(board.html, shared, board.width, board.height, style, theme)}
+                className="block origin-top-left border-0 bg-white"
+                style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
+              />
+            </div>
+          </figure>
+        ))}
       </div>
     </div>
   );

@@ -274,6 +274,16 @@ export function ArtifactViewer({
         const read = await api.artifact(thread, file.blob)
         files[path] = { media_type: file.media_type, data: read.data }
       }
+      // Past what one HTML file carries well, the copy is the page with its files beside it, zipped.
+      const carried = Object.values(files).reduce((sum, file) => sum + (file.data.length * 3) / 4, 0)
+      if (carried > ZIP_ABOVE) {
+        const { zipOf } = await import('../zip')
+        const decoded = (data: string) => Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+        const page = new TextEncoder().encode(offlineHtml(artifact, content.data, rendered, styleText, {}))
+        const zip = zipOf([{ path: 'index.html', bytes: page }, ...Object.entries(files).map(([path, file]) => ({ path, bytes: decoded(file.data) }))])
+        download(zip, 'application/zip', fileName(artifact, 'zip'))
+        return
+      }
       download(offlineHtml(artifact, content.data, rendered, styleText, files), 'text/html', fileName(artifact, 'html'))
     } catch (failure) {
       toast(message(failure), 'danger')
@@ -750,6 +760,9 @@ async function printDeck(thread: string, artifact: ArtifactView, html: string) {
     toast(message(failure), 'danger')
   }
 }
+
+/** Past this many bytes of files, an offline copy is a zip rather than one HTML file. */
+const ZIP_ABOVE = 32 << 20
 
 async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent): Promise<string | undefined> {
   if (artifact.kind === 'markdown' || artifact.kind === 'doc') {
