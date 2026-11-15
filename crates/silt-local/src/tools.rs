@@ -233,7 +233,7 @@ fn is_outside(root: &Path, path: &Path) -> bool {
 fn shown(root: &Path, path: &Path) -> String {
     match path.strip_prefix(root) {
         Ok(inside) if inside.as_os_str().is_empty() => ".".to_owned(),
-        Ok(inside) => inside.display().to_string(),
+        Ok(inside) => inside.iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join("/"),
         Err(_) => path.display().to_string(),
     }
 }

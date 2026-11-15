@@ -10,7 +10,7 @@ use axum::Router;
 use axum::extract::Path as UrlPath;
 use axum::routing::get;
 use common::{fake_agent, silt_command, temp_root};
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 struct Here {
@@ -207,7 +207,7 @@ fn releases() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let url = format!("http://{}", listener.local_addr().expect("address"));
     drop(listener);
-    let assets: Vec<Value> = ["macos-arm64", "ubuntu-vulkan-x64", "ubuntu-vulkan-arm64"]
+    let assets: Vec<serde_json::Value> = ["macos-arm64", "ubuntu-vulkan-x64", "ubuntu-vulkan-arm64"]
         .iter()
         .map(|kind| {
             json!({"name": format!("llama-b9999-bin-{kind}.tar.gz"), "browser_download_url": format!("{url}/download/build.tar.gz"),
