@@ -801,6 +801,14 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(viewer.getByTestId('artifact-frame')).toHaveAttribute('sandbox', 'allow-scripts')
   await expect(page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' })).toBeVisible()
   await expect(page.getByTestId('artifact-card')).toBeVisible()
+  // The version and the view are in the header, so nothing covers the page's top.
+  const header = await viewer.getByRole('button', { name: 'Versions' }).locator('xpath=ancestor::div[contains(@class,"sticky")]').boundingBox()
+  const frame = await viewer.getByTestId('artifact-frame').boundingBox()
+  expect(frame!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
+  await viewer.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Source' }).click()
+  await expect(viewer.getByTestId('artifact-source')).toContainText('Rescan benchmark')
+  await viewer.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Preview' }).click()
+  await expect(viewer.getByTestId('artifact-frame')).toBeVisible()
 
   await viewer.getByRole('button', { name: 'Full view (F)' }).click()
   await expect(page.getByLabel('draft')).toBeHidden()
