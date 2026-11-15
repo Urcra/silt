@@ -30,6 +30,73 @@ pub(crate) struct Control {
     relayed: Notify,
     /// Woken when a command is answered, for whoever waits on one.
     answered: Notify,
+    /// What a device's agent has said so far of a page's question it
+    /// answers, by command, for the hosted app to show as it streams.
+    progress: std::sync::Mutex<HashMap<i64, String>>,
+    /// Which command answers a browser's question, by its person and the
+    /// name the page gave it.
+    asks: std::sync::Mutex<HashMap<(UserId, String), i64>>,
+}
+
+/// The most of an answer kept as it streams, in bytes, as print mode keeps.
+const PROGRESS_BYTES: usize = 256 * 1024;
+
+impl Control {
+    /// Notes that command `id` answers `user`'s question named `ask`.
+    pub(crate) fn asked(&self, user: UserId, ask: String, id: i64) {
+        self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((user, ask), id);
+    }
+
+    /// Forgets the question, once it's answered.
+    pub(crate) fn forget_ask(&self, user: UserId, ask: &str) {
+        let id = self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(user, ask.to_owned()));
+        if let Some(id) = id {
+            self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
+        }
+    }
+
+    /// What's been said so far of `user`'s question named `ask`.
+    pub(crate) fn said_so_far(&self, user: UserId, ask: &str) -> Option<String> {
+        let id = *self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(user, ask.to_owned()))?;
+        self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&id).cloned()
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Progress {
+    text: String,
+}
+
+/// What a device's agent has said so far of a command it hasn't answered
+/// yet; only the device it's for tells it.
+pub(crate) async fn progress(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(said): Json<Progress>,
+) -> Result<StatusCode, ApiError> {
+    let device = id_bytes(caller.device.0);
+    // A runtime query, as it's read only here.
+    let open: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM control_commands WHERE id = ? AND device_id = ? AND answered_ms IS NULL")
+            .bind(id)
+            .bind(device)
+            .fetch_optional(server.db())
+            .await
+            .map_err(ServerError::from)?;
+    if open.is_none() {
+        return Err(not_found());
+    }
+    let mut text = said.text;
+    if text.len() > PROGRESS_BYTES {
+        let mut end = PROGRESS_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    server.shared.control.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, text);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 struct Heard {
@@ -590,6 +657,38 @@ mod tests {
         let heard = tokio::time::timeout(Duration::from_secs(5), waiting).await.expect("wakes").expect("joins");
         assert_eq!(heard.expect("reads"), Some(answer.clone()), "whoever waits hears the answer at once");
         assert_ne!(stale, id);
+    }
+
+    #[tokio::test]
+    async fn what_a_device_says_of_a_pages_question_so_far_reaches_the_person_who_asked() {
+        let (_data, server, base) = start().await;
+        let laptop = Device::sign_in(&base, "alice").await;
+        let (alice, device) = device_of(&server, "alice").await;
+        let phone = Device::sign_in(&base, "alice").await;
+        let command = RemoteCommand::Sample { question: "Name three rivers".into(), images: Vec::new() };
+        let relay = Relay {
+            device,
+            thread: ThreadId(7),
+            sender: alice,
+            from: None,
+            capabilities: Capabilities::ALL,
+            command,
+            ttl: Duration::from_secs(60),
+        };
+        let id = super::relay(&server, relay).await.expect("relays");
+        server.shared.control.asked(alice, "q1".into(), id);
+        let said = |device: &Device, text: &str| {
+            device
+                .request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"))
+                .json(&serde_json::json!({"text": text}))
+                .send()
+        };
+        assert_eq!(said(&phone, "nope").await.expect("sends").status(), StatusCode::NOT_FOUND, "only the device answering it");
+        assert_eq!(said(&laptop, "The Nile,").await.expect("sends").status(), StatusCode::NO_CONTENT);
+        assert_eq!(server.shared.control.said_so_far(alice, "q1").as_deref(), Some("The Nile,"));
+        assert_eq!(server.shared.control.said_so_far(UserId(alice.0 + 1), "q1"), None, "only the person who asked reads it");
+        server.shared.control.forget_ask(alice, "q1");
+        assert_eq!(server.shared.control.said_so_far(alice, "q1"), None, "forgotten once answered");
     }
 
     #[tokio::test]

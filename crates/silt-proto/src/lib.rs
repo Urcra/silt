@@ -1315,6 +1315,10 @@ pub enum RemoteCommand {
     /// session (ADR 0072); the answer is `{text, truncated}`.
     Sample {
         question: String,
+        /// What the page showed with it, which the server checked it
+        /// declared.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::artifact::SampleImage>,
     },
     /// The thread's files for a page that declares `files` (ADR 0078), as
     /// the device that holds the family reads them.

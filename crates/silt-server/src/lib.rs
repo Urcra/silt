@@ -353,6 +353,7 @@ impl Server {
             .route("/v1/control", get(control::poll))
             .route("/v1/control/agents", put(control::report))
             .route("/v1/control/{id}", post(control::answer))
+            .route("/v1/control/{id}/progress", post(control::progress))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/me/notifications", get(inbox::settings).put(inbox::change_setting))

@@ -374,6 +374,13 @@ impl Remote {
         Ok(())
     }
 
+    /// What this device's agent has said so far of command `id`'s answer.
+    pub async fn command_progress(&self, id: i64, text: &str) -> Result<(), RemoteError> {
+        let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"));
+        checked(request.json(&serde_json::json!({ "text": text })).send().await?).await?;
+        Ok(())
+    }
+
     pub async fn report_agents(&self, report: &silt_proto::AgentsReport) -> Result<(), RemoteError> {
         checked(self.request(reqwest::Method::PUT, "/v1/control/agents").json(report).send().await?).await?;
         Ok(())

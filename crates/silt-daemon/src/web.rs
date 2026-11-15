@@ -824,6 +824,8 @@ struct SampleAsk {
     #[serde(default)]
     ask: Option<String>,
     input: serde_json::Value,
+    #[serde(default)]
+    images: Vec<silt_proto::artifact::SampleImage>,
 }
 
 /// A page's question for this machine's agent, its answer streamed on the
@@ -833,7 +835,8 @@ async fn sample(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<SampleAsk>,
 ) -> HttpResponse {
-    ask(&web, Request::Sample { thread, artifact: Some(artifact), ask: asked.ask, input: asked.input }).await
+    ask(&web, Request::Sample { thread, artifact: Some(artifact), ask: asked.ask, input: asked.input, images: asked.images })
+        .await
 }
 
 /// Adds, lists or deletes the files people added to a page (ADR 0074).

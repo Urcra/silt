@@ -730,8 +730,8 @@ impl Core {
             Request::ArtifactFile { thread, id, version, path } => {
                 to_response(self.artifact_file(&thread, &id, version, &path).await)
             }
-            Request::Sample { thread, artifact, ask, input } => {
-                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input));
+            Request::Sample { thread, artifact, ask, input, images } => {
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images));
             }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),

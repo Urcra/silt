@@ -621,7 +621,7 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
                 "title": "Saver",
                 "kind": "html",
                 "content": "<!doctype html><h1>Saver</h1>",
-                "capabilities": {"artifact": {}, "sample": {}, "user": {}}
+                "capabilities": {"artifact": {}, "sample": {"images": true}, "user": {}}
             });
         }
         if prompt.contains("Artifact poll") {

@@ -372,8 +372,12 @@ function composerOnly(artifact: ArtifactView): boolean {
   return declared?.composer_only === true
 }
 
+/** The most images one of a page's questions shows the agent, as the daemon and server take them. */
+const SAMPLE_IMAGES = 4
+
 /** `sample`: a question for an agent, asked once the person agrees, its answer told to the page as it streams. */
 function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  const takesImages = (artifact.capabilities?.sample as { images?: unknown } | undefined)?.images === true
   let consent: Promise<boolean> | null = null
   const consented = () =>
     (consent ??= (async () => {
@@ -394,20 +398,37 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
     methods: ['ask', 'limits'],
     perMinute: 4,
     call: async (method, args, context) => {
-      if (method === 'limits') return { images: false, perMinute: 4 }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown }
+      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4 }
+      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown }
+      const blobs = Array.isArray(given.images) ? given.images : []
+      if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
+      if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
       if (!(await consented())) throw new Refusal('not_granted', 'the person chose not to let this page ask')
+      const images = await Promise.all((blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })))
       const ask = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : Math.random().toString(36).slice(2)
       const unsubscribe = bus.subscribe(`sample:${ask}`)
       const unlisten = bus.listen((event) => {
         const said = event as { event?: string; ask?: string; text?: string }
         if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask, text: said.text ?? '' })
       })
+      // The hosted app has no bus: it reads what the device's agent has said so far.
+      let heard = ''
+      const polling = hosted()
+        ? window.setInterval(() => {
+            void api
+              .sampleSoFar(thread, artifact.id, ask)
+              .then(({ text }) => {
+                if (text && text !== heard) context.emit('sample', 'text', { ask, text: (heard = text) })
+              })
+              .catch(() => undefined)
+          }, 400)
+        : null
       try {
-        return await api.sample(thread, artifact.id, ask, given.input)
+        return await api.sample(thread, artifact.id, ask, given.input, images)
       } catch (failure) {
         throw refusalOf(failure)
       } finally {
+        if (polling !== null) window.clearInterval(polling)
         unlisten()
         unsubscribe()
       }

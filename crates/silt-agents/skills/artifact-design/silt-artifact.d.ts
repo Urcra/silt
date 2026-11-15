@@ -131,14 +131,22 @@ interface SiltComments {
 // time. The person agrees once per artifact; `not_granted` means they said
 // no, so hide the feature. At most 4 a minute (`rate_limited`). Call it on a
 // click, never in a loop.
+interface SiltSampleOptions {
+  onText?: (said: { text: string; delta: string }) => void
+  /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most
+   * about 3.7 MB; declare `{"sample": {"images": true}}` for them. */
+  images?: Blob[]
+}
 interface SiltSample {
-  (input: string | { role: 'user' | 'assistant'; content: string }[], opts?: { onText?: (said: { text: string; delta: string }) => void }): Promise<{
+  (input: string | { role: 'user' | 'assistant'; content: string }[], opts?: SiltSampleOptions): Promise<{
     text: string
     truncated: boolean
   }>
   /** The answer parsed as JSON, a ```json fence around it allowed. */
-  json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: { onText?: (said: { text: string; delta: string }) => void }): Promise<any>
-  limits(): Promise<{ images: boolean; perMinute: number }>
+  json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: SiltSampleOptions): Promise<any>
+  /** `images` is how many one question may show, or false when the page
+   * didn't declare them. */
+  limits(): Promise<{ images: number | false; perMinute: number }>
 }
 
 // `assets` (declare `{"assets": {}}`, or `{"assets": {"upload": "comment"}}`

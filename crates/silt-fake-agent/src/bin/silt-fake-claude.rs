@@ -473,9 +473,18 @@ fn print_mode(args: &[String]) -> Step {
     }
     let mut message = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut message).map_err(io)?;
+    // With stream-json input, the question is a user message, images and all.
+    let mut images = 0;
+    if args.iter().any(|arg| arg == "--input-format") {
+        let said: serde_json::Value = serde_json::from_str(message.trim()).map_err(|error| Failed(2, error.to_string()))?;
+        let content = said.pointer("/message/content").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        images = content.iter().filter(|part| part["type"] == "image").count();
+        message = content.iter().filter_map(|part| part["text"].as_str()).collect();
+    }
     let answer = env::var("FAKE_SAMPLE").unwrap_or_else(|_| {
         let words: Vec<&str> = message.split_whitespace().take(6).collect();
-        format!("Sampled: {}", words.join(" "))
+        let seen = if images > 0 { format!(" ({images} images)") } else { String::new() };
+        format!("Sampled: {}{seen}", words.join(" "))
     });
     let (first, rest) = answer.split_at(answer.find(' ').unwrap_or(answer.len()));
     let mut out = std::io::stdout().lock();

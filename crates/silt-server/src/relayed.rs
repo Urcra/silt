@@ -46,6 +46,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}", get(sample_so_far))
         .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
 }
@@ -66,7 +67,13 @@ async fn file_at(
 
 #[derive(Deserialize)]
 struct SampleAsk {
+    /// The page's name for the question, under which what's said so far
+    /// is read while it streams.
+    #[serde(default)]
+    ask: Option<String>,
     input: Value,
+    #[serde(default)]
+    images: Vec<silt_proto::artifact::SampleImage>,
 }
 
 /// A page's question, answered by the agent of one of the person's own
@@ -83,8 +90,31 @@ async fn sample(
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample")));
     }
     let question = silt_proto::artifact::sample_question(&asked.input).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
-    let command = RemoteCommand::Sample { question };
-    Ok(Json(ask_device_within(&server, browser, thread, command, SAMPLE_WAIT).await?))
+    silt_proto::artifact::sample_images(&asked.images).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    let declared = latest.capabilities.clone().unwrap_or_default();
+    if !asked.images.is_empty() && !silt_proto::artifact::sample_takes_images(&declared) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample with images")));
+    }
+    let command = RemoteCommand::Sample { question, images: asked.images };
+    let ask =
+        asked.ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    let watched = ask.clone().map(|ask| (browser.user, ask));
+    let answered = ask_device_watched(&server, browser, thread, command, SAMPLE_WAIT, watched).await;
+    if let Some(ask) = &ask {
+        server.shared.control.forget_ask(browser.user, ask);
+    }
+    Ok(Json(answered?))
+}
+
+/// What the agent has said so far of a page's question named `ask`, while
+/// a device answers it.
+async fn sample_so_far(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((_, _, ask)): Path<(String, String, String)>,
+) -> Result<Json<Value>, Refused> {
+    let text = server.shared.control.said_so_far(browser.user, &ask).unwrap_or_default();
+    Ok(Json(serde_json::json!({ "text": text })))
 }
 
 /// The thread's files for a page, read by one of the person's devices that
@@ -136,6 +166,19 @@ async fn ask_device_within(
     command: RemoteCommand,
     wait: Duration,
 ) -> Result<Value, Refused> {
+    ask_device_watched(server, browser, thread, command, wait, None).await
+}
+
+/// [`ask_device_within`], noting each command relayed as the one answering
+/// `watched`, a person's named question, so what's said so far can be read.
+async fn ask_device_watched(
+    server: &Server,
+    browser: Browser,
+    thread: ThreadId,
+    command: RemoteCommand,
+    wait: Duration,
+    watched: Option<(crate::UserId, String)>,
+) -> Result<Value, Refused> {
     if let Err(needs) = browser.capabilities.allow(&command) {
         return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
     }
@@ -154,6 +197,9 @@ async fn ask_device_within(
             ttl: wait,
         };
         let id = control::relay(server, relay).await?;
+        if let Some((user, ask)) = &watched {
+            server.shared.control.asked(*user, ask.clone(), id);
+        }
         match control::answer_of(server, id, wait).await? {
             Some(answer) if answer.ok => return Ok(answer.data),
             Some(answer) => last = answer.message,

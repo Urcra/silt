@@ -163,7 +163,9 @@ function sampleClient(ns) {
         })
       : function () {};
     var done = function () { off(); delete sample.last[ask]; };
-    return ns.ask({ input: input, ask: ask }).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
+    var asked = { input: input, ask: ask };
+    if (opts.images) asked.images = Array.prototype.slice.call(opts.images);
+    return ns.ask(asked).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
   }
   sample.last = {};
   sample.json = function (input, opts) {

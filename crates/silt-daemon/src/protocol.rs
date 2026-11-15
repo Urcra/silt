@@ -429,6 +429,8 @@ pub enum Request {
         #[serde(default)]
         ask: Option<String>,
         input: serde_json::Value,
+        #[serde(default)]
+        images: Vec<silt_proto::artifact::SampleImage>,
     },
     /// The files people added to an artifact's page (ADR 0074).
     PageAssets {

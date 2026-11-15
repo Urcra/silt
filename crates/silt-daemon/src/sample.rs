@@ -29,8 +29,10 @@ impl Core {
         artifact: Option<&str>,
         ask: Option<String>,
         input: &serde_json::Value,
+        images: Vec<silt_proto::artifact::SampleImage>,
     ) -> Result<impl Future<Output = Result<Sampled, CoreError>> + Send + 'static, CoreError> {
         let question = silt_proto::artifact::sample_question(input).map_err(CoreError::Invalid)?;
+        silt_proto::artifact::sample_images(&images).map_err(CoreError::Invalid)?;
         let thread_id = self.find_thread(thread)?;
         if let Some(artifact) = artifact {
             let declared = self
@@ -39,10 +41,12 @@ impl Core {
                 .filter_map(|(_, entry)| entry.artifact.as_ref())
                 .filter(|view| view.id == artifact)
                 .max_by_key(|view| view.version)
-                .and_then(|view| view.capabilities.as_ref())
-                .is_some_and(|declared| declared.contains_key("sample"));
-            if !declared {
+                .and_then(|view| view.capabilities.clone());
+            let Some(declared) = declared.filter(|declared| declared.contains_key("sample")) else {
                 return Err(CoreError::Invalid(format!("artifact {artifact} doesn't declare sample")));
+            };
+            if !images.is_empty() && !silt_proto::artifact::sample_takes_images(&declared) {
+                return Err(CoreError::Invalid(format!("artifact {artifact} doesn't declare sample with images")));
             }
         }
         let key = format!("{thread_id}/{}", artifact.unwrap_or("elsewhere"));
@@ -59,7 +63,11 @@ impl Core {
         Ok(async move {
             std::fs::create_dir_all(&cwd)?;
             let answer = tokio::task::spawn_blocking(move || {
-                silt_agents::oneshot::ask_claude(&question, &cwd, |text| {
+                let shown: Vec<_> = images
+                    .iter()
+                    .map(|image| silt_agents::oneshot::Image { media_type: &image.media_type, data: &image.data })
+                    .collect();
+                silt_agents::oneshot::ask_claude(&question, &shown, &cwd, |text| {
                     if let Some(ask) = &ask {
                         let _ = bus.send(BusEvent::Sample { ask: ask.clone(), text: text.to_owned() });
                     }

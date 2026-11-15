@@ -106,6 +106,46 @@ pub fn asset_media_type_ok(media_type: &str) -> bool {
 
 /// The most of a page's question to `sample`, in bytes.
 pub const SAMPLE_BYTES: usize = 256 * 1024;
+/// The most images one question shows, each at most [`SAMPLE_IMAGE_BYTES`]
+/// of base64, as the model takes them.
+pub const SAMPLE_IMAGES: usize = 4;
+pub const SAMPLE_IMAGE_BYTES: usize = 5 << 20;
+
+/// An image a page's question shows the agent, which the page declared
+/// `{sample: {images: true}}` for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SampleImage {
+    pub media_type: String,
+    /// Base64.
+    pub data: String,
+}
+
+/// Whether `images` are ones a question may show: few, small, and of the
+/// kinds the model reads.
+pub fn sample_images(images: &[SampleImage]) -> Result<(), String> {
+    use base64::Engine as _;
+    if images.len() > SAMPLE_IMAGES {
+        return Err(format!("a question shows at most {SAMPLE_IMAGES} images"));
+    }
+    for image in images {
+        if !matches!(image.media_type.as_str(), "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+            return Err(format!("{} isn't an image the agent reads; use PNG, JPEG, GIF or WebP", image.media_type));
+        }
+        if image.data.len() > SAMPLE_IMAGE_BYTES {
+            return Err(format!("an image is at most {} MiB of base64", SAMPLE_IMAGE_BYTES >> 20));
+        }
+        if base64::engine::general_purpose::STANDARD.decode(&image.data).is_err() {
+            return Err("an image's data isn't base64".into());
+        }
+    }
+    Ok(())
+}
+
+/// Whether a version's declaration lets its page show the agent images.
+pub fn sample_takes_images(declared: &Capabilities) -> bool {
+    declared.get("sample").and_then(|sample| sample.get("images")).and_then(serde_json::Value::as_bool) == Some(true)
+}
 
 /// What a page's `sample` call asks, as one message to an agent's print
 /// mode: a string as it is, or a conversation ending on the person's turn,
@@ -291,6 +331,18 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_shows_only_images_its_page_declared_and_the_agent_reads() {
+        let declared = |sample: serde_json::Value| Capabilities::from([("sample".to_owned(), sample)]);
+        assert!(sample_takes_images(&declared(serde_json::json!({"images": true}))));
+        assert!(!sample_takes_images(&declared(serde_json::json!({}))));
+        let image = |media_type: &str, data: &str| SampleImage { media_type: media_type.into(), data: data.into() };
+        assert_eq!(sample_images(&[image("image/png", "aGk=")]), Ok(()));
+        assert!(sample_images(&[image("image/svg+xml", "aGk=")]).is_err());
+        assert!(sample_images(&[image("image/png", "not base64!")]).is_err());
+        assert!(sample_images(&vec![image("image/png", "aGk="); SAMPLE_IMAGES + 1]).is_err());
+    }
 
     fn edit(old: &str, new: &str) -> Edit {
         Edit { old: old.into(), new: new.into(), file: None }

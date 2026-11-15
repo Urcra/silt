@@ -13,6 +13,8 @@ use crate::Launch;
 pub const QUESTION_BYTES: usize = 256 * 1024;
 /// The most of an answer kept, in bytes; the rest is cut.
 pub const ANSWER_BYTES: usize = 256 * 1024;
+/// How long one question may take, under the hosted app's two minutes.
+const RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(110);
 
 #[derive(Debug, thiserror::Error)]
 pub enum OneShotError {
@@ -31,16 +33,35 @@ pub struct Answer {
     pub truncated: bool,
 }
 
+/// An image shown with a question: its media type and its base64.
+pub struct Image<'a> {
+    pub media_type: &'a str,
+    pub data: &'a str,
+}
+
 /// Asks Claude Code's print mode `question` from `cwd`, a directory of its
-/// own so no project's instructions apply, telling `heard` the answer so far
-/// each time more of it arrives.
-pub fn ask_claude(question: &str, cwd: &Path, mut heard: impl FnMut(&str)) -> Result<Answer, OneShotError> {
+/// own so no project's instructions apply, showing it `images`, and telling
+/// `heard` the answer so far each time more of it arrives.
+pub fn ask_claude(question: &str, images: &[Image<'_>], cwd: &Path, mut heard: impl FnMut(&str)) -> Result<Answer, OneShotError> {
     if question.len() > QUESTION_BYTES {
         return Err(OneShotError::TooLarge);
     }
     let launch = Launch::new("claude");
-    let mut child = Command::new(&launch.program)
-        .args(["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", ""])
+    let mut command = Command::new(&launch.program);
+    command.args(["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", ""]);
+    // Images go in a message of the stream, as plain text can't carry them.
+    let message = (!images.is_empty()).then(|| {
+        let mut content: Vec<Value> = images
+            .iter()
+            .map(|image| {
+                serde_json::json!({"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": image.data}})
+            })
+            .collect();
+        content.push(serde_json::json!({"type": "text", "text": question}));
+        command.args(["--input-format", "stream-json"]);
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": content}}).to_string() + "\n"
+    });
+    let mut child = command
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -49,9 +70,24 @@ pub fn ask_claude(question: &str, cwd: &Path, mut heard: impl FnMut(&str)) -> Re
         .map_err(|error| OneShotError::Run(format!("{}: {error}", launch.program.to_string_lossy())))?;
     // On stdin, so a question starting with a dash isn't taken for an option.
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(question.as_bytes()).map_err(|error| OneShotError::Run(error.to_string()))?;
+        let said = message.as_deref().unwrap_or(question);
+        stdin.write_all(said.as_bytes()).map_err(|error| OneShotError::Run(error.to_string()))?;
     }
     let stdout = child.stdout.take().ok_or_else(|| OneShotError::Run("no output".into()))?;
+    // A run that hangs is ended, so a page's question doesn't hold a thread
+    // and the person's wait forever.
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let (finished, finishing) = std::sync::mpsc::channel::<()>();
+    let watchdog = {
+        let child = std::sync::Arc::clone(&child);
+        std::thread::spawn(move || {
+            let late = finishing.recv_timeout(RUN_LIMIT).is_err();
+            if late && let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+            late
+        })
+    };
     let mut answer = Streamed::default();
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
@@ -59,6 +95,14 @@ pub fn ask_claude(question: &str, cwd: &Path, mut heard: impl FnMut(&str)) -> Re
             heard(&answer.text);
         }
     }
+    let _ = finished.send(());
+    if watchdog.join().unwrap_or(false) {
+        return Err(OneShotError::Failed(format!("the agent took longer than {} seconds", RUN_LIMIT.as_secs())));
+    }
+    let child = std::sync::Arc::try_unwrap(child)
+        .map_err(|_| OneShotError::Run("the run is still held".into()))?
+        .into_inner()
+        .map_err(|_| OneShotError::Run("the run's lock was poisoned".into()))?;
     let output = child.wait_with_output().map_err(|error| OneShotError::Run(error.to_string()))?;
     if let Some(error) = answer.error {
         return Err(OneShotError::Failed(error));
