@@ -623,10 +623,12 @@ impl Core {
             _ if silt_proto::edited::is_edited(&kind) => {
                 let mut declared = capabilities.unwrap_or_default();
                 declared.insert("edit".into(), serde_json::json!({}));
-                // A whiteboard keeps its items in page data, and its cursors in a room (ADR 0081).
+                // A whiteboard keeps its items in page data, its cursors in a
+                // room, and the images people put on it as assets (ADR 0081).
                 if kind == "whiteboard" {
                     declared.entry("db".to_owned()).or_insert_with(|| serde_json::json!({}));
                     declared.entry("room".to_owned()).or_insert_with(|| serde_json::json!({}));
+                    declared.entry("assets".to_owned()).or_insert_with(|| serde_json::json!({"upload": "comment"}));
                 }
                 Some(declared)
             }

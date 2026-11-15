@@ -160,6 +160,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         )
         .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
+        .route("/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
         .route("/api/threads/{id}/artifacts/{artifact}/doc.pdf", post(doc_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)))
         .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/api/threads/{id}/live", get(live))
@@ -849,6 +850,15 @@ async fn sample(
         tools: asked.tools,
     };
     ask(&web, request).await
+}
+
+/// One of the files people added to a page, for a view Silt draws itself,
+/// such as a whiteboard's images (ADR 0081).
+async fn page_asset_content(
+    State(web): State<Web>,
+    Path((thread, artifact, asset)): Path<(String, String, String)>,
+) -> HttpResponse {
+    ask(&web, Request::PageAsset { thread, artifact, asset }).await
 }
 
 #[derive(Deserialize)]

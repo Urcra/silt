@@ -208,6 +208,9 @@ export const api = {
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
   /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */
+  /** One of the files people added to a page, for a view Silt draws itself, such as a whiteboard's images. */
+  pageAsset: (id: string, artifact: string, asset: string) =>
+    request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/assets/${encodeURIComponent(asset)}`),
   /** Keeps a doc, a sheet or a whiteboard as it stands as its next version (ADR 0077). */
   saveVersion: (id: string, artifact: string, note: string) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/versions`, { note }),

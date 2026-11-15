@@ -1735,3 +1735,60 @@ test("two views of a whiteboard see each other's cursors, and a note moved by on
     .toBeGreaterThan(at!.y + 100)
   await other.close()
 })
+
+test('on a whiteboard people draw, connect, resize, rename and delete, and add an image (ADR 0081)', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact board')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact board')).toBeVisible()
+  await expect(page.getByTestId('whiteboard').or(page.getByTestId('artifact-card').first()).first()).toBeVisible()
+  if (!(await page.getByTestId('whiteboard').isVisible())) await page.getByTestId('artifact-card').first().click()
+  const board = page.getByTestId('whiteboard')
+  await expect(board.getByTestId('whiteboard-block')).toHaveCount(2)
+  const box = (await board.boundingBox())!
+
+  // A stroke drawn on an empty part of the board.
+  await board.getByRole('button', { name: 'Draw' }).click()
+  await page.mouse.move(box.x + 120, box.y + box.height - 120)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 260, box.y + box.height - 80, { steps: 8 })
+  await page.mouse.up()
+  await expect(board.getByTestId('whiteboard-stroke')).toHaveCount(1)
+
+  // An arrow back from the second note to the first.
+  await board.getByRole('button', { name: 'Connect' }).click()
+  await board.locator('[data-item="risk"]').click()
+  await board.locator('[data-item="goal"]').click()
+  await expect(board.getByTestId('whiteboard-arrow')).toHaveCount(2)
+
+  // A note made bigger by its handle, and renamed.
+  await board.getByRole('button', { name: 'Move' }).click()
+  const note = board.locator('[data-item="goal"] rect')
+  const before = (await note.boundingBox())!
+  await board.locator('[data-item="goal"]').click()
+  const handle = (await board.getByTestId('whiteboard-resize').boundingBox())!
+  await page.mouse.move(handle.x + 6, handle.y + 6)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + 86, handle.y + 46, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(async () => (await note.boundingBox())!.width, { timeout: 10_000 }).toBeGreaterThan(before.width + 40)
+  await board.locator('[data-item="goal"]').dblclick()
+  await board.getByLabel("the note's text").fill('Ship rooms by Friday')
+  await board.getByLabel("the note's text").press('Enter')
+  await expect(board.locator('[data-item="goal"]')).toContainText('Ship rooms by Friday')
+
+  // An image, as a file someone picked.
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+  await board.getByLabel('an image to add').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: pixel })
+  await expect(board.getByTestId('whiteboard-image').locator('image')).toHaveCount(1)
+
+  // The other note deleted, with the arrows that met it.
+  await board.locator('[data-item="risk"]').click()
+  await board.getByRole('button', { name: 'Delete' }).click()
+  await expect(board.getByTestId('whiteboard-block')).toHaveCount(1)
+  await expect(board.getByTestId('whiteboard-arrow')).toHaveCount(0)
+
+  const download = page.waitForEvent('download')
+  await board.getByRole('button', { name: 'Download as SVG' }).click()
+  expect((await download).suggestedFilename()).toBe('Planning-board.svg')
+})

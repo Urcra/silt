@@ -46,6 +46,7 @@ pub(crate) fn routes() -> Router<Server> {
             post(page_assets).layer(axum::extract::DefaultBodyLimit::max(PAGE_FILE_BODY)),
         )
         .route("/app/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/artifacts", get(artifact_listing))
         .route("/app/api/threads/{id}/artifacts/{artifact}/thumbnail", get(artifact_thumbnail))
@@ -692,6 +693,26 @@ async fn write_version(
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
     crate::writes::write_as_with(server, browser, row.family, row.id, None, native).await?;
     Ok(version)
+}
+
+/// One of the files people added to a page, for a view Silt draws itself,
+/// such as a whiteboard's images (ADR 0081).
+async fn page_asset_content(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact, asset)): Path<(String, String, String)>,
+) -> Result<Json<ArtifactContent>, ApiError> {
+    use base64::Engine as _;
+    if !silt_proto::page::asset_id_ok(&asset) {
+        return Err(not_found());
+    }
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    let doc = page.docs.get(&format!("_assets/{asset}")).ok_or_else(not_found)?;
+    let blob: silt_types::BlobHash = doc["blob"].as_str().and_then(|blob| blob.parse().ok()).ok_or_else(not_found)?;
+    let media_type = doc["media_type"].as_str().unwrap_or("application/octet-stream").to_owned();
+    let bytes = server.shared.blobs.get(blob).await.map_err(|_| not_found())?;
+    Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
 }
 
 #[derive(Deserialize)]
