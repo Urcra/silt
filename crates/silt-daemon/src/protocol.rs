@@ -386,6 +386,16 @@ pub enum Request {
     PutArtifact {
         artifact: NewArtifact,
     },
+    /// What a run reads before making an artifact: the design system that
+    /// applies, or the one named, and the others it may use (ADR 0070);
+    /// only inside [`Request::Scoped`].
+    ArtifactGuide {
+        #[serde(default)]
+        design_system: Option<String>,
+    },
+    /// The person's design systems and Silt's own, to pick a workspace's
+    /// default from.
+    DesignSystems,
     /// An artifact's content, by the blob a history entry of the thread names.
     ArtifactContent {
         thread: String,
@@ -752,6 +762,9 @@ pub struct NewArtifact {
     /// An image shown in the conversation rather than beside it.
     #[serde(default)]
     pub inline: bool,
+    /// The design system to style an HTML version with, or `none`.
+    #[serde(default)]
+    pub design_system: Option<String>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.
@@ -759,6 +772,49 @@ pub struct NewArtifact {
 pub struct ArtifactPut {
     pub id: String,
     pub version: u32,
+    /// The design system an HTML version was styled with.
+    #[serde(default)]
+    pub design_system: Option<String>,
+    /// What its tokens couldn't use, for the agent to fix.
+    #[serde(default)]
+    pub dropped: Vec<String>,
+}
+
+/// Where a design system comes from (ADR 0070).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum DesignSource {
+    /// The repository's `.silt/design-systems/`.
+    Project,
+    /// The person's, under Silt's data dir.
+    Personal,
+    Builtin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignSystemView {
+    /// What `design_system` takes.
+    pub name: String,
+    /// The name its tokens give it.
+    pub title: String,
+    pub source: DesignSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    /// Its custom properties and type classes, by family.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tokens: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// What [`Request::ArtifactGuide`] answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactGuide {
+    /// The system that applies, with its README and tokens.
+    pub system: Option<DesignSystemView>,
+    /// Why it applies: asked for, the project's default, the workspace's.
+    pub why: Option<String>,
+    pub systems: Vec<DesignSystemView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1504,6 +1560,8 @@ mod tests {
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
+            DesignSource::decl(&config),
+            DesignSystemView::decl(&config),
             silt_proto::view::ArtifactContent::decl(&config),
             silt_proto::view::LinkedArtifact::decl(&config),
             UsageView::decl(&config),

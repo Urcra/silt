@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { ArtifactView, CommentView, HistoryEntry } from './api'
-import { ARTIFACT_CSP, artifactPrompt, artifactsOf, commentsOn, fileName, offlineHtml, quoted, sandboxedDocument, shownImagesOf, textOf, versionOf } from './artifacts'
+import {
+  ARTIFACT_CSP,
+  artifactPrompt,
+  artifactsOf,
+  commentsOn,
+  fileName,
+  offlineHtml,
+  problemsPrompt,
+  quoted,
+  sandboxedDocument,
+  shownImagesOf,
+  textOf,
+  versionOf,
+} from './artifacts'
 
 function artifact(index: number, id: string, version: number, extra: Partial<ArtifactView> = {}): HistoryEntry {
   return {
@@ -59,7 +72,34 @@ describe('artifacts', () => {
     expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com'])
     expect(directives['font-src']).toEqual(['data:', 'https://fonts.gstatic.com'])
     expect(directives['img-src']).toEqual(['data:', 'blob:'])
-    expect(sandboxedDocument('<p>hi</p>', false)).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
+    expect(sandboxedDocument('<p>hi</p>', { probe: false })).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
+  })
+
+  it("gives the frame the design system's tokens and the viewer's theme before the page's own content", () => {
+    const page = sandboxedDocument('<!doctype html><html lang="en"><p>hi</p>', { style: ':root{--bg:#fff}</style><script>x</script>', theme: 'dark' })
+    const policy = page.indexOf('Content-Security-Policy')
+    const script = page.indexOf("root.setAttribute('data-theme','dark')")
+    const style = page.indexOf('<style data-silt="design-system">:root{--bg:#fff}<\\/style><script>x<\\/script></style>')
+    const own = page.indexOf('<html lang="en">')
+    expect(policy).toBeGreaterThan(0)
+    expect(script).toBeGreaterThan(policy)
+    expect(style).toBeGreaterThan(script)
+    expect(own).toBeGreaterThan(style)
+    expect(page).toContain("d.silt!=='theme'")
+    expect(page).toContain("'securitypolicyviolation'")
+    expect(sandboxedDocument('<p>hi</p>')).not.toContain("root.setAttribute('data-theme','")
+  })
+
+  it('asks the agent to fix what the frame saw go wrong', () => {
+    const entry = artifact(4, 'aaaaaaaaaaaa', 2)
+    const prompt = problemsPrompt({ entry, artifact: entry.artifact! }, [
+      { kind: 'blocked', text: 'https://esm.sh/react (script-src-elem)' },
+      { kind: 'overflow', text: 'The page is 920px wide in a 480px frame' },
+    ])
+    expect(prompt).toContain('(id aaaaaaaaaaaa, version 2)')
+    expect(prompt).toContain('- Blocked: https://esm.sh/react (script-src-elem)')
+    expect(prompt).toContain('- Too wide: The page is 920px wide in a 480px frame')
+    expect(prompt).toContain('silt_artifact and id aaaaaaaaaaaa')
   })
 
   it('makes one offline file with nothing outside it', () => {
@@ -70,6 +110,7 @@ describe('artifacts', () => {
     expect(file).not.toMatch(/(src|href)="https?:/)
     const html = artifact(2, 'bbbbbbbbbbbb', 1).artifact!
     expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') })).toContain('<h1>é</h1>')
+    expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') }, undefined, ':root{--bg:#fff}')).toContain(':root{--bg:#fff}</style><h1>é</h1>')
     expect(fileName(view)).toBe('sidebar-scan-v3.png')
     expect(fileName(html, 'html')).toBe('rescan-benchmark-v1.html')
   })

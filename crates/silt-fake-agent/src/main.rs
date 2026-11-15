@@ -12,7 +12,7 @@
 //! optional box for an answer of one's own, and none required. A prompt saying `Ponder` makes it think for a while between its
 //! edit and a read. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
-//! stops, as v1 can't. `Show me` and `Artifact` call Silt's own tools (see `show`). `Detached` makes it leave a shell running and read
+//! stops, as v1 can't. `Show me`, `Guide` and `Artifact` call Silt's own tools (see `show`). `Detached` makes it leave a shell running and read
 //! it once the turn is over, as Copilot does. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -472,9 +472,11 @@ async fn agent() -> Result<()> {
 }
 
 /// Calls Silt's own tools as an agent the web UI runs would: `Show me`
-/// shows an image with `silt_show`, `Artifact` makes an artifact with
-/// `silt_artifact` (`FAKE_ACP_ARTIFACT` its HTML), and `Artifact again` adds
-/// a version of the last one. Each call is reported as a tool call.
+/// shows an image with `silt_show`, `Guide` reads `silt_artifact_guide`,
+/// `Artifact` makes an artifact with `silt_artifact` (`FAKE_ACP_ARTIFACT`
+/// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), and `Artifact
+/// again` adds a version of the last one. Each call is reported as a tool
+/// call, with what it answered as its output.
 async fn show(
     worker: &ConnectionTo<Client>,
     session: &SessionId,
@@ -491,9 +493,14 @@ async fn show(
         let path = cwd.join("pixel.png");
         tokio::fs::write(&path, mcp::PIXEL_PNG).await.ok();
         ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
+    } else if prompt.contains("Guide") {
+        ("silt_artifact_guide", serde_json::json!({"kind": "html"}))
     } else {
         let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});
+        if let Ok(system) = std::env::var("FAKE_ACP_DESIGN_SYSTEM") {
+            arguments["design_system"] = serde_json::json!(system);
+        }
         if prompt.contains("again")
             && let Some(last) = last
         {

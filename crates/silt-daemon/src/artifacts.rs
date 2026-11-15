@@ -10,7 +10,8 @@ use silt_proto::view::{ArtifactContent, ArtifactView};
 use silt_types::{BlobHash, ThreadId};
 
 use crate::core::{Core, CoreError};
-use crate::protocol::{ArtifactPut, NewArtifact};
+use crate::design;
+use crate::protocol::{ArtifactGuide, ArtifactPut, DesignSystemView, NewArtifact};
 
 /// The largest artifact or image kept.
 pub(crate) const ARTIFACT_BYTES: u64 = 10 << 20;
@@ -149,14 +150,38 @@ impl Core {
         let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
 
         let entries = self.history_entries(thread);
-        let artifacts = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref());
+        let artifacts: Vec<&ArtifactView> = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).collect();
         let (id, version) = match new.id.as_deref() {
             Some(id) if !valid_id(id) => return Err(CoreError::Invalid(format!("{id} isn't an artifact id"))),
-            Some(id) => match latest_version(artifacts, id) {
+            Some(id) => match latest_version(artifacts.iter().copied(), id) {
                 0 => return Err(CoreError::Invalid(format!("this thread has no artifact {id}"))),
                 latest => (id.to_owned(), latest + 1),
             },
             None => (new_id(), 1),
+        };
+        let previous = artifacts
+            .iter()
+            .filter(|artifact| artifact.id == id)
+            .max_by_key(|artifact| artifact.version)
+            .map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
+        let styled = if kind == "html" {
+            let workspace_default = self.workspace_design_system(&workspace);
+            let project_default = design::project_default(&checkout);
+            let name = design::chosen(
+                new.design_system.as_deref(),
+                previous.as_deref(),
+                project_default.as_deref(),
+                workspace_default.as_deref(),
+            );
+            match name {
+                Some(name) => {
+                    let system = design::find(&design::systems(Some(&checkout), &self.data_dir), name)?;
+                    Some((system.name.to_string(), system.compiled()?))
+                }
+                None => None,
+            }
+        } else {
+            None
         };
 
         // Not redacted: a data: URI or an SRI hash reads as a secret, and
@@ -165,7 +190,17 @@ impl Core {
         let blob = self.store.blobs().put(&bytes).await?;
         let family = self.threads[&thread].family;
         let name = format!("artifact/{id}/v{version}/{}", file_name(&kind, media_type));
-        self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference, name, blob }).await?;
+        self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
+        let (design_system, style, dropped) = match styled {
+            Some((system, compiled)) => {
+                let style = self.store.blobs().put(compiled.css.as_bytes()).await?;
+                let name = format!("artifact/{id}/v{version}/design-system.css");
+                self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference, name, blob: style })
+                    .await?;
+                (Some(system), Some(style.to_string()), compiled.dropped)
+            }
+            None => (None, None, Vec::new()),
+        };
         let view = ArtifactView {
             id: id.clone(),
             version,
@@ -176,9 +211,43 @@ impl Core {
             size,
             inline: new.inline,
             caption,
+            design_system: design_system.clone(),
+            style,
         };
         self.record_acp(thread, &silt_agents::acp::artifact(&view)).await?;
-        Ok(ArtifactPut { id, version })
+        Ok(ArtifactPut { id, version, design_system, dropped })
+    }
+
+    /// The design system a run reads before making an artifact: the one
+    /// named, else its project's default, else its workspace's (ADR 0070).
+    pub(crate) async fn artifact_guide(&self, token: &str, asked: Option<String>) -> Result<ArtifactGuide, CoreError> {
+        let hash = blake3::hash(token.as_bytes());
+        let (thread, workspace) = self
+            .store
+            .run_token(hash.as_bytes())
+            .await?
+            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        let checkout = self.acp_run_place(thread).map(|(_, checkout)| checkout);
+        let systems = design::systems(checkout.as_deref(), &self.data_dir);
+        let project_default = checkout.as_deref().and_then(design::project_default);
+        let workspace_default = self.workspace_design_system(&workspace);
+        let (name, why) = match (asked.as_deref(), project_default.as_deref(), workspace_default.as_deref()) {
+            (Some(asked), _, _) => (design::chosen(Some(asked), None, None, None), "asked for"),
+            (None, Some(project), _) => (design::chosen(Some(project), None, None, None), "the project's default"),
+            (None, None, Some(workspace)) => (design::chosen(Some(workspace), None, None, None), "the workspace's default"),
+            (None, None, None) => (None, ""),
+        };
+        let system = name.map(|name| design::find(&systems, name)).transpose()?;
+        Ok(ArtifactGuide {
+            system: system.as_ref().map(|system| system.view(true)),
+            why: system.is_some().then(|| why.to_owned()),
+            systems: systems.iter().map(|system| system.view(false)).collect(),
+        })
+    }
+
+    /// The person's design systems and the built-in ones.
+    pub(crate) fn design_systems(&self) -> Vec<DesignSystemView> {
+        design::systems(None, &self.data_dir).iter().map(|system| system.view(false)).collect()
     }
 
     /// An artifact's content, if an artifact of `thread`'s history names
@@ -194,11 +263,13 @@ impl Core {
     }
 
     fn artifact_media_type(&self, thread: ThreadId, blob: &str) -> Option<String> {
-        self.history_entries(thread)
-            .iter()
-            .filter_map(|(_, entry)| entry.artifact.as_ref())
-            .find(|artifact| artifact.blob == blob)
-            .map(|artifact| artifact.media_type.clone())
+        self.history_entries(thread).iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
+            if artifact.blob == blob {
+                Some(artifact.media_type.clone())
+            } else {
+                (artifact.style.as_deref() == Some(blob)).then(|| "text/css".to_owned())
+            }
+        })
     }
 }
 
@@ -230,6 +301,7 @@ mod tests {
             id: None,
             caption: None,
             inline: false,
+            design_system: None,
         }
     }
 
@@ -294,6 +366,8 @@ mod tests {
             size: 0,
             inline: false,
             caption: None,
+            design_system: None,
+            style: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

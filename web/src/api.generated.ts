@@ -599,7 +599,32 @@ inline: boolean,
 /**
  * Words under an image shown in the conversation.
  */
-caption?: string | null, };
+caption?: string | null, 
+/**
+ * The design system an HTML version was styled with (ADR 0070).
+ */
+design_system?: string | null, 
+/**
+ * The blob holding the CSS that system's tokens compiled to, which the
+ * version's frame is given; read with the same route as the content.
+ */
+style?: string | null, };
+
+export type DesignSource = "project" | "personal" | "builtin";
+
+export type DesignSystemView = { 
+/**
+ * What `design_system` takes.
+ */
+name: string, 
+/**
+ * The name its tokens give it.
+ */
+title: string, source: DesignSource, readme?: string | null, 
+/**
+ * Its custom properties and type classes, by family.
+ */
+tokens?: { [key in string]: Array<string> }, };
 
 export type ArtifactContent = { media_type: string, 
 /**
@@ -989,7 +1014,12 @@ export type Defaults = { agent?: string | null, preset?: Preset | null, chats_pr
 /**
  * By agent id, as each agent's models and modes are its own.
  */
-agents?: { [key in string]: AgentDefaults }, };
+agents?: { [key in string]: AgentDefaults }, 
+/**
+ * The design system artifacts are styled with when the project names
+ * none (ADR 0070).
+ */
+design_system?: string | null, };
 
 export type AgentDefaults = { mode?: string | null, settings?: { [key in string]: string }, };
 

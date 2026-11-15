@@ -395,9 +395,15 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     let Ok(hash) = artifact.blob.parse() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(bytes) = server.shared.blobs.get(hash).await else {
+    let Ok(mut bytes) = server.shared.blobs.get(hash).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if artifact.kind == "html"
+        && let Some(style) = artifact.style.as_deref().and_then(|style| style.parse().ok())
+        && let Ok(css) = server.shared.blobs.get(style).await
+    {
+        bytes = with_style(&bytes, &css);
+    }
     let media_type = if artifact.media_type.starts_with("text/") {
         format!("{}; charset=utf-8", artifact.media_type)
     } else {
@@ -414,6 +420,24 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
+}
+
+/// A page with its design system's CSS ahead of its own content, after its
+/// doctype, as the web UI gives it (ADR 0070).
+fn with_style(html: &[u8], css: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(html);
+    let trimmed = text.trim_start();
+    let doctype_end = trimmed
+        .get(..9)
+        .filter(|start| start.eq_ignore_ascii_case("<!doctype"))
+        .and_then(|_| trimmed.find('>'))
+        .map(|end| end + 1);
+    let (doctype, rest) = match doctype_end {
+        Some(end) => trimmed.split_at(end),
+        None => ("<!doctype html>", trimmed),
+    };
+    let css = String::from_utf8_lossy(css).replace("</", "<\\/");
+    format!("{doctype}<style data-silt=\"design-system\">{css}</style>{rest}").into_bytes()
 }
 
 /// What an artifact's content may do when served, as in the web UI: run its
@@ -492,5 +516,15 @@ mod tests {
         assert_eq!(time_text(0), "1970-01-01 00:00 UTC");
         assert_eq!(time_text(1_792_547_100_000), "2026-10-21 01:45 UTC");
         assert_eq!(time_text(951_782_400_000), "2000-02-29 00:00 UTC");
+    }
+
+    #[test]
+    fn a_design_systems_css_goes_after_the_doctype_and_cant_close_its_element() {
+        let styled = |html: &str| String::from_utf8(with_style(html.as_bytes(), b":root { --bg: #fff; }</style>")).expect("text");
+        assert_eq!(
+            styled("<!DOCTYPE html><p>hi</p>"),
+            "<!DOCTYPE html><style data-silt=\"design-system\">:root { --bg: #fff; }<\\/style></style><p>hi</p>"
+        );
+        assert!(styled("<p>hi</p>").starts_with("<!doctype html><style data-silt=\"design-system\">"));
     }
 }

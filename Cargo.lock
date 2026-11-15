@@ -5164,6 +5164,7 @@ dependencies = [
  "silt-agents",
  "silt-checkout",
  "silt-crdt",
+ "silt-design",
  "silt-git",
  "silt-log",
  "silt-mcp",
@@ -5182,6 +5183,16 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "silt-design"
+version = "0.0.1"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

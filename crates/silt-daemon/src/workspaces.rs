@@ -399,6 +399,13 @@ impl Core {
         denied
     }
 
+    /// The design system a workspace styles artifacts with when the project
+    /// names none (ADR 0070).
+    pub(crate) fn workspace_design_system(&self, workspace: &str) -> Option<String> {
+        let id = WorkspaceId::new(workspace.to_owned()).ok()?;
+        self.workspaces().get(&id)?.defaults.design_system.clone()
+    }
+
     /// Whether the request being handled may read a family: always, unless
     /// an agent's token scopes it to a workspace.
     pub(crate) fn in_scope(&self, family: FamilyId) -> bool {

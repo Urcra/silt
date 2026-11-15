@@ -800,6 +800,8 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(viewer).toBeVisible()
   await expect(viewer.getByTestId('artifact-frame')).toHaveAttribute('sandbox', 'allow-scripts')
   await expect(page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' })).toBeVisible()
+  // The frame follows the viewer's theme (ADR 0070).
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').locator('html')).toHaveAttribute('data-theme', /^(light|dark)$/)
   await expect(page.getByTestId('artifact-card')).toBeVisible()
 
   await viewer.getByRole('button', { name: 'Full view (F)' }).click()

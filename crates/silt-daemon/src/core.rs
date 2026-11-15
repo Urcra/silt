@@ -570,6 +570,10 @@ impl Core {
                 let _ = reply.send(to_response(self.put_artifact(&token, artifact).await));
                 return;
             }
+            if let Request::ArtifactGuide { design_system } = *asking {
+                let _ = reply.send(to_response(self.artifact_guide(&token, design_system).await));
+                return;
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -596,6 +600,8 @@ impl Core {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Scoped { .. } => Response::error("a request carries one token"),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
+            Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
+            Request::DesignSystems => Response::ok(self.design_systems()),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),

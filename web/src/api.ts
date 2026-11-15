@@ -10,6 +10,7 @@ import type {
   ArtifactContent,
   ChatSettings,
   CloudLaunch,
+  DesignSystemView,
   CommentLocation,
   CommentOn,
   CommentView,
@@ -252,6 +253,8 @@ export const api = {
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
+  // The person's design systems and Silt's own, for a workspace's default (ADR 0070).
+  designSystems: () => request<DesignSystemView[]>('GET', '/api/design-systems'),
   setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>

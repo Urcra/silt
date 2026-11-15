@@ -7,12 +7,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Skill roots, highest precedence first: Silt's own, the cross-agent
-/// convention, then the user's personal skills.
-pub fn skill_roots(checkout: &Path, home: Option<&Path>) -> Vec<(SkillScope, PathBuf)> {
+/// convention, the user's personal skills, then those built into Silt when
+/// `builtin` gives their folder.
+pub fn skill_roots(checkout: &Path, home: Option<&Path>, builtin: Option<&Path>) -> Vec<(SkillScope, PathBuf)> {
     let mut roots =
         vec![(SkillScope::Silt, checkout.join(".silt/skills")), (SkillScope::Project, checkout.join(".agents/skills"))];
     if let Some(home) = home {
         roots.push((SkillScope::Personal, home.join(".agents/skills")));
+    }
+    if let Some(builtin) = builtin {
+        roots.push((SkillScope::Builtin, builtin.to_owned()));
     }
     roots
 }
@@ -22,6 +26,8 @@ pub enum SkillScope {
     Silt,
     Project,
     Personal,
+    /// Shipped with Silt for the agents the web UI runs (ADR 0070).
+    Builtin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,8 +54,13 @@ impl Skill {
 /// Every skill under the roots, nested category folders included. A name
 /// found in an earlier root hides the same name in later ones.
 pub fn discover_skills(checkout: &Path, home: Option<&Path>) -> Vec<Skill> {
+    discover_skills_with(checkout, home, None)
+}
+
+/// [`discover_skills`], with the built-in skills in `builtin` last.
+pub fn discover_skills_with(checkout: &Path, home: Option<&Path>, builtin: Option<&Path>) -> Vec<Skill> {
     let mut skills: BTreeMap<String, Skill> = BTreeMap::new();
-    for (scope, root) in skill_roots(checkout, home) {
+    for (scope, root) in skill_roots(checkout, home, builtin) {
         let mut found = Vec::new();
         find_skill_files(&root, 0, &mut found);
         found.sort();

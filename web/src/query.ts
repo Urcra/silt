@@ -36,6 +36,7 @@ export const keys = {
   mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
+  designSystems: ['design-systems'] as const,
   voice: ['voice'] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,

@@ -173,6 +173,10 @@ pub struct Defaults {
     /// By agent id, as each agent's models and modes are its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, AgentDefaults>,
+    /// The design system artifacts are styled with when the project names
+    /// none (ADR 0070).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_system: Option<String>,
 }
 
 /// An agent's mode and settings (its model, effort, …) by the ids the

@@ -32,6 +32,7 @@ export function WorkspacesSettings() {
   const view = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces })
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
   const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents })
+  const designSystems = useQuery({ queryKey: keys.designSystems, queryFn: api.designSystems })
   const [picked, setPicked] = useState<string>()
   const [draft, setDraft] = useState<WorkspacesFile>()
   const [error, setError] = useState<string>()
@@ -223,6 +224,22 @@ export function WorkspacesSettings() {
         <div className={ROW}>
           <span>Chats' permissions</span>
           <PresetSelect label="default permissions for chats" value={workspace.defaults.chats_preset ?? null} onChange={(chats_preset) => change({ defaults: { ...workspace.defaults, chats_preset } })} />
+        </div>
+        <div className={ROW}>
+          <span>Design system</span>
+          <Select
+            aria-label="default design system"
+            value={workspace.defaults.design_system ?? ''}
+            onChange={(event) => change({ defaults: { ...workspace.defaults, design_system: event.target.value || null } })}
+          >
+            <option value="">The project's, else none</option>
+            {(designSystems.data ?? []).map((system) => (
+              <option key={system.name} value={system.name}>
+                {system.title}
+                {system.source === 'builtin' ? ' (built in)' : ''}
+              </option>
+            ))}
+          </Select>
         </div>
         <AgentDefaultsRows
           key={workspace.id}

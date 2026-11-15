@@ -47,11 +47,12 @@ to see who else is changing a path. silt_skills lists the repository's skills an
 
 /// Added to [`INSTRUCTIONS`] when the run is watched in the web UI.
 pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image, call \
-silt_show; to give them a page, chart, diagram or document they can open beside the conversation, call silt_artifact, \
-and call it again with the same id for a new version.";
+silt_show; to give them a page, chart, diagram, mockup or document they can open beside the conversation, call \
+silt_artifact_guide first, follow what it says, then call silt_artifact, and call it again with the same id for a new \
+version.";
 
 /// The tools only a run watched in the web UI gets.
-pub const SHOW_TOOLS: [&str; 2] = ["silt_show", "silt_artifact"];
+pub const SHOW_TOOLS: [&str; 3] = ["silt_show", "silt_artifact_guide", "silt_artifact"];
 
 /// What the server says it's for, with the showing tools when offered.
 pub fn instructions(shows: bool) -> String {
@@ -68,7 +69,7 @@ pub fn tools(shows: bool) -> Value {
     tools
 }
 
-fn show_tools() -> [Value; 2] {
+fn show_tools() -> [Value; 3] {
     [
         json!({
             "name": "silt_show",
@@ -83,8 +84,20 @@ fn show_tools() -> [Value; 2] {
             }
         }),
         json!({
+            "name": "silt_artifact_guide",
+            "description": "Read before making an artifact: how to design it for Silt's frame, the design system that applies (its rules and token names), and the others there are. Call it once per artifact, before writing its first version.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the artifact will be"},
+                    "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
+                },
+                "required": ["kind"]
+            }
+        }),
+        json!({
             "name": "silt_artifact",
-            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data.",
+            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data. Call silt_artifact_guide before the first version.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -92,7 +105,8 @@ fn show_tools() -> [Value; 2] {
                     "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image"], "description": "What the content is"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
                     "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
-                    "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact"}
+                    "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact"},
+                    "design_system": {"type": "string", "description": "The design system whose tokens an html artifact's frame gets, by name, or none; by default the last version's, else the one silt_artifact_guide says applies"}
                 },
                 "required": ["title", "kind"]
             }

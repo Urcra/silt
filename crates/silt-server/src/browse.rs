@@ -344,8 +344,8 @@ async fn history(
     Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
 }
 
-/// An artifact's content, if an artifact of the thread names the blob
-/// (ADR 0068).
+/// An artifact's content, or the CSS its design system compiled to, if an
+/// artifact of the thread names the blob (ADR 0068, ADR 0070).
 async fn artifact_content(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
@@ -362,9 +362,14 @@ async fn artifact_content(
         .await
         .history(row.id)
         .and_then(|history| {
-            history.entries.iter().find_map(|(_, entry)| entry.artifact.as_ref().filter(|artifact| artifact.blob == blob))
+            history.entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
+                if artifact.blob == blob {
+                    Some(artifact.media_type.clone())
+                } else {
+                    (artifact.style.as_deref() == Some(blob.as_str())).then(|| "text/css".to_owned())
+                }
+            })
         })
-        .map(|artifact| artifact.media_type.clone())
         .ok_or_else(not_found)?;
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
     let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;

@@ -12,6 +12,7 @@ mod cloud;
 mod comments;
 mod control;
 mod core;
+mod design;
 mod disk;
 mod forks;
 mod history;
