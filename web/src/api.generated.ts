@@ -255,7 +255,16 @@ before: LineSpan | null, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
-export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, };
+export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", path: string, start: number, end: number, base?: string | null, 
+/**
+ * The lines are numbered as a diff with git's rewrites left out
+ * shows them (ADR 0069).
+ */
+hide_git?: boolean, } | { "on": "anchored", anchor: string, };
+
+export type PendingAnchor = { anchor: string, };
+
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**
@@ -282,6 +291,18 @@ old_path: string | null, added: number, removed: number, binary: boolean,
  * How long its part of the diff is, in bytes.
  */
 size: number, };
+
+export type FileTurns = { path: string, runs: Array<TurnRun>, };
+
+export type TurnRun = { start: number, end: number, turn: number, };
+
+export type Seen = "seen" | "changed";
+
+export type FileSeen = { path: string, seen: Seen, new_lines: Array<LineSpan>, };
+
+export type ThreadSeenView = { head: string, files: Array<FileSeen>, };
+
+export type MarkSeen = { path: string, seen: boolean, at: string, };
 
 export type FileAt = { path: string, 
 /**
@@ -435,7 +456,11 @@ url: string,
  */
 qr_svg: string, expires_ms: number, };
 
-export type NewLink = { days: number, frozen: boolean, };
+export type NewLink = { days: number, frozen: boolean, 
+/**
+ * A link to one artifact of the thread rather than its conversation.
+ */
+artifact: LinkedArtifact | null, };
 
 export type ThreadLink = { id: number, created_ms: number, expires_ms: number, 
 /**
@@ -445,7 +470,11 @@ frozen: boolean, revoked: boolean,
 /**
  * Only when just made: the server keeps no copy of the token.
  */
-url: string | null, };
+url: string | null, 
+/**
+ * The one artifact it shows, rather than the conversation (ADR 0068).
+ */
+artifact: LinkedArtifact | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 
@@ -490,6 +519,10 @@ outcome: ToolOutcome | null,
  * On an `image`: the picture the entry before it carried.
  */
 image: ImageView | null, 
+/**
+ * On an `artifact`: what the agent showed the person (ADR 0068).
+ */
+artifact: ArtifactView | null, 
 /**
  * On a `usage`: what one of the agent's messages cost.
  */
@@ -541,6 +574,40 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type ArtifactView = { 
+/**
+ * The same for every version of one artifact.
+ */
+id: string, 
+/**
+ * Counts up from 1 along the thread's lineage.
+ */
+version: number, title: string, 
+/**
+ * `html`, `svg`, `markdown`, `mermaid` or `image`.
+ */
+kind: string, media_type: string, 
+/**
+ * The blob holding the content, read with the thread's artifact route.
+ */
+blob: string, size: number, 
+/**
+ * Shown in the conversation (`silt_show`) rather than as a card.
+ */
+inline: boolean, 
+/**
+ * Words under an image shown in the conversation.
+ */
+caption?: string | null, };
+
+export type ArtifactContent = { media_type: string, 
+/**
+ * Base64.
+ */
+data: string, };
+
+export type LinkedArtifact = { id: string, version: number | null, };
 
 export type UsageView = { 
 /**
@@ -625,7 +692,11 @@ snoozed_at: number | null, wake_on_activity: boolean, settled: boolean,
 /**
  * When they last opened it.
  */
-seen_ms: number | null, };
+seen_ms: number | null, 
+/**
+ * The turn they reviewed its changes through.
+ */
+reviewed_turn: number | null, };
 
 export type Mount = { 
 /**
@@ -969,7 +1040,11 @@ export type WorkspaceId = string;
 
 export type AgentKey = string;
 
-export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, };
+export type StateChange = { pinned: boolean | null, snooze: Snooze | null, settled: boolean | null, seen: boolean, 
+/**
+ * The turn the thread was reviewed through.
+ */
+reviewed_turn: number | null, };
 
 export type TextKind = "message" | "thought" | "tool";
 

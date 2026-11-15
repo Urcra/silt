@@ -41,6 +41,16 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
                 let steps: Vec<String> = steps.iter().map(|(step, status)| format!("- [{status}] {step}")).collect();
                 push(Role::Assistant, format!("[Plan:\n{}]", steps.join("\n")));
             }
+            Entry::Artifact(artifact) if artifact.inline => {
+                push(Role::Assistant, format!("[Showed the person an image: {}]", artifact.title));
+            }
+            Entry::Artifact(artifact) => push(
+                Role::Assistant,
+                format!(
+                    "[Gave the person artifact \"{}\" ({}, id {}, version {})]",
+                    artifact.title, artifact.kind, artifact.id, artifact.version
+                ),
+            ),
             Entry::Compaction { summary: Some(summary) } => {
                 push(Role::User, format!("Summary of the earlier conversation:\n{summary}"));
             }

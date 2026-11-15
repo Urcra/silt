@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import type { CommentView } from './api'
+import type { CommentLocation, CommentView } from './api'
 import type { DiffFile } from './diffParse'
 import { store, stored } from './stored'
 
@@ -39,6 +39,10 @@ export interface Draft {
   quote: string[]
   /** The diff base deleted lines are numbered in. */
   base?: string
+  /** The daemon's anchor for its lines, taken when it was written, so it follows their text (ADR 0066). */
+  anchor?: string
+  /** Numbered as the diff showed them with git's rewrites left out (ADR 0069). */
+  hideGit?: boolean
 }
 
 export interface Review {
@@ -65,11 +69,14 @@ export function useReview(thread: string) {
   )
   return {
     review,
-    add: (at: Lines, text: string, quote: string[], base?: string) =>
-      update((before) => ({
-        ...before,
-        drafts: [...before.drafts, { id: `${Date.now()}-${before.drafts.length}`, at, text, quote, base }],
-      })),
+    /** Adds a draft, and says its id. */
+    add: (at: Lines, text: string, quote: string[], base?: string, hideGit?: boolean): string => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      update((before) => ({ ...before, drafts: [...before.drafts, { id, at, text, quote, base, ...(hideGit ? { hideGit } : {}) }] }))
+      return id
+    },
+    setAnchor: (id: string, anchor: string) =>
+      update((before) => ({ ...before, drafts: before.drafts.map((draft) => (draft.id === id ? { ...draft, anchor } : draft)) })),
     edit: (id: string, text: string) =>
       update((before) => ({ ...before, drafts: before.drafts.map((draft) => (draft.id === id ? { ...draft, text } : draft)) })),
     remove: (id: string) => update((before) => ({ ...before, drafts: before.drafts.filter((draft) => draft.id !== id) })),
@@ -126,4 +133,12 @@ export function reviewPrompt(items: ReviewItem[], note = ''): string {
   })
   const intro = note.trim() ? `${note.trim()}\n\n` : ''
   return `${intro}Please address these review comments:\n${comments.join('\n')}`
+}
+
+/** Where a draft shows now, from where the daemon places its anchor: its lines as they are, beside the base's lines
+ * once deleted, `outdated` when they're gone from both, and where it was written when it has no anchor (ADR 0066). */
+export function shownAt(draft: Draft, place: CommentLocation | undefined): Lines | 'outdated' {
+  if (!draft.anchor || !place || place.at !== 'lines') return draft.at
+  if (!place.outdated) return { path: place.path, start: place.start, end: place.end, side: 'new' }
+  return place.before ? { path: place.path, start: place.before.start, end: place.before.end, side: 'old' } : 'outdated'
 }

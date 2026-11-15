@@ -101,13 +101,18 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/graph", get(graph))
         .route("/api/threads/{id}/diff", get(diff))
         .route("/api/threads/{id}/diff/stats", get(diff_stats))
+        .route("/api/threads/{id}/diff/turns", get(diff_turns))
+        .route("/api/threads/{id}/seen", get(thread_seen).put(mark_thread_seen))
         .route("/api/threads/{id}/comments", get(comments).post(add_comment))
         .route("/api/threads/{id}/comments/sent", post(comments_sent))
+        .route("/api/threads/{id}/comments/anchor", post(anchor_lines))
+        .route("/api/threads/{id}/comments/place", post(place_anchors))
         .route("/api/threads/{id}/comments/{comment}/resolve", post(resolve_comment))
         .route("/api/threads/{id}/comments/{comment}/replies", post(reply))
         .route("/api/search", get(search))
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
+        .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -411,23 +416,59 @@ async fn graph(State(web): State<Web>, Query(query): Query<silt_proto::view::Gra
 #[derive(Deserialize)]
 struct DiffQuery {
     turn: Option<usize>,
+    /// With `turn`, the last of a range of turns.
+    to_turn: Option<usize>,
     base: Option<String>,
     /// A page of the changed files, as the changes panel shows them.
     offset: Option<usize>,
     limit: Option<usize>,
     /// One file, as a diff too large to read whole is read.
     path: Option<String>,
+    /// `hide` leaves out what git itself rewrote (ADR 0069).
+    #[serde(default)]
+    git: Option<String>,
+}
+
+impl DiffQuery {
+    fn hide_git(&self) -> bool {
+        silt_proto::view::GitQuery { git: self.git.clone() }.hide_git()
+    }
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let hide_git = query.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
-    let request = Request::Diff { thread, turn: query.turn, base, files, path: query.path.filter(|path| !path.is_empty()) };
-    ask(&web, request).await
+    let path = query.path.filter(|path| !path.is_empty());
+    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    ask(&web, Request::DiffStats { thread, turn: query.turn, base: query.base.filter(|base| !base.is_empty()) }).await
+    let hide_git = query.hide_git();
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+}
+
+async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    let hide_git = query.hide_git();
+    let base = query.base.filter(|base| !base.is_empty());
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+}
+
+async fn mark_thread_seen(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(mark): Json<silt_proto::view::MarkSeen>,
+) -> HttpResponse {
+    ask(&web, Request::MarkThreadSeen { thread, mark }).await
+}
+
+async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let hide_git = query.hide_git();
+    let base = query.base.filter(|base| !base.is_empty());
+    let path = query.path.filter(|path| !path.is_empty());
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -438,11 +479,15 @@ fn no_clone() -> std::path::PathBuf {
 #[derive(Deserialize)]
 struct CommentsQuery {
     base: Option<String>,
+    /// `hide` places them as a diff without git's rewrites shows the lines.
+    #[serde(default)]
+    git: Option<String>,
 }
 
 async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
+    let hide_git = silt_proto::view::GitQuery { git: query.git }.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::Comments { thread, base, cwd: no_clone() }).await
+    ask(&web, Request::Comments { thread, base, hide_git, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]
@@ -463,6 +508,22 @@ struct NewComment {
 async fn add_comment(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<NewComment>) -> HttpResponse {
     let request = Request::Comment { thread, on: body.on, text: body.text, cwd: no_clone() };
     ask(&web, request).await
+}
+
+async fn anchor_lines(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(on): Json<silt_proto::view::CommentOn>,
+) -> HttpResponse {
+    ask(&web, Request::AnchorLines { thread, on, cwd: no_clone() }).await
+}
+
+async fn place_anchors(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(place): Json<silt_proto::view::PlaceAnchors>,
+) -> HttpResponse {
+    ask(&web, Request::PlaceAnchors { thread, place, cwd: no_clone() }).await
 }
 
 async fn resolve_comment(State(web): State<Web>, Path((thread, comment)): Path<(String, String)>) -> HttpResponse {
@@ -523,6 +584,10 @@ async fn browser_deltas(State(web): State<Web>, Path(thread): Path<String>, Json
 
 async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, String)>) -> HttpResponse {
     ask(&web, Request::GitText { thread, oid }).await
+}
+
+async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactContent { thread, blob }).await
 }
 
 #[derive(Deserialize, Default)]
@@ -985,8 +1050,12 @@ async fn merge_requests(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::MrList { thread: None }).await
 }
 
-async fn merge_request(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {
-    ask(&web, Request::MrShow { mr }).await
+async fn merge_request(
+    State(web): State<Web>,
+    Path(mr): Path<String>,
+    Query(query): Query<silt_proto::view::GitQuery>,
+) -> HttpResponse {
+    ask(&web, Request::MrShow { mr, hide_git: query.hide_git() }).await
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {

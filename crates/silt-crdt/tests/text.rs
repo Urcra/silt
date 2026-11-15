@@ -1,7 +1,7 @@
 //! Expected results come from diamond-types (M0-10 probe), with actor ids
 //! ordered like its agent names.
 
-use silt_crdt::{CausalError, CharId, ReplicaError, TextError, TextOp, TextReplica};
+use silt_crdt::{Bias, CausalError, CharId, ReplicaError, TextError, TextOp, TextReplica};
 use silt_types::{ActorId, Frontier};
 
 const BASE: ActorId = ActorId(9);
@@ -240,4 +240,41 @@ fn unicode_positions_count_chars() {
     replica.delete(5, 1).expect("delete emoji");
     replica.insert(1, "→").expect("insert arrow");
     assert_eq!(replica.text(), "h→éllo");
+}
+
+#[test]
+fn text_with_some_edits_left_out_keeps_the_others_in_place() {
+    let mut replica = TextReplica::new(A);
+    replica.insert(0, "one\n").expect("insert");
+    // Typed on at the end, so these share a fragment with the first.
+    let pulled = replica.insert(4, "two\n").expect("insert").span;
+    replica.insert(8, "three\n").expect("insert");
+    let dropped = replica.delete(0, 4).expect("delete").span;
+    assert_eq!(replica.text(), "two\nthree\n");
+    let left_out = |id| [pulled, dropped].iter().any(|span| span.contains(id));
+    assert_eq!(replica.doc().text_where(|id| !left_out(id)), "one\nthree\n");
+    assert_eq!(replica.doc().text_where(|_| true), replica.text());
+    // Each character it keeps comes with its own id, none of those left out.
+    let kept = replica.doc().attribution_where(|id| !left_out(id));
+    assert_eq!(kept.iter().map(|(ch, _)| *ch).collect::<String>(), "one\nthree\n");
+    assert!(kept.iter().all(|(_, id)| matches!(id, CharId::Delta(id) if !left_out(*id))), "{kept:?}");
+    assert_eq!(replica.doc().attribution_where(|_| true), replica.doc().attribution());
+}
+
+#[test]
+fn an_anchor_made_with_some_edits_left_out_resolves_there_and_in_the_whole_text() {
+    let mut replica = TextReplica::new(A);
+    replica.insert(0, "one\n").expect("insert");
+    let pulled = replica.insert(4, "two\n").expect("insert").span;
+    replica.insert(8, "three\n").expect("insert");
+    let left_out = |id| pulled.contains(id);
+    let doc = replica.doc();
+    // "three" starts at 4 without git's line, at 8 with it.
+    let anchor = doc.anchor_where(|id| !left_out(id), 4, Bias::Right).expect("anchors");
+    assert_eq!(doc.resolve_where(|id| !left_out(id), &anchor).expect("resolves").pos, 4);
+    assert_eq!(doc.resolve(&anchor).expect("resolves").pos, 8);
+    // A character only git's edit has is no place in the text without it.
+    let on_pulled = doc.anchor(4, Bias::Right).expect("anchors");
+    let without = doc.resolve_where(|id| !left_out(id), &on_pulled).expect("resolves");
+    assert!(without.outdated && without.pos == 4, "{without:?}");
 }

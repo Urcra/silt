@@ -212,7 +212,7 @@ struct Shared {
     /// When read-only link tokens opened nothing, lately (ADR 0027).
     link_misses: std::sync::Mutex<Vec<std::time::Instant>>,
     /// Merge requests as a device of each person last showed them.
-    mr_views: Mutex<HashMap<(UserId, String), (std::time::Instant, serde_json::Value)>>,
+    mr_views: Mutex<HashMap<relayed::MrView, (std::time::Instant, serde_json::Value)>>,
     /// Password checks: how many run at once, and recent failures by name.
     passwords: accounts::PasswordChecks,
     /// Families whose pull request comments may need an update (ADR 0042).
@@ -350,6 +350,8 @@ impl Server {
             .route("/v1/me/threads/{thread}", patch(me::change_thread))
             .route("/v1/me/seen", get(me::seen))
             .route("/v1/me/seen/{mr}", put(me::mark_seen))
+            .route("/v1/me/thread-seen", get(me::thread_seen))
+            .route("/v1/me/thread-seen/{thread}", put(me::mark_thread_seen))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())

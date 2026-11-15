@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM tool_git_states WHERE agent = ? AND session_id = ? AND tool_use_id = ? RETURNING state",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_git_states",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "17b2d370561ac9da0898eff77dc4001d392f170e8364bfa1c319eeb1935b9d9b"
+}

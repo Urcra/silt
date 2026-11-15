@@ -76,6 +76,15 @@ export const router = createRouter({
       validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === 'string' ? { q: search.q } : {}),
     }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: routes.ThreadRoute }),
+    createRoute({
+      getParentRoute: () => root,
+      path: '/t/$id/review',
+      component: lazyRouteComponent(() => import('./components/Review'), 'ReviewRoute'),
+      // A server has no thread's diff, and a phone reviews in the panel's sheet.
+      beforeLoad: ({ params }) => {
+        if (hosted() || phone()) throw redirect({ to: '/t/$id', params, replace: true })
+      },
+    }),
     createRoute({ getParentRoute: () => root, path: '/t/$id/files/$', component: lazyRouteComponent(() => import('./components/FilePage'), 'FileRoute') }),
     createRoute({ getParentRoute: () => root, path: '/t/$id/live', component: lazyRouteComponent(() => import('./components/Live'), 'LivePage') }),
     createRoute({ getParentRoute: () => root, path: '/t/$id/reconcile', component: lazyRouteComponent(() => import('./components/Reconcile'), 'Reconcile') }),

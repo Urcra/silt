@@ -163,6 +163,7 @@ pub struct Shown {
     pub tool: Option<ToolView>,
     pub outcome: Option<ToolOutcome>,
     pub image: Option<ImageView>,
+    pub artifact: Option<silt_proto::view::ArtifactView>,
     pub usage: Option<UsageView>,
     pub plan: Option<Vec<PlanStepView>>,
     /// The subagent transcript it is from; none for the session's own.
@@ -178,6 +179,7 @@ impl Shown {
             tool: None,
             outcome: None,
             image: None,
+            artifact: None,
             usage: None,
             plan: None,
             side: None,
@@ -198,6 +200,7 @@ impl Shown {
             tool: self.tool,
             outcome: self.outcome,
             image: self.image,
+            artifact: self.artifact,
             usage: self.usage,
             plan: self.plan,
             side: self.side,
@@ -233,6 +236,10 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
         Entry::Image { media_type, data } => {
             let data = if data.len() > IMAGE_LIMIT { String::new() } else { data };
             Shown { image: Some(ImageView { media_type, data }), ..Shown::plain("image", String::new()) }
+        }
+        Entry::Artifact(artifact) => {
+            let text = artifact.title.clone();
+            Shown { artifact: Some(artifact), ..Shown::plain("artifact", text) }
         }
         Entry::Usage { message, input, output } => {
             Shown { usage: Some(UsageView { message, input, output }), ..Shown::plain("usage", String::new()) }

@@ -1,0 +1,83 @@
+import { describe, expect, it } from 'vitest'
+import type { ArtifactView, CommentView, HistoryEntry } from './api'
+import { ARTIFACT_CSP, artifactPrompt, artifactsOf, commentsOn, fileName, offlineHtml, quoted, sandboxedDocument, shownImagesOf, textOf, versionOf } from './artifacts'
+
+function artifact(index: number, id: string, version: number, extra: Partial<ArtifactView> = {}): HistoryEntry {
+  return {
+    index,
+    thread: 't',
+    origin: 'own',
+    kind: 'artifact',
+    text: 'Rescan benchmark',
+    time_ms: index,
+    rewound: false,
+    tool: null,
+    outcome: null,
+    image: null,
+    usage: null,
+    plan: null,
+    side: null,
+    task: null,
+    artifact: { id, version, title: 'Rescan benchmark', kind: 'html', media_type: 'text/html', blob: `blob${index}`, size: 10, inline: false, ...extra },
+  } as HistoryEntry
+}
+
+const base64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
+
+describe('artifacts', () => {
+  it('groups versions by id, the one changed last first, and keeps images shown apart', () => {
+    const entries = [
+      artifact(1, 'aaaaaaaaaaaa', 1),
+      artifact(2, 'bbbbbbbbbbbb', 1, { kind: 'mermaid' }),
+      artifact(3, 'cccccccccccc', 1, { kind: 'image', inline: true, media_type: 'image/png' }),
+      artifact(4, 'aaaaaaaaaaaa', 2),
+    ]
+    const groups = artifactsOf(entries)
+    expect(groups.map((group) => group.id)).toEqual(['aaaaaaaaaaaa', 'bbbbbbbbbbbb'])
+    expect(groups[0].versions.map((version) => version.artifact.version)).toEqual([1, 2])
+    expect(versionOf(groups[0], null).artifact.version).toBe(2)
+    expect(versionOf(groups[0], 1).artifact.version).toBe(1)
+    expect(versionOf(groups[0], 7).artifact.version).toBe(2)
+    expect(shownImagesOf(entries).map((image) => image.artifact.id)).toEqual(['cccccccccccc'])
+  })
+
+  it('loads an HTML artifact under a policy that reaches nothing, its doctype first', () => {
+    const page = sandboxedDocument('<!DOCTYPE html><html><body><script src="https://evil.example/x.js"></script></body></html>')
+    expect(page.startsWith('<!DOCTYPE html><meta http-equiv="Content-Security-Policy"')).toBe(true)
+    expect(page).toContain(ARTIFACT_CSP)
+    expect(ARTIFACT_CSP).toContain("default-src 'none'")
+    expect(ARTIFACT_CSP).not.toMatch(/https?:/)
+    expect(sandboxedDocument('<p>hi</p>', false)).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
+  })
+
+  it('makes one offline file with nothing outside it', () => {
+    const view = artifact(1, 'aaaaaaaaaaaa', 3, { kind: 'image', media_type: 'image/png', title: 'Sidebar <scan>' }).artifact!
+    const file = offlineHtml(view, { media_type: 'image/png', data: 'iVBORw0KGgo=' })
+    expect(file).toContain('<title>Sidebar &lt;scan&gt; · v3</title>')
+    expect(file).toContain('src="data:image/png;base64,iVBORw0KGgo="')
+    expect(file).not.toMatch(/(src|href)="https?:/)
+    const html = artifact(2, 'bbbbbbbbbbbb', 1).artifact!
+    expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') })).toContain('<h1>é</h1>')
+    expect(fileName(view)).toBe('sidebar-scan-v3.png')
+    expect(fileName(html, 'html')).toBe('rescan-benchmark-v1.html')
+  })
+
+  it('reads text in UTF-8', () => {
+    expect(textOf({ media_type: 'text/markdown', data: base64('# Över') })).toBe('# Över')
+  })
+
+  it('keeps comments on an artifact on the version they were made on, and sends them as one prompt', () => {
+    const entries = [artifact(1, 'aaaaaaaaaaaa', 1), artifact(4, 'aaaaaaaaaaaa', 2), artifact(6, 'bbbbbbbbbbbb', 1)]
+    const group = artifactsOf(entries).find((each) => each.id === 'aaaaaaaaaaaa')!
+    const comment = (id: string, index: number, text: string) =>
+      ({ id, by: 'alice', time_ms: 0, text, resolved: false, sent: false, location: { at: 'entry', index, excerpt: '' }, replies: [] }) as unknown as CommentView
+    const on = commentsOn(group, [comment('c1', 1, 'a'), comment('c2', 4, 'b'), comment('c3', 6, 'c'), comment('c4', 2, 'd')])
+    expect(on.map((each) => each.id)).toEqual(['c1', 'c2'])
+    expect(quoted('Make it blue', 'the bars\nall of them')).toBe('> the bars\n> all of them\n\nMake it blue')
+    expect(quoted(' Plain ', null)).toBe('Plain')
+    const prompt = artifactPrompt(group.versions[1], [comment('c2', 4, '> the bars\n\nMake it blue')])
+    expect(prompt).toContain('Comments on the artifact "Rescan benchmark" (id aaaaaaaaaaaa, version 2):')
+    expect(prompt).toContain('- > the bars\n  \n  Make it blue')
+    expect(prompt).toContain('Make a new version with silt_artifact and id aaaaaaaaaaaa.')
+  })
+})

@@ -8,6 +8,8 @@ export interface Shortcut {
   keys: string
   label: string
   run: () => void
+  /** Wins over shortcuts without it while registered, as a view's own keys win over the app's. */
+  over?: boolean
 }
 
 export interface Action {
@@ -61,14 +63,30 @@ function typing(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
+function inDialog(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('dialog[open], [role="dialog"]') !== null
+}
+
+type Pressed = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>
+
+/** The shortcut a key press runs: one registered `over` first, then the rest in the order they came; none while the
+ * person types or is in a dialog, unless it takes a modifier. */
+export function pick(list: Iterable<Shortcut>, event: Pressed, writing: boolean, mac = MAC): Shortcut | undefined {
+  const all = [...list]
+  const found = [...all.filter((shortcut) => shortcut.over), ...all.filter((shortcut) => !shortcut.over)].find((shortcut) =>
+    matches(event, shortcut.keys, mac),
+  )
+  if (!found || (writing && !/mod|alt/.test(found.keys))) return undefined
+  return found
+}
+
 function onKey(event: KeyboardEvent) {
-  for (const shortcut of shortcuts.values()) {
-    if (!matches(event, shortcut.keys)) continue
-    if (typing(event.target) && !/mod|alt/.test(shortcut.keys)) return
-    event.preventDefault()
-    shortcut.run()
-    return
-  }
+  // An overlay that took the key, such as a menu closing on Escape, keeps it.
+  if (event.defaultPrevented) return
+  const found = pick(shortcuts.values(), event, typing(event.target) || inDialog(event.target))
+  if (!found) return
+  event.preventDefault()
+  found.run()
 }
 
 function register(id: string, shortcut: Shortcut): () => void {
@@ -80,18 +98,24 @@ function register(id: string, shortcut: Shortcut): () => void {
   }
 }
 
+/** How a view's keys stand against the app's. */
+export interface Scope {
+  /** Over the app's own keys while mounted, as the review's j, k and n are. */
+  over?: boolean
+}
+
 /** Runs `run` on `keys` while the calling component is mounted. */
-export function useShortcut(keys: string, label: string, run: () => void) {
+export function useShortcut(keys: string, label: string, run: () => void, { over = false }: Scope = {}) {
   const id = useId()
   const latest = useRef(run)
   useEffect(() => {
     latest.current = run
   })
-  useEffect(() => register(id, { keys, label, run: () => latest.current() }), [id, keys, label])
+  useEffect(() => register(id, { keys, label, over, run: () => latest.current() }), [id, keys, label, over])
 }
 
 /** Offers `actions` in the palette, with their shortcuts, while the calling component is mounted. */
-export function useActions(actions: Action[]) {
+export function useActions(actions: Action[], { over = false }: Scope = {}) {
   const id = useId()
   const latest = useRef(actions)
   useEffect(() => {
@@ -108,14 +132,21 @@ export function useActions(actions: Action[]) {
     )
     const unregister = latest.current
       .filter((action) => action.keys)
-      .map((action) => register(`${id}:${action.id}`, { keys: action.keys!, label: action.label, run: () => latest.current.find((current) => current.id === action.id)?.run() }))
+      .map((action) =>
+        register(`${id}:${action.id}`, {
+          keys: action.keys!,
+          label: action.label,
+          over,
+          run: () => latest.current.find((current) => current.id === action.id)?.run(),
+        }),
+      )
     changed()
     return () => {
       offered.delete(id)
       for (const off of unregister) off()
       changed()
     }
-  }, [id, signature])
+  }, [id, signature, over])
 }
 
 /** Every action offered now, as views come and go. */

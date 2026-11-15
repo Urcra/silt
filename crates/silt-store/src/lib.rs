@@ -72,6 +72,19 @@ pub struct SeenRecord {
     pub pending: bool,
 }
 
+/// A seen mark on a thread's file (ADR 0067), with the thread's version it
+/// was seen at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSeenRecord {
+    pub thread: ThreadId,
+    pub path: String,
+    pub hash: String,
+    pub version: Option<String>,
+    pub seen: bool,
+    pub at_ms: i64,
+    pub pending: bool,
+}
+
 /// How the agent the web UI last ran in a thread stands (ADR 0022); its
 /// state, preset and mode by name, as the daemon spells them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -927,8 +940,8 @@ impl Store {
             .collect()
     }
 
-    /// Forgets a thread here: its sessions, checkouts and search entries.
-    /// Files on disk stay.
+    /// Forgets a thread here: its sessions, checkouts, search entries and
+    /// seen marks. Files on disk stay.
     pub async fn remove_thread(&self, thread: ThreadId) -> Result<(), StoreError> {
         let id = id_bytes(thread.0);
         let mut tx = self.write_transaction().await?;
@@ -950,7 +963,9 @@ impl Store {
         sqlx::query!("DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
             .execute(&mut *tx)
             .await?;
+        sqlx::query!("DELETE FROM checkout_git_states WHERE thread_id = ?1", id).execute(&mut *tx).await?;
         sqlx::query!("DELETE FROM checkouts WHERE thread_id = ?1", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM thread_seen_marks WHERE thread_id = ?1", id).execute(&mut *tx).await?;
         sqlx::query!("DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads WHERE thread_id = ?1)", id)
             .execute(&mut *tx)
             .await?;
@@ -1002,6 +1017,46 @@ impl Store {
         Ok(())
     }
 
+    /// This person's seen marks on threads' files, and whether the server
+    /// has yet to hear of each (ADR 0067).
+    pub async fn thread_seen_marks(&self) -> Result<Vec<ThreadSeenRecord>, StoreError> {
+        let rows = sqlx::query!("SELECT thread_id, path, hash, version, seen, at_ms, pending FROM thread_seen_marks")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ThreadSeenRecord {
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    path: row.path,
+                    hash: row.hash,
+                    version: row.version,
+                    seen: row.seen != 0,
+                    at_ms: row.at_ms,
+                    pending: row.pending != 0,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn put_thread_seen_mark(&self, mark: &ThreadSeenRecord) -> Result<(), StoreError> {
+        let thread = id_bytes(mark.thread.0);
+        sqlx::query!(
+            "INSERT INTO thread_seen_marks (thread_id, path, hash, version, seen, at_ms, pending) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (thread_id, path) DO UPDATE SET hash = excluded.hash, version = excluded.version, seen = excluded.seen,
+                 at_ms = excluded.at_ms, pending = excluded.pending",
+            thread,
+            mark.path,
+            mark.hash,
+            mark.version,
+            mark.seen,
+            mark.at_ms,
+            mark.pending,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn put_thread_state(&self, thread: ThreadId, state: &str, pending: bool) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);
         sqlx::query!(
@@ -1013,6 +1068,92 @@ impl Store {
         )
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// The git state `checkout` was in when `thread` last looked, and the
+    /// thread's head then (ADR 0069).
+    pub async fn checkout_git_state(
+        &self,
+        checkout: CheckoutId,
+        thread: ThreadId,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        let thread = id_bytes(thread.0);
+        let row = sqlx::query!(
+            "SELECT state, head FROM checkout_git_states WHERE checkout_id = ? AND thread_id = ?",
+            checkout.0,
+            thread,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| (row.state, row.head)))
+    }
+
+    pub async fn put_checkout_git_state(
+        &self,
+        checkout: CheckoutId,
+        thread: ThreadId,
+        state: &str,
+        head: &str,
+    ) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!(
+            "INSERT INTO checkout_git_states (checkout_id, thread_id, state, head) VALUES (?, ?, ?, ?)
+             ON CONFLICT (checkout_id, thread_id) DO UPDATE SET state = excluded.state, head = excluded.head",
+            checkout.0,
+            thread,
+            state,
+            head,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Keeps the git state a tool call started at (ADR 0069).
+    pub async fn put_tool_git_state(
+        &self,
+        agent: &str,
+        session_id: &str,
+        tool_use_id: &str,
+        state: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO tool_git_states (agent, session_id, tool_use_id, state) VALUES (?, ?, ?, ?)
+             ON CONFLICT (agent, session_id, tool_use_id) DO UPDATE SET state = excluded.state",
+            agent,
+            session_id,
+            tool_use_id,
+            state,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The git state the tool call started at, forgotten as it's read.
+    pub async fn take_tool_git_state(
+        &self,
+        agent: &str,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query_scalar!(
+            "DELETE FROM tool_git_states WHERE agent = ? AND session_id = ? AND tool_use_id = ? RETURNING state",
+            agent,
+            session_id,
+            tool_use_id,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Forgets the states of the session's tool calls that never said they ended.
+    pub async fn forget_tool_git_states(&self, agent: &str, session_id: &str) -> Result<(), StoreError> {
+        sqlx::query!("DELETE FROM tool_git_states WHERE agent = ? AND session_id = ?", agent, session_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

@@ -411,6 +411,19 @@ impl Core {
         self.threads.values().find(|record| record.family == family).map(|record| record.repo.as_str())
     }
 
+    /// Folders an agent in `workspace` may not show the person files from:
+    /// Silt's data, and in an isolated workspace, the others' folders.
+    pub(crate) fn artifact_denies(&self, workspace: &str) -> Vec<std::path::PathBuf> {
+        let all = self.workspaces();
+        let found = WorkspaceId::new(workspace.to_owned()).ok().and_then(|id| all.get(&id).cloned());
+        let mut denied = match found {
+            Some(workspace) => locks_for(&self.data_dir, &all, &workspace, &self.effective_policy(&workspace)).deny,
+            None => Vec::new(),
+        };
+        denied.push(self.data_dir.clone());
+        denied
+    }
+
     /// Whether the request being handled may read a family: always, unless
     /// an agent's token scopes it to a workspace, or a project of one.
     pub(crate) fn in_scope(&self, family: FamilyId) -> bool {

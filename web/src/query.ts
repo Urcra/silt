@@ -1,4 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
+import type { DiffSpec } from './api'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -15,6 +16,8 @@ export const keys = {
   cloudLaunches: ['threads', 'cloud'] as const,
   thread: (id: string) => ['thread', id] as const,
   history: (id: string) => ['thread', id, 'history'] as const,
+  // Not under the thread: what a blob holds never changes, so a thread event needn't fetch it again.
+  artifact: (id: string, blob: string) => ['artifact', id, blob] as const,
   turns: (id: string) => ['thread', id, 'turns'] as const,
   commits: (id: string) => ['thread', id, 'commits'] as const,
   unwritten: (id: string) => ['thread', id, 'unwritten'] as const,
@@ -22,12 +25,15 @@ export const keys = {
   graph: (query: object) => ['graph', query] as const,
   comments: (id: string) => ['thread', id, 'comments'] as const,
   queue: (id: string) => ['thread', id, 'queue'] as const,
-  diff: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff', options] as const,
-  diffPages: (id: string, base: string) => ['thread', id, 'diff-pages', base] as const,
-  diffStats: (id: string, options: { turn?: number; base?: string }) => ['thread', id, 'diff-stats', options] as const,
-  diffFile: (id: string, options: { turn?: number; base?: string }, path: string) => ['thread', id, 'diff-file', options, path] as const,
+  diff: (id: string, options: DiffSpec) => ['thread', id, 'diff', options] as const,
+  diffPages: (id: string, spec: DiffSpec) => ['thread', id, 'diff-pages', spec] as const,
+  diffStats: (id: string, options: DiffSpec) => ['thread', id, 'diff-stats', options] as const,
+  diffFile: (id: string, options: DiffSpec, path: string) => ['thread', id, 'diff-file', options, path] as const,
+  diffTurns: (id: string, spec: DiffSpec) => ['thread', id, 'diff-turns', spec] as const,
+  threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   mr: (id: string) => ['mrs', id] as const,
+  mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   voice: ['voice'] as const,

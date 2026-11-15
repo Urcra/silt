@@ -1,11 +1,11 @@
-//! This person's state of each thread and seen marks on merge request
-//! files (ADR 0024): kept in the store, sent to the server, and merged with
-//! what their other devices sent it.
+//! This person's state of each thread and seen marks on merge request and
+//! thread files (ADR 0024, ADR 0067): kept in the store, sent to the
+//! server, and merged with what their other devices sent it.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use silt_proto::{MrSeen, SeenMark, ThreadState};
+use silt_proto::{MrSeen, SeenMark, ThreadSeen, ThreadState};
 use silt_types::ThreadId;
 use tracing::warn;
 
@@ -19,6 +19,9 @@ const STATES_INTERVAL: Duration = Duration::from_secs(10);
 /// A merge request, by its `DeltaId`, and one of its files.
 type SeenKey = (String, String);
 
+/// A thread and one of its files.
+type ThreadFile = (ThreadId, String);
+
 #[derive(Default)]
 pub(crate) struct Personal {
     pub(crate) states: HashMap<ThreadId, ThreadState>,
@@ -26,6 +29,8 @@ pub(crate) struct Personal {
     pending: HashSet<ThreadId>,
     seen: HashMap<SeenKey, SeenMark>,
     seen_pending: HashSet<SeenKey>,
+    thread_seen: HashMap<ThreadFile, SeenMark>,
+    thread_seen_pending: HashSet<ThreadFile>,
     last_sync: Option<Instant>,
     syncing: bool,
 }
@@ -38,6 +43,28 @@ impl Personal {
     /// Whether the file was looked at as it is now, its `hash`.
     pub(crate) fn has_seen(&self, mr: &str, path: &str, hash: &str) -> bool {
         self.seen.get(&(mr.to_owned(), path.to_owned())).is_some_and(|mark| mark.seen && mark.hash == hash)
+    }
+
+    /// The mark on a thread's file, if the person marked it.
+    pub(crate) fn thread_mark(&self, thread: ThreadId, path: &str) -> Option<&SeenMark> {
+        self.thread_seen.get(&(thread, path.to_owned()))
+    }
+
+    /// Drops what this person kept of a thread that's gone from here.
+    pub(crate) fn forget(&mut self, thread: ThreadId) {
+        self.states.remove(&thread);
+        self.pending.remove(&thread);
+        self.thread_seen.retain(|key, _| key.0 != thread);
+        self.thread_seen_pending.retain(|key| key.0 != thread);
+    }
+
+    fn take_thread_mark(&mut self, thread: ThreadId, mark: SeenMark) -> bool {
+        let key = (thread, mark.path.clone());
+        let newer = self.thread_seen.get(&key).is_none_or(|known| mark.newer_than(known));
+        if newer {
+            self.thread_seen.insert(key, mark);
+        }
+        newer
     }
 
     fn take_mark(&mut self, mr: &str, mark: SeenMark) -> bool {
@@ -57,6 +84,7 @@ struct Round {
     remote: Remote,
     sending: Vec<ThreadState>,
     marking: Vec<(String, SeenMark)>,
+    thread_marking: Vec<(ThreadId, SeenMark)>,
 }
 
 pub(crate) struct Synced {
@@ -66,6 +94,9 @@ pub(crate) struct Synced {
     /// Seen marks the server took.
     marks_sent: Vec<(String, SeenMark)>,
     marks: Result<Vec<MrSeen>, String>,
+    /// Marks on threads' files the server took, and all it holds.
+    thread_marks_sent: Vec<(ThreadId, SeenMark)>,
+    thread_marks: Result<Vec<ThreadSeen>, String>,
 }
 
 impl Core {
@@ -84,8 +115,22 @@ impl Core {
             if record.pending {
                 self.personal.seen_pending.insert(key.clone());
             }
-            let mark = SeenMark { path: key.1.clone(), hash: record.hash, seen: record.seen, at_ms: record.at_ms };
+            let mark = SeenMark { path: key.1.clone(), hash: record.hash, seen: record.seen, at_ms: record.at_ms, version: None };
             self.personal.seen.insert(key, mark);
+        }
+        for record in self.store.thread_seen_marks().await? {
+            let key = (record.thread, record.path);
+            if record.pending {
+                self.personal.thread_seen_pending.insert(key.clone());
+            }
+            let mark = SeenMark {
+                path: key.1.clone(),
+                hash: record.hash,
+                seen: record.seen,
+                at_ms: record.at_ms,
+                version: record.version,
+            };
+            self.personal.thread_seen.insert(key, mark);
         }
         Ok(())
     }
@@ -101,7 +146,7 @@ impl Core {
             .map(|(_, hash)| hash)
             .ok_or_else(|| CoreError::Invalid(format!("{path} isn't a file this merge request changes")))?;
         let mr = request.id.to_string();
-        let mark = SeenMark { path: path.to_owned(), hash, seen, at_ms: now_ms() };
+        let mark = SeenMark { path: path.to_owned(), hash, seen, at_ms: now_ms(), version: None };
         self.personal.take_mark(&mr, mark.clone());
         self.personal.seen_pending.insert((mr.clone(), path.to_owned()));
         self.keep_mark(&mr, &mark, true).await;
@@ -109,6 +154,42 @@ impl Core {
         self.personal.last_sync = None;
         self.drive_thread_states();
         Ok("marked")
+    }
+
+    /// Keeps a mark on a thread's file, here at once and on the server at
+    /// the next sync.
+    pub(crate) async fn put_thread_mark(&mut self, thread: ThreadId, mark: SeenMark) {
+        self.personal.take_thread_mark(thread, mark.clone());
+        self.personal.thread_seen_pending.insert((thread, mark.path.clone()));
+        self.keep_thread_mark(thread, &mark, true).await;
+        self.announce_thread(thread);
+        self.personal.last_sync = None;
+        self.drive_thread_states();
+    }
+
+    async fn keep_thread_mark(&self, thread: ThreadId, mark: &SeenMark, pending: bool) {
+        let record = silt_store::ThreadSeenRecord {
+            thread,
+            path: mark.path.clone(),
+            hash: mark.hash.clone(),
+            version: mark.version.clone(),
+            seen: mark.seen,
+            at_ms: mark.at_ms,
+            pending,
+        };
+        if let Err(error) = self.store.put_thread_seen_mark(&record).await {
+            warn!(%error, "could not keep a seen mark");
+        }
+    }
+
+    /// Tells the thread's views that what the person marked of it changed.
+    fn announce_thread(&self, thread: ThreadId) {
+        let deltas = self
+            .thread_records()
+            .get(&thread)
+            .and_then(|record| self.families().get(&record.family))
+            .map_or(0, |family| family.log().len());
+        self.announce(BusEvent::Thread { thread: thread.to_string(), deltas });
     }
 
     async fn keep_mark(&self, mr: &str, mark: &SeenMark, pending: bool) {
@@ -186,13 +267,27 @@ impl Core {
                     })
                     .filter_map(|key| self.personal.seen.get(key).map(|mark| (key.0.clone(), mark.clone())))
                     .collect();
-                Round { remote: remote.clone(), sending, marking }
+                let thread_marking = self
+                    .personal
+                    .thread_seen_pending
+                    .iter()
+                    .filter(|key| self.homed_at(key.0, server))
+                    .filter_map(|key| self.personal.thread_seen.get(key).map(|mark| (key.0, mark.clone())))
+                    .collect();
+                Round { remote: remote.clone(), sending, marking, thread_marking }
             })
             .collect();
         let events = self.events.clone();
         tokio::spawn(async move {
-            let mut synced = Synced { sent: Vec::new(), fetched: Ok(Vec::new()), marks_sent: Vec::new(), marks: Ok(Vec::new()) };
-            for Round { remote, sending, marking } in rounds {
+            let mut synced = Synced {
+                sent: Vec::new(),
+                fetched: Ok(Vec::new()),
+                marks_sent: Vec::new(),
+                marks: Ok(Vec::new()),
+                thread_marks_sent: Vec::new(),
+                thread_marks: Ok(Vec::new()),
+            };
+            for Round { remote, sending, marking, thread_marking } in rounds {
                 let server = remote.config.url.clone();
                 for state in sending {
                     match remote.change_thread_state(&state).await {
@@ -205,6 +300,17 @@ impl Core {
                         Ok(()) => synced.marks_sent.push((mr, mark)),
                         Err(error) => warn!(%error, server, "could not send a seen mark to the server"),
                     }
+                }
+                for (thread, mark) in thread_marking {
+                    match remote.mark_thread_seen(thread, &mark).await {
+                        Ok(()) => synced.thread_marks_sent.push((thread, mark)),
+                        Err(error) => warn!(%error, server, "could not send a seen mark to the server"),
+                    }
+                }
+                match (remote.thread_seen().await, &mut synced.thread_marks) {
+                    (Ok(marks), Ok(all)) => all.extend(marks),
+                    (Err(error), _) => warn!(%error, server, "could not fetch seen marks from the server"),
+                    (Ok(_), Err(_)) => {}
                 }
                 match (remote.thread_states().await, &mut synced.fetched) {
                     (Ok(states), Ok(all)) => all.extend(states),
@@ -224,8 +330,9 @@ impl Core {
     /// Takes in a sync's answer: what the server took, and every state and
     /// mark it holds, merged into this machine's.
     pub(crate) async fn personal_synced(&mut self, synced: Synced) {
-        let Synced { sent, fetched, marks_sent, marks } = synced;
+        let Synced { sent, fetched, marks_sent, marks, thread_marks_sent, thread_marks } = synced;
         self.marks_synced(marks_sent, marks).await;
+        self.thread_marks_synced(thread_marks_sent, thread_marks).await;
         self.personal.syncing = false;
         let mut kept = HashSet::new();
         let mut changed = false;
@@ -263,6 +370,41 @@ impl Core {
 
     fn take_thread_state(&mut self, other: &ThreadState) -> bool {
         self.personal.states.entry(other.thread).or_insert_with(|| ThreadState::new(other.thread)).merge(other)
+    }
+
+    async fn thread_marks_synced(&mut self, sent: Vec<(ThreadId, SeenMark)>, fetched: Result<Vec<ThreadSeen>, String>) {
+        let mut kept: HashSet<ThreadFile> = HashSet::new();
+        for (thread, mark) in sent {
+            let key = (thread, mark.path.clone());
+            // A mark made since this one was sent stays pending.
+            if self.personal.thread_seen.get(&key) == Some(&mark) {
+                self.personal.thread_seen_pending.remove(&key);
+                kept.insert(key);
+            }
+        }
+        let mut changed = HashSet::new();
+        match fetched {
+            Ok(threads) => {
+                for ThreadSeen { thread, marks } in threads {
+                    for mark in marks {
+                        let key = (thread, mark.path.clone());
+                        if self.personal.take_thread_mark(thread, mark) {
+                            kept.insert(key);
+                            changed.insert(thread);
+                        }
+                    }
+                }
+            }
+            Err(error) => warn!(%error, "could not fetch seen marks from the server"),
+        }
+        for key in kept {
+            if let Some(mark) = self.personal.thread_seen.get(&key) {
+                self.keep_thread_mark(key.0, mark, self.personal.thread_seen_pending.contains(&key)).await;
+            }
+        }
+        for thread in changed {
+            self.announce_thread(thread);
+        }
     }
 
     async fn marks_synced(&mut self, sent: Vec<(String, SeenMark)>, fetched: Result<Vec<MrSeen>, String>) {

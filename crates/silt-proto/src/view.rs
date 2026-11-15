@@ -87,6 +87,8 @@ pub struct Mine {
     pub settled: bool,
     /// When they last opened it.
     pub seen_ms: Option<i64>,
+    /// The turn they reviewed its changes through.
+    pub reviewed_turn: Option<u32>,
 }
 
 impl Mine {
@@ -102,6 +104,7 @@ impl Mine {
             wake_on_activity: snooze.is_some_and(|snooze| snooze.wake_on_activity),
             settled: value(state.and_then(|state| state.settled)),
             seen_ms: state.and_then(|state| state.seen_ms).map(|seen| seen.value),
+            reviewed_turn: state.and_then(|state| state.reviewed_turn).map(|turn| turn.value),
         }
     }
 }
@@ -115,6 +118,8 @@ pub struct StateChange {
     pub snooze: Option<Snooze>,
     pub settled: Option<bool>,
     pub seen: bool,
+    /// The turn the thread was reviewed through.
+    pub reviewed_turn: Option<u32>,
 }
 
 impl StateChange {
@@ -127,6 +132,7 @@ impl StateChange {
             snooze: self.snooze.map(|snooze| crate::Stamped { value: snooze, at_ms: now }),
             settled: self.settled.map(at),
             seen_ms: self.seen.then_some(crate::Stamped { value: now, at_ms: now }),
+            reviewed_turn: self.reviewed_turn.map(|value| crate::Stamped { value, at_ms: now }),
         }
     }
 }
@@ -347,6 +353,9 @@ pub struct HistoryEntry {
     /// On an `image`: the picture the entry before it carried.
     #[serde(default)]
     pub image: Option<ImageView>,
+    /// On an `artifact`: what the agent showed the person (ADR 0068).
+    #[serde(default)]
+    pub artifact: Option<ArtifactView>,
     /// On a `usage`: what one of the agent's messages cost.
     #[serde(default)]
     pub usage: Option<UsageView>,
@@ -389,6 +398,40 @@ pub struct PlanStepView {
     pub text: String,
     /// `pending`, `in_progress` or `completed`.
     pub status: String,
+}
+
+/// One version of what an agent showed the person: an image in the
+/// conversation, or an artifact beside it (ADR 0068).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactView {
+    /// The same for every version of one artifact.
+    pub id: String,
+    /// Counts up from 1 along the thread's lineage.
+    pub version: u32,
+    pub title: String,
+    /// `html`, `svg`, `markdown`, `mermaid` or `image`.
+    pub kind: String,
+    pub media_type: String,
+    /// The blob holding the content, read with the thread's artifact route.
+    pub blob: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
+    /// Shown in the conversation (`silt_show`) rather than as a card.
+    #[serde(default)]
+    pub inline: bool,
+    /// Words under an image shown in the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+/// An artifact's content, as its route answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactContent {
+    pub media_type: String,
+    /// Base64.
+    pub data: String,
 }
 
 /// A picture a prompt or a tool's result carried, as its agent recorded it.
@@ -620,7 +663,35 @@ pub enum CommentOn {
         end: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        /// The lines are numbered as a diff with git's rewrites left out
+        /// shows them (ADR 0069).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hide_git: bool,
     },
+    /// Lines held by an anchor a pending review comment took when it was
+    /// written, so it lands where its text is now (ADR 0066).
+    Anchored { anchor: String },
+}
+
+/// Where a pending review comment's lines are held, as the daemon anchored
+/// them without recording a comment (ADR 0066). The browser keeps it as is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PendingAnchor {
+    pub anchor: String,
+}
+
+/// Anchors of pending review comments to place in the thread as it is now,
+/// and at `base` too, as comments are; with `hide_git`, as a diff without
+/// git's rewrites numbers the lines (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PlaceAnchors {
+    #[serde(default)]
+    pub base: Option<String>,
+    pub anchors: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_git: bool,
 }
 
 /// One of the person's signed-in devices (ADR 0026).
@@ -739,6 +810,20 @@ pub struct FileQuery {
     pub at: Option<String>,
 }
 
+/// A diff's query: `git=hide` leaves out what git itself rewrote, as a
+/// checkout, pull or stash does (ADR 0069).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitQuery {
+    #[serde(default)]
+    pub git: Option<String>,
+}
+
+impl GitQuery {
+    pub fn hide_git(&self) -> bool {
+        self.git.as_deref() == Some("hide")
+    }
+}
+
 /// One file of a diff, without the diff: what a page lists before it asks
 /// for a file's lines, as a diff of thousands of files is too large to read
 /// whole.
@@ -755,6 +840,65 @@ pub struct DiffStat {
     /// How long its part of the diff is, in bytes.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub size: u64,
+}
+
+/// The turns that last wrote a file's lines, as a diff's new side numbers
+/// them: runs of lines from one turn. Lines from git, or from before the
+/// thread's first turn, are in none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileTurns {
+    pub path: String,
+    pub runs: Vec<TurnRun>,
+}
+
+/// Lines `start` to `end`, from 1 and inclusive, last written in `turn`,
+/// counted as the thread's turns are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TurnRun {
+    pub start: u32,
+    pub end: u32,
+    pub turn: u32,
+}
+
+/// Whether a thread's file was marked seen as it is now, or changed since
+/// (ADR 0067).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Seen {
+    Seen,
+    Changed,
+}
+
+/// A file of a thread's diff marked seen: whether it changed since, and
+/// which of its lines are new since, as the diff's new side numbers them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileSeen {
+    pub path: String,
+    pub seen: Seen,
+    pub new_lines: Vec<LineSpan>,
+}
+
+/// The files of a thread's diff the person marked seen, and the version the
+/// diff was read at, which a new mark names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ThreadSeenView {
+    pub head: String,
+    pub files: Vec<FileSeen>,
+}
+
+/// A file of a thread marked seen, or not, as it was at `at`, a version the
+/// review read (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct MarkSeen {
+    pub path: String,
+    pub seen: bool,
+    pub at: String,
 }
 
 /// A file as a permalink shows it.
@@ -781,6 +925,19 @@ pub struct ThreadLink {
     /// Only when just made: the server keeps no copy of the token.
     #[serde(default)]
     pub url: Option<String>,
+    /// The one artifact it shows, rather than the conversation (ADR 0068).
+    #[serde(default)]
+    pub artifact: Option<LinkedArtifact>,
+}
+
+/// An artifact a read-only link shows: one version, or with none the
+/// latest when it's opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LinkedArtifact {
+    pub id: String,
+    #[serde(default)]
+    pub version: Option<u32>,
 }
 
 /// What a new link is: for how many days (1, 7 or 30), and whether frozen.
@@ -790,6 +947,9 @@ pub struct NewLink {
     pub days: u32,
     #[serde(default)]
     pub frozen: bool,
+    /// A link to one artifact of the thread rather than its conversation.
+    #[serde(default)]
+    pub artifact: Option<LinkedArtifact>,
 }
 
 /// A one-time code that signs a phone in (ADR 0028), to show as a QR code.
@@ -854,7 +1014,7 @@ mod tests {
     #[test]
     fn a_change_from_the_web_ui_sets_only_what_it_names() {
         let thread = ThreadId(3);
-        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true };
+        let change = StateChange { pinned: Some(true), snooze: None, settled: None, seen: true, reviewed_turn: None };
         let state = change.stamped(thread, 50);
         assert_eq!(state.pinned, Some(Stamped { value: true, at_ms: 50 }));
         assert_eq!((state.snooze, state.settled), (None, None));

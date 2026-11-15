@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id, path, hash, version, seen, at_ms FROM thread_seen WHERE user_id = ? ORDER BY thread_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "seen",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "seen"
+          }
+        }
+      },
+      {
+        "name": "at_ms",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_seen",
+            "name": "at_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2fe7683012027cda03d8a544496bad650349406472130e64972489748eabaf3b"
+}

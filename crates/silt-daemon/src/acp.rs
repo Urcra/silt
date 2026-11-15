@@ -660,8 +660,8 @@ impl Core {
         let token = self.mint_run_token(thread, &workspace.id, project.as_deref()).await?;
         let local_token = token.clone();
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
-        if let Some((_, args)) = &mut start.mcp {
-            args.extend(["--token".to_owned(), token]);
+        if let Some(mcp) = &mut start.mcp {
+            mcp.args.extend(["--token".to_owned(), token]);
         }
         start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
         if let Some(model) = &local_model {
@@ -738,16 +738,18 @@ impl Core {
             args: Vec::new(),
             env: Vec::new(),
             cwd: checkout.to_path_buf(),
-            mcp: Some((
-                silt_exe(),
-                vec![
+            mcp: Some(silt_acp::McpStart {
+                command: silt_exe(),
+                args: vec![
                     "mcp".into(),
                     "--thread".into(),
                     thread.to_string(),
                     "--checkout".into(),
                     checkout.to_string_lossy().into_owned(),
+                    "--ui".into(),
                 ],
-            )),
+                env: mcp_env(&self.data_dir),
+            }),
             load,
             sign_in_first: None,
         }
@@ -1900,11 +1902,17 @@ impl Core {
         self.keep_guide(family_id, &request, said, by).await
     }
 
-    async fn record_acp(&mut self, thread: ThreadId, line: &str) -> Result<(), CoreError> {
+    pub(crate) async fn record_acp(&mut self, thread: ThreadId, line: &str) -> Result<(), CoreError> {
         let Some(session) = self.acp.get(&thread).and_then(|run| run.session.clone()) else {
             return Ok(());
         };
         self.record_line(&session, "main", line.to_owned(), None).await
+    }
+
+    /// The session and checkout of the agent the daemon runs in `thread`.
+    pub(crate) fn acp_run_place(&self, thread: ThreadId) -> Option<(String, PathBuf)> {
+        let run = self.acp.get(&thread)?;
+        Some((run.session.clone()?, run.checkout.clone()))
     }
 
     /// Keeps each file beside the session, as text redacted like the rest of
@@ -1935,6 +1943,16 @@ impl Core {
         }
         Ok(names)
     }
+}
+
+/// What `silt mcp` needs to find this daemon, which an agent's filtered
+/// environment leaves out.
+fn mcp_env(data_dir: &Path) -> Vec<(String, String)> {
+    let mut env = vec![("SILT_HOME".to_owned(), data_dir.to_string_lossy().into_owned())];
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        env.push(("XDG_RUNTIME_DIR".to_owned(), runtime.to_string_lossy().into_owned()));
+    }
+    env
 }
 
 /// The largest file a prompt takes, and all of a prompt's files together.

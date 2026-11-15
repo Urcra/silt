@@ -4,7 +4,7 @@ use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
 use silt_store::{
     AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRead, SessionRecord, Snapshot, Store,
-    ThreadRecord,
+    ThreadRecord, ThreadSeenRecord,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
@@ -290,6 +290,26 @@ async fn notices_are_handed_over_once_in_order_and_go_with_their_thread() {
     store.add_notice(THREAD, "unread", 3).await.expect("adds");
     store.remove_thread(THREAD).await.expect("removes");
     assert!(store.take_notices(THREAD).await.expect("takes").is_empty());
+}
+
+#[tokio::test]
+async fn a_removed_thread_leaves_no_seen_marks_or_git_states() {
+    let (_dir, store) = store_with_thread().await;
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    store.put_checkout_git_state(checkout.id, THREAD, "state", "head").await.expect("keeps the git state");
+    let mark = ThreadSeenRecord {
+        thread: THREAD,
+        path: "patients.csv".into(),
+        hash: "h".into(),
+        version: None,
+        seen: true,
+        at_ms: 1,
+        pending: true,
+    };
+    store.put_thread_seen_mark(&mark).await.expect("keeps the mark");
+    store.remove_thread(THREAD).await.expect("removes");
+    assert!(store.thread_seen_marks().await.expect("reads").is_empty(), "file names are personal data too");
+    assert_eq!(store.checkout_git_state(checkout.id, THREAD).await.expect("reads"), None);
 }
 
 #[tokio::test]

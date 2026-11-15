@@ -1,4 +1,5 @@
 mod acp;
+mod artifacts;
 mod attribution;
 mod blame;
 mod bus;
@@ -35,6 +36,7 @@ mod recovery;
 pub mod remote;
 mod resume;
 mod revert;
+mod review;
 mod server;
 mod sessions;
 mod spool;
