@@ -5,6 +5,7 @@
 use std::str::FromStr;
 
 use silt_crdt::VersionVector;
+use silt_log::{Family, GitMade};
 use silt_proto::SeenMark;
 use silt_proto::view::{FileSeen, FileTurns, LineSpan, MarkSeen, Seen, ThreadSeenView, TurnRun};
 use silt_types::{DeltaId, Frontier, ThreadId};
@@ -16,24 +17,28 @@ use crate::views::{Only, TurnRange, diff_range, prompt_marks};
 type Lines = [(String, Option<DeltaId>)];
 
 impl Core {
-    /// For each file of the diff, the turns that last wrote its new lines.
+    /// For each file of the diff, the turns that last wrote its new lines;
+    /// with `hide_git`, numbered as the diff without git's rewrites shows
+    /// them (ADR 0069).
     pub(crate) fn diff_turns(
         &self,
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
+        hide_git: bool,
     ) -> Result<Vec<FileTurns>, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, only, false)?;
+        let changes = self.diff_changes(thread, turns, base, only, hide_git)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
-        let to = diff_range(family, thread, turns, base)?.to().clone();
+        let range = diff_range(family, thread, turns, base)?;
+        let shown = Shown::new(family, range.to(), hide_git && range.is_versions());
         let marks: Vec<VersionVector> = prompt_marks(family, thread).iter().map(|mark| graph.version_vector(mark)).collect();
         Ok(changes
             .iter()
             .filter_map(|change| change.new_path.as_deref())
             .filter_map(|path| {
-                let lines = family.lines_at(path, &to)?;
+                let lines = shown.lines(path)?;
                 Some(FileTurns {
                     path: path.to_owned(),
                     runs: runs_of(lines.iter().map(|(_, id)| id.map(|id| turn_of(&marks, id)))),
@@ -45,17 +50,23 @@ impl Core {
 
 impl Core {
     /// For each file of the diff the person marked seen, whether it's still
-    /// as they saw it, and else which of its lines are new since.
+    /// as they saw it, and else which of its lines are new since; with
+    /// `hide_git`, numbered as the diff without git's rewrites shows them.
+    /// Whether it's as they saw it reads the whole file either way, so the
+    /// box doesn't take a tick away.
     pub(crate) fn thread_seen(
         &self,
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
+        hide_git: bool,
     ) -> Result<ThreadSeenView, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, Only::default(), false)?;
+        let changes = self.diff_changes(thread, turns, base, Only::default(), hide_git)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
-        let to = diff_range(family, thread, turns, base)?.to().clone();
+        let range = diff_range(family, thread, turns, base)?;
+        let to = range.to().clone();
+        let shown = Shown::new(family, &to, hide_git && range.is_versions());
         let files = changes
             .iter()
             .filter_map(|change| change.new_path.as_deref().or(change.old_path.as_deref()))
@@ -67,10 +78,10 @@ impl Core {
                 }
                 // A version from another device not here yet counts every line as new.
                 let seen = mark.version.as_deref().and_then(|version| Frontier::from_str(version).ok());
-                let new_lines = match (&lines, seen) {
+                let new_lines = match (shown.lines(path), seen) {
                     (Some(lines), Some(seen)) => {
                         let seen = graph.version_vector(&seen);
-                        new_since(lines, |id| seen.contains(id))
+                        new_since(&lines, |id| seen.contains(id))
                     }
                     _ => Vec::new(),
                 };
@@ -96,6 +107,28 @@ impl Core {
         let seen = SeenMark { path: mark.path, hash, seen: mark.seen, at_ms: now_ms(), version: Some(at.to_string()) };
         self.put_thread_mark(thread, seen).await;
         Ok("marked")
+    }
+}
+
+/// A file's lines as the diff shows them: at its new side's version, and
+/// without git's edits where it leaves them out.
+struct Shown<'a> {
+    family: &'a Family,
+    to: &'a VersionVector,
+    git_made: Option<GitMade>,
+}
+
+impl<'a> Shown<'a> {
+    fn new(family: &'a Family, to: &'a VersionVector, hide_git: bool) -> Self {
+        let git_made = hide_git.then(|| GitMade::of(family.log())).filter(|made| !made.is_empty());
+        Self { family, to, git_made }
+    }
+
+    fn lines(&self, path: &str) -> Option<Vec<(String, Option<DeltaId>)>> {
+        match &self.git_made {
+            None => self.family.lines_at(path, self.to),
+            Some(made) => self.family.lines_where(path, |id| self.to.contains(id) && !made.contains(id)),
+        }
     }
 }
 

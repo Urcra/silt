@@ -865,6 +865,12 @@ pub(crate) enum DiffRange<'a> {
 }
 
 impl DiffRange<'_> {
+    /// Whether it runs between versions of the thread, rather than against
+    /// a branch, which is git's already.
+    pub(crate) fn is_versions(&self) -> bool {
+        matches!(self, Self::Versions { .. })
+    }
+
     /// The version whose files the diff's new side shows.
     pub(crate) fn to(&self) -> &VersionVector {
         match self {

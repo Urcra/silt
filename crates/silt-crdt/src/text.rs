@@ -582,6 +582,25 @@ impl TextDoc {
         attribution
     }
 
+    /// The character id of each character of [`Self::text_where`]'s text,
+    /// in order.
+    pub fn attribution_where(&self, contains: impl Fn(DeltaId) -> bool) -> Vec<(char, CharId)> {
+        let mut attribution = Vec::new();
+        for fragment in self.fragments.iter() {
+            let first = fragment.first_char();
+            let shown = visible_where(fragment, &contains);
+            attribution.extend(
+                self.chars_of(fragment)
+                    .iter()
+                    .zip(shown)
+                    .zip(0..)
+                    .filter(|((_, shown), _)| *shown)
+                    .map(|((ch, _), offset)| (*ch, first.offset(offset))),
+            );
+        }
+        attribution
+    }
+
     /// Checks that `event` is well formed and fits the document as of its
     /// parents, which must already be in `graph`. It moves the prepare
     /// version to those parents to measure the text there, hence `&mut`;

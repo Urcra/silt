@@ -224,6 +224,19 @@ fn the_clone_is_the_person_s_again_once_its_agent_finishes_until_the_next_turn()
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(env.stdout(&["diff", &thread]), before, "nor once a restarted daemon rescans the clone");
 
+    next_prompt(&env, "one more");
+    assert!(
+        eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")),
+        "the next turn takes in what changed meanwhile:\n{}",
+        env.stdout(&["show", &thread])
+    );
+    let show = env.stdout(&["show", &thread]);
+    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "the person's, not the agent's: {show}");
+}
+
+/// Submits the next prompt of the session, as Claude Code's hook does, which
+/// takes in what changed in the clone since the last turn.
+fn next_prompt(env: &Env, prompt: &str) {
     let session = env.transcript().file_stem().expect("named").to_string_lossy().into_owned();
     let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
         .args(["hook", "UserPromptSubmit"])
@@ -234,16 +247,9 @@ fn the_clone_is_the_person_s_again_once_its_agent_finishes_until_the_next_turn()
         .stdout(std::process::Stdio::null())
         .spawn()
         .expect("silt runs");
-    let input = format!(r#"{{"session_id":"{session}","hook_event_name":"UserPromptSubmit","prompt":"one more"}}"#);
-    hook.stdin.take().expect("piped").write_all(input.as_bytes()).expect("hook input");
+    let input = serde_json::json!({"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": prompt});
+    hook.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).expect("hook input");
     assert!(hook.wait().expect("hook ran").success());
-    assert!(
-        eventually(|| env.stdout(&["diff", &thread]).contains("+fn later() {}")),
-        "the next turn takes in what changed meanwhile:\n{}",
-        env.stdout(&["show", &thread])
-    );
-    let show = env.stdout(&["show", &thread]);
-    assert!(show.contains("outside tool calls: src/main.rs +14 -0"), "the person's, not the agent's: {show}");
 }
 
 #[test]
@@ -502,6 +508,36 @@ fn git_left_out(script: &'static str, in_one_turn: bool) {
         };
         assert_eq!(place(true), 2, "daemonless: {daemonless}");
         assert_eq!(place(false), 3, "daemonless: {daemonless}");
+
+        // The expanded review numbers the turn that wrote a line, and the lines new since Seen, as its diff does.
+        let turn_runs = |git: &str| {
+            let (ok, files) = api.call("GET", &format!("/api/threads/{thread}/diff/turns?git={git}"), None);
+            assert!(ok, "{files}");
+            let lib = files.as_array().expect("files").iter().find(|file| file["path"] == "lib.rs").cloned();
+            lib.map(|lib| lib["runs"].clone()).unwrap_or_default()
+        };
+        let starts = |runs: serde_json::Value| -> Vec<u64> {
+            runs.as_array().map(|runs| runs.iter().filter_map(|run| run["start"].as_u64()).collect()).unwrap_or_default()
+        };
+        assert_eq!(starts(turn_runs("hide")), vec![2], "daemonless: {daemonless}");
+        let shown = starts(turn_runs("show"));
+        assert!(shown.contains(&3) && !shown.contains(&2), "git's line above moves it to 3: {shown:?}, daemonless: {daemonless}");
+        let seen = |git: &str| {
+            let (ok, seen) = api.call("GET", &format!("/api/threads/{thread}/seen?git={git}"), None);
+            assert!(ok, "{seen}");
+            seen
+        };
+        let head = seen("show")["head"].as_str().expect("head").to_owned();
+        let mark = serde_json::json!({"path": "lib.rs", "seen": true, "at": head});
+        let (ok, marked) = api.call("PUT", &format!("/api/threads/{thread}/seen"), Some(mark));
+        assert!(ok, "{marked}");
+        assert_eq!(seen("hide")["files"][0]["seen"], "seen", "the box takes no tick away; daemonless: {daemonless}");
+        let lib = env.repo.join("lib.rs");
+        fs::write(&lib, fs::read_to_string(&lib).expect("read") + "fn later() {}\n").expect("write");
+        next_prompt(&env, "one more");
+        assert!(eventually(|| seen("show")["files"][0]["seen"] == "changed"), "daemonless: {daemonless}");
+        assert_eq!(seen("show")["files"][0]["new_lines"], serde_json::json!([{"start": 4, "end": 4}]));
+        assert_eq!(seen("hide")["files"][0]["new_lines"], serde_json::json!([{"start": 3, "end": 3}]));
     }
 }
 

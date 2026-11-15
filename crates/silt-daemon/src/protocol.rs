@@ -111,6 +111,9 @@ pub enum Request {
         to_turn: Option<usize>,
         #[serde(default)]
         base: Option<String>,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// Marks a file of the thread seen, or not, at a version the review read.
     MarkThreadSeen {
@@ -130,6 +133,9 @@ pub enum Request {
         files: Option<FilePage>,
         #[serde(default)]
         path: Option<String>,
+        /// As [`Request::Diff`]'s.
+        #[serde(default)]
+        hide_git: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.

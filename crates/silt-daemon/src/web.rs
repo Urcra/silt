@@ -443,8 +443,9 @@ async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(qu
 }
 
 async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
+    let hide_git = query.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base }).await
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
 }
 
 async fn mark_thread_seen(
@@ -457,9 +458,10 @@ async fn mark_thread_seen(
 
 async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
+    let hide_git = query.hide_git();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path }).await
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.

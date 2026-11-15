@@ -650,15 +650,19 @@ impl Core {
                     self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide_git)),
                 )
             }
-            Request::ThreadSeen { thread, turn, to_turn, base } => {
+            Request::ThreadSeen { thread, turn, to_turn, base, hide_git } => {
                 let turns = TurnRange { turn, to_turn };
-                to_response(self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref())))
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide_git)),
+                )
             }
             Request::MarkThreadSeen { thread, mark } => to_response(self.mark_thread_seen(&thread, mark).await),
-            Request::DiffTurns { thread, turn, to_turn, base, files, path } => {
+            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git } => {
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
-                to_response(self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only)))
+                to_response(
+                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide_git)),
+                )
             }
             Request::Search { query, limit, filters } => {
                 to_response(self.search(&query, limit, &filters).await.map(|results| self.scoped_results(results)))

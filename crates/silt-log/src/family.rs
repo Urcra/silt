@@ -773,31 +773,18 @@ impl Family {
         let (_, FileContent::Text(doc)) = self.files.get(&inode)?.content_at(|id| vv.contains(id))? else {
             return None;
         };
-        let mut lines = Vec::new();
-        let (mut text, mut latest) = (String::new(), None::<DeltaId>);
-        for (ch, id) in doc.attribution_at_vv(vv) {
-            let id = match id {
-                silt_crdt::CharId::Delta(id) => Some(id),
-                silt_crdt::CharId::Base { .. } => None,
-            };
-            if ch == '\n' {
-                // A newline usually comes with the line after it, so it
-                // only speaks for a line with nothing else.
-                let source = if text.is_empty() { id } else { latest.take() };
-                lines.push((std::mem::take(&mut text), source));
-                continue;
-            }
-            if let Some(id) = id
-                && latest.is_none_or(|latest| Stamp::from(id) > Stamp::from(latest))
-            {
-                latest = Some(id);
-            }
-            text.push(ch);
-        }
-        if !text.is_empty() {
-            lines.push((text, latest));
-        }
-        Some(lines)
+        Some(lines_of(doc.attribution_at_vv(vv)))
+    }
+
+    /// [`Self::lines_at`] as of the version holding exactly the ids
+    /// `contains` takes, which needn't be causally closed, as with git's
+    /// edits left out (ADR 0069).
+    pub fn lines_where(&self, path: &str, contains: impl Fn(DeltaId) -> bool) -> Option<Vec<(String, Option<DeltaId>)>> {
+        let inode = *self.tree().at(&contains).paths().get(path)?;
+        let (_, FileContent::Text(doc)) = self.files.get(&inode)?.content_at(&contains)? else {
+            return None;
+        };
+        Some(lines_of(doc.attribution_where(contains)))
     }
 
     pub fn text_doc(&self, inode: InodeId) -> Option<&TextDoc> {
@@ -1069,4 +1056,34 @@ fn file_content(content: Content, source: DeltaId) -> FileContent {
         Content::GitText(oid) => FileContent::GitText(oid),
         Content::Blob(hash) => FileContent::Blob(hash),
     }
+}
+
+/// Characters with their ids as lines, each with the id of its latest
+/// inserted character: `None` for a line wholly from git.
+fn lines_of(attribution: Vec<(char, silt_crdt::CharId)>) -> Vec<(String, Option<DeltaId>)> {
+    let mut lines = Vec::new();
+    let (mut text, mut latest) = (String::new(), None::<DeltaId>);
+    for (ch, id) in attribution {
+        let id = match id {
+            silt_crdt::CharId::Delta(id) => Some(id),
+            silt_crdt::CharId::Base { .. } => None,
+        };
+        if ch == '\n' {
+            // A newline usually comes with the line after it, so it
+            // only speaks for a line with nothing else.
+            let source = if text.is_empty() { id } else { latest.take() };
+            lines.push((std::mem::take(&mut text), source));
+            continue;
+        }
+        if let Some(id) = id
+            && latest.is_none_or(|latest| Stamp::from(id) > Stamp::from(latest))
+        {
+            latest = Some(id);
+        }
+        text.push(ch);
+    }
+    if !text.is_empty() {
+        lines.push((text, latest));
+    }
+    lines
 }

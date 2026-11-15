@@ -254,6 +254,11 @@ fn text_with_some_edits_left_out_keeps_the_others_in_place() {
     let left_out = |id| [pulled, dropped].iter().any(|span| span.contains(id));
     assert_eq!(replica.doc().text_where(|id| !left_out(id)), "one\nthree\n");
     assert_eq!(replica.doc().text_where(|_| true), replica.text());
+    // Each character it keeps comes with its own id, none of those left out.
+    let kept = replica.doc().attribution_where(|id| !left_out(id));
+    assert_eq!(kept.iter().map(|(ch, _)| *ch).collect::<String>(), "one\nthree\n");
+    assert!(kept.iter().all(|(_, id)| matches!(id, CharId::Delta(id) if !left_out(*id))), "{kept:?}");
+    assert_eq!(replica.doc().attribution_where(|_| true), replica.doc().attribution());
 }
 
 #[test]
