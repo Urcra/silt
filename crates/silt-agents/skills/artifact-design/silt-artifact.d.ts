@@ -76,3 +76,59 @@ interface SiltDb {
 // `localStorage` and `sessionStorage` work as usual, kept for this viewer
 // and this artifact by the page showing it. They never reach other viewers,
 // other machines or the agent.
+
+// `artifact` (declare `{"artifact": {}}`): the page saves itself as the next
+// version, for the person viewing it, and every open view reloads to it.
+// Nothing a viewer does is kept unless the page publishes it, so keep the
+// shared state as data in the document, render from it, and publish a whole
+// regenerated document (doctype first) after a viewer acts, never on load.
+// A save over a version that's no longer the latest rejects `conflict`:
+// don't retry, the view reloads to the winner. Only the thread's owner and
+// collaborators save; others get `not_granted`, so render read-only.
+interface SiltArtifact {
+  publish(html: string): Promise<{ id: string; version: number }>
+  /** The version this view shows. */
+  version(): Promise<number>
+}
+
+// `user` (declare `{"user": {}}`): who views the page. `id()` is the same
+// on every machine and the server for one person; store ids, never names,
+// and resolve names with `profiles` each time you render.
+interface SiltUser {
+  id(): Promise<string>
+  me(): Promise<{ id: string; name: string }>
+  isOwner(): Promise<boolean>
+  /** The owner or a collaborator. */
+  canEdit(): Promise<boolean>
+  /** `data.write` or `artifact.publish`; null where this view isn't told. */
+  can(name: string): Promise<boolean | null>
+  /** Names by id; `name` is '' for someone unknown here, so use `||`. */
+  profiles(ids: string[]): Promise<Record<string, { id: string; name: string }>>
+}
+
+// `downloads` (declare `{"downloads": {}}`): hands the viewer a file the page
+// made, after they confirm it. At most 16 MiB; runnable types are refused.
+interface SiltDownloads {
+  save(file: { filename: string; data: string | Blob | ArrayBuffer | Uint8Array; type?: string }): Promise<{ saved: true }>
+}
+
+// `comments` (declare `{"comments": {}}`): opens the artifact's own comment
+// composer, quoting `text`. Silt shows the comments; never list them.
+interface SiltComments {
+  openComposer(at: { text?: string }): Promise<null>
+}
+
+// `sample` (declare `{"sample": {}}`): asks an agent a question, with no
+// tools and no memory: send the instructions, the data and the format each
+// time. The person agrees once per artifact; `not_granted` means they said
+// no, so hide the feature. At most 4 a minute (`rate_limited`). Call it on a
+// click, never in a loop.
+interface SiltSample {
+  (input: string | { role: 'user' | 'assistant'; content: string }[], opts?: { onText?: (said: { text: string; delta: string }) => void }): Promise<{
+    text: string
+    truncated: boolean
+  }>
+  /** The answer parsed as JSON, a ```json fence around it allowed. */
+  json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: { onText?: (said: { text: string; delta: string }) => void }): Promise<any>
+  limits(): Promise<{ images: boolean; perMinute: number }>
+}

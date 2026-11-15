@@ -119,6 +119,16 @@ impl Core {
         }
     }
 
+    /// Who views `thread`'s pages here, for their `user` capability.
+    pub(crate) fn page_viewer(&self, thread: &str) -> Result<silt_proto::page::Viewer, CoreError> {
+        let thread = self.find_thread(thread)?;
+        let me = self.remote_for(thread).map(|remote| remote.config.user.clone()).filter(|user| !user.is_empty());
+        let owner = self.threads.get(&thread).map(|record| record.owner.clone()).unwrap_or_default();
+        let collaborators = self.collaborators.get(&thread).cloned().unwrap_or_default();
+        let people = std::iter::once(owner.as_str()).chain(collaborators.iter().map(String::as_str));
+        Ok(silt_proto::page::Viewer::of(me.as_deref(), self.page_level(thread), people))
+    }
+
     /// This machine's person's id in page data: the one their home server
     /// gave them, once known, else this machine's own (ADR 0072).
     pub(crate) fn page_me(&self, thread: ThreadId) -> String {

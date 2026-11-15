@@ -9,7 +9,11 @@ streaming: string, };
 
 export type AgentState = "starting" | "idle" | "working" | "awaiting_permission" | "awaiting_input" | "error" | "stopped";
 
-export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
+export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, 
+/**
+ * Ask one of the person's computers' agents a page's question (ADR 0072).
+ */
+sample: boolean, };
 
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
@@ -226,7 +230,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -621,7 +625,12 @@ description?: string | null,
  * The capabilities the version's page may use, each with its config
  * (ADR 0072).
  */
-capabilities?: Record<string, Record<string, unknown>> | null, };
+capabilities?: Record<string, Record<string, unknown>> | null, 
+/**
+ * The person this version was saved for, when the page saved itself
+ * rather than an agent making it (ADR 0072).
+ */
+by?: string | null, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 

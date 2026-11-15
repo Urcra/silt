@@ -21,6 +21,11 @@
 //! `lib.rs`;
 //! `git-by-hand`, the same with the merge run between two turns, outside
 //! any tool call, as a person would.
+//!
+//! `-p --output-format stream-json` answers the message on stdin as print
+//! mode does, in two chunks: `Sampled:` and the message's first words, or
+//! `FAKE_SAMPLE`. It checks no tools were allowed, and records the
+//! arguments in `FAKE_LOG_DIR/claude-print`.
 
 use std::env;
 use std::fs;
@@ -45,6 +50,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Step {
+    let given: Vec<String> = env::args().skip(1).collect();
+    if given.first().map(String::as_str) == Some("-p") && given.iter().any(|arg| arg == "stream-json") {
+        return print_mode(&given);
+    }
     let mut args = env::args().skip(1);
     let (mut session, mut resume, mut settings) = (String::new(), false, None);
     let log_dir = env::var_os("FAKE_LOG_DIR").map(PathBuf::from);
@@ -449,6 +458,36 @@ fn in_tool() -> Step {
     go.push(".go");
     while !Path::new(&go).exists() {
         std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// Print mode as `sample` runs it: no tools, no session, the answer streamed.
+fn print_mode(args: &[String]) -> Step {
+    if let Some(logs) = env::var_os("FAKE_LOG_DIR").map(PathBuf::from) {
+        write(&logs.join("claude-print"), args.join(" ").as_bytes())?;
+    }
+    let tools = args.iter().position(|arg| arg == "--allowedTools").and_then(|at| args.get(at + 1));
+    if tools.is_none_or(|tools| !tools.is_empty()) {
+        return Err(Failed(2, "print mode was allowed tools".into()));
+    }
+    let mut message = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut message).map_err(io)?;
+    let answer = env::var("FAKE_SAMPLE").unwrap_or_else(|_| {
+        let words: Vec<&str> = message.split_whitespace().take(6).collect();
+        format!("Sampled: {}", words.join(" "))
+    });
+    let (first, rest) = answer.split_at(answer.find(' ').unwrap_or(answer.len()));
+    let mut out = std::io::stdout().lock();
+    let chunk = |text: &str| json!({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}});
+    for line in [
+        json!({"type": "system", "subtype": "init"}),
+        chunk(first),
+        chunk(rest),
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": answer}),
+    ] {
+        writeln!(out, "{line}").map_err(io)?;
+        out.flush().map_err(io)?;
     }
     Ok(())
 }

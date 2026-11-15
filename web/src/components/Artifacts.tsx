@@ -33,7 +33,7 @@ import { KindIcon, ShownImage } from './ArtifactCards'
 import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 import { Broker, callOf } from '../bridge/broker'
-import { handlersFor } from '../bridge/capabilities'
+import { handlersFor, type Holder } from '../bridge/capabilities'
 import { lastSnapshot, rememberSnapshot } from '../bridge/hot'
 import { keep, keptFor } from '../bridge/storage'
 
@@ -143,6 +143,26 @@ export function ArtifactViewer({
   // What's selected in the page, for a comment to quote.
   const [quote, setQuote] = useState<string | null>(null)
   const [sharing, setSharing] = useState(false)
+  // What a page asks the person to agree to, such as saving a file, until they answer.
+  const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
+  const composer = useRef<(() => void) | null>(null)
+  const [holder] = useState<Holder>(() => ({
+    confirm: (ask) =>
+      new Promise<boolean>((answer) =>
+        setAsking((before) => {
+          before?.answer(false)
+          return { ...ask, answer }
+        }),
+      ),
+    openComposer: (text) => {
+      setQuote(text || null)
+      composer.current?.()
+    },
+  }))
+  const answerAsking = (agreed: boolean) => {
+    asking?.answer(agreed)
+    setAsking(null)
+  }
   const shown = group ? versionOf(group, opened.version) : null
   const content = useQuery({
     queryKey: keys.artifact(thread, shown?.artifact.blob ?? ''),
@@ -277,7 +297,9 @@ export function ArtifactViewer({
             triggerClassName="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 font-mono text-xs text-fg-2 hover:border-line-strong hover:text-fg-1 max-md:min-h-11"
             items={[...group.versions].reverse().map((version) => ({
               label: `v${version.artifact.version}${version.artifact.version === latestVersion ? ' · latest' : ''}`,
-              hint: [version.artifact.note, ago(version.entry.time_ms, now)].filter(Boolean).join(' · '),
+              hint: [version.artifact.by ? `saved by the page for ${version.artifact.by}` : null, version.artifact.note, ago(version.entry.time_ms, now)]
+                .filter(Boolean)
+                .join(' · '),
               icon: version.artifact.version === artifact.version ? 'check' : undefined,
               onSelect: () => onOpen(group.id, version.artifact.version === latestVersion ? null : version.artifact.version),
             }))}
@@ -328,6 +350,9 @@ export function ArtifactViewer({
           quote={quote}
           onClearQuote={() => setQuote(null)}
           onChanged={onCommentsChanged}
+          opener={(open) => {
+            composer.current = open
+          }}
         />
         {onFull && (
           <IconButton icon={full ? 'collapse' : 'expand'} label={full ? 'Leave the full view (F)' : 'Full view (F)'} onClick={onFull} className="max-lg:hidden" />
@@ -348,12 +373,32 @@ export function ArtifactViewer({
             full={Boolean(full)}
             onSelect={(text) => setQuote(text || null)}
             onProblems={(found) => setProblems({ blob: artifact.blob, seen: found })}
+            holder={holder}
           />
         ) : content.error ? (
           <p className="px-5 py-6 text-sm text-danger">{message(content.error)}</p>
         ) : (
           <div className="flex justify-center pt-20">
             <Spinner />
+          </div>
+        )}
+        {asking && (
+          <div
+            role="alertdialog"
+            aria-label={asking.title}
+            className="absolute inset-x-2.5 top-2.5 z-20 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs text-fg-1 shadow-overlay"
+            data-testid="artifact-asking"
+          >
+            <Icon name="lock" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{asking.title}</span> <span className="break-all text-fg-2">{asking.detail}</span>
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => answerAsking(false)}>
+              Not now
+            </Button>
+            <Button size="sm" onClick={() => answerAsking(true)}>
+              {asking.action}
+            </Button>
           </div>
         )}
         {seen.length > 0 && !source && (
@@ -409,6 +454,7 @@ function ArtifactPage({
   full,
   onSelect,
   onProblems,
+  holder,
 }: {
   thread: string
   artifact: ArtifactView
@@ -420,6 +466,7 @@ function ArtifactPage({
   full: boolean
   onSelect: (text: string) => void
   onProblems: (problems: FrameProblem[]) => void
+  holder: Holder
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const theme = useShownTheme()
@@ -487,7 +534,7 @@ function ArtifactPage({
         artifact,
         emit: (cap, topic, data) => frame.current?.contentWindow?.postMessage({ silt: 'event', cap, topic, data }, '*'),
       },
-      handlersFor(thread, artifact),
+      handlersFor(thread, artifact, holder),
     )
     const heard = (event: MessageEvent) => {
       const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown } | null
@@ -521,7 +568,7 @@ function ArtifactPage({
       window.removeEventListener('message', heard)
       broker.dispose()
     }
-  }, [thread, artifact])
+  }, [thread, artifact, holder])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }

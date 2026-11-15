@@ -1605,6 +1605,62 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     assert!(artifact_text(&api, &fork, &inherited[0]).starts_with("<h1>Rescan benchmark</h1>"));
 }
 
+/// A page saves itself as the next version for the person, refused over a
+/// version that's no longer the latest; it learns who views it; and it asks
+/// this machine's Claude Code a question, with no tools (ADR 0072).
+#[test]
+fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact saver"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact saver");
+    let made = artifacts_of(&api, &thread);
+    let id = made[0]["id"].as_str().expect("id").to_owned();
+
+    let page = "<!doctype html><html><head></head><body><h1>Saved</h1></body></html>";
+    let saved = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{id}/publish"),
+        Some(serde_json::json!({"html": page, "base": 1})),
+    );
+    assert_eq!(saved["version"], 2, "{saved}");
+    let all = artifacts_of(&api, &thread);
+    let latest = all.last().expect("a version");
+    assert_eq!((&latest["version"], &latest["by"]), (&2.into(), &"you".into()), "{all:?}");
+    assert_eq!(latest["capabilities"], made[0]["capabilities"], "the declaration carries forward");
+    assert_eq!(artifact_text(&api, &thread, latest), page);
+    let (stale, said) = api.call(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{id}/publish"),
+        Some(serde_json::json!({"html": page, "base": 1})),
+    );
+    assert!(!stale && said.to_string().contains("conflict"), "{said}");
+
+    let viewer = api.ok("GET", &format!("/api/threads/{thread}/viewer"), None);
+    assert_eq!((&viewer["id"], &viewer["level"]), (&"local".into(), &"owner".into()), "{viewer}");
+
+    let answer = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{id}/sample"),
+        Some(serde_json::json!({"ask": "q1", "input": [{"role": "user", "content": "Name three rivers"}]})),
+    );
+    assert_eq!((&answer["text"], &answer["truncated"]), (&"Sampled: Name three rivers".into(), &false.into()), "{answer}");
+    let (refused, _) = api.call(
+        "POST",
+        &format!("/api/threads/{thread}/artifacts/{}/sample", "0".repeat(12)),
+        Some(serde_json::json!({"input": "hi"})),
+    );
+    assert!(!refused, "only an artifact that declares sample asks");
+}
+
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps

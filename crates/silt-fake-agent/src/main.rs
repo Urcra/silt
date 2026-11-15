@@ -531,6 +531,15 @@ db.collection('tasks').onSnapshot(function(docs){document.getElementById('count'
 document.getElementById('add').onclick=function(){db.collection('tasks').add({done:false})}});</script>";
             arguments = serde_json::json!({"title": "Checklist", "kind": "html", "content": page, "capabilities": {"db": {}}});
         }
+        if prompt.contains("Artifact saver") {
+            // A page that saves itself and asks an agent (ADR 0072).
+            arguments = serde_json::json!({
+                "title": "Saver",
+                "kind": "html",
+                "content": "<!doctype html><h1>Saver</h1>",
+                "capabilities": {"artifact": {}, "sample": {}, "user": {}}
+            });
+        }
         if prompt.contains("Artifact poll") {
             // Everyone reads the votes, and each writes their own (ADR 0072).
             let rules = serde_json::json!([

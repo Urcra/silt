@@ -60,6 +60,9 @@ import type {
   WorkspacesView,
 } from './api.generated'
 
+/** Who views a thread's pages: their id in page data, their level, and the names of the people the thread knows. */
+export type PageViewer = { id: string; level: 'read' | 'comment' | 'collaborator' | 'owner'; people: Record<string, string> }
+
 export type * from './api.generated'
 
 const TOKEN_KEY = 'silt-token'
@@ -156,6 +159,14 @@ export const api = {
   artifactGrants: (id: string, artifact: string) => request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
   setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null) =>
     request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/grants`, { capability, state }),
+  /** A version an HTML artifact's page saves itself as; refused as a conflict unless `base` is the latest (ADR 0072). */
+  publishArtifact: (id: string, artifact: string, html: string, base: number) =>
+    request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/publish`, { html, base }),
+  /** Who views the thread's pages, for their `user` capability. */
+  pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
+  /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */
+  sample: (id: string, artifact: string, ask: string, input: unknown) =>
+    request<{ text: string; truncated: boolean }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, { ask, input }),
   /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
   artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
     request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),

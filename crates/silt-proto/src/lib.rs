@@ -1305,6 +1305,11 @@ pub enum RemoteCommand {
         code: String,
     },
     SignInCancel,
+    /// A page's question for the device's agent, asked with no tools and no
+    /// session (ADR 0072); the answer is `{text, truncated}`.
+    Sample {
+        question: String,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1317,12 +1322,15 @@ pub struct Capabilities {
     pub send_prompts: bool,
     pub run_agents: bool,
     pub review: bool,
+    /// Ask one of the person's computers' agents a page's question (ADR 0072).
+    pub sample: bool,
 }
 
 impl Capabilities {
-    pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true };
+    pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true, sample: true };
     /// A paired phone's, unless its person gives it more (ADR 0028).
-    pub const PHONE: Self = Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true };
+    pub const PHONE: Self =
+        Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true, sample: false };
 
     /// Whether these let the device send `command`, and if not, what it
     /// would need, for saying so.
@@ -1344,6 +1352,7 @@ impl Capabilities {
             RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } | RemoteCommand::FileAt { .. } => {
                 (self.review, "review merge requests")
             }
+            RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

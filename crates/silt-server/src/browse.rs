@@ -34,6 +34,8 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/app/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/app/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/publish", post(publish_artifact))
+        .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
         .route("/app/api/graph", get(graph))
@@ -478,6 +480,96 @@ async fn page_data(
 }
 
 #[derive(Deserialize)]
+struct Publish {
+    html: String,
+    #[serde(default)]
+    base: Option<u32>,
+}
+
+/// A version an HTML artifact's page saves itself as, for the person
+/// (ADR 0072): only its owner and collaborators save one, and only over the
+/// version the page was opened at.
+async fn publish_artifact(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(publish): Json<Publish>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let row = readable.row(&id)?;
+    let latest = readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if latest.kind != "html" || !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("artifact")) {
+        return Err(bad_request("only an HTML artifact that declares artifact saves itself"));
+    }
+    if publish.base.is_some_and(|base| base != latest.version) {
+        return Err(crate::conflict(format!("conflict: version {} is the latest", latest.version)));
+    }
+    let collaborator = readable.collaborators.get(&row.id).is_some_and(|names| names.contains(&readable.me));
+    if row.owner != readable.me && !collaborator {
+        return Err(crate::forbidden("only the thread's owner and collaborators save its artifacts' pages"));
+    }
+    let bytes = publish.html.into_bytes();
+    if bytes.len() as u64 > silt_proto::artifact::ARTIFACT_BYTES {
+        return Err(bad_request("the page is larger than an artifact keeps"));
+    }
+    let session = {
+        let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
+        let browsed = slot.browsed(row.family, &viewer);
+        let needle = format!("\"id\":\"{artifact}\"");
+        browsed.log.iter().rev().find_map(|delta| match &delta.op {
+            Op::Conv(silt_log::ConvOp::Native { session, line, .. })
+                if line.contains("\"t\":\"artifact\"") && line.contains(&needle) =>
+            {
+                Some(session.clone())
+            }
+            _ => None,
+        })
+    }
+    .ok_or_else(not_found)?;
+    let version = latest.version + 1;
+    let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the page couldn't be kept"))?;
+    let name = format!("artifact/{artifact}/v{version}/index.html");
+    let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
+    crate::writes::write_as_with(&server, browser, row.family, row.id, None, attachment).await?;
+    let view = ArtifactView {
+        version,
+        media_type: "text/html".into(),
+        blob: blob.to_string(),
+        size: bytes.len() as u64,
+        note: Some(format!("Saved by the page, for {}", readable.me)),
+        by: Some(readable.me.clone()),
+        ..latest
+    };
+    let line = silt_agents::acp::artifact(&view);
+    let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
+    crate::writes::write_as_with(&server, browser, row.family, row.id, None, native).await?;
+    Ok(Json(serde_json::json!({ "id": artifact, "version": version })))
+}
+
+/// Who views a thread's pages, for their `user` capability.
+async fn page_viewer(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path(id): Path<String>,
+) -> Result<Json<silt_proto::page::Viewer>, ApiError> {
+    use silt_proto::page::Level;
+    let viewer = server.viewer(browser.user).await?;
+    let readable = Readable::rows(&server, browser.user, &viewer).await?;
+    let row = readable.row(&id)?;
+    let collaborators = readable.collaborators.get(&row.id).cloned().unwrap_or_default();
+    let level = if row.owner == readable.me {
+        Level::Owner
+    } else if collaborators.contains(&readable.me) {
+        Level::Collaborator
+    } else {
+        Level::Comment
+    };
+    let people = std::iter::once(row.owner.as_str()).chain(collaborators.iter().map(String::as_str));
+    Ok(Json(silt_proto::page::Viewer::of(Some(&readable.me), level, people)))
+}
+
+#[derive(Deserialize)]
 struct GrantChange {
     capability: String,
     /// `granted` or `refused`, or none to ask again.
@@ -578,7 +670,7 @@ struct FrameAsk {
 
 /// The version of artifact `id` a person may read, the latest when
 /// `version` is none, along the thread's lineage.
-async fn readable_artifact(
+pub(crate) async fn readable_artifact(
     server: &Server,
     user: UserId,
     thread: &str,

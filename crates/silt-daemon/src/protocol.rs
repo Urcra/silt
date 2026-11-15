@@ -410,6 +410,30 @@ pub enum Request {
         artifact: String,
         asked: silt_proto::page::PageRequest,
     },
+    /// A version an HTML artifact's page saved itself as (ADR 0072); refused
+    /// as a conflict when `base` isn't the latest version.
+    PublishArtifact {
+        thread: String,
+        artifact: String,
+        html: String,
+        #[serde(default)]
+        base: Option<u32>,
+    },
+    /// A page's question for this machine's agent (ADR 0072); its answer
+    /// streams as `sample` bus events named `ask`. With no `artifact`, the
+    /// person asks from elsewhere and their server checked the page.
+    Sample {
+        thread: String,
+        #[serde(default)]
+        artifact: Option<String>,
+        #[serde(default)]
+        ask: Option<String>,
+        input: serde_json::Value,
+    },
+    /// Who views an artifact's page, as its `user` capability answers.
+    PageViewer {
+        thread: String,
+    },
     /// What the person allowed or refused an artifact's page (ADR 0072).
     ArtifactGrants {
         thread: String,
@@ -1527,6 +1551,8 @@ pub enum BusEvent {
     /// An import from the web UI has gone through `done` of its `total`
     /// sessions.
     Importing { done: usize, total: usize },
+    /// The answer so far to a page's `sample` question.
+    Sample { ask: String, text: String },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1553,6 +1579,7 @@ impl BusEvent {
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
             Self::Importing { .. } => Some("import".to_owned()),
+            Self::Sample { ask, .. } => Some(format!("sample:{ask}")),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }

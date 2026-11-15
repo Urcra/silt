@@ -368,6 +368,31 @@ pub fn person_id(user: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// Who views an artifact's page, as its `user` capability answers it: their
+/// id in page data, their level, and the names of the people the thread
+/// knows, by id, for the ids a page keeps to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Viewer {
+    pub id: String,
+    pub level: Level,
+    pub people: std::collections::BTreeMap<String, String>,
+}
+
+impl Viewer {
+    /// The viewer `me` at `level` in a thread whose owner and collaborators
+    /// are `people`.
+    pub fn of<'a>(me: Option<&str>, level: Level, people: impl IntoIterator<Item = &'a str>) -> Self {
+        let id = me.filter(|me| !me.is_empty()).map_or_else(|| "local".to_owned(), person_id);
+        let mut known: std::collections::BTreeMap<String, String> =
+            people.into_iter().filter(|name| !name.is_empty()).map(|name| (person_id(name), name.to_owned())).collect();
+        if let Some(me) = me.filter(|me| !me.is_empty()) {
+            known.insert(id.clone(), me.to_owned());
+        }
+        Self { id, level, people: known }
+    }
+}
+
 #[cfg(test)]
 mod person_tests {
     #[test]

@@ -23,6 +23,8 @@ export type CapabilityHandler = {
   call: (method: string, args: unknown, context: CallContext) => Promise<unknown>
   /** Calls allowed per minute; 120 when unset. */
   perMinute?: number
+  /** The largest call it takes, when more than [`MESSAGE_BYTES`], as a download's file may be. */
+  callBytes?: number
   /** Ends what the handler started, such as watches, when the frame goes. */
   dispose?: () => void
 }
@@ -39,8 +41,16 @@ export function callOf(data: unknown): Call | null {
   return { id: said.id, cap: said.cap, method: said.method, args: said.args ?? null }
 }
 
-/** The size of `value` as JSON, or Infinity when it doesn't serialize. */
-function sizeOf(value: unknown): number {
+/** The size of `value`: bytes and Blobs by their length, the rest as JSON; Infinity when it doesn't serialize. */
+export function sizeOf(value: unknown): number {
+  if (value instanceof Blob) return value.size
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength
+  if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + sizeOf(item) + 1, 2)
+  if (value && typeof value === 'object') {
+    let sum = 2
+    for (const [key, item] of Object.entries(value)) sum += key.length + 4 + sizeOf(item)
+    return sum
+  }
   try {
     return JSON.stringify(value ?? null).length
   } catch {
@@ -82,7 +92,8 @@ export class Broker {
   }
 
   private async run(call: Call): Promise<unknown> {
-    if (sizeOf(call.args) > MESSAGE_BYTES) throw new Refusal('too_large', `a call is at most ${MESSAGE_BYTES >> 20} MiB`)
+    const most = Math.max(MESSAGE_BYTES, this.handlers[call.cap]?.callBytes ?? 0)
+    if (sizeOf(call.args) > most) throw new Refusal('too_large', `a call is at most ${most >> 20} MiB`)
     if (call.cap === 'silt' && call.method === 'use') {
       const name = String((call.args as { name?: unknown } | null)?.name ?? '')
       return this.available(name) ? { available: true, methods: this.handlers[name].methods } : { available: false }

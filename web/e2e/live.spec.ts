@@ -871,7 +871,9 @@ test("an artifact's page keeps its tasks in the thread's page data, live and acr
   await frame.getByRole('button', { name: 'Add a task' }).click()
   await expect(frame.getByText('tasks: 2')).toBeVisible()
   await page.reload()
+  // After a reload the panel either reopens the artifact or shows its card.
   const card = page.getByTestId('artifact-card').first()
+  await expect(page.getByTestId('artifact-frame').or(card).first()).toBeVisible()
   if (await card.isVisible()) await card.click()
   await expect(page.frameLocator('[data-testid="artifact-frame"]').getByText('tasks: 2')).toBeVisible()
 })

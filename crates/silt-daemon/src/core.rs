@@ -288,6 +288,8 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// When each artifact's page last asked `sample`, for its rate.
+    pub(crate) samples: HashMap<String, Vec<Instant>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -528,6 +530,7 @@ impl Core {
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
             resident,
             adopted: HashSet::new(),
+            samples: HashMap::new(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
@@ -616,6 +619,13 @@ impl Core {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
             Request::PageData { thread, artifact, asked } => to_response(self.page_data(&thread, &artifact, asked).await),
+            Request::PublishArtifact { thread, artifact, html, base } => {
+                to_response(self.publish_artifact(&thread, &artifact, html, base).await)
+            }
+            Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
+            Request::Sample { thread, artifact, ask, input } => {
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input));
+            }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),
                 Err(error) => Response::failure(&error),

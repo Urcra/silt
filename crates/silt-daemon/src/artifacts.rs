@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use silt_log::{Author, ConvOp};
+use silt_log::{Author, ConvOp, Op, SessionFile, SessionRef};
 use silt_proto::view::{ArtifactContent, ArtifactView};
 use silt_types::{BlobHash, ThreadId};
 
@@ -14,7 +14,7 @@ use crate::design;
 use crate::protocol::{ArtifactGuide, ArtifactPut, ArtifactRead, DesignSystemView, NewArtifact};
 
 /// The largest artifact or image kept.
-pub(crate) const ARTIFACT_BYTES: u64 = 10 << 20;
+pub(crate) const ARTIFACT_BYTES: u64 = silt_proto::artifact::ARTIFACT_BYTES;
 const TITLE_CHARS: usize = 200;
 const CAPTION_CHARS: usize = 500;
 
@@ -111,6 +111,13 @@ fn content_of(new: &NewArtifact, kind: &str, file: Option<&Path>) -> Result<(Vec
     Ok((bytes, media_type))
 }
 
+/// Who a version is recorded for: the run that made it, or the person a
+/// page saved itself for.
+enum Recorded {
+    ByRun,
+    ByPage(String),
+}
+
 /// The highest version of artifact `id` among `entries`, or 0.
 fn latest_version<'a>(entries: impl IntoIterator<Item = &'a ArtifactView>, id: &str) -> u32 {
     entries.into_iter().filter(|artifact| artifact.id == id).map(|artifact| artifact.version).max().unwrap_or(0)
@@ -133,7 +140,88 @@ impl Core {
             .session_mut(&session)
             .map(|session| session.reference())
             .ok_or_else(|| CoreError::Invalid("the run's session isn't recorded yet".into()))?;
+        self.put_version(thread, &workspace, reference, Some(checkout), new, Recorded::ByRun).await
+    }
 
+    /// A version a page saved itself as, for this machine's person (ADR 0072),
+    /// recorded in the session that recorded the artifact's latest version.
+    pub(crate) async fn publish_artifact(
+        &mut self,
+        thread: &str,
+        id: &str,
+        html: String,
+        base: Option<u32>,
+    ) -> Result<ArtifactPut, CoreError> {
+        let thread = self.find_thread(thread)?;
+        if !valid_id(id) {
+            return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
+        }
+        let entries = self.history_entries(thread);
+        let latest = entries
+            .iter()
+            .filter_map(|(_, entry)| entry.artifact.as_ref())
+            .filter(|artifact| artifact.id == id)
+            .max_by_key(|artifact| artifact.version)
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid(format!("this thread has no artifact {id}")))?;
+        if latest.kind != "html" {
+            return Err(CoreError::Invalid("only an HTML artifact's page saves itself".into()));
+        }
+        if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("artifact")) {
+            return Err(CoreError::Invalid(format!("artifact {id} doesn't declare artifact")));
+        }
+        if base.is_some_and(|base| base != latest.version) {
+            return Err(CoreError::Invalid(format!("conflict: version {} is the latest", latest.version)));
+        }
+        if !self.may_write(thread) {
+            return Err(CoreError::Invalid("only the thread's owner and collaborators save its artifacts' pages".into()));
+        }
+        let reference = self
+            .artifact_session(thread, id)
+            .ok_or_else(|| CoreError::Invalid(format!("no session recorded artifact {id} here")))?;
+        let by = match self.own_user(thread) {
+            user if user.is_empty() => "you".to_owned(),
+            user => user,
+        };
+        let new = NewArtifact {
+            title: latest.title.clone(),
+            kind: "html".into(),
+            content: Some(html),
+            path: None,
+            id: Some(id.to_owned()),
+            caption: None,
+            inline: false,
+            design_system: None,
+            edits: Vec::new(),
+            note: Some(format!("Saved by the page, for {by}")),
+            description: None,
+            capabilities: None,
+        };
+        let checkout = Some(self.threads[&thread].repo_root.clone()).filter(|root| !root.as_os_str().is_empty());
+        self.put_version(thread, "", reference, checkout, new, Recorded::ByPage(by)).await
+    }
+
+    /// The session whose record line names the artifact's latest version.
+    fn artifact_session(&self, thread: ThreadId, id: &str) -> Option<SessionRef> {
+        let family = self.threads.get(&thread)?.family;
+        let needle = format!("\"id\":\"{id}\"");
+        self.local_log(family).iter().rev().find_map(|delta| match &delta.op {
+            Op::Conv(ConvOp::Native { session, line, .. }) if line.contains("\"t\":\"artifact\"") && line.contains(&needle) => {
+                Some(session.clone())
+            }
+            _ => None,
+        })
+    }
+
+    async fn put_version(
+        &mut self,
+        thread: ThreadId,
+        workspace: &str,
+        reference: SessionRef,
+        checkout: Option<PathBuf>,
+        new: NewArtifact,
+        recorded: Recorded,
+    ) -> Result<ArtifactPut, CoreError> {
         // A new version may leave its title and kind as the last version's.
         let earlier = match new.id.as_deref() {
             Some(id) if valid_id(id) => self
@@ -194,7 +282,11 @@ impl Core {
             new.content = Some(edited);
         }
         let file = match &new.path {
-            Some(path) => Some(readable_file(path, &checkout, &self.artifact_denies(&workspace))?),
+            Some(path) => {
+                let checkout =
+                    checkout.as_deref().ok_or_else(|| CoreError::Invalid("a page saves its own source, not a file".into()))?;
+                Some(readable_file(path, checkout, &self.artifact_denies(workspace))?)
+            }
             None => None,
         };
         let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
@@ -215,8 +307,8 @@ impl Core {
             Some(declared) => Some(silt_proto::artifact::checked_capabilities(declared).map_err(CoreError::Invalid)?),
         };
         let styled = if kind == "html" {
-            let workspace_default = self.workspace_design_system(&workspace);
-            let repository = design::project_default(&checkout);
+            let workspace_default = self.workspace_design_system(workspace);
+            let repository = checkout.as_deref().and_then(design::project_default);
             let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
             let defaults = design::Defaults {
                 picked: picked.as_deref(),
@@ -225,7 +317,7 @@ impl Core {
             };
             match design::chosen(new.design_system.as_deref(), previous.as_deref(), defaults) {
                 Some(name) => {
-                    let system = design::find(&design::systems(Some(&checkout), &self.data_dir), name)?;
+                    let system = design::find(&design::systems(checkout.as_deref(), &self.data_dir), name)?;
                     Some((system.name.to_string(), system.compiled()?))
                 }
                 None => None,
@@ -240,6 +332,7 @@ impl Core {
         let blob = self.store.blobs().put(&bytes).await?;
         let family = self.threads[&thread].family;
         let name = format!("artifact/{id}/v{version}/{}", file_name(&kind, media_type));
+        let page_session = reference.clone();
         self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
         let (design_system, style, dropped) = match styled {
             Some((system, compiled)) => {
@@ -266,8 +359,24 @@ impl Core {
             note,
             description,
             capabilities,
+            by: match &recorded {
+                Recorded::ByRun => None,
+                Recorded::ByPage(by) => Some(by.clone()),
+            },
         };
-        self.record_acp(thread, &silt_agents::acp::artifact(&view)).await?;
+        let line = silt_agents::acp::artifact(&view);
+        match recorded {
+            Recorded::ByRun => self.record_acp(thread, &line).await?,
+            // Recorded in the session this machine keeps, where it keeps it,
+            // so its readers see the line; else straight onto the log.
+            Recorded::ByPage(_) if self.session_mut(&page_session.id).is_some() => {
+                self.record_line(&page_session.id, "main", line, None).await?;
+            }
+            Recorded::ByPage(_) => {
+                let op = ConvOp::Native { session: page_session, file: SessionFile::Main, line };
+                self.append_conv(family, thread, Author::User, op).await?;
+            }
+        }
         Ok(ArtifactPut { id, version, design_system, dropped })
     }
 
@@ -511,6 +620,7 @@ mod tests {
             note: None,
             description: None,
             capabilities: None,
+            by: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

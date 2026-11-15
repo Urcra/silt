@@ -240,6 +240,9 @@ impl Core {
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },
             RemoteCommand::SignInCode { code } => Request::AcpSignInCode { thread, code },
             RemoteCommand::SignInCancel => Request::AcpSignInCancel { thread },
+            RemoteCommand::Sample { question } => {
+                Request::Sample { thread, artifact: None, ask: None, input: serde_json::Value::String(question) }
+            }
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),
                 clone: None,

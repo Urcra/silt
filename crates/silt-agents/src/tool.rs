@@ -239,7 +239,7 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
         }
         Entry::Artifact(artifact) => {
             let text = artifact.title.clone();
-            Shown { artifact: Some(artifact), ..Shown::plain("artifact", text) }
+            Shown { artifact: Some(*artifact), ..Shown::plain("artifact", text) }
         }
         Entry::Usage { message, input, output } => {
             Shown { usage: Some(UsageView { message, input, output }), ..Shown::plain("usage", String::new()) }

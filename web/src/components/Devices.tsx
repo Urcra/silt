@@ -16,6 +16,7 @@ const CAPABILITIES: { id: keyof Capabilities; label: string }[] = [
   { id: 'answer_permissions', label: 'Answer permissions' },
   { id: 'send_prompts', label: 'Send prompts' },
   { id: 'run_agents', label: 'Start and stop agents' },
+  { id: 'sample', label: "Ask an agent a page's question" },
   { id: 'review', label: 'Review merge requests' },
 ]
 

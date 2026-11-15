@@ -130,6 +130,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/publish", post(publish_artifact))
+        .route("/api/threads/{id}/viewer", get(page_viewer))
+        .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -641,6 +644,43 @@ async fn page_data(
     Json(request): Json<silt_proto::page::PageRequest>,
 ) -> HttpResponse {
     ask(&web, Request::PageData { thread, artifact, asked: request }).await
+}
+
+#[derive(Deserialize)]
+struct Publish {
+    html: String,
+    #[serde(default)]
+    base: Option<u32>,
+}
+
+/// A version a page saves itself as, through the `artifact` capability.
+async fn publish_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(publish): Json<Publish>,
+) -> HttpResponse {
+    ask(&web, Request::PublishArtifact { thread, artifact, html: publish.html, base: publish.base }).await
+}
+
+#[derive(Deserialize)]
+struct SampleAsk {
+    #[serde(default)]
+    ask: Option<String>,
+    input: serde_json::Value,
+}
+
+/// A page's question for this machine's agent, its answer streamed on the
+/// bus as it comes (ADR 0072).
+async fn sample(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<SampleAsk>,
+) -> HttpResponse {
+    ask(&web, Request::Sample { thread, artifact: Some(artifact), ask: asked.ask, input: asked.input }).await
+}
+
+async fn page_viewer(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::PageViewer { thread }).await
 }
 
 async fn artifact_grants(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {

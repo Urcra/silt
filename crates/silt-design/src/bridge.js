@@ -132,7 +132,49 @@ function database(ns) {
     batch: function (writes) { return ns.batch({ writes: writes }); }
   });
 }
-var clients = { db: database };
+// The rest as a page writes them, each call one message to the holding page.
+function artifactClient(ns) {
+  return Object.freeze({
+    publish: function (html) { return ns.publish({ html: String(html) }); },
+    version: function () { return ns.version().then(function (v) { return v.version; }); }
+  });
+}
+function userClient(ns) {
+  return Object.freeze({
+    id: function () { return ns.id(); },
+    me: function () { return ns.me(); },
+    isOwner: function () { return ns.isOwner(); },
+    canEdit: function () { return ns.canEdit(); },
+    can: function (name) { return ns.can({ name: String(name) }); },
+    profiles: function (ids) { return ns.profiles({ ids: Array.prototype.slice.call(ids || []) }); }
+  });
+}
+function sampleClient(ns) {
+  function sample(input, opts) {
+    opts = opts || {};
+    var ask = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var off = typeof opts.onText === 'function'
+      ? ns.on('text', function (d) {
+          if (!d || d.ask !== ask) return;
+          var before = sample.last[ask] || '';
+          sample.last[ask] = d.text;
+          try { opts.onText({ text: d.text, delta: d.text.slice(before.length) }); } catch (x) {}
+        })
+      : function () {};
+    var done = function () { off(); delete sample.last[ask]; };
+    return ns.ask({ input: input, ask: ask }).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
+  }
+  sample.last = {};
+  sample.json = function (input, opts) {
+    return sample(input, opts).then(function (answer) {
+      var text = String(answer.text).trim().replace(/^```(?:json)?\s*/, '').replace(/```$/, '').trim();
+      return JSON.parse(text);
+    });
+  };
+  sample.limits = function () { return ns.limits(); };
+  return Object.freeze(sample);
+}
+var clients = { db: database, artifact: artifactClient, user: userClient, sample: sampleClient };
 var made = {};
 window.silt = Object.freeze({
   version: '1',

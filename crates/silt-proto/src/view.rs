@@ -441,6 +441,10 @@ pub struct ArtifactView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "Record<string, Record<string, unknown>> | null"))]
     pub capabilities: Option<crate::artifact::Capabilities>,
+    /// The person this version was saved for, when the page saved itself
+    /// rather than an agent making it (ADR 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
 /// An artifact's content, as its route answers it.

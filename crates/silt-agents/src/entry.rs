@@ -55,7 +55,7 @@ pub enum Entry {
     /// News of a subagent or a background command the agent started.
     Task(Task),
     /// What the agent showed the person through Silt (ADR 0068).
-    Artifact(silt_proto::view::ArtifactView),
+    Artifact(Box<silt_proto::view::ArtifactView>),
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {
         kind: String,

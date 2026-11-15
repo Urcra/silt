@@ -5,6 +5,53 @@ use serde::{Deserialize, Serialize};
 
 /// The most edits one call takes.
 pub const MAX_EDITS: usize = 64;
+/// The largest artifact a version keeps, in bytes.
+pub const ARTIFACT_BYTES: u64 = 10 << 20;
+/// The most of a page's question to `sample`, in bytes.
+pub const SAMPLE_BYTES: usize = 256 * 1024;
+
+/// What a page's `sample` call asks, as one message to an agent's print
+/// mode: a string as it is, or a conversation ending on the person's turn,
+/// each turn marked.
+pub fn sample_question(input: &serde_json::Value) -> Result<String, String> {
+    use serde_json::Value;
+    let question = match input {
+        Value::String(text) => text.clone(),
+        Value::Array(turns) => {
+            let mut said = Vec::new();
+            for turn in turns {
+                let role = turn.get("role").and_then(Value::as_str).ok_or("each turn has a role")?;
+                let content = turn.get("content").and_then(Value::as_str).ok_or("each turn's content is text")?;
+                let tag = match role {
+                    "user" => "user",
+                    "assistant" => "assistant",
+                    _ => return Err(format!("{role} isn't a role")),
+                };
+                said.push((tag, content));
+            }
+            if said.last().is_none_or(|(role, _)| *role != "user") {
+                return Err("a conversation ends on the user's turn".into());
+            }
+            let earlier: String =
+                said[..said.len() - 1].iter().map(|(role, content)| format!("<{role}>\n{content}\n</{role}>\n")).collect();
+            let last = said[said.len() - 1].1;
+            if earlier.is_empty() {
+                last.to_owned()
+            } else {
+                format!("The conversation so far:\n{earlier}\nAnswer the user's latest message:\n{last}")
+            }
+        }
+        _ => return Err("a question is text or a list of turns".into()),
+    };
+    if question.trim().is_empty() {
+        return Err("there's nothing to ask".into());
+    }
+    if question.len() > SAMPLE_BYTES {
+        return Err(format!("a question is at most {} KiB", SAMPLE_BYTES >> 10));
+    }
+    Ok(question)
+}
+
 /// The longest note on a version, in characters.
 pub const NOTE_CHARS: usize = 200;
 /// The longest description of an artifact, in characters.
@@ -100,6 +147,24 @@ pub fn short_text(text: Option<&str>, limit: usize, what: &str) -> Result<Option
         return Err(format!("{what} is at most {limit} characters"));
     }
     Ok(Some(text.to_owned()))
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::sample_question;
+    use serde_json::json;
+
+    #[test]
+    fn a_question_is_text_or_turns_ending_on_the_users() {
+        assert_eq!(sample_question(&json!("Summarise this")).as_deref(), Ok("Summarise this"));
+        let turns = json!([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, {"role": "user", "content": "And?"}]);
+        let asked = sample_question(&turns).expect("turns");
+        assert!(asked.contains("<assistant>\nHello\n</assistant>") && asked.ends_with("And?"));
+        assert!(sample_question(&json!([{"role": "assistant", "content": "Hello"}])).is_err());
+        assert!(sample_question(&json!([{"role": "system", "content": "x"}])).is_err());
+        assert!(sample_question(&json!("  ")).is_err());
+        assert!(sample_question(&json!(3)).is_err());
+    }
 }
 
 #[cfg(test)]

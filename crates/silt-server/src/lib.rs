@@ -507,6 +507,11 @@ pub(crate) fn forbidden(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::FORBIDDEN, ErrorReply::Forbidden { message: message.into() })
 }
 
+/// A write over a version that's no longer the latest.
+pub(crate) fn conflict(message: impl Into<String>) -> ApiError {
+    ApiError(StatusCode::CONFLICT, ErrorReply::Invalid { message: message.into() })
+}
+
 pub(crate) fn not_found() -> ApiError {
     ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound)
 }

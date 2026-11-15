@@ -1078,7 +1078,7 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
     let listed = devices.iter().find(|device| device["kind"] == "phone").expect("the phone is listed");
     assert_eq!(
         listed["capabilities"],
-        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true })
+        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true, "sample": false })
     );
     let id = listed["id"].as_str().expect("an id").to_owned();
     let change = |browser: &Browser, body: serde_json::Value| {
@@ -1650,4 +1650,56 @@ async fn page_data_is_written_under_the_versions_rules_by_who_wrote_it() {
     let picks: Vec<&str> = votes.as_array().expect("docs").iter().filter_map(|doc| doc["data"]["pick"].as_str()).collect();
     assert_eq!(picks.len(), 2, "{votes}");
     assert!(picks.contains(&"soup") && picks.contains(&"pizza"), "{picks:?}");
+}
+
+/// A page saves itself as its thread's owner, over the latest version only,
+/// and not as someone who only reads the thread (ADR 0072).
+#[tokio::test]
+async fn a_page_saves_itself_only_for_the_owner_over_the_latest_version() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Planner", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"artifact": {}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let publish = format!("/threads/{THREAD}/artifacts/0123456789ab/publish");
+    let page = serde_json::json!({"html": "<!doctype html><h1>Saved</h1>", "base": 1});
+    let carol = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1, "carol").await;
+    assert_eq!(carol.post(&publish, page.clone()).await.0, StatusCode::FORBIDDEN, "carol only reads the thread");
+    let (status, viewer) = carol.get(&format!("/threads/{THREAD}/viewer")).await;
+    assert_eq!((status, &viewer["level"]), (StatusCode::OK, &"comment".into()), "{viewer}");
+    assert_eq!(viewer["id"], silt_proto::page::person_id("carol"));
+    assert_eq!(viewer["people"][silt_proto::page::person_id("alice")], "alice", "the owner's name, by id");
+
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let (status, saved) = alice.post(&publish, page.clone()).await;
+    assert_eq!((status, &saved["version"]), (StatusCode::OK, &2.into()), "{saved}");
+    assert_eq!(alice.post(&publish, page).await.0, StatusCode::CONFLICT, "version 1 is no longer the latest");
+    let (_, history) = alice.get(&format!("/threads/{THREAD}/history")).await;
+    let latest = history["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry.get("artifact"))
+        .rfind(|artifact| !artifact.is_null())
+        .cloned()
+        .expect("an artifact");
+    assert_eq!((&latest["version"], &latest["by"]), (&2.into(), &"alice".into()), "{latest}");
+    assert_eq!(latest["capabilities"], serde_json::json!({"artifact": {}}), "the declaration carries forward");
 }

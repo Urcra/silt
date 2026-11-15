@@ -20,6 +20,8 @@ use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from};
 
 /// How long the browser waits for the daemon to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a page's question waits for an agent's answer (ADR 0072).
+const SAMPLE_WAIT: Duration = Duration::from_secs(120);
 /// How long a prompt left for an offline device waits for it.
 const QUEUED_WAIT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -43,6 +45,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/mrs/{id}", get(mr_details))
         .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
         .route("/app/api/threads/{id}/files/at", get(file_at))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
 }
 
 /// A file at a version for a permalink, from one of the person's devices,
@@ -59,6 +62,29 @@ async fn file_at(
     Ok(Json(ask_any_device(&server, browser, thread, command).await?))
 }
 
+#[derive(Deserialize)]
+struct SampleAsk {
+    input: Value,
+}
+
+/// A page's question, answered by the agent of one of the person's own
+/// online computers (ADR 0072), as the server runs no agent.
+async fn sample(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<SampleAsk>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("sample")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample")));
+    }
+    let question = silt_proto::artifact::sample_question(&asked.input).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    let command = RemoteCommand::Sample { question };
+    Ok(Json(ask_device_within(&server, browser, thread, command, SAMPLE_WAIT).await?))
+}
+
 /// How long one device's view of a merge request stands in for asking
 /// again, as the hosted app fetches every few seconds.
 const MR_VIEW_FOR: Duration = Duration::from_secs(15);
@@ -66,6 +92,16 @@ const MR_VIEW_FOR: Duration = Duration::from_secs(15);
 /// Has one of the person's online devices answer `command`, trying each
 /// until one can: any that holds the family can.
 async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, command: RemoteCommand) -> Result<Value, Refused> {
+    ask_device_within(server, browser, thread, command, ANSWER_WAIT).await
+}
+
+async fn ask_device_within(
+    server: &Server,
+    browser: Browser,
+    thread: ThreadId,
+    command: RemoteCommand,
+    wait: Duration,
+) -> Result<Value, Refused> {
     if let Err(needs) = browser.capabilities.allow(&command) {
         return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
     }
@@ -81,10 +117,10 @@ async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, com
             from: None,
             capabilities: browser.capabilities,
             command: command.clone(),
-            ttl: ANSWER_WAIT,
+            ttl: wait,
         };
         let id = control::relay(server, relay).await?;
-        match control::answer_of(server, id, ANSWER_WAIT).await? {
+        match control::answer_of(server, id, wait).await? {
             Some(answer) if answer.ok => return Ok(answer.data),
             Some(answer) => last = answer.message,
             None => last = format!("{} didn't answer", device.name),
