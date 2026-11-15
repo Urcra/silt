@@ -49,3 +49,12 @@ describe('the capabilities a page is served', () => {
     expect(await broker.answer({ id: 3, cap: 'artifact', method: 'version', args: null })).toEqual({ ok: true, value: { version: 3 } })
   })
 })
+
+describe('the built-in permissions', () => {
+  it('is served to every page, declared or not', async () => {
+    const plain: ArtifactView = { ...artifact, capabilities: null }
+    const broker = new Broker({ thread: 't', artifact: plain, emit: () => undefined }, handlersFor('t', plain, holder(true)))
+    expect(await broker.answer({ id: 1, cap: 'silt', method: 'use', args: { name: 'permissions' } })).toMatchObject({ ok: true, value: { available: true } })
+    expect(await broker.answer({ id: 2, cap: 'silt', method: 'use', args: { name: 'sample' } })).toMatchObject({ ok: true, value: { available: false } })
+  })
+})

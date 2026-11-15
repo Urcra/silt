@@ -436,6 +436,11 @@ pub enum Request {
         artifact: String,
         asked: silt_proto::page::AssetRequest,
     },
+    /// Where a page's room is relayed: the server the thread syncs with, so
+    /// the room spans every machine viewing it, or none to relay it here.
+    RoomRoute {
+        thread: String,
+    },
     /// A view joins a page's room (ADR 0081); the answer is who hears what.
     RoomJoin {
         key: silt_proto::rooms::RoomKey,
@@ -508,6 +513,19 @@ pub enum Request {
     },
     /// Every artifact in the threads here, for the Artifacts page (ADR 0075).
     ArtifactListing,
+    /// An artifact's thumbnail as a JPEG, rendered the first time it's asked
+    /// for where a headless browser is installed.
+    ArtifactThumbnail {
+        thread: String,
+        artifact: String,
+    },
+    /// Keeps a thumbnail rendered off the event loop.
+    KeepThumbnail {
+        thread: String,
+        artifact: String,
+        version: u32,
+        jpeg: String,
+    },
     PinArtifact {
         thread: String,
         artifact: String,

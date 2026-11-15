@@ -184,6 +184,8 @@ export const api = {
   pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
   /** Every artifact in the threads the person can read, for the Artifacts page (ADR 0075). */
   artifacts: () => request<ArtifactListed[]>('GET', '/api/artifacts'),
+  /** An artifact's thumbnail, drawn the first time it's asked for where a headless browser is installed (ADR 0075). */
+  artifactThumbnail: (id: string, artifact: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/thumbnail`),
   pinArtifact: (id: string, artifact: string, pinned: boolean) => request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/pin`, { pinned }),
   /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
   archiveArtifact: (id: string, artifact: string, archived: boolean) =>

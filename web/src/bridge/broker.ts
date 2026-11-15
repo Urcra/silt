@@ -77,6 +77,8 @@ export class Broker {
 
   /** Whether the version declared `name` and this view serves it. */
   available(name: string): boolean {
+    // `permissions` is built in: every page may ask what it was allowed.
+    if (name === 'permissions') return name in this.handlers
     return Boolean(this.context.artifact.capabilities?.[name]) && name in this.handlers
   }
 

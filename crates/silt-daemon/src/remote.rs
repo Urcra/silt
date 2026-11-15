@@ -246,6 +246,18 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
+    /// The artifacts the person pinned on any of their machines (ADR 0075).
+    pub async fn artifact_pins(&self) -> Result<Vec<silt_proto::view::ArtifactPin>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/artifact-pins").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn pin_artifact(&self, pin: &silt_proto::view::ArtifactPin) -> Result<(), RemoteError> {
+        let response = self.request(reqwest::Method::PUT, "/v1/me/artifact-pins").json(pin).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn seen(&self) -> Result<Vec<silt_proto::MrSeen>, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/me/seen").send().await?;
         Ok(checked(response).await?.json().await?)

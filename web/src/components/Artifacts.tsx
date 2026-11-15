@@ -531,6 +531,8 @@ function ArtifactPage({
     gcTime: 0,
     refetchOnWindowFocus: false,
   })
+  // A plain `#name` in the artifact's link reaches the page, for its own views; `#artifact-…` is Silt's.
+  const [pageHash] = useState(() => (/^#[A-Za-z0-9-]{1,64}$/.test(window.location.hash) && !window.location.hash.startsWith('#artifact-') ? window.location.hash : ''))
   // Where no frame address can be had, the page is composed here as before.
   const [framed] = useState(() =>
     artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin }) : '',
@@ -627,7 +629,7 @@ function ArtifactPage({
           title={artifact.title}
           sandbox="allow-scripts"
           allow="fullscreen; clipboard-write"
-          {...(address.data ? { src: address.data.path } : address.isError ? { srcDoc: framed } : {})}
+          {...(address.data ? { src: address.data.path + pageHash } : address.isError ? { srcDoc: framed } : {})}
           referrerPolicy="no-referrer"
           style={zoomed}
           className="block border-0"

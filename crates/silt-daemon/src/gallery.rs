@@ -48,6 +48,53 @@ impl Core {
         read_capped(&self.data_dir.join(PINS), 1 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
     }
 
+    /// The listing with the pins the person's servers keep merged in, so a
+    /// pin made on another machine shows here too.
+    pub(crate) fn artifact_listing_merged(
+        &self,
+    ) -> impl Future<Output = Result<Vec<ArtifactListed>, CoreError>> + Send + 'static + use<> {
+        let rows = self.artifact_listing();
+        let remotes = self.remotes.clone();
+        async move {
+            let mut pinned = std::collections::HashSet::new();
+            for remote in remotes {
+                let asked = tokio::time::timeout(std::time::Duration::from_secs(3), remote.artifact_pins()).await;
+                if let Ok(Ok(pins)) = asked {
+                    pinned.extend(pins.into_iter().map(|pin| (pin.thread, pin.artifact)));
+                }
+            }
+            let rows = rows
+                .into_iter()
+                .map(|mut row| {
+                    row.pinned |= pinned.contains(&(row.thread.clone(), row.artifact.id.clone()));
+                    row
+                })
+                .collect();
+            Ok(artifact_listing(rows))
+        }
+    }
+
+    /// Sends a pin to the server the thread syncs with, so it follows the
+    /// person; kept here either way.
+    pub(crate) fn share_pin(
+        &self,
+        thread: &str,
+        artifact: &str,
+        pinned: bool,
+    ) -> impl Future<Output = Result<&'static str, CoreError>> + Send + 'static + use<> {
+        let remote = self.find_thread(thread).ok().and_then(|id| self.remote_for(id)).cloned();
+        let pin = silt_proto::view::ArtifactPin { thread: thread.to_owned(), artifact: artifact.to_owned(), pinned };
+        async move {
+            if let Some(remote) = remote {
+                remote
+                    .pin_artifact(&pin)
+                    .await
+                    .map_err(|error| CoreError::Invalid(format!("kept here, not on the server: {error}")))?;
+            }
+            Ok("saved")
+        }
+    }
+
     /// Pins an artifact to the top of the page for this machine's person, or unpins it.
     pub(crate) fn pin_artifact(&self, thread: &str, artifact: &str, pinned: bool) -> Result<(), CoreError> {
         let thread = self.find_thread(thread)?;

@@ -383,7 +383,7 @@ impl Core {
     }
 
     /// The session whose record line names the artifact's latest version.
-    fn artifact_session(&self, thread: ThreadId, id: &str) -> Option<SessionRef> {
+    pub(crate) fn artifact_session(&self, thread: ThreadId, id: &str) -> Option<SessionRef> {
         let family = self.threads.get(&thread)?.family;
         let needle = format!("\"id\":\"{id}\"");
         self.local_log(family).iter().rev().find_map(|delta| match &delta.op {

@@ -659,9 +659,48 @@ impl Core {
                 to_response(self.publish_artifact(&thread, &artifact, html, base).await)
             }
             Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
-            Request::ArtifactListing => Response::ok(self.artifact_listing()),
+            Request::ArtifactListing => return answer_later(reply, Ok(self.artifact_listing_merged())),
+            Request::ArtifactThumbnail { thread, artifact } => {
+                let kept = self.kept_thumbnail(&thread, &artifact).await;
+                let source = self.thumbnail_source(&thread, &artifact).await;
+                let events = self.events.clone();
+                let dir = self.data_dir.join("thumbnails").join(&artifact);
+                return answer_later(
+                    reply,
+                    Ok(async move {
+                        if let Some(jpeg) = kept? {
+                            return Ok(serde_json::json!({ "media_type": "image/jpeg", "data": jpeg }));
+                        }
+                        let Some((page, style, version)) = source? else {
+                            return Err(CoreError::Invalid("only an HTML version has a thumbnail".into()));
+                        };
+                        let jpeg = tokio::task::spawn_blocking(move || crate::thumbnails::render(&page, style.as_deref(), &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| CoreError::Invalid("no headless browser here to draw one".into()))?;
+                        use base64::Engine as _;
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                        let (kept, _) = tokio::sync::oneshot::channel();
+                        let keep = Request::KeepThumbnail { thread, artifact, version, jpeg: encoded.clone() };
+                        let _ = events.send(Event::Request(keep, kept));
+                        Ok(serde_json::json!({ "media_type": "image/jpeg", "data": encoded }))
+                    }),
+                );
+            }
+            Request::KeepThumbnail { thread, artifact, version, jpeg } => {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(jpeg) {
+                    Ok(bytes) => to_response(self.keep_thumbnail(&thread, &artifact, version, bytes).await.map(|()| "kept")),
+                    Err(_) => Response::error("not base64"),
+                }
+            }
             Request::PinArtifact { thread, artifact, pinned } => {
-                to_response(self.pin_artifact(&thread, &artifact, pinned).map(|()| "saved"))
+                let full = self.find_thread(&thread).map(|id| id.to_string());
+                return answer_later(
+                    reply,
+                    self.pin_artifact(&thread, &artifact, pinned).and(full).map(|full| self.share_pin(&full, &artifact, pinned)),
+                );
             }
             Request::ArchiveArtifact { thread, artifact, archived } => {
                 to_response(self.archive_artifact(&thread, &artifact, archived).await.map(|()| "saved"))
@@ -670,6 +709,12 @@ impl Core {
             Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
             Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
             Request::RoomAgent { .. } => Response::error("only an agent's run speaks in a room, with its token"),
+            Request::RoomRoute { thread } => Response::ok(
+                self.find_thread(&thread)
+                    .ok()
+                    .and_then(|thread| self.remote_for(thread))
+                    .map(|remote| serde_json::json!({ "url": remote.config.url, "token": remote.config.token })),
+            ),
             Request::RoomJoin { key, peer } => to_response(self.room_join(key, peer, false)),
             Request::RoomSend { key, peer, sent } => Response::ok(self.room_send(&key, &peer, sent)),
             Request::RoomLeave { key, peer } => Response::ok(self.room_leave(&key, &peer)),

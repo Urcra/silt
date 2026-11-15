@@ -23,7 +23,7 @@ pub mod view;
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
 /// through each server they use (ADR 0071). 13: an artifact's page data
 /// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077).
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

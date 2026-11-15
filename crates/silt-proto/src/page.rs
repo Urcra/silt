@@ -17,6 +17,9 @@ pub enum Level {
     /// The owner and the thread's collaborators.
     Collaborator,
     Owner,
+    /// A level nobody holds, written `self`: on a prefix whose `{self}` rule
+    /// lets each person write their own, nobody else may, the owner included.
+    Nobody,
 }
 
 impl Level {
@@ -26,6 +29,7 @@ impl Level {
             "comment" => Some(Self::Comment),
             "collaborator" => Some(Self::Collaborator),
             "owner" => Some(Self::Owner),
+            "self" => Some(Self::Nobody),
             _ => None,
         }
     }
@@ -91,13 +95,20 @@ impl Rules {
     }
 
     pub fn may_read(&self, path: &str, me: &str, level: Level) -> bool {
-        level >= self.needs(path, me).0
+        private_to(path).is_none_or(|owner| owner == me) && level >= self.needs(path, me).0
     }
 
     pub fn may_write(&self, path: &str, me: &str, level: Level) -> bool {
         // `_assets` holds what people add to the page, written through its own routes.
-        !path.starts_with("_") && level >= self.needs(path, me).1
+        !path.starts_with("_") && private_to(path).is_none_or(|owner| owner == me) && level >= self.needs(path, me).1
     }
+}
+
+/// Whose a path under `data/users/<id>/` is: that person's alone, whatever
+/// the rules or anyone's level, the owner's included.
+fn private_to(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("data/users/")?;
+    Some(rest.split('/').next().unwrap_or(rest))
 }
 
 fn valid_pattern(segment: &str) -> bool {
@@ -225,6 +236,22 @@ mod tests {
         assert!(rules.may_read("votes/bob", "ann", Level::Read));
         assert!(Rules::of(Some(&json!({"rules": [{"path": "a/../b"}]}))).is_err());
         assert!(Rules::of(Some(&json!({"rules": [{"path": "a", "write": "everyone"}]}))).is_err());
+    }
+
+    #[test]
+    fn a_self_level_holds_for_nobody_and_a_persons_own_paths_are_theirs_alone() {
+        let config = json!({"rules": [
+            {"path": "signoffs", "read": "read", "write": "self"},
+            {"path": "signoffs/{self}", "read": "read", "write": "comment"}
+        ]});
+        let rules = Rules::of(Some(&config)).expect("rules");
+        assert!(rules.may_write("signoffs/ann", "ann", Level::Comment), "her own");
+        assert!(!rules.may_write("signoffs/ann", "bob", Level::Owner), "not even the owner");
+        assert!(rules.may_read("signoffs/ann", "bob", Level::Read));
+        let open = Rules::of(None).expect("none");
+        assert!(open.may_write("data/users/ann/notes/n1", "ann", Level::Comment));
+        assert!(!open.may_read("data/users/ann/notes/n1", "bob", Level::Owner), "private even from the owner");
+        assert!(!open.may_write("data/users/ann", "bob", Level::Owner));
     }
 
     #[test]

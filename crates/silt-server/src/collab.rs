@@ -238,6 +238,12 @@ fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &
     {
         return if level == Level::Owner { Ok(()) } else { Err(refused("archive")) };
     }
+    // A thumbnail is drawn by the machine of someone who may change the artifact.
+    if let PageOp::Set { path, .. } = op
+        && path == "_meta/thumbnail"
+    {
+        return if level >= Level::Collaborator { Ok(()) } else { Err(refused("draw a thumbnail of")) };
+    }
     let declared = ledger.pages.get(&(thread, artifact)).cloned().flatten();
     let Some(declared) = declared else {
         return Err(refused("write"));

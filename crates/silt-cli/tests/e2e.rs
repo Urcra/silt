@@ -1659,6 +1659,16 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     let row = listed.as_array().and_then(|rows| rows.iter().find(|row| row["artifact"]["id"] == id)).cloned().expect("listed");
     assert_eq!((&row["pinned"], &row["archived"]), (&true.into(), &true.into()), "{row}");
     api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/archive"), Some(serde_json::json!({"archived": false})));
+    // Its thumbnail is drawn the first time it's asked for, where a headless
+    // browser is installed, and kept in the page data for the next time.
+    let (drawn, thumbnail) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{id}/thumbnail"), None);
+    if drawn {
+        assert_eq!(thumbnail["media_type"], "image/jpeg");
+        let again = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{id}/thumbnail"), None);
+        assert_eq!(again["data"], thumbnail["data"], "kept, not drawn again");
+    } else {
+        assert!(thumbnail.to_string().contains("headless"), "{thumbnail}");
+    }
     let listed = api.ok("GET", "/api/artifacts", None);
     assert!(listed.as_array().is_some_and(|rows| rows.iter().any(|row| row["artifact"]["id"] == id && row["archived"] == false)));
 

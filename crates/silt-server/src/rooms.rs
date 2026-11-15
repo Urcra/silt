@@ -39,7 +39,18 @@ pub(crate) fn routes() -> Router<Server> {
 }
 
 async fn socket(State(server): State<Server>, Extension(browser): Extension<Browser>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, browser))
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, browser.user))
+}
+
+/// A view on one of the person's machines, whose daemon relays it here, so
+/// a room spans every machine viewing the page (ADR 0081).
+pub(crate) async fn device_socket(
+    State(server): State<Server>,
+    Extension(caller): Extension<crate::Caller>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let user = caller.user;
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, user))
 }
 
 #[derive(Deserialize)]
@@ -50,7 +61,7 @@ struct Join {
     name: String,
 }
 
-async fn serve(mut socket: WebSocket, server: Server, browser: Browser) {
+async fn serve(mut socket: WebSocket, server: Server, user: crate::UserId) {
     let Some(Ok(Message::Text(first))) = socket.recv().await else { return };
     let Ok(join) = serde_json::from_str::<Join>(&first) else { return };
     let refuse = |reason: &str| Message::Text(json!({"event": "refused", "reason": reason}).to_string().into());
@@ -58,7 +69,7 @@ async fn serve(mut socket: WebSocket, server: Server, browser: Browser) {
         let _ = socket.send(refuse("not an artifact")).await;
         return;
     };
-    let Ok(page) = crate::browse::page_of(&server, browser.user, &join.thread, artifact).await else {
+    let Ok(page) = crate::browse::page_of(&server, user, &join.thread, artifact).await else {
         let _ = socket.send(refuse("not_found")).await;
         return;
     };

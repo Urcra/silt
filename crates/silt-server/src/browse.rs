@@ -47,6 +47,7 @@ pub(crate) fn routes() -> Router<Server> {
         )
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/artifacts", get(artifact_listing))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/thumbnail", get(artifact_thumbnail))
         .route("/app/api/threads/{id}/artifacts/{artifact}/doc", post(doc_data))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
@@ -844,6 +845,85 @@ async fn artifact_listing(
     Ok(Json(artifact_listing(rows)))
 }
 
+/// The thumbnail a person's machine drew of an artifact's latest version
+/// (ADR 0075); none until one has.
+async fn artifact_thumbnail(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+) -> Result<Json<ArtifactContent>, ApiError> {
+    use base64::Engine as _;
+    let latest = readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    let artifact_id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact_id).await?;
+    let doc = page
+        .docs
+        .get("_meta/thumbnail")
+        .filter(|doc| doc["version"].as_u64() == Some(u64::from(latest.version)))
+        .ok_or_else(not_found)?;
+    let blob: silt_types::BlobHash = doc["blob"].as_str().and_then(|blob| blob.parse().ok()).ok_or_else(not_found)?;
+    let bytes = server.shared.blobs.get(blob).await.map_err(|_| not_found())?;
+    Ok(Json(ArtifactContent { media_type: "image/jpeg".into(), data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
+}
+
+/// The artifacts the person pinned, for their machines (ADR 0075).
+pub(crate) async fn device_pins(
+    State(server): State<Server>,
+    Extension(caller): Extension<crate::Caller>,
+) -> Result<Json<Vec<silt_proto::view::ArtifactPin>>, ApiError> {
+    let user = caller.user;
+    let rows =
+        sqlx::query!("SELECT thread_id, artifact_id FROM artifact_pins WHERE user_id = ?", user).fetch_all(server.db()).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| silt_proto::view::ArtifactPin {
+                thread: silt_types::ThreadId(crate::id_from(&row.thread_id)).to_string(),
+                artifact: row.artifact_id,
+                pinned: true,
+            })
+            .collect(),
+    ))
+}
+
+/// A pin or unpin made on one of the person's machines.
+pub(crate) async fn device_pin(
+    State(server): State<Server>,
+    Extension(caller): Extension<crate::Caller>,
+    Json(pin): Json<silt_proto::view::ArtifactPin>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    store_pin(&server, caller.user, &pin.thread, &pin.artifact, pin.pinned).await
+}
+
+async fn store_pin(
+    server: &Server,
+    user: UserId,
+    id: &str,
+    artifact: &str,
+    pinned: bool,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let _: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let viewer = server.viewer(user).await?;
+    let readable = Readable::rows(server, user, &viewer).await?;
+    let thread = crate::id_bytes(readable.row(id)?.id.0);
+    if pinned {
+        let now = crate::now_ms();
+        sqlx::query!(
+            "INSERT OR REPLACE INTO artifact_pins (user_id, thread_id, artifact_id, at_ms) VALUES (?, ?, ?, ?)",
+            user,
+            thread,
+            artifact,
+            now
+        )
+        .execute(server.db())
+        .await?;
+    } else {
+        sqlx::query!("DELETE FROM artifact_pins WHERE user_id = ? AND thread_id = ? AND artifact_id = ?", user, thread, artifact)
+            .execute(server.db())
+            .await?;
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 struct Pinned {
     pinned: bool,
@@ -856,32 +936,7 @@ async fn pin_artifact(
     Path((id, artifact)): Path<(String, String)>,
     Json(pin): Json<Pinned>,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    let _: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
-    let viewer = server.viewer(browser.user).await?;
-    let readable = Readable::rows(&server, browser.user, &viewer).await?;
-    let thread = crate::id_bytes(readable.row(&id)?.id.0);
-    if pin.pinned {
-        let now = crate::now_ms();
-        sqlx::query!(
-            "INSERT OR REPLACE INTO artifact_pins (user_id, thread_id, artifact_id, at_ms) VALUES (?, ?, ?, ?)",
-            browser.user,
-            thread,
-            artifact,
-            now
-        )
-        .execute(server.db())
-        .await?;
-    } else {
-        sqlx::query!(
-            "DELETE FROM artifact_pins WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
-            browser.user,
-            thread,
-            artifact
-        )
-        .execute(server.db())
-        .await?;
-    }
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    store_pin(&server, browser.user, &id, &artifact, pin.pinned).await
 }
 
 #[derive(Deserialize)]

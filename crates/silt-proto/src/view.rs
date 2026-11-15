@@ -484,6 +484,16 @@ pub struct ArtifactListed {
     pub archived: bool,
 }
 
+/// An artifact the person pinned, kept by their server so it follows
+/// them between machines (ADR 0075).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArtifactPin {
+    pub thread: String,
+    pub artifact: String,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
 /// The listing as the page shows it: one row per artifact, a fork's copy
 /// left out unless it made a version of its own, pinned ones first, then
 /// the most recently changed.

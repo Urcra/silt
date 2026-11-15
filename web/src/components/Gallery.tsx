@@ -86,9 +86,7 @@ export function Gallery() {
             {shown.map((row) => (
               <li key={`${row.thread}/${row.artifact.id}`} className="relative flex flex-col rounded-md border border-line bg-elevated hover:border-line-strong" data-testid="gallery-card">
                 <Link to={artifactPath(row.thread, row.artifact.id)} className="flex min-w-0 flex-1 flex-col gap-2 p-3">
-                  <span className="flex h-24 items-center justify-center rounded-sm bg-surface-1 text-fg-2">
-                    <KindIcon kind={row.artifact.kind} className="h-7 w-7" />
-                  </span>
+                  <Thumbnail row={row} />
                   <span className="truncate font-medium text-fg-1">{row.artifact.title}</span>
                   {row.artifact.description && <span className="line-clamp-2 text-xs text-fg-2">{row.artifact.description}</span>}
                   <span className="mt-auto flex min-w-0 items-center gap-1.5 font-mono text-2xs text-fg-3">
@@ -117,5 +115,29 @@ export function Gallery() {
         </p>
       </div>
     </Page>
+  )
+}
+
+/** A version's thumbnail where one has been drawn, else its kind's icon; an image shows itself. */
+function Thumbnail({ row }: { row: ArtifactListed }) {
+  const drawn = useQuery({
+    queryKey: ['artifact-thumbnail', row.thread, row.artifact.id, row.artifact.version],
+    queryFn: () =>
+      row.artifact.kind === 'image' || row.artifact.kind === 'svg' ? api.artifact(row.thread, row.artifact.blob) : api.artifactThumbnail(row.thread, row.artifact.id),
+    enabled: ['html', 'image', 'svg'].includes(row.artifact.kind),
+    staleTime: Infinity,
+    retry: false,
+  })
+  const box = 'flex h-24 items-center justify-center overflow-hidden rounded-sm bg-surface-1 text-fg-2'
+  if (drawn.data)
+    return (
+      <span className={box}>
+        <img src={`data:${drawn.data.media_type};base64,${drawn.data.data}`} alt="" className="h-full w-full object-cover object-top" data-testid="gallery-thumbnail" />
+      </span>
+    )
+  return (
+    <span className={box}>
+      <KindIcon kind={row.artifact.kind} className="h-7 w-7" />
+    </span>
   )
 }

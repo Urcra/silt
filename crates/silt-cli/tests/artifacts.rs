@@ -265,3 +265,93 @@ fn a_polls_votes_from_two_people_both_count_and_a_fork_inherits_them() {
     let changed = alice.web("POST", &fork_data, Some(serde_json::json!({"op": "get", "path": format!("votes/{ann}")})));
     assert_eq!(changed["data"]["pick"], "tacos");
 }
+
+type RoomSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// What a room's socket hears, up to its first moment or ten quiet seconds.
+async fn heard(socket: &mut RoomSocket) -> Vec<serde_json::Value> {
+    use futures_util::StreamExt as _;
+    let mut seen = Vec::new();
+    loop {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next()).await;
+        let Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) = next else { return seen };
+        let event: serde_json::Value = serde_json::from_str(&text).expect("json");
+        let moment = event["event"] == "moment";
+        seen.push(event);
+        if moment {
+            return seen;
+        }
+    }
+}
+
+/// A page's room spans machines (ADR 0081): each daemon relays its views'
+/// room to the server the thread syncs with, so a moment Alice's view emits
+/// reaches Bob's view on his own machine.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rooms_moments_reach_a_view_on_another_machine() {
+    use futures_util::SinkExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+    let root = common::temp_root("silt-rooms");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let alice = Machine::new_for(root.path(), "alice", "alice", &origin, &server);
+    let bob = Machine::new_for(root.path(), "bob", "bob", &origin, &server);
+    let fake = alice.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(alice.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = alice.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": alice.repo, "agent": "v1", "prompt": "Artifact board"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let mut shown = Vec::new();
+    assert!(eventually(|| {
+        shown = artifacts(&bob, &thread);
+        shown.len() == 1
+    }));
+    let id = shown[0]["id"].as_str().expect("id").to_owned();
+
+    let join = |machine: &Machine| {
+        let url = machine.stdout(&["open", "--no-browser"]);
+        let (base, token) = common::web_ui(&url);
+        let address = format!("{}/api/rooms?token={token}", base.trim_end_matches('/').replacen("http", "ws", 1));
+        let join = serde_json::json!({"thread": thread, "artifact": id}).to_string();
+        async move {
+            let (mut socket, _) = tokio_tungstenite::connect_async(address).await.expect("connects");
+            socket.send(Message::Text(join.into())).await.expect("joins");
+            socket
+        }
+    };
+    let mut theirs = join(&bob).await;
+    let mut mine = join(&alice).await;
+    // Alice owns the thread, so she may emit to any topic.
+    mine.send(Message::Text(r#"{"op": "emit", "topic": "move", "data": {"x": 7}}"#.into())).await.expect("emits");
+    let seen = heard(&mut theirs).await;
+    let moment = seen.iter().find(|event| event["event"] == "moment").unwrap_or_else(|| panic!("bob hears it: {seen:?}"));
+    assert_eq!((&moment["topic"], &moment["data"]["x"]), (&"move".into(), &7.into()));
+    drop(mine);
+    drop(theirs);
+}
+
+/// A pin follows the person between their machines through their server
+/// (ADR 0075).
+#[test]
+fn a_pin_made_on_one_machine_shows_on_another() {
+    let world = world();
+    let (laptop, home) = (&world.laptop, &world.home);
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "Artifact"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    assert!(eventually(|| artifacts(home, &thread).len() == 1), "the other machine pulls it");
+    let id = artifacts(laptop, &thread)[0]["id"].as_str().expect("id").to_owned();
+    laptop.web("PUT", &format!("/api/threads/{thread}/artifacts/{id}/pin"), Some(serde_json::json!({"pinned": true})));
+    let pinned_on = |machine: &Machine| {
+        let listed = machine.web("GET", "/api/artifacts", None);
+        listed.as_array().is_some_and(|rows| rows.iter().any(|row| row["artifact"]["id"] == id.as_str() && row["pinned"] == true))
+    };
+    assert!(eventually(|| pinned_on(home)), "pinned on the other machine too");
+}

@@ -143,6 +143,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         )
         .route("/api/threads/{id}/viewer", get(page_viewer))
         .route("/api/artifacts", get(artifact_listing))
+        .route("/api/threads/{id}/artifacts/{artifact}/thumbnail", get(artifact_thumbnail))
         .route("/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
         .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
@@ -402,6 +403,14 @@ fn deliver(web: &Web, deliveries: &serde_json::Value) {
 async fn serve_room(mut socket: WebSocket, web: Web) {
     let Some(Ok(Message::Text(first))) = socket.recv().await else { return };
     let Ok(join) = serde_json::from_str::<Join>(&first) else { return };
+    // A thread that syncs with a server has its room there, spanning every
+    // machine viewing the page and the hosted app.
+    if let Ok(route) = answer(&web, Request::RoomRoute { thread: join.thread.clone() }).await
+        && let (Some(url), Some(token)) = (route["url"].as_str(), route["token"].as_str())
+    {
+        relay_room(socket, url, token, first.to_string()).await;
+        return;
+    }
     let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
     let peer = uuid::Uuid::new_v4().simple().to_string();
     let (sender, mut heard) = mpsc::unbounded_channel();
@@ -451,6 +460,50 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     if let Ok(deliveries) = answer(&web, Request::RoomLeave { key, peer }).await {
         deliver(&web, &deliveries);
     }
+}
+
+/// Relays one view's room to its server's `/v1/rooms`, as this device,
+/// both ways until either side closes.
+async fn relay_room(mut socket: WebSocket, server: &str, token: &str, join: String) {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest as _};
+    let refuse = |reason: &str| Message::Text(json!({"event": "refused", "reason": reason}).to_string().into());
+    let address = format!("{}/v1/rooms", server.trim_end_matches('/').replacen("http", "ws", 1));
+    let Ok(mut request) = address.into_client_request() else {
+        let _ = socket.send(refuse("unavailable")).await;
+        return;
+    };
+    let headers = request.headers_mut();
+    if let (Ok(auth), Ok(version)) = (format!("Bearer {token}").parse(), silt_proto::PROTOCOL.to_string().parse()) {
+        headers.insert("authorization", auth);
+        headers.insert(silt_proto::PROTOCOL_HEADER, version);
+    }
+    let Ok((mut upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+        let _ = socket.send(refuse("unavailable: the server can't be reached")).await;
+        return;
+    };
+    if upstream.send(tungstenite::Message::Text(join.into())).await.is_err() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if upstream.send(tungstenite::Message::Text(text.to_string().into())).await.is_err() { break }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            heard = upstream.next() => match heard {
+                Some(Ok(tungstenite::Message::Text(text))) => {
+                    if socket.send(Message::Text(text.to_string().into())).await.is_err() { break }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+        }
+    }
+    let _ = upstream.close(None).await;
 }
 
 /// Sends the socket the events of the topics it subscribed to, until it
@@ -877,6 +930,10 @@ async fn page_files(
 /// Every artifact in the threads here, for the Artifacts page (ADR 0075).
 async fn artifact_listing(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::ArtifactListing).await
+}
+
+async fn artifact_thumbnail(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactThumbnail { thread, artifact }).await
 }
 
 #[derive(Deserialize)]

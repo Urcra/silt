@@ -269,13 +269,24 @@ export function CanvasView({
     );
     setView({ x: 40, y: 60, scale: Math.max(scale, 0.05) });
   };
-  // A new canvas opens with every board in view.
-  useEffect(fit, [extent]);
+  // A new canvas opens with every board in view, and fits again as its panel resizes, until someone moves it.
+  const moved = useRef(false)
+  useEffect(fit, [extent])
+  useEffect(() => {
+    const element = box.current
+    if (!element) return
+    const observer = new ResizeObserver(() => {
+      if (!moved.current) fit()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  });
   useEffect(() => {
     const element = box.current;
     if (!element) return;
     const wheel = (event: WheelEvent) => {
-      event.preventDefault();
+      event.preventDefault()
+      moved.current = true;
       const rect = element.getBoundingClientRect();
       const [px, py] = [event.clientX - rect.left, event.clientY - rect.top];
       setView((was) => {
@@ -301,6 +312,7 @@ export function CanvasView({
     );
   const down = (event: ReactPointerEvent) => {
     if ((event.target as HTMLElement).closest("[data-board-label]")) return;
+    moved.current = true
     drag.current = { x: event.clientX, y: event.clientY, from: view };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   };

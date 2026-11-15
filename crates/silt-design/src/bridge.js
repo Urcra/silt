@@ -146,7 +146,8 @@ function userClient(ns) {
     isOwner: function () { return ns.isOwner(); },
     canEdit: function () { return ns.canEdit(); },
     can: function (name) { return ns.can({ name: String(name) }); },
-    profiles: function (ids) { return ns.profiles({ ids: Array.prototype.slice.call(ids || []) }); }
+    profiles: function (ids) { return ns.profiles({ ids: Array.prototype.slice.call(ids || []) }); },
+    search: function (query) { return ns.search({ query: String(query || '') }); }
   });
 }
 function sampleClient(ns) {
@@ -257,7 +258,14 @@ function roomClient(ns) {
 }
 var clients = {
   db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient,
-  dictation: dictationClient, tts: ttsClient, mcp: mcpClient, room: roomClient
+  dictation: dictationClient, tts: ttsClient, mcp: mcpClient, room: roomClient,
+  permissions: function (ns) {
+    return Object.freeze({
+      state: function (name) { return ns.state({ name: name }); },
+      request: function (names) { return ns.request({ names: names === undefined ? undefined : [].concat(names) }); },
+      manage: function () { return ns.manage(); }
+    });
+  }
 };
 var made = {};
 window.silt = Object.freeze({

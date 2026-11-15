@@ -31,6 +31,47 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     ...(ttsServed() ? { tts: ttsHandler() } : {}),
     mcp: mcpHandler(thread, artifact, holder),
     room: roomHandler(thread, artifact),
+    permissions: permissionsHandler(thread, artifact, holder),
+  }
+}
+
+/** The capabilities that ask the viewer before they act, which `permissions` reports on. */
+const ASKED = ['sample', 'dictation', 'mcp']
+
+/** `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. */
+function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]))
+  const states = async () => {
+    const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
+    return Object.fromEntries(declared().map((name) => [name, grants[name] === 'granted' ? 'granted' : grants[name] === 'refused' ? 'denied' : 'prompt']))
+  }
+  // A refusal holds for the page's load: asking again shows nothing until it opens anew.
+  const asked = new Set<string>()
+  return {
+    methods: ['state', 'request', 'manage'],
+    perMinute: 20,
+    call: async (method, args) => {
+      const given = (args ?? {}) as { name?: unknown; names?: unknown }
+      if (method === 'state') {
+        const all = await states()
+        return typeof given.name === 'string' ? (all[given.name] ?? 'unavailable') : all
+      }
+      if (method === 'request') {
+        const wanted = Array.isArray(given.names) ? given.names.map(String) : declared()
+        const all = await states()
+        const pending = wanted.filter((name) => all[name] === 'prompt' && !asked.has(name))
+        if (pending.length > 0) {
+          pending.forEach((name) => asked.add(name))
+          const agreed = await holder.confirm({ title: `Let ${artifact.title} use ${pending.join(', ')}?`, detail: 'You can change this later from the page.', action: 'Allow' })
+          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused').catch(() => undefined)
+        }
+        const now = await states()
+        return Object.fromEntries(wanted.map((name) => [name, now[name] ?? 'unavailable']))
+      }
+      const forget = await holder.confirm({ title: `Forget what you allowed ${artifact.title}?`, detail: 'It asks again the next time it needs something.', action: 'Forget' })
+      if (forget) for (const name of declared()) await api.setArtifactGrant(thread, artifact.id, name, null).catch(() => undefined)
+      return null
+    },
   }
 }
 
@@ -178,7 +219,7 @@ function userHandler(thread: string): CapabilityHandler {
   let viewer: Promise<PageViewer> | null = null
   const known = () => (viewer ??= api.pageViewer(thread))
   return {
-    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles'],
+    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles', 'search'],
     call: async (method, args) => {
       const me = await known()
       const name = (id: string) => me.people[id] ?? ''
@@ -196,6 +237,14 @@ function userHandler(thread: string): CapabilityHandler {
           if (what === 'data.write') return me.level !== 'read'
           if (what === 'artifact.publish') return me.level === 'owner' || me.level === 'collaborator'
           return null
+        }
+        case 'search': {
+          // The thread's people whose names start a word with what was typed; everyone when it's empty.
+          const typed = String((args as { query?: unknown } | null)?.query ?? '').trim().toLowerCase()
+          return Object.entries(me.people)
+            .filter(([, person]) => !typed || person.toLowerCase().split(/[\s._-]+/).some((word) => word.startsWith(typed)))
+            .slice(0, 20)
+            .map(([id, person]) => ({ id, name: person }))
         }
         default: {
           const ids = (args as { ids?: unknown } | null)?.ids
