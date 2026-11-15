@@ -416,10 +416,15 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     response
 }
 
-/// What an artifact's content may do when served: run its own inline
-/// scripts and styles in a sandbox, show what it carries inline, and reach
-/// nothing, as in the web UI.
-const ARTIFACT_CSP: &str = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:";
+/// What an artifact's content may do when served, as in the web UI: run its
+/// own inline scripts and styles in a sandbox, load scripts from a few CDNs
+/// and fonts from Google Fonts, and connect to nothing (ADR 0070).
+const ARTIFACT_CSP: &str = concat!(
+    "sandbox allow-scripts; default-src 'none'; ",
+    "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com; ",
+    "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; ",
+    "img-src data: blob:; media-src data: blob:",
+);
 
 /// The conversation as plain text with turn markers; a fork's note says so.
 fn render(log: &[Delta], thread: ThreadId, owner: &str, frozen_at: Option<i64>) -> String {

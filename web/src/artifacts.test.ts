@@ -41,12 +41,24 @@ describe('artifacts', () => {
     expect(shownImagesOf(entries).map((image) => image.artifact.id)).toEqual(['cccccccccccc'])
   })
 
-  it('loads an HTML artifact under a policy that reaches nothing, its doctype first', () => {
+  it('loads an HTML artifact under a policy that allows only the CDN allowlist and connects nowhere, its doctype first', () => {
     const page = sandboxedDocument('<!DOCTYPE html><html><body><script src="https://evil.example/x.js"></script></body></html>')
     expect(page.startsWith('<!DOCTYPE html><meta http-equiv="Content-Security-Policy"')).toBe(true)
     expect(page).toContain(ARTIFACT_CSP)
-    expect(ARTIFACT_CSP).toContain("default-src 'none'")
-    expect(ARTIFACT_CSP).not.toMatch(/https?:/)
+    const directives = Object.fromEntries(ARTIFACT_CSP.split('; ').map((part) => [part.split(' ')[0], part.split(' ').slice(1)]))
+    expect(directives['default-src']).toEqual(["'none'"])
+    expect(directives['connect-src']).toBeUndefined()
+    expect(directives['script-src']).toEqual([
+      "'unsafe-inline'",
+      'https://cdnjs.cloudflare.com',
+      'https://cdn.jsdelivr.net/npm/',
+      'https://unpkg.com',
+      'https://cdn.tailwindcss.com',
+      'https://code.jquery.com',
+    ])
+    expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com'])
+    expect(directives['font-src']).toEqual(['data:', 'https://fonts.gstatic.com'])
+    expect(directives['img-src']).toEqual(['data:', 'blob:'])
     expect(sandboxedDocument('<p>hi</p>', false)).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
   })
 

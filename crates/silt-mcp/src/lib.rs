@@ -84,7 +84,7 @@ fn show_tools() -> [Value; 2] {
         }),
         json!({
             "name": "silt_artifact",
-            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed with no network, so inline its scripts, styles and images.",
+            "description": "Give the person a page, chart, diagram or document that opens beside the conversation, versioned. Without id it makes a new artifact and returns its id; with the id of one you made, it adds a version. HTML runs sandboxed: scripts load only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com and code.jquery.com, pinned to an exact version, and stylesheets only from Google Fonts; nothing else loads and nothing connects, so inline other styles, images and data.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

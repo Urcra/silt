@@ -1536,7 +1536,7 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     );
     assert_eq!(first[0]["inline"], false);
     let text = artifact_text(&api, &thread, &first[0]);
-    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && !text.contains(secret), "kept redacted: {text}");
+    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && text.contains(secret), "kept as written (ADR 0070): {text}");
     let (served, _) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{}", "ab".repeat(32)), None);
     assert!(!served, "a blob no artifact of the thread names isn't served");
 

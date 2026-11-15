@@ -56,13 +56,17 @@ fn a_wrapper_told_to_stop_ends_the_agent_and_its_session() {
 fn recorded(world: &World, agent: &str, said: &str) -> String {
     world.laptop.silt(&[agent]);
     let thread = thread_of(&world.laptop);
-    let show = world.laptop.stdout(&["show", &thread]);
-    assert!(show.contains("> Please add a farewell line to main"), "{show}");
-    assert!(show.contains(said), "{show}");
     // OpenCode's store is read after the fact, so its edits are only known
     // to be the agent's, not which tool call's.
     let credited = if agent == "opencode" { "src/main.rs +17" } else { "    ✎ src/main.rs" };
-    assert!(show.contains(credited), "the edit is credited to the agent: {show}");
+    // Under load the edit can be credited a moment after the prompt shows.
+    let mut show = String::new();
+    let complete = eventually(|| {
+        show = world.laptop.stdout(&["show", &thread]);
+        show.contains(said) && show.contains(credited)
+    });
+    assert!(show.contains("> Please add a farewell line to main"), "{show}");
+    assert!(complete, "the reply and the edit, credited to the agent: {show}");
     assert!(eventually(|| world.home.try_stdout(&["show", &thread]).contains(said)), "the home machine gets the thread");
     assert!(world.root.path().exists() && world.server.data.exists());
     thread

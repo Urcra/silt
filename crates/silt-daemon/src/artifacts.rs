@@ -159,14 +159,8 @@ impl Core {
             None => (new_id(), 1),
         };
 
-        let bytes = match std::str::from_utf8(&bytes) {
-            Ok(text) => {
-                let (redacted, found) = self.redactor.replace_found(text);
-                self.learn_secrets(found);
-                redacted.into_bytes()
-            }
-            Err(_) => bytes,
-        };
+        // Not redacted: a data: URI or an SRI hash reads as a secret, and
+        // redacting it breaks the page (ADR 0070).
         let size = bytes.len() as u64;
         let blob = self.store.blobs().put(&bytes).await?;
         let family = self.threads[&thread].family;

@@ -42,9 +42,15 @@ export function kindLabel(kind: string): string {
   return KINDS[kind] ?? kind
 }
 
-/** What an artifact's page may do: run its own inline scripts and styles, show what it carries inline, and reach nothing. */
+/**
+ * What an artifact's page may do: run its own inline scripts and styles, load scripts from a few CDNs and fonts from
+ * Google Fonts, show what it carries inline, and connect to nothing (ADR 0070).
+ */
 export const ARTIFACT_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:"
+  "default-src 'none'; " +
+  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com; " +
+  "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; " +
+  'img-src data: blob:; media-src data: blob:'
 
 /** Tells the page holding the frame what text is selected in it, for a comment to quote. */
 const SELECTION_SCRIPT =
