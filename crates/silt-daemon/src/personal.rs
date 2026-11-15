@@ -270,7 +270,9 @@ impl Core {
             })
             .collect();
         let events = self.events.clone();
+        let design = (self.data_dir.clone(), self.remotes.clone());
         tokio::spawn(async move {
+            crate::design_sync::sync(design.0, design.1, now_ms()).await;
             let mut synced = Synced {
                 sent: Vec::new(),
                 fetched: Ok(Vec::new()),

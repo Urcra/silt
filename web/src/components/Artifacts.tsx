@@ -7,11 +7,13 @@ import { api, type ArtifactContent, type ArtifactView, type CommentView } from '
 import {
   type ArtifactGroup,
   type ArtifactVersion,
+  type FrameProblem,
   dataUrl,
   fileName,
   kindLabel,
   latest,
   offlineHtml,
+  problemsPrompt,
   sandboxedDocument,
   svgUrl,
   textOf,
@@ -23,7 +25,8 @@ import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
 import { Links } from './ShareDialog'
 import { ago } from '../time'
-import { Dialog, Icon, IconButton, Menu, type MenuItem, Spinner, cx, toast } from '../ui'
+import { useShownTheme } from '../theme'
+import { Button, Dialog, Icon, IconButton, Menu, type MenuItem, Spinner, cx, toast } from '../ui'
 import { ArtifactCommentsButton, AskForChange } from './ArtifactComments'
 import { KindIcon, ShownImage } from './ArtifactCards'
 import { Markdown } from './Markdown'
@@ -141,10 +144,35 @@ export function ArtifactViewer({
     enabled: Boolean(shown),
     staleTime: Infinity,
   })
+  // The CSS the version's design system compiled to, which its frame is given (ADR 0071).
+  const styleBlob = shown?.artifact.style ?? null
+  const style = useQuery({
+    queryKey: keys.artifact(thread, styleBlob ?? ''),
+    queryFn: () => api.artifact(thread, styleBlob!),
+    enabled: Boolean(styleBlob),
+    staleTime: Infinity,
+  })
+  // Libraries and fonts come through Silt's vendor route when that's on (ADR 0071).
+  const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings, staleTime: 60_000 })
+  const vendor = settings.data?.proxy ? `${window.location.origin}/vendor/` : null
+  // What this viewer's frame saw go wrong in the version shown, until it's sent or dismissed.
+  const [problems, setProblems] = useState<{ blob: string; seen: FrameProblem[] } | null>(null)
   const link = usePermalink(thread)
   const now = useNow()
   if (!group || !shown) return <p className="px-5 py-6 text-sm text-fg-2">This artifact isn't in the thread's history.</p>
   const artifact = shown.artifact
+  const styleText = style.data ? textOf(style.data) : null
+  const styled = (!styleBlob || style.isSuccess || style.isError) && (settings.isSuccess || settings.isError)
+  const seen = problems?.blob === artifact.blob ? problems.seen : []
+  const sendProblems = async () => {
+    try {
+      await api.prompt(thread, problemsPrompt(shown, seen))
+      setProblems(null)
+      toast('Sent to the agent')
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   const textual = artifact.kind !== 'image'
   const download = (bytes: BlobPart, type: string, name: string) => {
     const url = URL.createObjectURL(new Blob([bytes], { type }))
@@ -163,7 +191,7 @@ export function ArtifactViewer({
     if (!content.data) return
     try {
       const rendered = await renderedMarkup(artifact, content.data)
-      download(offlineHtml(artifact, content.data, rendered), 'text/html', fileName(artifact, 'html'))
+      download(offlineHtml(artifact, content.data, rendered, styleText), 'text/html', fileName(artifact, 'html'))
     } catch (failure) {
       toast(message(failure), 'danger')
     }
@@ -301,21 +329,41 @@ export function ArtifactViewer({
         <IconButton icon="x" label="Close the artifact" onClick={onClose} />
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden bg-elevated">
-        {content.data ? (
+        {content.data && styled ? (
           <ArtifactPage
             key={`${artifact.blob}-${reloads}`}
             artifact={artifact}
             content={content.data}
+            style={styleText}
+            vendor={vendor}
             source={source}
             zoom={zoom}
             full={Boolean(full)}
             onSelect={(text) => setQuote(text || null)}
+            onProblems={(found) => setProblems({ blob: artifact.blob, seen: found })}
           />
         ) : content.error ? (
           <p className="px-5 py-6 text-sm text-danger">{message(content.error)}</p>
         ) : (
           <div className="flex justify-center pt-20">
             <Spinner />
+          </div>
+        )}
+        {seen.length > 0 && !source && (
+          <div
+            role="status"
+            className="absolute inset-x-2.5 bottom-2.5 z-10 flex flex-wrap items-center gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs text-fg-1 shadow-overlay"
+            data-testid="artifact-problems"
+          >
+            <Icon name="alert" className="h-3.5 w-3.5 shrink-0 text-warn" />
+            <span className="min-w-0 flex-1">
+              {seen.length === 1 ? 'Your browser saw a problem in this version: ' : `Your browser saw ${seen.length} problems in this version, first: `}
+              <span className="font-mono break-all text-fg-2">{seen[0].text}</span>
+            </span>
+            <Button size="sm" onClick={() => void sendProblems()}>
+              Send to the agent
+            </Button>
+            <IconButton icon="x" label="Dismiss the problems" onClick={() => setProblems(null)} />
           </div>
         )}
       </div>
@@ -337,33 +385,52 @@ export function ArtifactViewer({
   )
 }
 
+function isProblem(value: unknown): value is FrameProblem {
+  const problem = value as FrameProblem | null
+  return Boolean(problem) && ['blocked', 'error', 'overflow'].includes(problem!.kind) && typeof problem!.text === 'string'
+}
+
 /** The page itself: an HTML artifact in a frame that can reach nothing, anything else drawn here without running it. */
 function ArtifactPage({
   artifact,
   content,
+  style,
+  vendor,
   source,
   zoom,
   full,
   onSelect,
+  onProblems,
 }: {
   artifact: ArtifactView
   content: ArtifactContent
+  style: string | null
+  vendor: string | null
   source: boolean
   zoom: number
   full: boolean
   onSelect: (text: string) => void
+  onProblems: (problems: FrameProblem[]) => void
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
-  // A frame's page says what's selected in it; only messages from that frame count.
+  const theme = useShownTheme()
+  // The frame starts in the theme shown when it loads, and hears of each change after, so its page isn't reloaded.
+  const [startTheme] = useState(theme)
+  const [framed] = useState(() => (artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor }) : ''))
+  useEffect(() => {
+    frame.current?.contentWindow?.postMessage({ silt: 'theme', theme }, '*')
+  }, [theme])
+  // A frame's page says what's selected in it and what went wrong; only messages from that frame count.
   useEffect(() => {
     const heard = (event: MessageEvent) => {
-      const said = event.data as { silt?: unknown; text?: unknown } | null
-      if (event.source !== frame.current?.contentWindow || said?.silt !== 'selection') return
-      onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
+      const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown } | null
+      if (event.source !== frame.current?.contentWindow) return
+      if (said?.silt === 'selection') onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
+      if (said?.silt === 'problems' && Array.isArray(said.problems)) onProblems(said.problems.filter(isProblem).slice(0, 20))
     }
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
-  }, [onSelect])
+  }, [onSelect, onProblems])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
@@ -375,12 +442,12 @@ function ArtifactPage({
     )
   if (artifact.kind === 'html')
     return (
-      <div className="absolute inset-0 overflow-hidden bg-white">
+      <div className="absolute inset-0 overflow-hidden bg-bg">
         <iframe
           ref={frame}
           title={artifact.title}
           sandbox="allow-scripts"
-          srcDoc={sandboxedDocument(textOf(content))}
+          srcDoc={framed}
           referrerPolicy="no-referrer"
           style={zoomed}
           className="block border-0"

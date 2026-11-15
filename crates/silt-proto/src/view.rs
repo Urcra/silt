@@ -423,6 +423,13 @@ pub struct ArtifactView {
     /// Words under an image shown in the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// The design system an HTML version was styled with (ADR 0071).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_system: Option<String>,
+    /// The blob holding the CSS that system's tokens compiled to, which the
+    /// version's frame is given; read with the same route as the content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 /// An artifact's content, as its route answers it.

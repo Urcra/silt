@@ -1,0 +1,769 @@
+//! Design systems: the tokens an artifact is styled with, and the CSS its
+//! frame is given (ADR 0071). A system is a `README.md` for the agent and a
+//! `tokens.json`, compiled here into custom properties for every theme.
+
+pub mod frame;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
+
+/// Built-in systems, by name: Silt's own look and a neutral one.
+pub const BUILTIN: [Builtin; 2] = [
+    Builtin {
+        name: "nous",
+        readme: include_str!("../systems/nous/README.md"),
+        tokens: include_str!("../systems/nous/tokens.json"),
+    },
+    Builtin {
+        name: "plain",
+        readme: include_str!("../systems/plain/README.md"),
+        tokens: include_str!("../systems/plain/tokens.json"),
+    },
+];
+
+#[derive(Debug, Clone, Copy)]
+pub struct Builtin {
+    pub name: &'static str,
+    pub readme: &'static str,
+    pub tokens: &'static str,
+}
+
+pub fn builtin(name: &str) -> Option<Builtin> {
+    BUILTIN.into_iter().find(|system| system.name == name)
+}
+
+/// A font file, an inlined face, may be at most this large.
+pub const FONT_BYTES: usize = 1 << 20;
+const FONTS_BYTES: usize = 4 << 20;
+
+/// A system's name: what `silt_artifact`'s `design_system` takes and its
+/// folder is called.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SystemName(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} isn't a design system's name: lowercase letters, digits and hyphens, at most 64")]
+pub struct BadSystemName(String);
+
+impl SystemName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SystemName {
+    type Error = BadSystemName;
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        let ok = (1..=64).contains(&name.len())
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !name.starts_with('-');
+        if ok { Ok(Self(name)) } else { Err(BadSystemName(name)) }
+    }
+}
+
+impl std::str::FromStr for SystemName {
+    type Err = BadSystemName;
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::try_from(name.to_owned())
+    }
+}
+
+impl From<SystemName> for String {
+    fn from(name: SystemName) -> Self {
+        name.0
+    }
+}
+
+impl std::fmt::Display for SystemName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `tokens.json`, as written. Families other than colour and type are kept
+/// as JSON and read leniently, so one bad family doesn't lose the rest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Tokens {
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<Colors>,
+    #[serde(default, rename = "type")]
+    pub typography: Option<Typography>,
+    /// More names for tokens, such as the ones MCP Apps hosts give their
+    /// views (`color-background-primary`), so a page written for those
+    /// reads this system too.
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
+    #[serde(flatten)]
+    pub rest: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Colors {
+    pub themes: Vec<Theme>,
+    pub tokens: Vec<Token>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Theme {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Token {
+    pub name: String,
+    pub value: TokenValue,
+    #[serde(default)]
+    pub usage: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum TokenValue {
+    One(String),
+    ByTheme(BTreeMap<String, String>),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Typography {
+    #[serde(default)]
+    pub fonts: Vec<Font>,
+    #[serde(default)]
+    pub families: BTreeMap<String, String>,
+    #[serde(default)]
+    pub groups: Vec<TypeGroup>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Font {
+    pub family: String,
+    /// Under the system's `fonts/`; none loads the face from Google Fonts.
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub weight: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TypeGroup {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub styles: Vec<TypeStyle>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeStyle {
+    pub name: String,
+    #[serde(default)]
+    pub family: Option<String>,
+    pub font_size: String,
+    #[serde(default)]
+    pub line_height: Option<serde_json::Value>,
+    #[serde(default)]
+    pub font_weight: Option<serde_json::Value>,
+    #[serde(default)]
+    pub letter_spacing: Option<String>,
+    #[serde(default)]
+    pub usage: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Family {
+    tokens: Vec<Token>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidTokens {
+    #[error("tokens.json isn't valid: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn parse(json: &str) -> Result<Tokens, InvalidTokens> {
+    Ok(serde_json::from_str(json)?)
+}
+
+/// The CSS a frame is given, and what was left out of it and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compiled {
+    pub css: String,
+    pub dropped: Vec<String>,
+}
+
+/// Compiles `tokens` into custom properties: the first theme's on `:root`,
+/// `light` and `dark` following the viewer through `prefers-color-scheme`
+/// and `data-theme`, and any other theme under its own `data-theme`.
+/// `fonts` holds the system's font files by their path in `tokens.json`.
+pub fn compile(tokens: &Tokens, fonts: &BTreeMap<String, Vec<u8>>) -> Compiled {
+    let mut dropped = Vec::new();
+    let mut names = BTreeSet::new();
+    let mut claim = |name: &str, dropped: &mut Vec<String>| {
+        if !valid_name(name) {
+            dropped.push(format!("{name:?} isn't a token name"));
+            false
+        } else if !names.insert(name.to_owned()) {
+            dropped.push(format!("{name} is named twice"));
+            false
+        } else {
+            true
+        }
+    };
+
+    let themes: Vec<String> = tokens
+        .color
+        .as_ref()
+        .map(|colors| colors.themes.iter().map(|theme| theme.id.clone()).filter(|id| valid_name(id)).collect())
+        .unwrap_or_default();
+    let themes = if themes.is_empty() { vec!["light".to_owned()] } else { themes };
+    let mut by_theme: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+
+    if let Some(colors) = &tokens.color {
+        let known: BTreeSet<&str> = colors.tokens.iter().map(|token| token.name.as_str()).collect();
+        for token in &colors.tokens {
+            if !claim(&token.name, &mut dropped) {
+                continue;
+            }
+            let value_in = |theme: &str| match &token.value {
+                TokenValue::One(value) => Some(value.as_str()),
+                TokenValue::ByTheme(values) => values.get(theme).or_else(|| values.get(&themes[0])).map(String::as_str),
+            };
+            let mut values = Vec::new();
+            let before = dropped.len();
+            for theme in &themes {
+                match value_in(theme).map(|value| color_value(value, &token.name, &known)) {
+                    Some(Ok(value)) => values.push((theme.as_str(), value)),
+                    Some(Err(why)) => dropped.push(format!("{} in {theme}: {why}", token.name)),
+                    None => {}
+                }
+            }
+            if values.is_empty() {
+                if dropped.len() == before {
+                    dropped.push(format!("{} has no value it can use", token.name));
+                }
+                continue;
+            }
+            for (theme, value) in values {
+                by_theme.entry(theme).or_default().push((token.name.clone(), value));
+            }
+        }
+    }
+
+    let mut plain: Vec<(String, String)> = Vec::new();
+    for (family, value) in &tokens.rest {
+        if matches!(family.as_str(), "version" | "meta" | "description") {
+            continue;
+        }
+        let Ok(family_tokens) = serde_json::from_value::<Family>(value.clone()) else {
+            dropped.push(format!("{family} isn't a list of tokens"));
+            continue;
+        };
+        for token in family_tokens.tokens {
+            if !claim(&token.name, &mut dropped) {
+                continue;
+            }
+            match &token.value {
+                TokenValue::One(value) if plain_value(value) => plain.push((token.name, value.clone())),
+                TokenValue::ByTheme(values) => {
+                    for theme in &themes {
+                        let Some(value) = values.get(theme).or_else(|| values.get(&themes[0])) else {
+                            continue;
+                        };
+                        if plain_value(value) {
+                            by_theme.entry(theme.as_str()).or_default().push((token.name.clone(), value.clone()));
+                        } else {
+                            dropped.push(format!("{} in {theme}: {value:?} isn't a plain CSS value", token.name));
+                        }
+                    }
+                }
+                TokenValue::One(value) => dropped.push(format!("{}: {value:?} isn't a plain CSS value", token.name)),
+            }
+        }
+    }
+
+    let mut css = String::new();
+    let typography = tokens.typography.clone().unwrap_or_default();
+    if let Some(import) = google_fonts(&typography.fonts, &mut dropped) {
+        let _ = writeln!(css, "@import url(\"{import}\");");
+    }
+    font_faces(&mut css, &typography.fonts, fonts, &mut dropped);
+
+    let first = themes[0].as_str();
+    let scheme = |theme: &str| if theme == "dark" { "dark" } else { "light" };
+    let block = |css: &mut String, selector: &str, theme: &str, declarations: &[(String, String)]| {
+        let _ = writeln!(css, "{selector} {{");
+        let _ = writeln!(css, "  color-scheme: {};", scheme(theme));
+        for (name, value) in declarations {
+            let _ = writeln!(css, "  --{name}: {value};");
+        }
+        css.push_str("}\n");
+    };
+    let empty = Vec::new();
+    block(&mut css, &format!(":root, :root[data-theme=\"{first}\"]"), first, by_theme.get(first).unwrap_or(&empty));
+    for theme in themes.iter().skip(1) {
+        let declarations = by_theme.get(theme.as_str()).unwrap_or(&empty);
+        let other = match (first, theme.as_str()) {
+            ("light", "dark") => Some(("dark", "light")),
+            ("dark", "light") => Some(("light", "dark")),
+            _ => None,
+        };
+        if let Some((preference, guard)) = other {
+            let _ = writeln!(css, "@media (prefers-color-scheme: {preference}) {{");
+            let mut inner = String::new();
+            block(&mut inner, &format!(":root:not([data-theme=\"{guard}\"])"), theme, declarations);
+            for line in inner.lines() {
+                let _ = writeln!(css, "  {line}");
+            }
+            css.push_str("}\n");
+        }
+        block(&mut css, &format!(":root[data-theme=\"{theme}\"]"), theme, declarations);
+    }
+
+    let mut root = Vec::new();
+    for (key, stack) in &typography.families {
+        if valid_name(key) && font_stack(stack) {
+            root.push((format!("font-{key}"), stack.clone()));
+        } else {
+            dropped.push(format!("the font family {key:?} isn't a name and a font stack"));
+        }
+    }
+    root.extend(plain);
+    for (alias, target) in &tokens.aliases {
+        if !valid_name(alias) || !valid_name(target) || !names.contains(target.as_str()) {
+            dropped.push(format!("the alias {alias} names no token"));
+        } else if names.contains(alias.as_str()) || root.iter().any(|(name, _)| name == alias) {
+            dropped.push(format!("the alias {alias} is a token's own name"));
+        } else {
+            root.push((alias.clone(), format!("var(--{target})")));
+        }
+    }
+    if !root.is_empty() {
+        css.push_str(":root {\n");
+        for (name, value) in &root {
+            let _ = writeln!(css, "  --{name}: {value};");
+        }
+        css.push_str("}\n");
+    }
+
+    for group in &typography.groups {
+        for style in &group.styles {
+            match type_class(style, group.family.as_deref(), &typography.families) {
+                Ok(rule) => css.push_str(&rule),
+                Err(why) => dropped.push(format!("the type style {}: {why}", style.name)),
+            }
+        }
+    }
+    Compiled { css, dropped }
+}
+
+fn valid_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+const COLOR_FUNCTIONS: [&str; 9] = ["rgb", "rgba", "hsl", "hsla", "oklch", "oklab", "lab", "lch", "color"];
+
+fn color_value(value: &str, name: &str, known: &BTreeSet<&str>) -> Result<String, String> {
+    let value = value.trim();
+    if let Some(alias) = value.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) {
+        return if alias == name {
+            Err("it names itself".into())
+        } else if known.contains(alias) && valid_name(alias) {
+            Ok(format!("var(--{alias})"))
+        } else {
+            Err(format!("{{{alias}}} names no colour token"))
+        };
+    }
+    if let Some(hex) = value.strip_prefix('#') {
+        return if matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Ok(value.to_ascii_lowercase())
+        } else {
+            Err(format!("{value:?} isn't a hex colour"))
+        };
+    }
+    let function = value.split('(').next().unwrap_or_default();
+    let arguments = value.strip_prefix(function).and_then(|rest| rest.strip_prefix('(')).and_then(|rest| rest.strip_suffix(')'));
+    match arguments {
+        Some(arguments)
+            if COLOR_FUNCTIONS.contains(&function)
+                && arguments.bytes().all(|b| b.is_ascii_alphanumeric() || b" .,%/+-".contains(&b)) =>
+        {
+            Ok(value.to_owned())
+        }
+        _ => Err(format!("{value:?} isn't a hex colour, a colour function of plain numbers or an alias")),
+    }
+}
+
+/// A single CSS value with nothing that reaches outside it: no `url()`,
+/// `var()` or anything that could close the rule.
+fn plain_value(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let mut depth = 0i32;
+    let balanced = value.chars().all(|c| {
+        depth += match c {
+            '(' => 1,
+            ')' => -1,
+            _ => 0,
+        };
+        depth >= 0
+    }) && depth == 0;
+    (1..=400).contains(&value.len())
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b" #%(),./+_-".contains(&b))
+        && balanced
+        && !lower.contains("url(")
+        && !lower.contains("var(")
+        && !lower.contains("expression(")
+        && !lower.contains("image(")
+}
+
+fn font_stack(stack: &str) -> bool {
+    (1..=200).contains(&stack.len())
+        && !stack.bytes().any(|b| b";{}<>\\()".contains(&b) || b.is_ascii_control())
+        && stack.matches('"').count().is_multiple_of(2)
+        && stack.matches('\'').count().is_multiple_of(2)
+}
+
+fn family_name(family: &str) -> bool {
+    (1..=64).contains(&family.len()) && family.bytes().all(|b| b.is_ascii_alphanumeric() || b == b' ')
+}
+
+fn weights(weight: Option<&str>) -> Option<(u16, u16)> {
+    let weight = weight.unwrap_or("400").trim();
+    let parse = |w: &str| w.trim().parse::<u16>().ok().filter(|w| (1..=1000).contains(w));
+    match weight.split_once(' ') {
+        Some((low, high)) => Some((parse(low)?, parse(high)?)),
+        None => parse(weight).map(|w| (w, w)),
+    }
+}
+
+fn italic(style: Option<&str>) -> Result<bool, String> {
+    match style.unwrap_or("normal") {
+        "normal" => Ok(false),
+        "italic" => Ok(true),
+        other => Err(format!("{other:?} isn't normal or italic")),
+    }
+}
+
+/// One `css2` URL for every face without a file.
+fn google_fonts(fonts: &[Font], dropped: &mut Vec<String>) -> Option<String> {
+    let mut families: BTreeMap<&str, BTreeSet<(bool, u16)>> = BTreeMap::new();
+    for font in fonts.iter().filter(|font| font.file.is_none()) {
+        let (Some((low, high)), Ok(italic)) = (weights(font.weight.as_deref()), italic(font.style.as_deref())) else {
+            dropped.push(format!("the font {} has a weight or style that can't be loaded", font.family));
+            continue;
+        };
+        if !family_name(&font.family) || low != high {
+            dropped.push(format!("{:?} can't be loaded from Google Fonts by name", font.family));
+            continue;
+        }
+        families.entry(font.family.as_str()).or_default().insert((italic, low));
+    }
+    if families.is_empty() {
+        return None;
+    }
+    let mut url = String::from("https://fonts.googleapis.com/css2?");
+    for (family, faces) in families {
+        let tuples: Vec<String> = faces.iter().map(|(italic, weight)| format!("{},{weight}", u8::from(*italic))).collect();
+        let _ = write!(url, "family={}:ital,wght@{}&", family.replace(' ', "+"), tuples.join(";"));
+    }
+    url.push_str("display=swap");
+    Some(url)
+}
+
+fn font_faces(css: &mut String, fonts: &[Font], files: &BTreeMap<String, Vec<u8>>, dropped: &mut Vec<String>) {
+    let mut total = 0;
+    for font in fonts {
+        let Some(file) = &font.file else {
+            continue;
+        };
+        let Some(bytes) = files.get(file) else {
+            dropped.push(format!("the font file {file} isn't in the system"));
+            continue;
+        };
+        let format = match file.rsplit('.').next() {
+            Some("woff2") => "woff2",
+            Some("woff") => "woff",
+            Some("ttf") => "truetype",
+            Some("otf") => "opentype",
+            _ => {
+                dropped.push(format!("{file} isn't a woff2, woff, ttf or otf file"));
+                continue;
+            }
+        };
+        let (Some((low, high)), Ok(italic)) = (weights(font.weight.as_deref()), italic(font.style.as_deref())) else {
+            dropped.push(format!("the font {} has a weight or style that can't be used", font.family));
+            continue;
+        };
+        if !family_name(&font.family) {
+            dropped.push(format!("{:?} isn't a font family's name", font.family));
+            continue;
+        }
+        total += bytes.len();
+        if bytes.len() > FONT_BYTES || total > FONTS_BYTES {
+            dropped.push(format!("{file} is too large to inline"));
+            continue;
+        }
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let weight = if low == high { low.to_string() } else { format!("{low} {high}") };
+        let style = if italic { "italic" } else { "normal" };
+        let _ = writeln!(
+            css,
+            "@font-face {{ font-family: \"{}\"; src: url(data:font/{format};base64,{data}) format(\"{format}\"); font-weight: {weight}; font-style: {style}; font-display: swap; }}",
+            font.family
+        );
+    }
+}
+
+fn length(value: &str) -> bool {
+    let value = value.trim();
+    let number_end = value.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).unwrap_or(value.len());
+    let (number, unit) = value.split_at(number_end);
+    number.parse::<f32>().is_ok() && matches!(unit, "" | "px" | "rem" | "em" | "%")
+}
+
+fn type_class(style: &TypeStyle, group_family: Option<&str>, families: &BTreeMap<String, String>) -> Result<String, String> {
+    if !valid_name(&style.name) {
+        return Err("its name isn't a token name".into());
+    }
+    if !length(&style.font_size) {
+        return Err(format!("{:?} isn't a font size", style.font_size));
+    }
+    let mut rule = format!(".ds-{} {{", style.name);
+    if let Some(family) = style.family.as_deref().or(group_family).filter(|family| families.contains_key(*family)) {
+        let _ = write!(rule, " font-family: var(--font-{family});");
+    }
+    let size = if style.font_size.trim().bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        format!("{}px", style.font_size.trim())
+    } else {
+        style.font_size.trim().to_owned()
+    };
+    let _ = write!(rule, " font-size: {size};");
+    match &style.line_height {
+        Some(serde_json::Value::Number(number)) if number.as_f64().is_some_and(|n| n > 0.0 && n < 10.0) => {
+            let _ = write!(rule, " line-height: {number};");
+        }
+        Some(serde_json::Value::String(value)) if length(value) => {
+            let _ = write!(rule, " line-height: {};", value.trim());
+        }
+        None => {}
+        Some(other) => return Err(format!("{other} isn't a line height")),
+    }
+    match &style.font_weight {
+        Some(serde_json::Value::Number(number)) if number.as_u64().is_some_and(|w| (1..=1000).contains(&w)) => {
+            let _ = write!(rule, " font-weight: {number};");
+        }
+        Some(serde_json::Value::String(value)) if weights(Some(value)).is_some() => {
+            let _ = write!(rule, " font-weight: {};", value.trim());
+        }
+        None => {}
+        Some(other) => return Err(format!("{other} isn't a font weight")),
+    }
+    if let Some(spacing) = &style.letter_spacing {
+        if !length(spacing) {
+            return Err(format!("{spacing:?} isn't a letter spacing"));
+        }
+        let _ = write!(rule, " letter-spacing: {};", spacing.trim());
+    }
+    rule.push_str(" }\n");
+    Ok(rule)
+}
+
+/// The token names a system defines, by family, for the agent's guide.
+pub fn token_names(tokens: &Tokens) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Some(colors) = &tokens.color {
+        out.insert("color".into(), colors.tokens.iter().map(|token| format!("--{}", token.name)).collect());
+    }
+    if let Some(typography) = &tokens.typography {
+        let mut names: Vec<String> = typography.families.keys().map(|key| format!("--font-{key}")).collect();
+        names.extend(typography.groups.iter().flat_map(|group| group.styles.iter().map(|style| format!(".ds-{}", style.name))));
+        out.insert("type".into(), names);
+    }
+    for (family, value) in &tokens.rest {
+        if let Ok(family_tokens) = serde_json::from_value::<Family>(value.clone()) {
+            out.insert(family.clone(), family_tokens.tokens.iter().map(|token| format!("--{}", token.name)).collect());
+        }
+    }
+    if !tokens.aliases.is_empty() {
+        out.insert("aliases".into(), tokens.aliases.iter().map(|(alias, target)| format!("--{alias} = --{target}")).collect());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compiled(json: &str) -> Compiled {
+        compile(&parse(json).expect("tokens"), &BTreeMap::new())
+    }
+
+    #[test]
+    fn light_and_dark_follow_the_viewer_both_ways() {
+        let out = compiled(
+            r##"{"name":"t","color":{"themes":[{"id":"light"},{"id":"dark"}],"tokens":[
+                {"name":"bg","value":{"light":"#FFFFFF","dark":"#111"}},
+                {"name":"ink","value":"#222"},
+                {"name":"link","value":"{ink}"}]}}"##,
+        );
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        let css = &out.css;
+        assert!(css.contains(":root, :root[data-theme=\"light\"] {\n  color-scheme: light;\n  --bg: #ffffff;\n  --ink: #222;\n  --link: var(--ink);\n}"), "{css}");
+        assert!(css.contains("@media (prefers-color-scheme: dark) {\n  :root:not([data-theme=\"light\"]) {\n    color-scheme: dark;\n    --bg: #111;"), "{css}");
+        assert!(css.contains(":root[data-theme=\"dark\"] {\n  color-scheme: dark;\n  --bg: #111;\n  --ink: #222;"), "{css}");
+    }
+
+    #[test]
+    fn nothing_that_reaches_outside_its_value_is_kept() {
+        let out = compiled(
+            r##"{"name":"t","color":{"themes":[{"id":"light"}],"tokens":[
+                {"name":"a","value":"red; } body { background: url(https://x.example/)"},
+                {"name":"b","value":"var(--a)"},
+                {"name":"c","value":"{c}"},
+                {"name":"d","value":"{missing}"},
+                {"name":"bad name","value":"#fff"},
+                {"name":"e","value":"rgb(1 2 3 / 0.5)"},
+                {"name":"e","value":"#000"}]},
+              "spacing":{"tokens":[{"name":"s","value":"16px"},{"name":"u","value":"url(x)"},{"name":"v","value":"1px</style><script>"}]},
+              "type":{"families":{"sans":"Inter, sans-serif","evil":"x; } * { color: red"},"groups":[]}}"##,
+        );
+        for gone in ["url(", "var(--a)", "</style", "evil", "red;"] {
+            assert!(!out.css.contains(gone), "{gone} in {}", out.css);
+        }
+        assert!(out.css.contains("--e: rgb(1 2 3 / 0.5);") && out.css.contains("--s: 16px;"), "{}", out.css);
+        assert!(out.css.contains("--font-sans: Inter, sans-serif;"), "{}", out.css);
+        assert_eq!(out.dropped.len(), 9, "{:?}", out.dropped);
+    }
+
+    #[test]
+    fn faces_load_from_google_fonts_or_inline_from_the_system() {
+        let tokens = parse(
+            r#"{"name":"t","type":{"fonts":[
+                {"family":"IBM Plex Sans","weight":"400"},{"family":"IBM Plex Sans","weight":"600"},
+                {"family":"IBM Plex Sans","weight":"400","style":"italic"},
+                {"family":"Acme","file":"fonts/acme.woff2","weight":"300 800"},
+                {"family":"Gone","file":"fonts/gone.woff2"}],
+              "families":{"sans":"\"IBM Plex Sans\", sans-serif"},
+              "groups":[{"name":"Text","family":"sans","styles":[{"name":"body","fontSize":"14px","lineHeight":1.6,"fontWeight":400,"letterSpacing":"-0.01em"}]}]}}"#,
+        )
+        .expect("tokens");
+        let files = BTreeMap::from([("fonts/acme.woff2".to_owned(), b"wOF2".to_vec())]);
+        let out = compile(&tokens, &files);
+        assert!(
+            out.css.starts_with("@import url(\"https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&display=swap\");\n"),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css.contains(
+                "font-family: \"Acme\"; src: url(data:font/woff2;base64,d09GMg==) format(\"woff2\"); font-weight: 300 800;"
+            ),
+            "{}",
+            out.css
+        );
+        assert!(out.css.contains(".ds-body { font-family: var(--font-sans); font-size: 14px; line-height: 1.6; font-weight: 400; letter-spacing: -0.01em; }"), "{}", out.css);
+        assert_eq!(out.dropped, ["the font file fonts/gone.woff2 isn't in the system"]);
+    }
+
+    #[test]
+    fn the_built_in_systems_compile_whole() {
+        for system in BUILTIN {
+            let tokens = parse(system.tokens).expect(system.name);
+            let out = compile(&tokens, &BTreeMap::new());
+            assert!(out.dropped.is_empty(), "{}: {:?}", system.name, out.dropped);
+            assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", system.name);
+            assert!(SystemName::try_from(system.name.to_owned()).is_ok());
+        }
+    }
+
+    /// Nous's tokens are the web UI's: each colour both define has the same
+    /// value in both themes.
+    #[test]
+    fn nous_matches_the_web_ui() {
+        let css = include_str!("../../../web/src/nous.css");
+        let mut palette = BTreeMap::new();
+        let mut defined = BTreeMap::new();
+        for line in css.lines().map(str::trim) {
+            let Some((name, value)) = line.strip_prefix("--").and_then(|line| line.split_once(": ")) else {
+                continue;
+            };
+            let value = value.trim_end_matches(';');
+            if let Some(pair) = value.strip_prefix("light-dark(").and_then(|value| value.strip_suffix(')')) {
+                defined.insert(name.to_owned(), pair.to_owned());
+            } else if value.starts_with('#') {
+                palette.insert(format!("var(--{name})"), value.to_owned());
+                defined.insert(name.to_owned(), format!("{value}, {value}"));
+            } else if let Some(other) = value.strip_prefix("var(--") {
+                defined.insert(name.to_owned(), format!("var(--{other}, var(--{other}"));
+            }
+        }
+        let resolve = |value: &str| palette.get(value.trim()).cloned().unwrap_or_else(|| value.trim().to_owned());
+        let tokens = parse(builtin("nous").expect("nous").tokens).expect("tokens");
+        let mut compared = 0;
+        for token in tokens.color.expect("colours").tokens {
+            let Some(pair) = defined.get(&token.name) else {
+                continue;
+            };
+            let TokenValue::ByTheme(values) = &token.value else {
+                panic!("{} has one value", token.name);
+            };
+            let Some((light, dark)) = split_pair(pair) else {
+                continue;
+            };
+            let norm = |value: &str| value.replace(' ', "").replace("0.1)", "0.10)");
+            assert_eq!(norm(&resolve(&light)), norm(&values["light"]), "{} in light", token.name);
+            assert_eq!(norm(&resolve(&dark)), norm(&values["dark"]), "{} in dark", token.name);
+            compared += 1;
+        }
+        assert!(compared >= 20, "only {compared} compared");
+    }
+
+    fn split_pair(pair: &str) -> Option<(String, String)> {
+        let mut depth = 0;
+        for (at, c) in pair.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => return Some((pair[..at].to_owned(), pair[at + 1..].to_owned())),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn aliases_name_tokens_that_exist() {
+        let out = compiled(
+            r##"{"name":"t","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]},
+                "radius":{"tokens":[{"name":"radius-md","value":"4px"}]},
+                "aliases":{"color-background-primary":"bg","border-radius-md":"radius-md","gone":"missing","bg":"radius-md"}}"##,
+        );
+        assert!(
+            out.css.contains("--color-background-primary: var(--bg);")
+                && out.css.contains("--border-radius-md: var(--radius-md);"),
+            "{}",
+            out.css
+        );
+        assert_eq!(out.dropped, ["the alias bg is a token's own name", "the alias gone names no token"]);
+    }
+
+    #[test]
+    fn names_are_checked() {
+        assert!(SystemName::try_from("nous".to_owned()).is_ok());
+        for bad in ["", "Nous", "../x", "-x", "a b"] {
+            assert!(SystemName::try_from(bad.to_owned()).is_err(), "{bad}");
+        }
+    }
+}

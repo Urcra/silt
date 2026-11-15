@@ -527,6 +527,8 @@ mod tests {
             size: 12,
             inline: false,
             caption: None,
+            design_system: Some("nous".into()),
+            style: Some("cd".repeat(32)),
         };
         let read = read_line(&artifact(&shown));
         assert_eq!(read.entries, vec![Entry::Artifact(shown.clone())]);

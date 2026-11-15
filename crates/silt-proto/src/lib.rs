@@ -14,8 +14,9 @@ pub mod view;
 /// out of every org, and moved into the project their folder becomes
 /// (ADR 0059). 11: a thread's files marked seen, and the turn a person
 /// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
-/// diff may leave out (ADR 0069).
-pub const PROTOCOL: u32 = 11;
+/// diff may leave out (ADR 0069). 12: a person's own design systems, synced
+/// through each server they use (ADR 0071).
+pub const PROTOCOL: u32 = 12;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -209,6 +210,46 @@ impl SeenMark {
 pub struct MrSeen {
     pub mr: DeltaId,
     pub marks: Vec<SeenMark>,
+}
+
+/// A person's own design system, as their devices sync it through each
+/// server they use (ADR 0071). The copy changed last wins; one removed
+/// stays as a tombstone so the removal reaches every device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignSystemCopy {
+    /// Its folder's name, which `design_system` takes.
+    pub name: String,
+    /// When it last changed on a device.
+    pub at_ms: i64,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub readme: String,
+    #[serde(default)]
+    pub tokens: String,
+    /// Its font files, by their name under `fonts/`, in base64.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, String>,
+}
+
+/// The most a design system's copy may hold, its fonts in base64 included.
+pub const DESIGN_SYSTEM_BYTES: usize = 8 << 20;
+
+impl DesignSystemCopy {
+    /// Whether a device may take it as it is: a system's name, font files
+    /// named plainly, and no more than [`DESIGN_SYSTEM_BYTES`].
+    pub fn valid(&self) -> bool {
+        let name = (1..=64).contains(&self.name.len())
+            && self.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !self.name.starts_with('-');
+        let fonts = self.fonts.keys().all(|file| {
+            (1..=128).contains(&file.len())
+                && !file.starts_with('.')
+                && file.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        });
+        let size = self.readme.len() + self.tokens.len() + self.fonts.values().map(String::len).sum::<usize>();
+        name && fonts && size <= DESIGN_SYSTEM_BYTES && self.fonts.len() <= 64
+    }
 }
 
 /// A person's marks on one thread's files (ADR 0067).

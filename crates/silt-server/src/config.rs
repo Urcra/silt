@@ -29,6 +29,11 @@ pub struct Config {
     /// for projects that turn it on (ADR 0042).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub forges: Vec<Forge>,
+    /// Artifacts' frames load libraries and fonts through this server,
+    /// which fetches and keeps each file, rather than from the CDNs, so a
+    /// viewer never contacts one (ADR 0071).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub artifact_proxy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +60,7 @@ impl Default for Config {
             auth: Auth::default(),
             trash_days: default_trash_days(),
             forges: Vec::new(),
+            artifact_proxy: false,
         }
     }
 }

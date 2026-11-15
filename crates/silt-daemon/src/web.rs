@@ -32,6 +32,9 @@ struct Web {
     port: u16,
     codes: OneTimeCodes,
     voice: Arc<Voice>,
+    /// The CDN files artifacts load through Silt, when the person turned
+    /// that on (ADR 0071).
+    vendor: Arc<silt_vendor::Vendor>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -88,7 +91,15 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
     let port = listener.local_addr()?.port();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let codes = OneTimeCodes::default();
-    let web = Web { events, bus, token: token.clone(), port, codes: codes.clone(), voice: Arc::new(Voice::new()) };
+    let web = Web {
+        events,
+        bus,
+        token: token.clone(),
+        port,
+        codes: codes.clone(),
+        voice: Arc::new(Voice::new()),
+        vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
+    };
     let api = Router::new()
         .route("/api/events", get(events_socket))
         .route("/api/status", get(status))
@@ -138,6 +149,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
+        .route("/api/design-systems", get(design_systems))
+        .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
+        .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
         .route("/api/threads/{id}/agent/prompt", post(agent_prompt).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
@@ -188,6 +202,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .layer(middleware::from_fn_with_state(web.clone(), authenticate));
     let app = api
         .route("/api/exchange", post(exchange))
+        // An artifact's frame has an opaque origin and no token; this serves
+        // only pinned files of the CDN allowlist.
+        .route("/vendor/{host}/{*path}", get(vendor_file))
         .fallback(asset)
         .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
         .with_state(web);
@@ -583,6 +600,37 @@ async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(St
     ask(&web, Request::ArtifactContent { thread, blob }).await
 }
 
+async fn artifact_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ArtifactSettings).await
+}
+
+async fn set_artifact_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ArtifactSettings>) -> HttpResponse {
+    ask(&web, Request::SetArtifactSettings { settings }).await
+}
+
+/// A CDN file an artifact's frame loads through Silt (ADR 0071).
+async fn vendor_file(State(web): State<Web>, Path((host, path)): Path<(String, String)>, request: HttpRequest) -> HttpResponse {
+    let query = request.uri().query().map(str::to_owned);
+    match web.vendor.get(&host, &format!("/{path}"), query.as_deref()).await {
+        Ok(fetched) => vendor_response(fetched),
+        Err(silt_vendor::VendorError::Refused(why)) => (StatusCode::FORBIDDEN, why).into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+    }
+}
+
+fn vendor_response(fetched: silt_vendor::Fetched) -> HttpResponse {
+    let mut response = (StatusCode::OK, fetched.bytes).into_response();
+    let headers = response.headers_mut();
+    if let Ok(value) = header::HeaderValue::from_str(&fetched.content_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=31536000, immutable"));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    headers.insert("cross-origin-resource-policy", header::HeaderValue::from_static("cross-origin"));
+    response
+}
+
 #[derive(Deserialize, Default)]
 struct PresenceBody {
     #[serde(default)]
@@ -630,6 +678,31 @@ async fn set_chat_settings(State(web): State<Web>, Json(settings): Json<crate::p
 
 async fn workspaces(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Workspaces).await
+}
+
+#[derive(Deserialize)]
+struct DesignSystemsQuery {
+    #[serde(default)]
+    clone: Option<PathBuf>,
+}
+
+async fn design_systems(State(web): State<Web>, Query(query): Query<DesignSystemsQuery>) -> HttpResponse {
+    ask(&web, Request::DesignSystems { clone: query.clone }).await
+}
+
+async fn project_design_systems(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ProjectDesignSystems).await
+}
+
+#[derive(Deserialize)]
+struct ProjectDesignSystem {
+    repo: String,
+    #[serde(default)]
+    design_system: Option<String>,
+}
+
+async fn set_project_design_system(State(web): State<Web>, Json(body): Json<ProjectDesignSystem>) -> HttpResponse {
+    ask(&web, Request::SetProjectDesignSystem { repo: body.repo, design_system: body.design_system }).await
 }
 
 async fn set_workspaces(State(web): State<Web>, Json(workspaces): Json<silt_workspace::Workspaces>) -> HttpResponse {
@@ -1180,7 +1253,15 @@ mod tests {
         let codes = OneTimeCodes::default();
         let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
         let bus = broadcast::channel(1).0;
-        let web = Web { events, bus, token: info.token.clone(), port: 1, codes, voice: Arc::new(Voice::new()) };
+        let web = Web {
+            events,
+            bus,
+            token: info.token.clone(),
+            port: 1,
+            codes,
+            voice: Arc::new(Voice::new()),
+            vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
+        };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();

@@ -42,24 +42,104 @@ export function kindLabel(kind: string): string {
   return KINDS[kind] ?? kind
 }
 
-/** What an artifact's page may do: run its own inline scripts and styles, show what it carries inline, and reach nothing. */
-export const ARTIFACT_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:"
+/**
+ * What an artifact's page may do: run its own inline scripts and styles, load scripts from a few CDNs and fonts from
+ * Google Fonts, show what it carries inline, and connect to nothing (ADR 0071).
+ */
+export const ARTIFACT_CSP = framePolicy(null)
 
-/** Tells the page holding the frame what text is selected in it, for a comment to quote. */
-const SELECTION_SCRIPT =
-  "document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();parent.postMessage({silt:'selection',text:t.slice(0,500)},'*')})"
+/** The hosts Silt's vendor route fetches from, as `silt_design::frame` lists them. */
+const VENDOR_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.tailwindcss.com', 'code.jquery.com', 'fonts.googleapis.com', 'fonts.gstatic.com']
 
 /**
- * An HTML artifact as its sandboxed frame loads it: with a policy that lets it reach nothing, before anything of its
- * own, and its doctype kept first so it renders as written. `selection` adds the script that reports selected text.
+ * The policy a frame runs under, as `silt_design::frame::policy` writes it: the CDNs themselves, or only `vendor`, an
+ * absolute URL ending in `/` that serves them through Silt (ADR 0071).
  */
-export function sandboxedDocument(html: string, selection = true): string {
+export function framePolicy(vendor: string | null): string {
+  const scripts = vendor ?? 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com'
+  const styles = vendor ?? 'https://fonts.googleapis.com'
+  const fonts = vendor ?? 'https://fonts.gstatic.com'
+  return `default-src 'none'; script-src 'unsafe-inline' ${scripts}; style-src 'unsafe-inline' ${styles}; font-src data: ${fonts}; img-src data: blob:; media-src data: blob:`
+}
+
+/** `text` with every allowlisted CDN address going through `vendor`, as `silt_design::frame::through_vendor` does. */
+export function throughVendor(text: string, vendor: string): string {
+  let out = text
+  for (const host of VENDOR_HOSTS) {
+    out = out.split(`https://${host}/`).join(`${vendor}${host}/`)
+    out = out.split(`//${host}/`).join(`${vendor}${host}/`)
+  }
+  return out.split(`https:${vendor}`).join(vendor).split(`http:${vendor}`).join(vendor)
+}
+
+export type FrameTheme = 'light' | 'dark'
+
+/** What the page in an artifact's frame reported going wrong in it: a load the policy blocked, a script error, or a page wider than its frame. */
+export type FrameProblem = { kind: 'blocked' | 'error' | 'overflow'; text: string }
+
+/**
+ * The script that runs first in an artifact's frame. It takes the viewer's theme, now and as it changes, and tells the
+ * page holding the frame what text is selected, for a comment to quote, and what went wrong in it (ADR 0071).
+ */
+function frameScript(theme: FrameTheme | null): string {
+  return [
+    '(function(){var root=document.documentElement;',
+    theme ? `root.setAttribute('data-theme','${theme}');` : '',
+    "addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||d.silt!=='theme')return;if(d.theme==='light'||d.theme==='dark')root.setAttribute('data-theme',d.theme)});",
+    "document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();parent.postMessage({silt:'selection',text:t.slice(0,500)},'*')});",
+    'var seen={},problems=[];',
+    "function report(kind,text){text=String(text).slice(0,300);if(seen[kind+text]||problems.length>=20)return;seen[kind+text]=1;problems.push({kind:kind,text:text});parent.postMessage({silt:'problems',problems:problems.slice()},'*')}",
+    "document.addEventListener('securitypolicyviolation',function(e){report('blocked',(e.blockedURI||'inline')+' ('+e.effectiveDirective+')')});",
+    "addEventListener('error',function(e){if(e.message)report('error',e.message+(e.lineno?' (line '+e.lineno+')':''))});",
+    "addEventListener('unhandledrejection',function(e){var r=e.reason;report('error','Unhandled rejection: '+(r&&r.message||r))});",
+    "addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,v=root.clientWidth;if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame')},300)});",
+    '})();',
+  ].join('')
+}
+
+export type FrameOptions = {
+  /** The script that reports selections and problems and follows the theme; an offline copy has none. */
+  probe?: boolean
+  /** The CSS the version's design system compiled to. */
+  style?: string | null
+  /** The viewer's theme, set on the page's root. */
+  theme?: FrameTheme | null
+  /** Silt's vendor route, an absolute URL ending in `/`, when libraries and fonts load through it. */
+  vendor?: string | null
+}
+
+/**
+ * An HTML artifact as its sandboxed frame loads it: with a policy that lets it reach nothing but the CDN allowlist,
+ * the frame's script and the design system's tokens before anything of its own, and its doctype kept first so it
+ * renders as written.
+ */
+export function sandboxedDocument(html: string, { probe = true, style = null, theme = null, vendor = null }: FrameOptions = {}): string {
+  if (vendor) {
+    html = throughVendor(html, vendor)
+    style = style && throughVendor(style, vendor)
+  }
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html)
   const first = doctype ? doctype[0].trim() : '<!doctype html>'
   const rest = doctype ? html.slice(doctype[0].length) : html
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`
-  return `${first}${policy}${selection ? `<script>${SELECTION_SCRIPT}</script>` : ''}${rest}`
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${framePolicy(vendor)}">`
+  const script = probe ? `<script>${frameScript(theme)}</script>` : ''
+  // The CSS can't close its own element, whatever a peer put in it.
+  const styled = style ? `<style data-silt="design-system">${style.replace(/<\//g, '<\\/')}</style>` : ''
+  return `${first}${policy}${script}${styled}${rest}`
+}
+
+/** A prompt asking the agent to fix what the viewer's frame reported in a version. */
+export function problemsPrompt(shown: ArtifactVersion, problems: FrameProblem[]): string {
+  const { id, title, version } = shown.artifact
+  const words = { blocked: 'Blocked', error: 'Script error', overflow: 'Too wide' }
+  const items = problems.map((problem) => `- ${words[problem.kind]}: ${problem.text}`)
+  return [
+    `The viewer's frame saw problems in the artifact "${title}" (id ${id}, version ${version}):`,
+    '',
+    ...items,
+    '',
+    `Fix them in a new version with silt_artifact and id ${id}. Only the CDNs and Google Fonts load; inline everything else.`,
+  ].join('\n')
 }
 
 /** An artifact's content as text. */
@@ -110,8 +190,8 @@ function escape(text: string): string {
  * same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
  * content inline, on a plain page titled with the artifact's name.
  */
-export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string): string {
-  if (artifact.kind === 'html') return sandboxedDocument(textOf(content), false)
+export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null): string {
+  if (artifact.kind === 'html') return sandboxedDocument(textOf(content), { probe: false, style })
   const title = escape(`${artifact.title} · v${artifact.version}`)
   const body = rendered ?? `<img alt="${escape(artifact.title)}" src="${dataUrl(content)}">`
   return [

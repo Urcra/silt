@@ -10,7 +10,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_agents::conventions::{self, Skill};
 use silt_daemon::protocol::{
-    ArtifactPut, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request, Response, SearchResult, TaskView,
+    ArtifactGuide, ArtifactPut, ArtifactRead, DesignSource, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request,
+    Response, SearchResult, TaskView,
 };
 use silt_daemon::{client, paths};
 
@@ -82,9 +83,12 @@ impl DaemonTools {
         Some(self.cwd.join(path).to_string_lossy().into_owned())
     }
 
+    /// The repository's and the person's skills, and Silt's own for a run
+    /// the web UI shows (ADR 0071).
     fn skills(&self) -> Vec<Skill> {
         let home = silt_os::home_dir();
-        conventions::discover_skills(&self.checkout, home.as_deref())
+        let builtin = self.shows.then(|| silt_agents::builtin::builtin_skills_root(&paths::data_dir()).ok()).flatten();
+        conventions::discover_skills_with(&self.checkout, home.as_deref(), builtin.as_deref())
     }
 
     fn skill(&self, name: &str) -> Result<Skill, String> {
@@ -151,8 +155,16 @@ impl silt_mcp::Backend for DaemonTools {
                 let path = self.path_arg(arguments).ok_or("missing argument path")?;
                 let caption = arguments.get("caption").and_then(Value::as_str).map(str::to_owned);
                 let title = caption.clone().unwrap_or_else(|| file_title(&path));
-                let artifact =
-                    NewArtifact { title, kind: "image".into(), content: None, path: Some(path), id: None, caption, inline: true };
+                let artifact = NewArtifact {
+                    title,
+                    kind: "image".into(),
+                    content: None,
+                    path: Some(path),
+                    id: None,
+                    caption,
+                    inline: true,
+                    design_system: None,
+                };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
             }
@@ -165,12 +177,48 @@ impl silt_mcp::Backend for DaemonTools {
                     id: arguments.get("id").and_then(Value::as_str).map(str::to_owned),
                     caption: None,
                     inline: false,
+                    design_system: arguments.get("design_system").and_then(Value::as_str).map(str::to_owned),
                 };
                 let kept = self.show(artifact)?;
-                return Ok(format!(
+                let mut out = format!(
                     "Artifact {} version {} is beside the conversation. For a new version, call silt_artifact again with id {}.",
                     kept.id, kept.version, kept.id
-                ));
+                );
+                if let Some(system) = &kept.design_system {
+                    let _ = write!(out, " Its frame has the {system} design system's tokens.");
+                }
+                if !kept.dropped.is_empty() {
+                    let _ = write!(out, "\nThe design system's tokens left out: {}.", kept.dropped.join("; "));
+                }
+                return Ok(out);
+            }
+            "silt_artifact_read" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
+                let id = text_arg(arguments, "id")?;
+                let version = arguments.get("version").and_then(Value::as_u64).and_then(|version| u32::try_from(version).ok());
+                let read: ArtifactRead =
+                    ask_daemon(&Request::Scoped { token, asking: Box::new(Request::ArtifactRead { id, version }) })?;
+                return read_back(&self.thread, &read);
+            }
+            "silt_artifact_check" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs checks its artifacts")?;
+                let id = text_arg(arguments, "id")?;
+                let version = arguments.get("version").and_then(Value::as_u64).and_then(|version| u32::try_from(version).ok());
+                let read: ArtifactRead =
+                    ask_daemon(&Request::Scoped { token, asking: Box::new(Request::ArtifactRead { id, version }) })?;
+                let dir = env::temp_dir()
+                    .join("silt-artifacts")
+                    .join(short(&self.thread))
+                    .join(format!("check-{}-v{}", read.id, read.version));
+                return crate::artifact_check::check(&read, &self.checkout, &dir);
+            }
+            "silt_artifact_guide" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs makes artifacts")?;
+                let kind = text_arg(arguments, "kind")?;
+                let asked = arguments.get("design_system").and_then(Value::as_str).map(str::to_owned);
+                let guide: ArtifactGuide =
+                    ask_daemon(&Request::Scoped { token, asking: Box::new(Request::ArtifactGuide { design_system: asked }) })?;
+                return Ok(guide_text(&kind, &guide, &self.skills()));
             }
             _ => {}
         }
@@ -255,6 +303,127 @@ impl silt_mcp::Backend for DaemonTools {
     }
 }
 
+/// The longest source `silt_artifact_read` returns whole, beside its file.
+const READ_INLINE_BYTES: usize = 64 << 10;
+
+/// Writes a version read back to a file of its own outside the checkout,
+/// and says where, with its source when it's short.
+fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;
+    let extension = match read.kind.as_str() {
+        "html" => "html",
+        "svg" => "svg",
+        "markdown" => "md",
+        "mermaid" => "mmd",
+        _ => read.media_type.rsplit('/').next().filter(|ext| ext.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or("bin"),
+    };
+    // The id is checked by the daemon; the thread's short form names the folder.
+    let dir = env::temp_dir().join("silt-artifacts").join(short(thread));
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!("{}-v{}.{extension}", read.id, read.version));
+    std::fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    let mut out = format!(
+        "Artifact {} \"{}\" ({}), version {} of {}, is at {}.",
+        read.id,
+        read.title,
+        read.kind,
+        read.version,
+        read.latest,
+        path.display()
+    );
+    if let Some(system) = &read.design_system {
+        let _ = write!(out, " It was styled with the {system} design system.");
+    }
+    let _ = write!(out, " Edit that file and pass its path to silt_artifact with id {} for a new version.", read.id);
+    match std::str::from_utf8(&bytes) {
+        Ok(text) if text.len() <= READ_INLINE_BYTES => {
+            let _ = write!(out, "\n\n{text}");
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+/// What `silt_artifact_guide` answers: the design guidance for `kind`, the
+/// design system that applies and the others there are (ADR 0071).
+fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
+    let body = |name: &str| skills.iter().find(|skill| skill.name == name).and_then(|skill| skill.body().ok());
+    let mut out = String::new();
+    match kind {
+        "html" => match body("artifact-design") {
+            Some(text) => out.push_str(&text),
+            None => out.push_str("Write a whole HTML document, and design it for both light and dark themes and every width.\n"),
+        },
+        "svg" => out.push_str(
+            "An SVG artifact shows as an image: nothing in it runs and it gets no design system's tokens, so give it its \
+own colours, readable in light and dark (a `prefers-color-scheme` rule inside the SVG works). For a chart, load the \
+artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming.\n",
+        ),
+        "mermaid" => out.push_str(
+            "Silt renders Mermaid in its own theme. Keep node labels short, label edges, and use the codebase's real \
+names. The artifact-diagramming skill says what a diagram should show.\n",
+        ),
+        "markdown" => out.push_str(
+            "Silt renders Markdown in its own styles, with no raw HTML. Lead with the point, use headings a reader can \
+scan, and tables for comparisons.\n",
+        ),
+        _ => out.push_str("An image shows as it is; give it a short title.\n"),
+    }
+    if kind != "html" {
+        return out;
+    }
+    let source = |source: DesignSource| match source {
+        DesignSource::Project => "the repository's",
+        DesignSource::Personal => "the person's own",
+        DesignSource::Builtin => "built into Silt",
+    };
+    out.push_str("\n# The design system\n\n");
+    match &guide.system {
+        Some(system) => {
+            let _ = writeln!(
+                out,
+                "This artifact uses {} (`{}`, {}), {}. Silt gives its frame these tokens as CSS custom properties for both \
+themes and sets `data-theme` from the viewer, so use them with a fallback, as in `var(--bg, #fff)`. Pass \
+`design_system` to silt_artifact to use another, or `none`.\n",
+                system.title,
+                system.name,
+                source(system.source),
+                guide.why.as_deref().unwrap_or("asked for")
+            );
+            if let Some(readme) = &system.readme {
+                let _ = writeln!(out, "## Its rules\n\n{}\n", readme.trim());
+            }
+            if !system.tokens.is_empty() {
+                out.push_str("## Its tokens\n\n");
+                for (family, names) in &system.tokens {
+                    let _ = writeln!(out, "- {family}: {}", names.join(", "));
+                }
+                out.push('\n');
+            }
+        }
+        None => out.push_str(
+            "None applies: the project names no default in `.silt/design-systems/default` and its workspace none. Work \
+from a small token set of your own, or pass `design_system` to silt_artifact with one of those below.\n\n",
+        ),
+    }
+    let others: Vec<String> = guide
+        .systems
+        .iter()
+        .filter(|system| guide.system.as_ref().is_none_or(|chosen| chosen.name != system.name))
+        .map(|system| format!("`{}` ({}, {})", system.name, system.title, source(system.source)))
+        .collect();
+    if !others.is_empty() {
+        let _ =
+            writeln!(out, "Other design systems: {}. silt_artifact_guide with `design_system` reads one.\n", others.join(", "));
+    }
+    out.push_str(
+        "For a chart, also load the artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming; to \
+write a design system for this project, design-system.\n",
+    );
+    out
+}
+
 fn render_page(page: &HistoryPage) -> String {
     let mut out = format!("Thread {} has {} history entries.", page.thread, page.total);
     match (page.entries.first(), page.entries.last()) {
@@ -301,4 +470,43 @@ fn task_line(task: &TaskView) -> String {
 fn clip(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
     if text.chars().count() > 160 { text.chars().take(160).collect::<String>() + "…" } else { text }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use silt_daemon::protocol::DesignSystemView;
+
+    fn system(name: &str, source: DesignSource, readme: Option<&str>) -> DesignSystemView {
+        DesignSystemView {
+            name: name.into(),
+            title: name.to_uppercase(),
+            source,
+            readme: readme.map(str::to_owned),
+            tokens: [("color".to_owned(), vec!["--bg".to_owned(), "--fg-1".to_owned()])].into(),
+        }
+    }
+
+    #[test]
+    fn the_guide_gives_the_design_skill_the_system_that_applies_and_the_others() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let root = silt_agents::builtin::builtin_skills_root(data.path()).expect("skills");
+        let checkout = tempfile::tempdir().expect("temp dir");
+        let skills = conventions::discover_skills_with(checkout.path(), None, Some(&root));
+        let guide = ArtifactGuide {
+            system: Some(system("nous", DesignSource::Builtin, Some("Use `accent` sparingly."))),
+            why: Some("the project's default".into()),
+            systems: vec![system("nous", DesignSource::Builtin, None), system("acme", DesignSource::Project, None)],
+        };
+        let text = guide_text("html", &guide, &skills);
+        assert!(text.starts_with("# Making an artifact"), "{text}");
+        assert!(text.contains("This artifact uses NOUS (`nous`, built into Silt), the project's default."), "{text}");
+        assert!(text.contains("Use `accent` sparingly.") && text.contains("- color: --bg, --fg-1"), "{text}");
+        assert!(text.contains("Other design systems: `acme` (ACME, the repository's)."), "{text}");
+
+        let none = ArtifactGuide { system: None, why: None, systems: guide.systems.clone() };
+        assert!(guide_text("html", &none, &skills).contains("None applies"));
+        let svg = guide_text("svg", &guide, &skills);
+        assert!(svg.contains("artifact-dataviz") && !svg.contains("Other design systems"), "{svg}");
+    }
 }
