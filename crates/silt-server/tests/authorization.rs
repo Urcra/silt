@@ -1523,6 +1523,7 @@ async fn a_forks_history_in_the_hosted_app_includes_what_it_inherited() {
 /// sandbox's policy, and nothing for a key that wasn't made.
 #[tokio::test]
 async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
+    use base64::Engine as _;
     use silt_log::{ConvOp, SessionFile, SessionRef};
     let mut world = world(Visibility::Team("core".into())).await;
     let alice = &world.alice;
@@ -1530,9 +1531,15 @@ async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
     let blob = BlobStore::hash(html);
     let put = alice.request(Method::PUT, &format!("/v1/blobs/{blob}")).body(html.to_vec());
     assert_eq!(alice.send(put).await, StatusCode::NO_CONTENT);
+    let data = br#"{"n": 3}"#;
+    let data_blob = BlobStore::hash(data);
+    let put = alice.request(Method::PUT, &format!("/v1/blobs/{data_blob}")).body(data.to_vec());
+    assert_eq!(alice.send(put).await, StatusCode::NO_CONTENT);
     let record = serde_json::json!({
         "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Rescan benchmark", "kind": "html",
-        "media_type": "text/html", "blob": blob.to_string(), "size": html.len(), "inline": false
+        "media_type": "text/html", "blob": blob.to_string(), "size": html.len(), "inline": false,
+        "files": {"data.json": {"blob": data_blob.to_string(), "size": data.len(), "media_type": "application/json"}},
+        "capabilities": {"assets": {}}
     });
     let session = SessionRef { agent: "acp".into(), id: "s".into() };
     let family = &mut world.family;
@@ -1585,7 +1592,33 @@ async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
     let unknown = anyone.get(format!("{}/f/{}/", bob.base, "0".repeat(64))).send().await.expect("sends");
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     let file = anyone.get(format!("{}{path}data.json", bob.base)).send().await.expect("sends");
-    assert_eq!(file.status(), StatusCode::NOT_FOUND, "a version has no files yet");
+    assert_eq!(file.status(), StatusCode::OK, "a version's file is served beside its page");
+    assert_eq!(file.headers()[reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    assert_eq!(file.text().await.expect("text"), r#"{"n": 3}"#);
+    let missing = anyone.get(format!("{}{path}missing.json", bob.base)).send().await.expect("sends");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // Files people add to the page (ADR 0074): the owner adds one, someone
+    // who may only comment can't, and the frame serves it.
+    let assets = format!("/threads/{THREAD}/artifacts/0123456789ab/assets");
+    let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfake");
+    let add = serde_json::json!({"op": "add", "name": "chart.png", "media_type": "image/png", "data": png});
+    let carol = browser_of("carol").await;
+    assert_eq!(carol.post(&assets, add.clone()).await.0, StatusCode::FORBIDDEN, "carol only comments");
+    let owner = Browser::sign_in(&world.alice, "alice").await;
+    let (status, added) = owner.post(&assets, add).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let url = added["url"].as_str().expect("a url");
+    let served = anyone.get(format!("{}{path}{url}", bob.base)).send().await.expect("sends");
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(served.headers()[reqwest::header::CONTENT_TYPE], "image/png");
+    let (_, listed) = bob.post(&assets, serde_json::json!({"op": "list"})).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    let delete = serde_json::json!({"op": "delete", "id": added["id"]});
+    assert_eq!(carol.post(&assets, delete.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(owner.post(&assets, delete).await.0, StatusCode::OK);
+    let gone = anyone.get(format!("{}{path}{url}", bob.base)).send().await.expect("sends");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
 }
 
 /// An artifact's page data on the server (ADR 0072): a push is checked

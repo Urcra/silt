@@ -445,6 +445,24 @@ pub struct ArtifactView {
     /// rather than an agent making it (ADR 0072).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
+    /// The files beside an HTML version's page, by path, which its frame
+    /// fetches relative to itself (ADR 0074).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<std::collections::BTreeMap<String, crate::artifact::ArtifactFile>>,
+}
+
+impl ArtifactView {
+    /// What `blob` is served as, when this version names it: its page, the
+    /// CSS its design system compiled to, or one of its files.
+    pub fn media_type_of(&self, blob: &str) -> Option<String> {
+        if self.blob == blob {
+            return Some(self.media_type.clone());
+        }
+        if self.style.as_deref() == Some(blob) {
+            return Some("text/css".to_owned());
+        }
+        self.files.as_ref()?.values().find(|file| file.blob == blob).map(|file| file.media_type.clone())
+    }
 }
 
 /// An artifact's content, as its route answers it.

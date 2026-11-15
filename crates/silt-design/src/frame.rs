@@ -36,6 +36,23 @@ pub fn policy(vendor: Option<&str>) -> String {
     )
 }
 
+/// [`policy`] for a frame served at `files`, an absolute URL ending in `/`,
+/// whose page loads and fetches its own files and assets from there
+/// (ADR 0074); a frame's origin is opaque, so it names the address itself.
+pub fn policy_with_files(vendor: Option<&str>, files: &str) -> String {
+    let (scripts, styles, fonts) = match vendor {
+        Some(vendor) => (vendor.to_owned(), vendor.to_owned(), vendor.to_owned()),
+        None => (SCRIPT_SOURCES.join(" "), STYLE_SOURCES.join(" "), FONT_SOURCES.join(" ")),
+    };
+    format!(
+        "default-src 'none'; script-src 'unsafe-inline' {scripts} {files}; style-src 'unsafe-inline' {styles} {files}; font-src data: {fonts} {files}; img-src data: blob: {files}; media-src data: blob: {files}; connect-src {files}"
+    )
+}
+
+/// The policy a version's own file is served under when a browser could
+/// render it as a page of its own: a sandbox that runs nothing.
+pub const FILE_POLICY: &str = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+
 /// `text` with every allowlisted CDN address going through `vendor`, an
 /// absolute URL ending in `/`.
 pub fn through_vendor(text: &str, vendor: &str) -> String {
@@ -281,6 +298,17 @@ pub fn compose(html: &str, parts: &FrameParts<'_>) -> String {
 /// An HTML version as a frame loads it to be checked, in `theme`.
 pub fn checked_document(html: &str, style: Option<&str>, theme: Theme) -> String {
     compose(html, &FrameParts { style, theme: Some(theme), ..FrameParts::default() })
+}
+
+#[cfg(test)]
+mod files_policy_tests {
+    #[test]
+    fn a_frame_with_files_reaches_its_own_address_and_nothing_else() {
+        let policy = super::policy_with_files(None, "http://127.0.0.1:9/f/k/");
+        assert!(policy.contains("connect-src http://127.0.0.1:9/f/k/"), "{policy}");
+        assert!(policy.contains("img-src data: blob: http://127.0.0.1:9/f/k/"), "{policy}");
+        assert!(policy.starts_with("default-src 'none';"));
+    }
 }
 
 #[cfg(test)]

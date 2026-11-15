@@ -174,7 +174,21 @@ function sampleClient(ns) {
   sample.limits = function () { return ns.limits(); };
   return Object.freeze(sample);
 }
-var clients = { db: database, artifact: artifactClient, user: userClient, sample: sampleClient };
+function assetsClient(ns) {
+  return Object.freeze({
+    upload: function (blob, name) { return ns.upload({ blob: blob, name: name }); },
+    list: function () { return ns.list(); },
+    delete: function (id) { return ns['delete']({ id: String(id) }); }
+  });
+}
+function filesClient(ns) {
+  return Object.freeze({
+    list: function (opts) { opts = opts || {}; return ns.list({ path: opts.path || '', recursive: !!opts.recursive, cursor: opts.cursor || null }); },
+    read: function (path, opts) { opts = opts || {}; return ns.read({ path: String(path), at: opts.at || null }); },
+    download: function (path) { return ns.download({ path: String(path) }); }
+  });
+}
+var clients = { db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient };
 var made = {};
 window.silt = Object.freeze({
   version: '1',

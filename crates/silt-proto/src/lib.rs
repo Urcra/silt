@@ -1310,6 +1310,12 @@ pub enum RemoteCommand {
     Sample {
         question: String,
     },
+    /// The thread's files for a page that declares `files` (ADR 0078), as
+    /// the device that holds the family reads them.
+    PageFiles {
+        artifact: String,
+        asked: crate::page::FilesRequest,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1349,7 +1355,10 @@ impl Capabilities {
             | RemoteCommand::SignIn { .. }
             | RemoteCommand::SignInCode { .. }
             | RemoteCommand::SignInCancel => (self.run_agents, "start and stop agents"),
-            RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } | RemoteCommand::FileAt { .. } => {
+            RemoteCommand::MrShow { .. }
+            | RemoteCommand::MrSeen { .. }
+            | RemoteCommand::FileAt { .. }
+            | RemoteCommand::PageFiles { .. } => {
                 (self.review, "review merge requests")
             }
             RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),

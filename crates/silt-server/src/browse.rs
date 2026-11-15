@@ -26,6 +26,9 @@ use crate::app::Browser;
 use crate::index::Conversation;
 use crate::{ApiError, Caller, Server, UserId, Viewer, bad_request, id_from, not_found, now_ms};
 
+/// The most a page's save or added file may send: the largest asset, as base64.
+const PAGE_FILE_BODY: usize = 28 << 20;
+
 pub(crate) fn routes() -> Router<Server> {
     Router::new()
         .route("/app/api/threads", get(threads))
@@ -34,7 +37,14 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/app/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/app/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
-        .route("/app/api/threads/{id}/artifacts/{artifact}/publish", post(publish_artifact))
+        .route(
+            "/app/api/threads/{id}/artifacts/{artifact}/publish",
+            post(publish_artifact).layer(axum::extract::DefaultBodyLimit::max(PAGE_FILE_BODY)),
+        )
+        .route(
+            "/app/api/threads/{id}/artifacts/{artifact}/assets",
+            post(page_assets).layer(axum::extract::DefaultBodyLimit::max(PAGE_FILE_BODY)),
+        )
         .route("/app/api/threads/{id}/viewer", get(page_viewer))
         .route("/app/api/threads/{id}/turns", get(turns))
         .route("/app/api/threads/{id}/commits", get(commits))
@@ -412,13 +422,7 @@ async fn artifact_content(
     let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
     let named = |entries: &[(DeltaId, HistoryEntry)]| {
-        entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
-            if artifact.blob == blob {
-                Some(artifact.media_type.clone())
-            } else {
-                (artifact.style.as_deref() == Some(blob.as_str())).then(|| "text/css".to_owned())
-            }
-        })
+        entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| artifact.media_type_of(&blob))
     };
     let media_type = match lineage_entries(&server, &viewer, row).await {
         Some(entries) => named(&entries),
@@ -439,18 +443,42 @@ async fn page_data(
     Path((id, artifact)): Path<(String, String)>,
     Json(request): Json<silt_proto::page::PageRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    use silt_proto::page::{Level, Rules};
+    use silt_proto::page::Rules;
     let artifact_id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
-    let viewer = server.viewer(browser.user).await?;
-    let readable = Readable::rows(&server, browser.user, &viewer).await?;
-    let row = readable.row(&id)?;
-    let declared = readable_artifact(&server, browser.user, &id, &artifact, None).await?.capabilities;
-    let config = declared
-        .as_ref()
-        .and_then(|declared| declared.get("db"))
-        .ok_or_else(|| bad_request("this artifact doesn't declare db"))?;
+    let page = page_of(&server, browser.user, &id, artifact_id).await?;
+    let config = page.declared.get("db").ok_or_else(|| bad_request("this artifact doesn't declare db"))?;
     let rules = Rules::of(Some(config)).map_err(bad_request)?;
-    let me = silt_proto::page::person_id(&readable.me);
+    if let Some(read) = silt_proto::page::read(&page.docs, &request, &rules, &page.me, page.level) {
+        return Ok(Json(read));
+    }
+    let writes = request.writes().map_err(bad_request)?;
+    let ops =
+        silt_proto::page::page_ops(artifact_id, &page.docs, writes, &rules, &page.me, page.level).map_err(crate::forbidden)?;
+    let written = ops.len();
+    for op in ops {
+        crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
+    }
+    Ok(Json(serde_json::json!({ "written": written })))
+}
+
+/// An artifact's page as a person sees it: what its latest version
+/// declares, its documents along the thread's lineage, and the person's id
+/// and level there (ADR 0072).
+struct PageOf {
+    family: silt_types::FamilyId,
+    thread: silt_types::ThreadId,
+    declared: silt_proto::artifact::Capabilities,
+    docs: silt_log::page::Documents,
+    me: String,
+    level: silt_proto::page::Level,
+}
+
+async fn page_of(server: &Server, user: UserId, id: &str, artifact: silt_types::ArtifactId) -> Result<PageOf, ApiError> {
+    use silt_proto::page::Level;
+    let viewer = server.viewer(user).await?;
+    let readable = Readable::rows(server, user, &viewer).await?;
+    let row = readable.row(id)?;
+    let declared = readable_artifact(server, user, id, &artifact.to_string(), None).await?.capabilities.unwrap_or_default();
     let level = if row.owner == readable.me {
         Level::Owner
     } else if readable.collaborators.get(&row.id).is_some_and(|names| names.contains(&readable.me)) {
@@ -465,18 +493,69 @@ async fn page_data(
         for delta in &browsed.log {
             let _ = graph.add(delta.span, &delta.parents);
         }
-        silt_log::page_documents_in(&browsed.log, &graph, row.id, artifact_id)
+        silt_log::page_documents_in(&browsed.log, &graph, row.id, artifact)
     };
-    if let Some(read) = silt_proto::page::read(&docs, &request, &rules, &me, level) {
-        return Ok(Json(read));
+    Ok(PageOf { family: row.family, thread: row.id, declared, docs, me: silt_proto::page::person_id(&readable.me), level })
+}
+
+/// Adds, lists or deletes the files people added to a page (ADR 0074).
+async fn page_assets(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::AssetRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use base64::Engine as _;
+    use silt_proto::page::{AssetRequest, AssetView, Level};
+    let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    let page = page_of(&server, browser.user, &id, artifact).await?;
+    let config = page.declared.get("assets").ok_or_else(|| bad_request("this artifact doesn't declare assets"))?;
+    match asked {
+        AssetRequest::List => Ok(Json(serde_json::to_value(silt_proto::page::assets(&page.docs)).unwrap_or_default())),
+        AssetRequest::Add { name, media_type, data } => {
+            if page.level < silt_proto::page::asset_level(config) {
+                return Err(crate::forbidden("you may not add files to this page"));
+            }
+            if !silt_proto::artifact::asset_media_type_ok(&media_type) {
+                return Err(bad_request(format!("a page's files may not be {media_type}")));
+            }
+            let name: String = name.chars().filter(|char| !char.is_control()).take(200).collect();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data.trim())
+                .map_err(|_| bad_request("the file's base64 doesn't decode"))?;
+            if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
+                return Err(bad_request("the file is larger than a page keeps"));
+            }
+            let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the file couldn't be kept"))?;
+            let asset = format!("{:032x}", uuid::Uuid::new_v4().as_u128())[..12].to_owned();
+            let size = bytes.len() as u64;
+            let op = silt_log::PageOp::Asset {
+                artifact,
+                asset: asset.clone(),
+                blob,
+                name: name.clone(),
+                media_type: media_type.clone(),
+                size,
+            };
+            crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
+            Ok(Json(
+                serde_json::to_value(AssetView { url: format!("_assets/{asset}"), id: asset, name, media_type, size })
+                    .unwrap_or_default(),
+            ))
+        }
+        AssetRequest::Delete { id: asset } => {
+            if page.level < Level::Collaborator {
+                return Err(crate::forbidden("only the thread's owner and collaborators delete a page's files"));
+            }
+            let path = format!("_assets/{asset}");
+            if !silt_proto::page::asset_id_ok(&asset) || !page.docs.contains_key(&path) {
+                return Err(not_found());
+            }
+            let op = silt_log::PageOp::Deleted { artifact, path };
+            crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
+            Ok(Json(serde_json::json!({ "deleted": asset })))
+        }
     }
-    let writes = request.writes().map_err(bad_request)?;
-    let ops = silt_proto::page::page_ops(artifact_id, &docs, writes, &rules, &me, level).map_err(crate::forbidden)?;
-    let written = ops.len();
-    for op in ops {
-        crate::writes::write_as_with(&server, browser, row.family, row.id, None, Op::Page(op)).await?;
-    }
-    Ok(Json(serde_json::json!({ "written": written })))
 }
 
 #[derive(Deserialize)]
@@ -759,11 +838,12 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
         boot: grant.boot.as_deref(),
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&content), &parts);
+    let files = format!("{}/f/{key}/", server.config().public_url());
+    let policy = silt_design::frame::policy_with_files(vendor.as_deref(), &files);
     let mut response = (StatusCode::OK, page).into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    if let Ok(value) = HeaderValue::from_str(&format!("sandbox allow-scripts; {}", silt_design::frame::policy(vendor.as_deref())))
-    {
+    if let Ok(value) = HeaderValue::from_str(&format!("sandbox allow-scripts; {policy}")) {
         headers.insert(header::CONTENT_SECURITY_POLICY, value);
     }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
@@ -773,9 +853,57 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
     response
 }
 
-/// A file of a frame's version; versions have none yet (ADR 0074).
-pub(crate) async fn frame_file(Path((_key, _path)): Path<(String, String)>) -> axum::http::StatusCode {
-    axum::http::StatusCode::NOT_FOUND
+/// A file beside a frame's version, or an asset someone added to its page
+/// (ADR 0074), for the person the key was made for.
+pub(crate) async fn frame_file(
+    State(server): State<Server>,
+    Path((key, path)): Path<(String, String)>,
+) -> axum::response::Response {
+    use axum::http::{HeaderValue, StatusCode, header};
+    use axum::response::IntoResponse;
+    let not_found = || (StatusCode::NOT_FOUND, "no such file").into_response();
+    let grant = server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key);
+    let Some(grant) = grant else {
+        return not_found();
+    };
+    let found = match path.strip_prefix("_assets/") {
+        Some(asset) if silt_proto::page::asset_id_ok(asset) => {
+            let Ok(artifact) = grant.artifact.parse::<silt_types::ArtifactId>() else {
+                return not_found();
+            };
+            let Ok(page) = page_of(&server, grant.user, &grant.thread, artifact).await else {
+                return not_found();
+            };
+            page.docs.get(&format!("_assets/{asset}")).and_then(|doc| {
+                Some((doc["blob"].as_str()?.parse::<silt_types::BlobHash>().ok()?, doc["media_type"].as_str()?.to_owned()))
+            })
+        }
+        Some(_) => None,
+        None => match readable_artifact(&server, grant.user, &grant.thread, &grant.artifact, grant.version).await {
+            Ok(view) => view
+                .files
+                .and_then(|files| files.get(&path).cloned())
+                .and_then(|file| Some((file.blob.parse::<silt_types::BlobHash>().ok()?, file.media_type))),
+            Err(_) => None,
+        },
+    };
+    let Some((blob, media_type)) = found else {
+        return not_found();
+    };
+    let Ok(bytes) = server.shared.blobs.get(blob).await else {
+        return not_found();
+    };
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&media_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(silt_design::frame::FILE_POLICY));
+    headers.insert("cross-origin-resource-policy", HeaderValue::from_static("cross-origin"));
+    response
 }
 
 async fn turns(

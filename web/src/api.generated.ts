@@ -630,7 +630,14 @@ capabilities?: Record<string, Record<string, unknown>> | null,
  * The person this version was saved for, when the page saved itself
  * rather than an agent making it (ADR 0072).
  */
-by?: string | null, };
+by?: string | null, 
+/**
+ * The files beside an HTML version's page, by path, which its frame
+ * fetches relative to itself (ADR 0074).
+ */
+files?: { [key in string]: ArtifactFile } | null, };
+
+export type ArtifactFile = { blob: string, size: number, media_type: string, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 

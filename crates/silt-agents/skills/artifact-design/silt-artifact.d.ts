@@ -132,3 +132,27 @@ interface SiltSample {
   json(input: string | { role: 'user' | 'assistant'; content: string }[], opts?: { onText?: (said: { text: string; delta: string }) => void }): Promise<any>
   limits(): Promise<{ images: boolean; perMinute: number }>
 }
+
+// `assets` (declare `{"assets": {}}`, or `{"assets": {"upload": "comment"}}`
+// to let anyone who may comment add one): files people add to the page,
+// kept with the thread. Images, video, audio, PDFs, fonts and text; never a
+// page or a script. At most 20 MiB each. Keep an asset's `id` in `db` as the
+// pointer, and use `url` (relative to the page) as an <img> or <a> source.
+interface SiltAssets {
+  upload(file: Blob, name?: string): Promise<{ id: string; url: string; sizeBytes: number; contentType: string }>
+  list(): Promise<{ assets: { id: string; name: string; media_type: string; size: number; url: string }[]; usage: { bytes: number } }>
+  /** Only on a deliberate action; the owner and collaborators only. */
+  delete(id: string): Promise<unknown>
+}
+
+// `files` (declare `{"files": {}}`, or `{"files": {"paths": ["docs/**"]}}`):
+// the thread's files, read from its history as the viewer, never from a
+// checkout. Folders the workspace denies are refused. Insert what you read
+// with `textContent`, and don't copy it into `db` unless the person asks.
+interface SiltFiles {
+  list(opts?: { path?: string; recursive?: boolean; cursor?: string }): Promise<{ entries: { path: string; kind: 'file' | 'folder' }[]; cursor: string | null }>
+  /** Text files, at most 4 MiB; `at` a version for an older one. */
+  read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
+  /** Asks the viewer to save it. */
+  download(path: string): Promise<{ saved: true }>
+}

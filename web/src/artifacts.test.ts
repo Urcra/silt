@@ -15,6 +15,7 @@ import {
   textOf,
   throughVendor,
   versionOf,
+  withFilesInlined,
 } from './artifacts'
 import { FRAME_FIXTURES, OFFLINE_STUB } from './frame.generated'
 
@@ -170,5 +171,23 @@ describe('the frame contract', () => {
       })
       expect(composed).toBe(fixture.out)
     }
+  })
+})
+
+describe("the offline copy of a page with files", () => {
+  it('carries its files inside: as data URIs where named, and answered by fetch', async () => {
+    const files = { 'css/site.css': { media_type: 'text/css; charset=utf-8', data: btoa('h1{}') }, 'data.json': { media_type: 'application/json', data: btoa('{"n":3}') } }
+    const html = withFilesInlined('<!doctype html><link rel="stylesheet" href="./css/site.css"><img src="data.json">', files)
+    expect(html.startsWith('<!doctype html><script>')).toBe(true)
+    expect(html).toContain(`href="data:text/css;base64,${btoa('h1{}')}"`)
+    expect(html).not.toContain('"./css/site.css"')
+    expect(withFilesInlined('<p>none</p>', {})).toBe('<p>none</p>')
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]
+    const fetched: unknown[] = []
+    const scope = { fetch: (url: unknown) => (fetched.push(url), Promise.resolve(new Response('net'))) }
+    new Function('window', script)(scope)
+    expect(await (await scope.fetch('data.json')).json()).toEqual({ n: 3 })
+    await scope.fetch('https://example.com/x')
+    expect(fetched).toEqual(['https://example.com/x'])
   })
 })

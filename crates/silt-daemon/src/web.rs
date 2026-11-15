@@ -43,6 +43,9 @@ struct Web {
 /// daemon, which hands them out, and the web server, which trades them in.
 type OneTimeCodes = Arc<Mutex<HashMap<String, Instant>>>;
 
+/// The most a page's save or added file may send: the largest asset, as base64.
+const PAGE_FILE_BODY_BYTES: usize = 28 << 20;
+
 /// How long a one-time code may wait for its browser.
 const CODE_TTL: Duration = Duration::from_secs(60);
 
@@ -130,8 +133,16 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
-        .route("/api/threads/{id}/artifacts/{artifact}/publish", post(publish_artifact))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/publish",
+            post(publish_artifact).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
         .route("/api/threads/{id}/viewer", get(page_viewer))
+        .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/assets",
+            post(page_assets).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
         .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
@@ -679,6 +690,24 @@ async fn sample(
     ask(&web, Request::Sample { thread, artifact: Some(artifact), ask: asked.ask, input: asked.input }).await
 }
 
+/// Adds, lists or deletes the files people added to a page (ADR 0074).
+async fn page_assets(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::AssetRequest>,
+) -> HttpResponse {
+    ask(&web, Request::PageAssets { thread, artifact, asked }).await
+}
+
+/// The thread's files, read by a page that declares `files` (ADR 0078).
+async fn page_files(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::FilesRequest>,
+) -> HttpResponse {
+    ask(&web, Request::PageFiles { thread, artifact, asked }).await
+}
+
 async fn page_viewer(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::PageViewer { thread }).await
 }
@@ -763,12 +792,54 @@ async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: H
         boot: grant.boot.as_deref(),
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
-    framed_response(page, &silt_design::frame::policy(vendor.as_deref()))
+    let files = format!("http://{host}/f/{key}/");
+    framed_response(page, &silt_design::frame::policy_with_files(vendor.as_deref(), &files))
 }
 
-/// A file of a frame's version; versions have none yet (ADR 0074).
-async fn frame_file(Path((_key, _path)): Path<(String, String)>) -> HttpResponse {
-    StatusCode::NOT_FOUND.into_response()
+/// A file beside a frame's version, or an asset someone added to its page
+/// (ADR 0074), fetched by the frame from its own address.
+async fn frame_file(State(web): State<Web>, Path((key, path)): Path<(String, String)>) -> HttpResponse {
+    let not_found = || (StatusCode::NOT_FOUND, "no such file").into_response();
+    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+        return not_found();
+    };
+    let request = match path.strip_prefix("_assets/") {
+        Some(asset) if silt_proto::page::asset_id_ok(asset) => {
+            Request::PageAsset { thread: grant.thread.clone(), artifact: grant.artifact.clone(), asset: asset.to_owned() }
+        }
+        Some(_) => return not_found(),
+        None if silt_proto::artifact::file_path_ok(&path) => {
+            Request::ArtifactFile { thread: grant.thread.clone(), id: grant.artifact.clone(), version: grant.version, path }
+        }
+        None => return not_found(),
+    };
+    let Ok(answer) = answer(&web, request).await else {
+        return not_found();
+    };
+    let Ok(content) = serde_json::from_value::<silt_proto::view::ArtifactContent>(answer) else {
+        return not_found();
+    };
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&content.data) else {
+        return not_found();
+    };
+    file_response(bytes, &content.media_type)
+}
+
+/// A frame's file: readable by the frame's opaque origin, never sniffed,
+/// and run as nothing if opened as a page of its own.
+fn file_response(bytes: Vec<u8>, media_type: &str) -> HttpResponse {
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    if let Ok(value) = header::HeaderValue::from_str(media_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, header::HeaderValue::from_static(silt_design::frame::FILE_POLICY));
+    headers.insert("cross-origin-resource-policy", header::HeaderValue::from_static("cross-origin"));
+    response
 }
 
 fn framed_response(page: String, policy: &str) -> HttpResponse {

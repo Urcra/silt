@@ -1661,6 +1661,97 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     assert!(!refused, "only an artifact that declares sample asks");
 }
 
+/// A page is built from files beside it, which its frame fetches from its
+/// own address; a version can change one file alone, and the rest carry
+/// over. People add files to the page, served beside it too; and the page
+/// reads the thread's files within the globs it declares (ADR 0074, 0078).
+#[test]
+fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
+    use base64::Engine as _;
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact files"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact files");
+    let made = artifacts_of(&api, &thread);
+    assert_eq!(made[0]["files"]["data.json"]["media_type"], "application/json", "{made:?}");
+    let id = made[0]["id"].as_str().expect("id").to_owned();
+    let base = api.base.trim_end_matches('/').to_owned();
+    let frame = |version: u32| {
+        let made =
+            api.ok("POST", &format!("/api/threads/{thread}/artifacts/{id}/frame"), Some(serde_json::json!({"version": version})));
+        made["path"].as_str().expect("a frame path").to_owned()
+    };
+    let fetch = |url: &str| {
+        let output = Command::new("curl").args(["-s", "-D", "-", url]).output().expect("curl runs");
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+        (head.to_ascii_lowercase(), body.to_owned())
+    };
+    let first = frame(1);
+    let (head, _) = fetch(&format!("{base}{first}"));
+    assert!(head.contains(&format!("connect-src {}{first}", base.to_ascii_lowercase())), "{head}");
+    let (head, body) = fetch(&format!("{base}{first}data.json"));
+    assert!(head.contains(" 200 ") && head.contains("access-control-allow-origin: *"), "{head}");
+    assert_eq!(body, r#"{"n": 3}"#);
+    assert!(fetch(&format!("{base}{first}missing.json")).0.contains(" 404 "));
+
+    let sent =
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "Artifact files edit"})));
+    assert!(sent == "sent" || sent == "queued", "{sent}");
+    settled_history(&api, &thread, "Done: Artifact files edit");
+    let all = artifacts_of(&api, &thread);
+    let second = all.last().expect("a version");
+    assert_eq!(second["version"], 2, "{all:?}");
+    assert_eq!(second["files"]["css/site.css"], made[0]["files"]["css/site.css"], "an unchanged file carries over");
+    assert_eq!(second["blob"], made[0]["blob"], "the page is as it was");
+    assert_eq!(fetch(&format!("{base}{}data.json", frame(2))).1, r#"{"n": 4}"#);
+
+    let assets = format!("/api/threads/{thread}/artifacts/{id}/assets");
+    let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfake");
+    let added = api.ok(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "chart.png", "media_type": "image/png", "data": png})),
+    );
+    let url = added["url"].as_str().expect("an asset url");
+    let (head, _) = fetch(&format!("{base}{}{url}", frame(2)));
+    assert!(
+        head.contains(" 200 ") && head.contains("content-type: image/png"),
+        "an added file is served beside the page: {head}"
+    );
+    let (refused, _) = api.call(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "x.html", "media_type": "text/html", "data": png})),
+    );
+    assert!(!refused, "a page's files are never pages");
+    let listed = api.ok("POST", &assets, Some(serde_json::json!({"op": "list"})));
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": added["id"]})));
+    assert_eq!(api.ok("POST", &assets, Some(serde_json::json!({"op": "list"}))).as_array().map(Vec::len), Some(0));
+
+    let files = format!("/api/threads/{thread}/artifacts/{id}/files");
+    let listed = api.ok("POST", &files, Some(serde_json::json!({"op": "list", "recursive": true})));
+    let paths: Vec<&str> =
+        listed["entries"].as_array().expect("entries").iter().filter_map(|entry| entry["path"].as_str()).collect();
+    assert!(
+        paths.contains(&"src/main.rs") && paths.iter().all(|path| path.starts_with("src/")),
+        "only what it declares: {paths:?}"
+    );
+    let read = api.ok("POST", &files, Some(serde_json::json!({"op": "read", "path": "src/main.rs"})));
+    assert!(read["text"].as_str().is_some_and(|text| text.contains("fn main")), "{read}");
+    let (outside, _) = api.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "README.md"})));
+    assert!(!outside, "a file outside its globs is refused");
+}
+
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
 /// takes the design system the repository names as its default; the CSS
 /// its tokens compiled to is served beside the page, a new version keeps

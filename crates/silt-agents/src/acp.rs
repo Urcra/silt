@@ -533,6 +533,7 @@ mod tests {
             description: Some("How long a rescan takes".into()),
             capabilities: Some([("db".to_owned(), serde_json::json!({}))].into()),
             by: Some("ann".into()),
+            files: None,
         };
         let read = read_line(&artifact(&shown));
         assert_eq!(read.entries, vec![Entry::Artifact(Box::new(shown.clone()))]);

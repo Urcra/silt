@@ -237,6 +237,11 @@ fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &
         return Err(refused("write"));
     };
     match op {
+        PageOp::Deleted { path, .. } if path.starts_with("_assets/") => {
+            if !declared.contains_key("assets") || level < Level::Collaborator {
+                return Err(refused("delete the files of"));
+            }
+        }
         PageOp::Set { path, .. } | PageOp::Patched { path, .. } | PageOp::Deleted { path, .. } => {
             let rules = Rules::of(declared.get("db")).map_err(|_| refused("write"))?;
             if !declared.contains_key("db") || !rules.may_write(path, &ledger.me, level) {

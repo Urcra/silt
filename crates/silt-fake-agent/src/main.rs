@@ -501,6 +501,12 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_read", serde_json::json!({"id": last}))
+    } else if prompt.contains("Artifact files edit")
+        && let Some(last) = last.clone()
+    {
+        // A version that changes only one of its files (ADR 0074).
+        let edit = serde_json::json!({"old": "3", "new": "4", "file": "data.json"});
+        ("silt_artifact", serde_json::json!({"id": last, "edits": [edit], "note": "More"}))
     } else if prompt.contains("Artifact edit")
         && let Some(last) = last.clone()
     {
@@ -530,6 +536,16 @@ silt.use('db').then(function(db){if(!db){document.getElementById('count').textCo
 db.collection('tasks').onSnapshot(function(docs){document.getElementById('count').textContent='tasks: '+docs.length});\
 document.getElementById('add').onclick=function(){db.collection('tasks').add({done:false})}});</script>";
             arguments = serde_json::json!({"title": "Checklist", "kind": "html", "content": page, "capabilities": {"db": {}}});
+        }
+        if prompt.contains("Artifact files") {
+            // A page built from files beside it, that takes uploads and reads the thread's files (ADR 0074, 0078).
+            arguments = serde_json::json!({
+                "title": "Report",
+                "kind": "html",
+                "content": "<!doctype html><link rel=\"stylesheet\" href=\"css/site.css\"><h1>Report</h1><p id=\"n\">n: asking</p><script>fetch('data.json').then(function(r){return r.json()}).then(function(d){document.getElementById('n').textContent='n: '+d.n})</script>",
+                "files": {"data.json": {"content": "{\"n\": 3}"}, "css/site.css": {"content": "h1 { color: teal }"}},
+                "capabilities": {"assets": {}, "files": {"paths": ["src/**"]}}
+            });
         }
         if prompt.contains("Artifact saver") {
             // A page that saves itself and asks an agent (ADR 0072).

@@ -160,6 +160,7 @@ impl silt_mcp::Backend for DaemonTools {
                     note: None,
                     description: None,
                     capabilities: None,
+                    files: Default::default(),
                 };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
@@ -189,6 +190,7 @@ impl silt_mcp::Backend for DaemonTools {
                         Some(Value::Object(declared)) => Some(declared.clone()),
                         Some(_) => return Err("capabilities is an object of names and configs".into()),
                     },
+                    files: self.files_arg(arguments)?,
                 };
                 let kept = self.show(artifact)?;
                 let mut out = format!(
@@ -517,6 +519,34 @@ fn skill_files(dir: &std::path::Path) -> Vec<String> {
     files
 }
 
+impl DaemonTools {
+    /// `files`, as `{path: {content} | {base64} | {path} | null}`, a
+    /// relative `path` read from the working directory as `path` is.
+    fn files_arg(
+        &self,
+        arguments: &Value,
+    ) -> Result<std::collections::BTreeMap<String, Option<silt_daemon::protocol::NewFile>>, String> {
+        let Some(files) = arguments.get("files") else {
+            return Ok(Default::default());
+        };
+        let files = files.as_object().ok_or("files is an object of paths and files")?;
+        files
+            .iter()
+            .map(|(path, file)| {
+                if file.is_null() {
+                    return Ok((path.clone(), None));
+                }
+                let text = |name: &str| file.get(name).and_then(Value::as_str).map(str::to_owned);
+                let from = self.path_arg(file);
+                Ok((
+                    path.clone(),
+                    Some(silt_daemon::protocol::NewFile { content: text("content"), base64: text("base64"), path: from }),
+                ))
+            })
+            .collect()
+    }
+}
+
 /// `edits`, checked here as the MCP server checks only numbers: a list of
 /// `{old, new}` strings.
 fn edits_arg(arguments: &Value) -> Result<Vec<silt_proto::artifact::Edit>, String> {
@@ -530,7 +560,7 @@ fn edits_arg(arguments: &Value) -> Result<Vec<silt_proto::artifact::Edit>, Strin
         .map(|(at, edit)| {
             let field = |name: &str| edit.get(name).and_then(Value::as_str).map(str::to_owned);
             match (field("old"), field("new")) {
-                (Some(old), Some(new)) => Ok(silt_proto::artifact::Edit { old, new }),
+                (Some(old), Some(new)) => Ok(silt_proto::artifact::Edit { old, new, file: field("file") }),
                 _ => Err(format!("edit {} needs old and new text", at + 1)),
             }
         })

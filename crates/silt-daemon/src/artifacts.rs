@@ -194,11 +194,117 @@ impl Core {
             design_system: None,
             edits: Vec::new(),
             note: Some(format!("Saved by the page, for {by}")),
-            description: None,
-            capabilities: None,
+            ..NewArtifact::default()
         };
         let checkout = Some(self.threads[&thread].repo_root.clone()).filter(|root| !root.as_os_str().is_empty());
         self.put_version(thread, "", reference, checkout, new, Recorded::ByPage(by)).await
+    }
+
+    /// A version's files: the last version's, with `changes` and `edited`
+    /// made, each new one kept as a blob and marked as added. Only an HTML
+    /// page has files.
+    #[expect(clippy::too_many_arguments, reason = "the parts of one version")]
+    async fn version_files(
+        &mut self,
+        mut kept: std::collections::BTreeMap<String, silt_proto::artifact::ArtifactFile>,
+        changes: std::collections::BTreeMap<String, Option<crate::protocol::NewFile>>,
+        edited: std::collections::BTreeMap<String, String>,
+        kind: &str,
+        checkout: Option<&Path>,
+        workspace: &str,
+        page_bytes: u64,
+    ) -> Result<Vec<(String, silt_proto::artifact::ArtifactFile, bool)>, CoreError> {
+        use silt_proto::artifact::{ArtifactFile, FILE_BYTES, FILES, VERSION_BYTES, file_media_type, file_path_ok};
+        if (!changes.is_empty() || !edited.is_empty()) && kind != "html" {
+            return Err(CoreError::Invalid("only an HTML page has files beside it".into()));
+        }
+        let mut added = std::collections::BTreeSet::new();
+        let put = |bytes: Vec<u8>, path: &str| -> Result<(Vec<u8>, &'static str), CoreError> {
+            if !file_path_ok(path) {
+                return Err(CoreError::Invalid(format!("{path} isn't a path a version's file may have")));
+            }
+            let media_type =
+                file_media_type(path).ok_or_else(|| CoreError::Invalid(format!("{path}: a frame has no use for that type")))?;
+            if bytes.len() as u64 > FILE_BYTES {
+                return Err(CoreError::Invalid(format!("{path} is over {} MiB", FILE_BYTES >> 20)));
+            }
+            Ok((bytes, media_type))
+        };
+        let mut incoming: Vec<(String, Vec<u8>)> = Vec::new();
+        for (path, change) in changes {
+            let Some(file) = change else {
+                kept.remove(&path);
+                continue;
+            };
+            let bytes = match (file.content, file.base64, file.path) {
+                (Some(text), None, None) => text.into_bytes(),
+                (None, Some(encoded), None) => BASE64
+                    .decode(encoded.trim())
+                    .map_err(|_| CoreError::Invalid(format!("{path}: base64 that doesn't decode")))?,
+                (None, None, Some(from)) => {
+                    let checkout =
+                        checkout.ok_or_else(|| CoreError::Invalid(format!("{path}: no checkout to read {from} from")))?;
+                    let real = readable_file(&from, checkout, &self.artifact_denies(workspace))?;
+                    std::fs::read(&real).map_err(|_| CoreError::Invalid(format!("{path}: couldn't read {from}")))?
+                }
+                _ => return Err(CoreError::Invalid(format!("{path}: give content, base64 or a path"))),
+            };
+            incoming.push((path, bytes));
+        }
+        incoming.extend(edited.into_iter().map(|(path, text)| (path, text.into_bytes())));
+        for (path, bytes) in incoming {
+            let (bytes, media_type) = put(bytes, &path)?;
+            let blob = self.store.blobs().put(&bytes).await?;
+            kept.insert(
+                path.clone(),
+                ArtifactFile { blob: blob.to_string(), size: bytes.len() as u64, media_type: media_type.to_owned() },
+            );
+            added.insert(path);
+        }
+        if kept.len() > FILES {
+            return Err(CoreError::Invalid(format!("a version has at most {FILES} files")));
+        }
+        let total: u64 = page_bytes + kept.values().map(|file| file.size).sum::<u64>();
+        if total > VERSION_BYTES {
+            return Err(CoreError::Invalid(format!(
+                "a version's page and files are at most {} MiB together",
+                VERSION_BYTES >> 20
+            )));
+        }
+        Ok(kept
+            .into_iter()
+            .map(|(path, file)| {
+                let new = added.contains(&path);
+                (path, file, new)
+            })
+            .collect())
+    }
+
+    /// A file of `id`'s version (the latest when none) in `thread`: its
+    /// type and its bytes.
+    pub(crate) async fn artifact_file(
+        &self,
+        thread: &str,
+        id: &str,
+        version: Option<u32>,
+        path: &str,
+    ) -> Result<silt_proto::view::ArtifactContent, CoreError> {
+        let thread = self.find_thread(thread)?;
+        let entries = self.history_entries(thread);
+        let view = entries
+            .iter()
+            .filter_map(|(_, entry)| entry.artifact.as_ref())
+            .filter(|artifact| artifact.id == id && version.is_none_or(|wanted| wanted == artifact.version))
+            .max_by_key(|artifact| artifact.version)
+            .ok_or_else(|| CoreError::Invalid(format!("no artifact {id} here")))?;
+        let file = view
+            .files
+            .as_ref()
+            .and_then(|files| files.get(path))
+            .ok_or_else(|| CoreError::Invalid(format!("version {} has no file {path}", view.version)))?;
+        let hash = file.blob.parse().map_err(|_| CoreError::Invalid(format!("{path} isn't kept here")))?;
+        let bytes = self.store.blobs().get(hash).await?;
+        Ok(silt_proto::view::ArtifactContent { media_type: file.media_type.clone(), data: BASE64.encode(bytes) })
     }
 
     /// The session whose record line names the artifact's latest version.
@@ -260,6 +366,49 @@ impl Core {
         let entries = self.history_entries(thread);
         let artifacts: Vec<&ArtifactView> = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).collect();
         let mut new = new;
+        // Edits of the version's files apply to those files; the rest, to its page.
+        let (file_edits, page_edits): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut new.edits).into_iter().partition(|edit| edit.file.is_some());
+        new.edits = page_edits;
+        let latest_of = |id: Option<&str>| {
+            id.and_then(|id| {
+                artifacts.iter().filter(|artifact| artifact.id == id).max_by_key(|artifact| artifact.version).copied()
+            })
+        };
+        if new.edits.is_empty()
+            && new.content.is_none()
+            && new.path.is_none()
+            && (!file_edits.is_empty() || !new.files.is_empty())
+        {
+            // Only its files change: the page stays as it was.
+            let latest = latest_of(new.id.as_deref())
+                .ok_or_else(|| CoreError::Invalid("a version's files change an artifact: give its id".into()))?;
+            let hash =
+                latest.blob.parse().map_err(|_| CoreError::Invalid("the latest version's content isn't kept here".into()))?;
+            new.content = Some(
+                String::from_utf8(self.store.blobs().get(hash).await?)
+                    .map_err(|_| CoreError::Invalid("the latest version isn't text".into()))?,
+            );
+        }
+        let mut edited_files: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        for edit in &file_edits {
+            let path = edit.file.clone().unwrap_or_default();
+            let source = match edited_files.get(&path) {
+                Some(source) => source.clone(),
+                None => {
+                    let file = latest_of(new.id.as_deref())
+                        .and_then(|latest| latest.files.as_ref())
+                        .and_then(|files| files.get(&path))
+                        .ok_or_else(|| CoreError::Invalid(format!("the latest version has no file {path}")))?;
+                    let hash = file.blob.parse().map_err(|_| CoreError::Invalid(format!("{path} isn't kept here")))?;
+                    String::from_utf8(self.store.blobs().get(hash).await?)
+                        .map_err(|_| CoreError::Invalid(format!("{path} isn't text, so it's replaced, not edited")))?
+                }
+            };
+            let edited = silt_proto::artifact::apply_edits(&source, std::slice::from_ref(edit))
+                .map_err(|error| CoreError::Invalid(format!("{path}: {error}")))?;
+            edited_files.insert(path, edited);
+        }
         if !new.edits.is_empty() {
             if new.content.is_some() || new.path.is_some() {
                 return Err(CoreError::Invalid("give edits, or content or a path, not both".into()));
@@ -306,6 +455,17 @@ impl Core {
             Some(declared) if declared.is_empty() => None,
             Some(declared) => Some(silt_proto::artifact::checked_capabilities(declared).map_err(CoreError::Invalid)?),
         };
+        let files = self
+            .version_files(
+                last.and_then(|artifact| artifact.files.clone()).unwrap_or_default(),
+                std::mem::take(&mut new.files),
+                edited_files,
+                &kind,
+                checkout.as_deref(),
+                workspace,
+                bytes.len() as u64,
+            )
+            .await?;
         let styled = if kind == "html" {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);
@@ -334,6 +494,16 @@ impl Core {
         let name = format!("artifact/{id}/v{version}/{}", file_name(&kind, media_type));
         let page_session = reference.clone();
         self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
+        for (path, file, added) in &files {
+            if *added {
+                let blob = file.blob.parse().map_err(|_| CoreError::Invalid(format!("{path} isn't kept")))?;
+                let name = format!("artifact/{id}/v{version}/files/{path}");
+                self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob })
+                    .await?;
+            }
+        }
+        let files: std::collections::BTreeMap<String, silt_proto::artifact::ArtifactFile> =
+            files.into_iter().map(|(path, file, _)| (path, file)).collect();
         let (design_system, style, dropped) = match styled {
             Some((system, compiled)) => {
                 let style = self.store.blobs().put(compiled.css.as_bytes()).await?;
@@ -359,6 +529,7 @@ impl Core {
             note,
             description,
             capabilities,
+            files: (!files.is_empty()).then_some(files),
             by: match &recorded {
                 Recorded::ByRun => None,
                 Recorded::ByPage(by) => Some(by.clone()),
@@ -508,13 +679,10 @@ impl Core {
     }
 
     fn artifact_media_type(&self, thread: ThreadId, blob: &str) -> Option<String> {
-        self.history_entries(thread).iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
-            if artifact.blob == blob {
-                Some(artifact.media_type.clone())
-            } else {
-                (artifact.style.as_deref() == Some(blob)).then(|| "text/css".to_owned())
-            }
-        })
+        self.history_entries(thread)
+            .iter()
+            .filter_map(|(_, entry)| entry.artifact.as_ref())
+            .find_map(|artifact| artifact.media_type_of(blob))
     }
 }
 
@@ -551,6 +719,7 @@ mod tests {
             note: None,
             description: None,
             capabilities: None,
+            files: Default::default(),
         }
     }
 
@@ -621,6 +790,7 @@ mod tests {
             description: None,
             capabilities: None,
             by: None,
+            files: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

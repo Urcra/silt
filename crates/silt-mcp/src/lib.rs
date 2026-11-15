@@ -156,11 +156,13 @@ fn show_tools() -> Vec<Value> {
                             "type": "object",
                             "properties": {
                                 "old": {"type": "string", "description": "Text copied exactly from the source"},
-                                "new": {"type": "string", "description": "What replaces it; empty deletes it"}
+                                "new": {"type": "string", "description": "What replaces it; empty deletes it"},
+                                "file": {"type": "string", "description": "One of the version's files to change, rather than the page"}
                             },
                             "required": ["old", "new"]
                         }
                     },
+                    "files": {"type": "object", "description": "For an html page: files beside it, by relative path such as data.json or css/site.css, each {content}, {base64} or {path}, or null to remove one; the page fetches them relative to itself. The last version's files are kept unless named"},
                     "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
                     "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},
                     "capabilities": {"type": "object", "description": "What the html page may use through silt.use(name), as {name: config}: db, artifact, user, downloads, comments, sample and the others silt_artifact_guide lists. Leave it out to keep the last version's; {} clears them"},

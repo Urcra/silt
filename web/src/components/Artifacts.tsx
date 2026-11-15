@@ -14,6 +14,7 @@ import {
   kindLabel,
   latest,
   offlineHtml,
+  type InlineFiles,
   problemsPrompt,
   sandboxedDocument,
   svgUrl,
@@ -217,7 +218,14 @@ export function ArtifactViewer({
     if (!content.data) return
     try {
       const rendered = await renderedMarkup(artifact, content.data)
-      download(offlineHtml(artifact, content.data, rendered, styleText), 'text/html', fileName(artifact, 'html'))
+      // The version's files go inside the copy, so it opens anywhere (ADR 0074).
+      const files: InlineFiles = {}
+      for (const [path, file] of Object.entries(artifact.files ?? {})) {
+        if (!file) continue
+        const read = await api.artifact(thread, file.blob)
+        files[path] = { media_type: file.media_type, data: read.data }
+      }
+      download(offlineHtml(artifact, content.data, rendered, styleText, files), 'text/html', fileName(artifact, 'html'))
     } catch (failure) {
       toast(message(failure), 'danger')
     }

@@ -430,6 +430,32 @@ pub enum Request {
         ask: Option<String>,
         input: serde_json::Value,
     },
+    /// The files people added to an artifact's page (ADR 0074).
+    PageAssets {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::AssetRequest,
+    },
+    /// The thread's files, for a page that declares `files` (ADR 0078).
+    PageFiles {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::FilesRequest,
+    },
+    /// One added file's bytes, for the page's frame.
+    PageAsset {
+        thread: String,
+        artifact: String,
+        asset: String,
+    },
+    /// A file beside a version's page, for its frame (ADR 0074).
+    ArtifactFile {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+        path: String,
+    },
     /// Who views an artifact's page, as its `user` capability answers.
     PageViewer {
         thread: String,
@@ -817,7 +843,7 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// since it started, as installing Silt again does, it still runs the old
 /// build and serves the old web UI.
 /// What `silt_show` or `silt_artifact` asks to show.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewArtifact {
     pub title: String,
     /// `html`, `svg`, `markdown`, `mermaid` or `image`.
@@ -853,6 +879,23 @@ pub struct NewArtifact {
     /// version's, `{}` clears them, and an object replaces them all.
     #[serde(default)]
     pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Files beside an HTML version's page, by path (ADR 0074): each one
+    /// added or replaced, or removed by `null`; the rest of the last
+    /// version's are kept.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, Option<NewFile>>,
+}
+
+/// A file of a version, as text, as base64, or read from a file of the
+/// run's checkout.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewFile {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub base64: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.
@@ -1680,6 +1723,7 @@ mod tests {
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
+            silt_proto::artifact::ArtifactFile::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),

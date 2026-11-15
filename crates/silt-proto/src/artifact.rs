@@ -7,6 +7,103 @@ use serde::{Deserialize, Serialize};
 pub const MAX_EDITS: usize = 64;
 /// The largest artifact a version keeps, in bytes.
 pub const ARTIFACT_BYTES: u64 = 10 << 20;
+/// The most files a version has beside its page (ADR 0074).
+pub const FILES: usize = 255;
+/// The most one file of a version may be, in bytes.
+pub const FILE_BYTES: u64 = 16 << 20;
+/// The most a version's page and files may be together, in bytes.
+pub const VERSION_BYTES: u64 = 64 << 20;
+/// The most an asset someone adds to a page may be, in bytes.
+pub const ASSET_BYTES: u64 = 20 << 20;
+
+/// A file of a version, beside its page, served at the frame's own address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactFile {
+    pub blob: String,
+    pub size: u64,
+    pub media_type: String,
+}
+
+/// Whether `path` may name a version's file: relative, `/`-separated, of
+/// plain segments, none of them hidden or a step up, and not `index.html`
+/// or under `_`, which the page and its assets take.
+pub fn file_path_ok(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    (1..=200).contains(&path.len())
+        && segments.len() <= 8
+        && path != "index.html"
+        && !path.starts_with('_')
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('.')
+                && segment.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        })
+}
+
+/// What a version's file is served as, by its extension; none for a type
+/// a frame has no use for.
+pub fn file_media_type(path: &str) -> Option<&'static str> {
+    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" => "application/json",
+        "csv" => "text/csv; charset=utf-8",
+        "tsv" => "text/tab-separated-values; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
+        "xml" => "application/xml",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "wasm" => "application/wasm",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
+/// What an asset someone adds may be: an image, a video, a PDF, a font,
+/// or text, never a page or a script that would run.
+pub fn asset_media_type_ok(media_type: &str) -> bool {
+    let base = media_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "image/png"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp"
+            | "image/avif"
+            | "image/svg+xml"
+            | "video/mp4"
+            | "video/webm"
+            | "audio/mpeg"
+            | "audio/wav"
+            | "audio/ogg"
+            | "application/pdf"
+            | "font/woff"
+            | "font/woff2"
+            | "text/csv"
+            | "text/markdown"
+            | "text/plain"
+            | "application/json"
+    )
+}
+
 /// The most of a page's question to `sample`, in bytes.
 pub const SAMPLE_BYTES: usize = 256 * 1024;
 
@@ -95,6 +192,9 @@ pub fn checked_capabilities(declared: &serde_json::Map<String, serde_json::Value
 pub struct Edit {
     pub old: String,
     pub new: String,
+    /// The version's file it changes, rather than its page (ADR 0074).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// Why an edit couldn't be made; nothing was changed.
@@ -150,6 +250,27 @@ pub fn short_text(text: Option<&str>, limit: usize, what: &str) -> Result<Option
 }
 
 #[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn a_versions_files_have_plain_relative_paths_of_types_a_frame_uses() {
+        for good in ["data.json", "css/site.css", "img/a-b_c.v2.png", "fonts/Inter.woff2"] {
+            assert!(file_path_ok(good) && file_media_type(good).is_some(), "{good}");
+        }
+        for bad in
+            ["", "/etc/passwd", "../x.css", "a/../b.css", ".hidden/x.js", "index.html", "_assets/x.png", "a//b.css", "a\\b.css"]
+        {
+            assert!(!file_path_ok(bad), "{bad}");
+        }
+        assert_eq!(file_media_type("x.exe"), None);
+        assert_eq!(file_media_type("Photo.JPG"), Some("image/jpeg"));
+        assert!(asset_media_type_ok("image/png") && asset_media_type_ok("text/csv; charset=utf-8"));
+        assert!(!asset_media_type_ok("text/html") && !asset_media_type_ok("text/javascript"));
+    }
+}
+
+#[cfg(test)]
 mod sample_tests {
     use super::sample_question;
     use serde_json::json;
@@ -172,7 +293,7 @@ mod tests {
     use super::*;
 
     fn edit(old: &str, new: &str) -> Edit {
-        Edit { old: old.into(), new: new.into() }
+        Edit { old: old.into(), new: new.into(), file: None }
     }
 
     #[test]

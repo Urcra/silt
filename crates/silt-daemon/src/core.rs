@@ -623,6 +623,12 @@ impl Core {
                 to_response(self.publish_artifact(&thread, &artifact, html, base).await)
             }
             Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
+            Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
+            Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
+            Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
+            Request::ArtifactFile { thread, id, version, path } => {
+                to_response(self.artifact_file(&thread, &id, version, &path).await)
+            }
             Request::Sample { thread, artifact, ask, input } => {
                 return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input));
             }

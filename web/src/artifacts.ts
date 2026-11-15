@@ -224,8 +224,30 @@ function escape(text: string): string {
  * `rendered` with its diagrams drawn in, under the same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
  * content inline, on a plain page titled with the artifact's name.
  */
-export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null): string {
-  if (artifact.kind === 'html') return sandboxedDocument(rendered ?? textOf(content), { probe: false, style })
+/** A version's files as the offline copy carries them: each one's type and its bytes as base64, by path. */
+export type InlineFiles = Record<string, { media_type: string; data: string }>
+
+/**
+ * `html` with its own files carried inside it, for the offline copy (ADR 0074): each `src` or `href` naming one becomes
+ * a `data:` URI, and `fetch` of one answers from what's carried.
+ */
+export function withFilesInlined(html: string, files: InlineFiles): string {
+  const paths = Object.keys(files)
+  if (paths.length === 0) return html
+  let out = html
+  for (const path of paths) {
+    const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const uri = `data:${files[path].media_type.split(';')[0]};base64,${files[path].data}`
+    out = out.replace(new RegExp(`((?:src|href)\\s*=\\s*["'])(?:\\./)?${escaped}(["'])`, 'g'), (_match, before: string, after: string) => `${before}${uri}${after}`)
+  }
+  const carried = JSON.stringify(Object.fromEntries(paths.map((path) => [path, [files[path].media_type, files[path].data]]))).replace(/</g, '\\u003c')
+  const shim = `<script>(function(){var f=${carried};var of=window.fetch;window.fetch=function(u,o){var k=String(u&&u.url||u).replace(/^\\.\\//,'');if(Object.prototype.hasOwnProperty.call(f,k)){var b=atob(f[k][1]),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return Promise.resolve(new Response(a,{headers:{'content-type':f[k][0]}}))}return of.apply(this,arguments)}})()</script>`
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(out)
+  return doctype ? doctype[0] + shim + out.slice(doctype[0].length) : shim + out
+}
+
+export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null, files: InlineFiles = {}): string {
+  if (artifact.kind === 'html') return sandboxedDocument(withFilesInlined(rendered ?? textOf(content), files), { probe: false, style })
   const title = escape(`${artifact.title} · v${artifact.version}`)
   const body = rendered ?? `<img alt="${escape(artifact.title)}" src="${dataUrl(content)}">`
   return [

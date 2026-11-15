@@ -162,6 +162,11 @@ export const api = {
   /** A version an HTML artifact's page saves itself as; refused as a conflict unless `base` is the latest (ADR 0072). */
   publishArtifact: (id: string, artifact: string, html: string, base: number) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/publish`, { html, base }),
+  /** The files people added to an artifact's page (ADR 0074). */
+  pageAssets: (id: string, artifact: string, asked: { op: 'add'; name: string; media_type: string; data: string } | { op: 'list' } | { op: 'delete'; id: string }) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/assets`, asked),
+  /** The thread's files, for a page that declares `files` (ADR 0078). */
+  pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
   /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */

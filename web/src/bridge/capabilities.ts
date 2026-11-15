@@ -23,6 +23,80 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     downloads: downloadsHandler(holder),
     comments: commentsHandler(holder),
     sample: sampleHandler(thread, artifact, holder),
+    assets: assetsHandler(thread, artifact),
+    files: filesHandler(thread, artifact, holder),
+  }
+}
+
+/** The most an added file may be. */
+export const ASSET_BYTES = 20 << 20
+
+async function base64Of(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let text = ''
+  for (let at = 0; at < bytes.length; at += 0x8000) text += String.fromCharCode(...bytes.subarray(at, at + 0x8000))
+  return btoa(text)
+}
+
+/** `assets`: files people add to the page, kept with the thread and served beside the page at `_assets/<id>`. */
+function assetsHandler(thread: string, artifact: ArtifactView): CapabilityHandler {
+  const ask = (asked: Parameters<typeof api.pageAssets>[2]) =>
+    api.pageAssets(thread, artifact.id, asked).catch((failure: unknown) => {
+      throw refusalOf(failure)
+    })
+  return {
+    methods: ['upload', 'list', 'delete'],
+    perMinute: 30,
+    callBytes: ASSET_BYTES + 4096,
+    call: async (method, args) => {
+      const given = (args ?? {}) as { blob?: unknown; name?: unknown; id?: unknown }
+      if (method === 'list') {
+        const assets = (await ask({ op: 'list' })) as { size: number }[]
+        return { assets, usage: { bytes: assets.reduce((sum, asset) => sum + asset.size, 0) } }
+      }
+      if (method === 'delete') return ask({ op: 'delete', id: String(given.id ?? '') })
+      if (!(given.blob instanceof Blob)) throw new Refusal('refused', 'upload takes a Blob or a File')
+      if (given.blob.size > ASSET_BYTES) throw new Refusal('too_large', `a file is at most ${ASSET_BYTES >> 20} MiB`)
+      const name = typeof given.name === 'string' ? given.name : given.blob instanceof File ? given.blob.name : 'file'
+      const made = (await ask({ op: 'add', name, media_type: given.blob.type || 'application/octet-stream', data: await base64Of(given.blob) })) as {
+        id: string
+        url: string
+        size: number
+        media_type: string
+      }
+      return { id: made.id, url: made.url, sizeBytes: made.size, contentType: made.media_type }
+    },
+  }
+}
+
+/** `files`: the thread's files, read from its history as the person, within what the version declares. */
+function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  const ask = (asked: Record<string, unknown>) =>
+    api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
+      const said = failure instanceof Error ? failure.message : String(failure)
+      throw new Refusal(/not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
+    })
+  return {
+    methods: ['list', 'read', 'download'],
+    perMinute: 120,
+    call: async (method, args) => {
+      const given = (args ?? {}) as { path?: unknown; recursive?: unknown; cursor?: unknown; at?: unknown }
+      const path = typeof given.path === 'string' ? given.path : ''
+      if (method === 'list') return ask({ op: 'list', path, recursive: given.recursive === true, cursor: typeof given.cursor === 'string' ? given.cursor : null })
+      const read = (await ask({ op: 'read', path, at: typeof given.at === 'string' ? given.at : null })) as { text: string; size: number; revision: string }
+      if (method === 'read') return read
+      const filename = downloadName(path.split('/').pop())
+      if (!filename) throw new Refusal('refused', "that file isn't one a page may save")
+      if (!(await holder.confirm({ title: 'Save a file from this thread?', detail: `${path} · ${sizeText(read.size)}`, action: 'Save' })))
+        throw new Refusal('not_granted', 'the person chose not to save it')
+      const url = URL.createObjectURL(new Blob([read.text], { type: 'text/plain' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      return { saved: true }
+    },
   }
 }
 

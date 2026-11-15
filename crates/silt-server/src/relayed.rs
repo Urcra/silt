@@ -46,6 +46,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
 }
 
 /// A file at a version for a permalink, from one of the person's devices,
@@ -83,6 +84,22 @@ async fn sample(
     let question = silt_proto::artifact::sample_question(&asked.input).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
     let command = RemoteCommand::Sample { question };
     Ok(Json(ask_device_within(&server, browser, thread, command, SAMPLE_WAIT).await?))
+}
+
+/// The thread's files for a page, read by one of the person's devices that
+/// holds the family (ADR 0078): the server projects no file text itself.
+async fn page_files(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::FilesRequest>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("files")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare files")));
+    }
+    Ok(Json(ask_any_device(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked }).await?))
 }
 
 /// How long one device's view of a merge request stands in for asking

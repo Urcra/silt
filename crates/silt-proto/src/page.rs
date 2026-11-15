@@ -368,6 +368,160 @@ pub fn person_id(user: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// What a page asks of its assets (ADR 0074).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum AssetRequest {
+    /// Adds a file: its name, its type, and its bytes as base64.
+    Add {
+        name: String,
+        media_type: String,
+        data: String,
+    },
+    List,
+    Delete {
+        id: String,
+    },
+}
+
+/// An asset as a page reads it: `url` is relative to the page's frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AssetView {
+    pub id: String,
+    pub name: String,
+    pub media_type: String,
+    pub size: u64,
+    pub url: String,
+}
+
+/// The assets among a page's documents.
+pub fn assets(docs: &std::collections::BTreeMap<String, Value>) -> Vec<AssetView> {
+    docs.iter()
+        .filter_map(|(path, doc)| {
+            let id = path.strip_prefix("_assets/")?;
+            Some(AssetView {
+                id: id.to_owned(),
+                name: doc.get("name")?.as_str()?.to_owned(),
+                media_type: doc.get("media_type")?.as_str()?.to_owned(),
+                size: doc.get("size")?.as_u64()?,
+                url: format!("_assets/{id}"),
+            })
+        })
+        .collect()
+}
+
+/// The level adding an asset needs: a collaborator's, unless the version
+/// lets anyone who may comment add one with `{"upload": "comment"}`.
+pub fn asset_level(config: &Value) -> Level {
+    match config.get("upload").and_then(Value::as_str) {
+        Some("comment") => Level::Comment,
+        _ => Level::Collaborator,
+    }
+}
+
+/// Whether `id` may name an asset: 12 lowercase hex characters, as Silt makes them.
+pub fn asset_id_ok(id: &str) -> bool {
+    id.len() == 12 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// What a page asks of the thread's files, through `files` (ADR 0078).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FilesRequest {
+    /// The files under `path` (the whole tree when empty), only those
+    /// directly in it unless `recursive`, after `cursor`.
+    List {
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        recursive: bool,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    /// A file's text, at the thread's head or `at` a version.
+    Read {
+        path: String,
+        #[serde(default)]
+        at: Option<String>,
+    },
+}
+
+/// The most entries one listing answers.
+pub const FILES_PAGE: usize = 500;
+
+/// One page of a listing of `paths`, as `List` asks: the files directly
+/// under `path` (or every one below it), then folders once each, and the
+/// cursor for the next page.
+pub fn list_files<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+    path: &str,
+    recursive: bool,
+    cursor: Option<&str>,
+) -> (Vec<Value>, Option<String>) {
+    let prefix = match path.trim_matches('/') {
+        "" => String::new(),
+        path => format!("{path}/"),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut entries = Vec::new();
+    let mut next = None;
+    let mut last = None;
+    for full in paths {
+        let Some(rest) = full.strip_prefix(&prefix) else { continue };
+        let entry = match rest.split_once('/') {
+            Some((folder, _)) if !recursive => format!("{prefix}{folder}/"),
+            _ => full.to_owned(),
+        };
+        if cursor.is_some_and(|cursor| entry.as_str() <= cursor) || !seen.insert(entry.clone()) {
+            continue;
+        }
+        if entries.len() == FILES_PAGE {
+            next = last.take();
+            break;
+        }
+        last = Some(entry.clone());
+        let kind = if entry.ends_with('/') { "folder" } else { "file" };
+        entries.push(serde_json::json!({"path": entry.trim_end_matches('/'), "kind": kind}));
+    }
+    (entries, next)
+}
+
+/// Whether `path` is among the `paths` globs a `files` declaration names:
+/// `*` within a segment, `**` across them; none names the whole tree.
+pub fn files_allowed(config: &Value, path: &str) -> bool {
+    let Some(globs) = config.get("paths").and_then(Value::as_array) else {
+        return true;
+    };
+    globs.iter().filter_map(Value::as_str).any(|glob| glob_matches(glob, path))
+}
+
+fn glob_matches(glob: &str, path: &str) -> bool {
+    fn segments(glob: &[&str], path: &[&str]) -> bool {
+        match (glob.first(), path.first()) {
+            (None, None) => true,
+            (Some(&"**"), _) => segments(&glob[1..], path) || (!path.is_empty() && segments(glob, &path[1..])),
+            (Some(pattern), Some(segment)) => one(pattern, segment) && segments(&glob[1..], &path[1..]),
+            _ => false,
+        }
+    }
+    fn one(pattern: &str, segment: &str) -> bool {
+        match pattern.split_once('*') {
+            None => pattern == segment,
+            Some((before, after)) => {
+                segment.len() >= before.len() + after.len() && segment.starts_with(before) && {
+                    let rest = &segment[before.len()..];
+                    (0..=rest.len()).filter(|at| rest.is_char_boundary(*at)).any(|at| one(after, &rest[at..]))
+                }
+            }
+        }
+    }
+    let glob: Vec<&str> = glob.trim_matches('/').split('/').collect();
+    let path: Vec<&str> = path.trim_matches('/').split('/').collect();
+    segments(&glob, &path)
+}
+
 /// Who views an artifact's page, as its `user` capability answers it: their
 /// id in page data, their level, and the names of the people the thread
 /// knows, by id, for the ids a page keeps to show.
@@ -390,6 +544,35 @@ impl Viewer {
             known.insert(id.clone(), me.to_owned());
         }
         Self { id, level, people: known }
+    }
+}
+
+#[cfg(test)]
+mod files_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_declarations_globs_name_the_files_a_page_reads() {
+        let config = json!({"paths": ["docs/**", "target/criterion/*.json"]});
+        assert!(files_allowed(&config, "docs/guide/intro.md"));
+        assert!(files_allowed(&config, "target/criterion/report.json"));
+        assert!(!files_allowed(&config, "target/criterion/deep/report.json"));
+        assert!(!files_allowed(&config, "src/main.rs"));
+        assert!(files_allowed(&json!({}), "src/main.rs"), "none names the whole tree");
+    }
+
+    #[test]
+    fn a_listing_shows_a_folders_files_and_folders_once() {
+        let paths = ["README.md", "docs/a.md", "docs/b.md", "docs/deep/c.md", "src/main.rs"];
+        let (top, next) = list_files(paths, "", false, None);
+        let names: Vec<&str> = top.iter().filter_map(|entry| entry["path"].as_str()).collect();
+        assert_eq!(names, ["README.md", "docs", "src"]);
+        assert!(next.is_none());
+        let (docs, _) = list_files(paths, "docs", true, None);
+        assert_eq!(docs.len(), 3);
+        let (after, _) = list_files(paths, "docs", true, Some("docs/a.md"));
+        assert_eq!(after[0]["path"], "docs/b.md");
     }
 }
 

@@ -240,6 +240,7 @@ impl Core {
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },
             RemoteCommand::SignInCode { code } => Request::AcpSignInCode { thread, code },
             RemoteCommand::SignInCancel => Request::AcpSignInCancel { thread },
+            RemoteCommand::PageFiles { artifact, asked } => Request::PageFiles { thread, artifact, asked },
             RemoteCommand::Sample { question } => {
                 Request::Sample { thread, artifact: None, ask: None, input: serde_json::Value::String(question) }
             }
