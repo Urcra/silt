@@ -1,6 +1,6 @@
 //! `local`'s tools: reading, searching, editing and writing files, and
 //! running commands. They act inside the project as the mode allows, and
-//! always ask before touching a path outside it (ADR 0070).
+//! always ask before touching a path outside it (ADR 0072).
 
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;

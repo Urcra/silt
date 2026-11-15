@@ -1,4 +1,5 @@
 mod admin;
+mod artifact_check;
 mod commands;
 mod desktop;
 mod mcp;

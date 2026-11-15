@@ -6,6 +6,7 @@
 
 pub mod acp;
 pub mod antigravity;
+pub mod builtin;
 pub mod claude;
 pub mod cloud;
 pub mod codex;

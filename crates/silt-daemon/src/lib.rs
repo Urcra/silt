@@ -12,6 +12,8 @@ mod cloud;
 mod comments;
 mod control;
 mod core;
+mod design;
+mod design_sync;
 mod disk;
 mod erase;
 mod forks;

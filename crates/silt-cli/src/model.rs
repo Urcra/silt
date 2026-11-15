@@ -1,4 +1,4 @@
-//! `silt model`: the local models on this machine (ADR 0070).
+//! `silt model`: the local models on this machine (ADR 0072).
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;

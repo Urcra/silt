@@ -25,6 +25,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 silt-agents = { path = "../silt-agents" }
 silt-crdt = { path = "../silt-crdt" }
+silt-design = { path = "../silt-design" }
 silt-log = { path = "../silt-log" }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }
@@ -32,6 +33,7 @@ silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
 silt-sync = { path = "../silt-sync" }
 silt-types = { path = "../silt-types" }
+silt-vendor = { path = "../silt-vendor" }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "sqlx-toml"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "net", "sync", "time", "macros", "process", "io-util"] }

@@ -1,4 +1,4 @@
-//! Running llama.cpp's `llama-server` (ADR 0070): found rather than linked,
+//! Running llama.cpp's `llama-server` (ADR 0072): found rather than linked,
 //! on loopback with a key drawn at each start, and stopped with everything
 //! it started.
 

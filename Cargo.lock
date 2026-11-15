@@ -5140,6 +5140,7 @@ dependencies = [
  "sha2 0.11.1",
  "silt-agents",
  "silt-daemon",
+ "silt-design",
  "silt-git",
  "silt-llm",
  "silt-local",
@@ -5195,6 +5196,7 @@ dependencies = [
  "silt-agents",
  "silt-checkout",
  "silt-crdt",
+ "silt-design",
  "silt-git",
  "silt-llm",
  "silt-local",
@@ -5206,6 +5208,7 @@ dependencies = [
  "silt-store",
  "silt-sync",
  "silt-types",
+ "silt-vendor",
  "silt-web",
  "silt-workspace",
  "similar",
@@ -5215,6 +5218,16 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "silt-design"
+version = "0.0.1"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5352,6 +5365,7 @@ dependencies = [
  "sha2 0.11.1",
  "silt-agents",
  "silt-crdt",
+ "silt-design",
  "silt-log",
  "silt-os",
  "silt-proto",
@@ -5359,6 +5373,7 @@ dependencies = [
  "silt-store",
  "silt-sync",
  "silt-types",
+ "silt-vendor",
  "silt-web",
  "sqlx",
  "tempfile",
@@ -5428,6 +5443,18 @@ dependencies = [
  "sha2 0.11.1",
  "smallvec 1.16.3",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "silt-vendor"
+version = "0.0.1"
+dependencies = [
+ "reqwest",
+ "sha2 0.11.1",
+ "silt-design",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

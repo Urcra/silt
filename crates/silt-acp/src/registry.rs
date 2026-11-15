@@ -367,7 +367,7 @@ impl Custom {
     }
 }
 
-/// Silt's own agent's id (ADR 0070).
+/// Silt's own agent's id (ADR 0072).
 pub const LOCAL_AGENT: &str = "local";
 
 /// Silt's own agent on a local model, run as `silt agent local` by the

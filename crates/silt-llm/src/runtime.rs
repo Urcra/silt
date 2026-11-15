@@ -1,5 +1,5 @@
 //! llama.cpp's own build of `llama-server`, for a machine without one
-//! (ADR 0070): its latest release from GitHub, fetched only when the person
+//! (ADR 0072): its latest release from GitHub, fetched only when the person
 //! asks, checked against the SHA-256 GitHub publishes for it, and unpacked
 //! whole, as it ships its libraries beside the program.
 

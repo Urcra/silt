@@ -74,6 +74,35 @@ function ProjectHome({ project }: { project: Project }) {
   )
 }
 
+/** The design system the project's artifacts take on this machine, above the repository's default and the workspace's (ADR 0071). */
+function ProjectDesignSystem({ project }: { project: Project }) {
+  const queries = useQueryClient()
+  const clone = project.clone ?? ''
+  const systems = useQuery({ queryKey: keys.cloneDesignSystems(clone), queryFn: () => api.designSystems(clone) })
+  const picks = useQuery({ queryKey: keys.projectDesignSystems, queryFn: api.projectDesignSystems })
+  if (!systems.data || !picks.data) return null
+  const choose = (name: string) =>
+    api.setProjectDesignSystem(project.repo, name || null).then(
+      () => void queries.invalidateQueries({ queryKey: keys.projectDesignSystems }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
+      Artifacts' design system
+      <Select aria-label={`${project.name}'s design system`} value={picks.data[project.repo] ?? ''} onChange={(event) => void choose(event.target.value)} className="text-xs">
+        <option value="">The repository's, else the workspace's</option>
+        {systems.data.map((system) => (
+          <option key={system.name} value={system.name}>
+            {system.title}
+            {system.source === 'builtin' ? ' (built in)' : ''}
+          </option>
+        ))}
+        <option value="none">None</option>
+      </Select>
+    </label>
+  )
+}
+
 /** Which workspace the project is in, and why: by rule, set by the person, or matched nothing (ADR 0065). */
 function ProjectWorkspace({ project, views }: { project: Project; views: WorkspaceView[] }) {
   const queries = useQueryClient()
@@ -503,6 +532,7 @@ export function Projects() {
                   !hosted() && <CloneHere project={project} projects={all} />
                 )}
                 {!hosted() && project.clone && <ProjectHome project={project} />}
+                {!hosted() && project.clone && <ProjectDesignSystem project={project} />}
                 {!hosted() && workspaces.data?.saved && <ProjectWorkspace project={project} views={workspaces.data.workspaces} />}
               </div>
               {open ? (

@@ -424,6 +424,13 @@ impl Core {
         denied
     }
 
+    /// The design system a workspace styles artifacts with when the project
+    /// names none (ADR 0071).
+    pub(crate) fn workspace_design_system(&self, workspace: &str) -> Option<String> {
+        let id = WorkspaceId::new(workspace.to_owned()).ok()?;
+        self.workspaces().get(&id)?.defaults.design_system.clone()
+    }
+
     /// Whether the request being handled may read a family: always, unless
     /// an agent's token scopes it to a workspace, or a project of one.
     pub(crate) fn in_scope(&self, family: FamilyId) -> bool {
@@ -605,7 +612,7 @@ pub(crate) fn can_sandbox(support: silt_agents::SandboxSupport, policy: &Policy)
 }
 
 /// What an agent's history tools may read (ADR 0065): its workspace, and
-/// in a Local only one its own project only (ADR 0070).
+/// in a Local only one its own project only (ADR 0072).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Scope {
     pub(crate) workspace: WorkspaceId,
@@ -627,7 +634,7 @@ pub struct RunRules {
     /// For its history tools, which read its workspace only.
     pub token: String,
     /// The arguments to run it with, when they differ from those given: a
-    /// local model's flag goes in its environment instead (ADR 0070).
+    /// local model's flag goes in its environment instead (ADR 0072).
     #[serde(default)]
     pub args: Option<Vec<String>>,
 }

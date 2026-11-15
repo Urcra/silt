@@ -39,7 +39,7 @@ test.afterAll(() => {
   })
 })
 
-test('a local model answers in a Local only workspace, and its thread can be erased (ADR 0070)', async ({ page }) => {
+test('a local model answers in a Local only workspace, and its thread can be erased (ADR 0072)', async ({ page }) => {
   await page.goto(fixture.url)
   await page.goto(new URL('/settings/models', fixture.url).href)
   const models = page.getByRole('region', { name: 'Local models' })

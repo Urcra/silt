@@ -10,7 +10,8 @@ use silt_proto::view::{ArtifactContent, ArtifactView};
 use silt_types::{BlobHash, ThreadId};
 
 use crate::core::{Core, CoreError};
-use crate::protocol::{ArtifactPut, NewArtifact};
+use crate::design;
+use crate::protocol::{ArtifactGuide, ArtifactPut, ArtifactRead, DesignSystemView, NewArtifact};
 
 /// The largest artifact or image kept.
 pub(crate) const ARTIFACT_BYTES: u64 = 10 << 20;
@@ -149,29 +150,57 @@ impl Core {
         let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
 
         let entries = self.history_entries(thread);
-        let artifacts = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref());
+        let artifacts: Vec<&ArtifactView> = entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).collect();
         let (id, version) = match new.id.as_deref() {
             Some(id) if !valid_id(id) => return Err(CoreError::Invalid(format!("{id} isn't an artifact id"))),
-            Some(id) => match latest_version(artifacts, id) {
+            Some(id) => match latest_version(artifacts.iter().copied(), id) {
                 0 => return Err(CoreError::Invalid(format!("this thread has no artifact {id}"))),
                 latest => (id.to_owned(), latest + 1),
             },
             None => (new_id(), 1),
         };
-
-        let bytes = match std::str::from_utf8(&bytes) {
-            Ok(text) => {
-                let (redacted, found) = self.redactor.replace_found(text);
-                self.learn_secrets(found);
-                redacted.into_bytes()
+        let previous = artifacts
+            .iter()
+            .filter(|artifact| artifact.id == id)
+            .max_by_key(|artifact| artifact.version)
+            .map(|artifact| artifact.design_system.clone().unwrap_or_else(|| design::NONE.to_owned()));
+        let styled = if kind == "html" {
+            let workspace_default = self.workspace_design_system(&workspace);
+            let repository = design::project_default(&checkout);
+            let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
+            let defaults = design::Defaults {
+                picked: picked.as_deref(),
+                repository: repository.as_deref(),
+                workspace: workspace_default.as_deref(),
+            };
+            match design::chosen(new.design_system.as_deref(), previous.as_deref(), defaults) {
+                Some(name) => {
+                    let system = design::find(&design::systems(Some(&checkout), &self.data_dir), name)?;
+                    Some((system.name.to_string(), system.compiled()?))
+                }
+                None => None,
             }
-            Err(_) => bytes,
+        } else {
+            None
         };
+
+        // Not redacted: a data: URI or an SRI hash reads as a secret, and
+        // redacting it breaks the page (ADR 0071).
         let size = bytes.len() as u64;
         let blob = self.store.blobs().put(&bytes).await?;
         let family = self.threads[&thread].family;
         let name = format!("artifact/{id}/v{version}/{}", file_name(&kind, media_type));
-        self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference, name, blob }).await?;
+        self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
+        let (design_system, style, dropped) = match styled {
+            Some((system, compiled)) => {
+                let style = self.store.blobs().put(compiled.css.as_bytes()).await?;
+                let name = format!("artifact/{id}/v{version}/design-system.css");
+                self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference, name, blob: style })
+                    .await?;
+                (Some(system), Some(style.to_string()), compiled.dropped)
+            }
+            None => (None, None, Vec::new()),
+        };
         let view = ArtifactView {
             id: id.clone(),
             version,
@@ -182,9 +211,107 @@ impl Core {
             size,
             inline: new.inline,
             caption,
+            design_system: design_system.clone(),
+            style,
         };
         self.record_acp(thread, &silt_agents::acp::artifact(&view)).await?;
-        Ok(ArtifactPut { id, version })
+        Ok(ArtifactPut { id, version, design_system, dropped })
+    }
+
+    /// The design system a run reads before making an artifact: the one
+    /// named, else its project's default, else its workspace's (ADR 0071).
+    pub(crate) async fn artifact_guide(&self, token: &str, asked: Option<String>) -> Result<ArtifactGuide, CoreError> {
+        let hash = blake3::hash(token.as_bytes());
+        let silt_store::RunToken { thread, workspace, .. } = self
+            .store
+            .run_token(hash.as_bytes())
+            .await?
+            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        let checkout = self.acp_run_place(thread).map(|(_, checkout)| checkout);
+        let systems = design::systems(checkout.as_deref(), &self.data_dir);
+        let repository = checkout.as_deref().and_then(design::project_default);
+        let workspace_default = self.workspace_design_system(&workspace);
+        let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
+        let defaults = design::Defaults {
+            picked: picked.as_deref(),
+            repository: repository.as_deref(),
+            workspace: workspace_default.as_deref(),
+        };
+        let (name, why) = match asked.as_deref() {
+            Some(asked) => (design::chosen(Some(asked), None, defaults), "asked for"),
+            None => match defaults.first() {
+                Some((name, why)) => (design::chosen(Some(name), None, defaults), why),
+                None => (None, ""),
+            },
+        };
+        let system = name.map(|name| design::find(&systems, name)).transpose()?;
+        Ok(ArtifactGuide {
+            system: system.as_ref().map(|system| system.view(true)),
+            why: system.is_some().then(|| why.to_owned()),
+            systems: systems.iter().map(|system| system.view(false)).collect(),
+        })
+    }
+
+    /// A version of an artifact of the thread `token` was made for, the
+    /// latest when `version` is none, as the agent revises it after a
+    /// handoff or a fork.
+    pub(crate) async fn artifact_read(&self, token: &str, id: &str, version: Option<u32>) -> Result<ArtifactRead, CoreError> {
+        if !valid_id(id) {
+            return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
+        }
+        let hash = blake3::hash(token.as_bytes());
+        let silt_store::RunToken { thread, .. } = self
+            .store
+            .run_token(hash.as_bytes())
+            .await?
+            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
+        let entries = self.history_entries(thread);
+        let versions: Vec<&ArtifactView> =
+            entries.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).filter(|artifact| artifact.id == id).collect();
+        let latest = latest_version(versions.iter().copied(), id);
+        if latest == 0 {
+            return Err(CoreError::Invalid(format!("this thread has no artifact {id}")));
+        }
+        let wanted = version.unwrap_or(latest);
+        let artifact = versions
+            .iter()
+            .find(|artifact| artifact.version == wanted)
+            .ok_or_else(|| CoreError::Invalid(format!("artifact {id} has versions 1 to {latest}, not {wanted}")))?;
+        let blob: BlobHash = artifact.blob.parse().map_err(|_| CoreError::Invalid("the version's blob doesn't read".into()))?;
+        let family = self.threads[&thread].family;
+        let bytes = self.blob(family, blob).await?;
+        let style = match artifact.style.as_deref().and_then(|style| style.parse::<BlobHash>().ok()) {
+            Some(style) => Some(String::from_utf8_lossy(&self.blob(family, style).await?).into_owned()),
+            None => None,
+        };
+        Ok(ArtifactRead {
+            id: id.to_owned(),
+            version: wanted,
+            latest,
+            title: artifact.title.clone(),
+            kind: artifact.kind.clone(),
+            media_type: artifact.media_type.clone(),
+            design_system: artifact.design_system.clone(),
+            data: BASE64.encode(bytes),
+            style,
+        })
+    }
+
+    /// The design system picked for each project on this machine.
+    pub(crate) fn project_design_systems(&self) -> std::collections::BTreeMap<String, String> {
+        design::project_choices(&self.data_dir)
+    }
+
+    /// Picks the design system a project's artifacts take on this machine,
+    /// above the repository's default and the workspace's; `None` drops it.
+    pub(crate) fn set_project_design_system(&self, repo: &str, name: Option<&str>) -> Result<&'static str, CoreError> {
+        design::set_project_choice(&self.data_dir, repo, name)?;
+        Ok("design system saved")
+    }
+
+    /// The person's design systems and the built-in ones, and a clone's own.
+    pub(crate) fn design_systems(&self, clone: Option<&std::path::Path>) -> Vec<DesignSystemView> {
+        design::systems(clone, &self.data_dir).iter().map(|system| system.view(false)).collect()
     }
 
     /// An artifact's content, if an artifact of `thread`'s history names
@@ -200,11 +327,13 @@ impl Core {
     }
 
     fn artifact_media_type(&self, thread: ThreadId, blob: &str) -> Option<String> {
-        self.history_entries(thread)
-            .iter()
-            .filter_map(|(_, entry)| entry.artifact.as_ref())
-            .find(|artifact| artifact.blob == blob)
-            .map(|artifact| artifact.media_type.clone())
+        self.history_entries(thread).iter().filter_map(|(_, entry)| entry.artifact.as_ref()).find_map(|artifact| {
+            if artifact.blob == blob {
+                Some(artifact.media_type.clone())
+            } else {
+                (artifact.style.as_deref() == Some(blob)).then(|| "text/css".to_owned())
+            }
+        })
     }
 }
 
@@ -236,6 +365,7 @@ mod tests {
             id: None,
             caption: None,
             inline: false,
+            design_system: None,
         }
     }
 
@@ -300,6 +430,8 @@ mod tests {
             size: 0,
             inline: false,
             caption: None,
+            design_system: None,
+            style: None,
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

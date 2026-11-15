@@ -8,8 +8,10 @@ import { askedServer } from './workspace'
 import type {
   AgentChoices,
   ArtifactContent,
+  ArtifactSettings,
   ChatSettings,
   CloudLaunch,
+  DesignSystemView,
   CommentLocation,
   CommentOn,
   CommentView,
@@ -148,7 +150,7 @@ export function dictationSocket(): WebSocket {
 export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
-  /** The local models here, and the llama-server that runs them (ADR 0070); a daemon's only. */
+  /** The local models here, and the llama-server that runs them (ADR 0072); a daemon's only. */
   models: () => request<LocalModels>('GET', '/api/models'),
   /** Starts a download: `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
   pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
@@ -159,7 +161,7 @@ export const api = {
   modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
   /** Starts downloading llama.cpp's latest build for this machine. */
   pullRuntime: () => request<string>('POST', '/api/models/runtime'),
-  /** Erases a Local only thread and its forks (ADR 0070); unconfirmed, says what would go. */
+  /** Erases a Local only thread and its forks (ADR 0072); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
@@ -268,6 +270,12 @@ export const api = {
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
+  // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
+  designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
+  setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
+  projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
+  setProjectDesignSystem: (repo: string, design_system: string | null) => request<string>('PUT', '/api/projects/design-systems', { repo, design_system }),
   setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>

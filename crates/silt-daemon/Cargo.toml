@@ -26,6 +26,8 @@ silt-acp = { path = "../silt-acp" }
 silt-agents = { path = "../silt-agents" }
 silt-checkout = { path = "../silt-checkout" }
 silt-crdt = { path = "../silt-crdt" }
+silt-design = { path = "../silt-design" }
+silt-vendor = { path = "../silt-vendor" }
 silt-git = { path = "../silt-git" }
 silt-llm = { path = "../silt-llm" }
 silt-local = { path = "../silt-local" }

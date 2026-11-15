@@ -201,6 +201,9 @@ struct Shared {
     data_dir: std::path::PathBuf,
     config: Config,
     http: reqwest::Client,
+    /// The CDN files artifacts load through this server, when its config
+    /// says so (ADR 0071).
+    vendor: silt_vendor::Vendor,
     /// Threads purged for good; their deltas are never stored again.
     purged: Mutex<std::collections::HashSet<ThreadId>>,
     presence: Mutex<presence::Board>,
@@ -289,6 +292,7 @@ impl Server {
                 viewers: Mutex::new(HashMap::new()),
                 viewer_serial: std::sync::atomic::AtomicU64::new(0),
                 data_dir: data_dir.to_owned(),
+                vendor: silt_vendor::Vendor::new(&data_dir.join("vendor")),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
                 control: control::Control::default(),
@@ -352,6 +356,11 @@ impl Server {
             .route("/v1/me/seen/{mr}", put(me::mark_seen))
             .route("/v1/me/thread-seen", get(me::thread_seen))
             .route("/v1/me/thread-seen/{thread}", put(me::mark_thread_seen))
+            .route("/v1/me/design-systems", get(me::design_systems))
+            .route(
+                "/v1/me/design-systems/{name}",
+                put(me::put_design_system).layer(DefaultBodyLimit::max(silt_proto::DESIGN_SYSTEM_BYTES + (64 << 10))),
+            )
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())
@@ -371,6 +380,7 @@ impl Server {
             .route("/", get(pages::home))
             .route("/login", get(pages::login_page).post(pages::login))
             .route("/fonts/{name}", get(app::font))
+            .route("/vendor/{host}/{*path}", get(links::vendor_file))
             .route("/logout", post(pages::logout))
             .route("/devices/revoke", post(pages::revoke_device))
             .route("/sessions/end-others", post(pages::end_other_sessions))

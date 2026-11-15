@@ -1509,8 +1509,8 @@ fn artifact_text(api: &Api, thread: &str, artifact: &serde_json::Value) -> Strin
 /// An agent the web UI runs shows the person what it made through Silt's
 /// own tools (ADR 0068): an artifact, a new version of it under the same
 /// id, and an image in the conversation. Each is kept in the thread's
-/// history, redacted, and served only by the blob an artifact names; a
-/// fork inherits them.
+/// history as written (ADR 0071), and served only by the blob an artifact
+/// names; a fork inherits them.
 #[test]
 fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     let env = Env::new();
@@ -1536,7 +1536,7 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     );
     assert_eq!(first[0]["inline"], false);
     let text = artifact_text(&api, &thread, &first[0]);
-    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && !text.contains(secret), "kept redacted: {text}");
+    assert!(text.starts_with("<h1>Rescan benchmark</h1>") && text.contains(secret), "kept as written (ADR 0071): {text}");
     let (served, _) = api.call("GET", &format!("/api/threads/{thread}/artifacts/{}", "ab".repeat(32)), None);
     assert!(!served, "a blob no artifact of the thread names isn't served");
 
@@ -1566,6 +1566,51 @@ fn an_agent_the_web_ui_runs_shows_an_image_and_versions_an_artifact() {
     let inherited = artifacts_of(&api, &fork);
     assert_eq!(inherited.len(), 3, "a fork inherits what was shown: {inherited:?}");
     assert!(artifact_text(&api, &fork, &inherited[0]).starts_with("<h1>Rescan benchmark</h1>"));
+}
+
+/// An agent the web UI runs reads the artifact guide, and its HTML artifact
+/// takes the design system the repository names as its default; the CSS
+/// its tokens compiled to is served beside the page, a new version keeps
+/// it, and the agent reads the latest version back (ADR 0071).
+#[test]
+fn an_artifact_takes_the_repositorys_design_system() {
+    let env = Env::new();
+    let systems = env.repo.join(".silt/design-systems");
+    fs::create_dir_all(&systems).expect("mkdir");
+    fs::write(systems.join("default"), "nous\n").expect("write");
+    git(&env.repo, &["add", "."]);
+    git(&env.repo, &["commit", "-q", "-m", "design system"]);
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started =
+        api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Guide me"})));
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let said = settled_history(&api, &thread, "Done: Guide me");
+    assert!(said.iter().any(|(_, text)| text.contains("# Making an artifact")), "the guide answered: {said:?}");
+
+    let prompt = |text: &str| {
+        api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": text})));
+        settled_history(&api, &thread, &format!("Done: {text}"))
+    };
+    prompt("Artifact please");
+    let made = artifacts_of(&api, &thread);
+    assert_eq!(made.len(), 1, "{made:?}");
+    assert_eq!(made[0]["design_system"], "nous");
+    let style = made[0]["style"].as_str().expect("a style blob");
+    let css = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{style}"), None);
+    assert_eq!(css["media_type"], "text/css");
+    let css = artifact_text(&api, &thread, &serde_json::json!({"blob": style}));
+    assert!(css.contains("--bg: #f6f1e8;") && css.contains(":root[data-theme=\"dark\"]"), "{css}");
+
+    prompt("Artifact again");
+    let versions = artifacts_of(&api, &thread);
+    assert_eq!((versions.len(), &versions[1]["design_system"]), (2, &"nous".into()), "a new version keeps the last one's");
+
+    let read = prompt("Read back the artifact");
+    let answer = read.iter().map(|(_, text)| text.as_str()).find(|text| text.contains("version 2 of 2")).unwrap_or_default();
+    assert!(answer.contains("styled with the nous design system") && answer.contains("<h1>Rescan benchmark</h1>"), "{read:?}");
 }
 
 /// Talks to the MCP server Silt configured for the session, the way
