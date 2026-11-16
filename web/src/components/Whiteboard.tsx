@@ -85,6 +85,38 @@ function BoardImage({ thread, artifact, item, onDown }: { thread: string; artifa
   )
 }
 
+/** `html`, a note's text on screen, as SVG text wrapped to its width, for an exported board. */
+function textInstead(html: SVGForeignObjectElement) {
+  const svg = 'http://www.w3.org/2000/svg'
+  const [x, y, width, height] = ['x', 'y', 'width', 'height'].map((name) => Number(html.getAttribute(name) ?? 0))
+  const size = 13
+  const most = Math.max(4, Math.floor((width - 16) / (size * 0.55)))
+  const lines: string[] = []
+  for (const paragraph of (html.textContent ?? '').split('\n')) {
+    let line = ''
+    for (const word of paragraph.split(/\s+/)) {
+      if (line && (line + ' ' + word).length > most) {
+        lines.push(line)
+        line = word
+      } else line = line ? `${line} ${word}` : word
+    }
+    lines.push(line)
+  }
+  const fits = Math.max(1, Math.floor((height - 12) / (size * 1.3)))
+  const text = document.createElementNS(svg, 'text')
+  text.setAttribute('font-family', 'system-ui, sans-serif')
+  text.setAttribute('font-size', String(size))
+  text.setAttribute('fill', '#1d1d1f')
+  lines.slice(0, fits).forEach((shown, at) => {
+    const span = document.createElementNS(svg, 'tspan')
+    span.setAttribute('x', String(x + 8))
+    span.setAttribute('y', String(y + 8 + size + at * size * 1.3))
+    span.textContent = shown
+    text.appendChild(span)
+  })
+  html.replaceWith(text)
+}
+
 /** What's on the board, as left, top, width and height with a margin; none when it's empty. */
 function boundsOf(items: Item[]): [number, number, number, number] | null {
   const boxes = items
@@ -305,14 +337,16 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     if (item && item.text !== editing.text) void write({ ...item, text: editing.text.slice(0, 2000) })
     setEditing(null)
   }
-  /** The board as an SVG file: what's on it, framed, without anyone's cursor. */
-  const exportSvg = () => {
+  /** The board as an SVG document: what's on it, framed, without anyone's cursor. */
+  const boardSvg = () => {
     const svg = picture.current
     const bounds = boundsOf(items)
-    if (!svg || !bounds) return
+    if (!svg || !bounds) return null
     const [left, top, width, height] = bounds
     const copy = svg.cloneNode(true) as SVGSVGElement
     copy.querySelectorAll('[data-testid="whiteboard-cursor"], [data-handle]').forEach((node) => node.remove())
+    // A note's text is HTML on screen, which neither a file nor a canvas draws: here it's SVG text, wrapped to the note.
+    copy.querySelectorAll('foreignObject').forEach((html) => textInstead(html as SVGForeignObjectElement))
     copy.querySelector('g[data-board]')?.removeAttribute('transform')
     copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
     copy.setAttribute('viewBox', `${left} ${top} ${width} ${height}`)
@@ -320,13 +354,45 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     copy.setAttribute('height', String(Math.round(height)))
     copy.setAttribute('color', '#4a4a48')
     copy.removeAttribute('class')
-    const text = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(copy)}`
-    const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }))
+    return { text: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(copy)}`, width, height }
+  }
+  const save = (blob: Blob, extension: string) => {
+    const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `${title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'whiteboard'}.svg`
+    anchor.download = `${title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'whiteboard'}.${extension}`
     anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  const exportSvg = () => {
+    const board = boardSvg()
+    if (board) save(new Blob([board.text], { type: 'image/svg+xml' }), 'svg')
+  }
+  /** The board as a PNG at twice its size, on white, drawn from its SVG in this browser. */
+  const exportPng = () => {
+    const board = boardSvg()
+    if (!board) return
+    const scale = Math.min(2, 8192 / Math.max(board.width, board.height))
+    const image = new Image()
+    const url = URL.createObjectURL(new Blob([board.text], { type: 'image/svg+xml' }))
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(board.width * scale)
+      canvas.height = Math.round(board.height * scale)
+      const context = canvas.getContext('2d')
+      if (context) {
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.drawImage(image, 0, 0, canvas.width, canvas.height)
+        canvas.toBlob((png) => png && save(png, 'png'), 'image/png')
+      }
+      URL.revokeObjectURL(url)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      toast("This board couldn't be drawn as a PNG", 'danger')
+    }
+    image.src = url
   }
   const handle = (item: Item) => {
     if (selected !== item.id || tool !== 'move') return null
@@ -531,6 +597,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       </div>
       <div className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
         <IconButton icon="download" label="Download as SVG" onClick={exportSvg} />
+        <IconButton icon="image" label="Download as PNG" onClick={exportPng} />
         <IconButton icon="plus" label="Zoom in" onClick={() => zoom(1.25)} />
         <IconButton icon="x" label="Zoom out" onClick={() => zoom(1 / 1.25)} />
       </div>

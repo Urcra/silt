@@ -541,7 +541,8 @@ HTML out: it shows as text.\n",
             "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
 {\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
 silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
-change it, and keep one table per sheet with one header row.\n",
+change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
+or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n",
         ),
         "whiteboard" => out.push_str(
             "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \

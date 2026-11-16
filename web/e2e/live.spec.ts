@@ -1799,4 +1799,10 @@ test('on a whiteboard people draw, connect, resize, rename and delete, and add a
   const download = page.waitForEvent('download')
   await board.getByRole('button', { name: 'Download as SVG' }).click()
   expect((await download).suggestedFilename()).toBe('Planning-board.svg')
+  const png = page.waitForEvent('download')
+  await board.getByRole('button', { name: 'Download as PNG' }).click()
+  const saved = await png
+  expect(saved.suggestedFilename()).toBe('Planning-board.png')
+  const bytes = readFileSync((await saved.path()) ?? '')
+  expect([...bytes.subarray(1, 4)].map((byte) => String.fromCharCode(byte)).join('')).toBe('PNG')
 })
