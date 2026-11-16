@@ -95,8 +95,9 @@ pub struct Policy {
     /// The agent runs only with its own sandbox on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sandbox: bool,
-    /// The sandbox also hides Silt's data and other workspaces; implies
-    /// `sandbox`.
+    /// "Hide other workspaces' files": the sandbox also keeps the agent out
+    /// of Silt's data and other workspaces' folders; implies `sandbox`.
+    /// History tools are scoped to their workspace without it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub isolated: bool,
     /// Projects keep the workspace's server: no other, and not this machine
@@ -207,7 +208,7 @@ pub enum Broken {
     Preset { asked: Preset, cap: Preset },
     Mode { mode: String, cap: Preset },
     Flag { flag: String, agent: String, cap: Preset },
-    Sandbox { agent: String },
+    Sandbox { agent: String, hides_others: bool },
     Home,
     Move { project: String, servers: Vec<String>, to: Option<String> },
     WaitingForPolicy,
@@ -247,7 +248,10 @@ impl Refusal {
                 "{flag} stops {agent} asking before it acts, which {workspace} doesn't allow: {source} {allows} at most {}",
                 cap.label()
             ),
-            Broken::Sandbox { agent } => {
+            Broken::Sandbox { agent, hides_others: true } => format!(
+                "{workspace} hides other workspaces' files from its agents, which needs a sandbox Silt can't set up for {agent} ({source})"
+            ),
+            Broken::Sandbox { agent, hides_others: false } => {
                 format!("{workspace} needs the agent's own sandbox, which Silt can't turn on for {agent} ({source})")
             }
             Broken::Home => format!("{workspace}'s projects sync with its server only ({source})"),
@@ -332,7 +336,8 @@ impl Rules<'_> {
             },
         })?;
         self.check(|policy| {
-            (policy.sandbox_required() && !can_sandbox).then(|| Broken::Sandbox { agent: agent.name().to_owned() })
+            (policy.sandbox_required() && !can_sandbox)
+                .then(|| Broken::Sandbox { agent: agent.name().to_owned(), hides_others: policy.isolated })
         })
     }
 
@@ -469,7 +474,10 @@ mod tests {
         // Isolated is the person's own rule, and Copilot can't sandbox here.
         let refusal = rules.check_agent(&known("copilot", "GitHub Copilot"), false).unwrap_err();
         assert_eq!(refusal.origin, Source::Local);
-        assert!(matches!(*refusal.broken, Broken::Sandbox { .. }));
+        assert_eq!(
+            refusal.to_string(),
+            "Work hides other workspaces' files from its agents, which needs a sandbox Silt can't set up for GitHub Copilot (your rules)"
+        );
 
         assert_eq!(rules.check_preset(Preset::Plan), Ok(()));
         assert_eq!(

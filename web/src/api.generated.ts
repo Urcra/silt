@@ -1141,8 +1141,9 @@ max_preset?: Preset | null,
  */
 sandbox?: boolean, 
 /**
- * The sandbox also hides Silt's data and other workspaces; implies
- * `sandbox`.
+ * "Hide other workspaces' files": the sandbox also keeps the agent out
+ * of Silt's data and other workspaces' folders; implies `sandbox`.
+ * History tools are scoped to their workspace without it.
  */
 isolated?: boolean, 
 /**

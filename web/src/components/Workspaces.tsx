@@ -308,13 +308,19 @@ export function WorkspacesSettings() {
               />
               <Rule
                 name="Agent's own sandbox"
-                mine={<Toggle label="require the agent's sandbox" on={Boolean(workspace.policy.sandbox)} onChange={(sandbox) => changePolicy({ sandbox })} />}
+                mine={
+                  workspace.policy.isolated ? (
+                    <span className="text-xs text-fg-2">on, to hide other workspaces' files</span>
+                  ) : (
+                    <Toggle label="require the agent's sandbox" on={Boolean(workspace.policy.sandbox)} onChange={(sandbox) => changePolicy({ sandbox })} />
+                  )
+                }
                 theirs={org?.policy.sandbox ? 'Required' : '—'}
                 effect={effective.sandbox || effective.isolated ? 'Required' : 'Not required'}
               />
               <Rule
-                name="Isolated history"
-                mine={<Toggle label="isolated history" on={Boolean(workspace.policy.isolated)} onChange={(isolated) => changePolicy({ isolated })} />}
+                name="Hide other workspaces' files"
+                mine={<Toggle label="hide other workspaces' files" on={Boolean(workspace.policy.isolated)} onChange={(isolated) => changePolicy({ isolated })} />}
                 theirs={org?.policy.isolated ? 'On' : '—'}
                 effect={effective.isolated ? 'On' : 'Off'}
               />
@@ -328,8 +334,8 @@ export function WorkspacesSettings() {
           </table>
         </div>
         <p className={SUB}>
-          <strong>Isolated</strong>: Silt's history tools answer only with {workspace.name}'s threads, and the agent's sandbox can't read Silt's data or other
-          workspaces' folders. Without the sandbox, an agent could still read files directly.
+          Silt's history tools always answer an agent only with its own workspace's threads. <strong>Hide other workspaces' files</strong> also keeps the
+          agent's sandbox from reading Silt's data and other workspaces' folders directly, so it needs an agent Silt can sandbox that way.
         </p>
         {rulesLine(effective) && <p className="text-xs">In effect: {rulesLine(effective)}</p>}
       </section>

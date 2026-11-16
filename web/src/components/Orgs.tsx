@@ -130,7 +130,7 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
         {(
           [
             ['sandbox', "Agent's own sandbox", 'Agents that can’t sandbox are refused'],
-            ['isolated', 'Isolated history', "The sandbox also hides Silt's data and other workspaces"],
+            ['isolated', "Hide other workspaces' files", "The sandbox also keeps agents out of Silt's data and other workspaces' folders"],
             ['home_locked', 'Where threads sync', `Only to this server; never this machine only, never another`],
           ] as const
         ).map(([key, name, says]) => (
