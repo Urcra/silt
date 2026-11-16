@@ -443,9 +443,9 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
     call: async (method, args, context) => {
       if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: true }
       if (method === 'stop') {
-        // The page stopped asking: this computer's agent stops too; in the hosted app the device's run ends on its own.
+        // The page stopped asking: the agent answering stops too, on this computer or the device the server asked.
         const minted = asks.get(String((args as { ask?: unknown } | null)?.ask ?? ''))
-        if (minted && !hosted()) await api.sampleStop(thread, artifact.id, minted).catch(() => undefined)
+        if (minted) await api.sampleStop(thread, artifact.id, minted).catch(() => undefined)
         return null
       }
       if (method === 'toolResult') {

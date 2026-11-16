@@ -20,6 +20,8 @@ use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from};
 
 /// How long the browser waits for the daemon to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a stop waits to reach the device answering the question.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 /// How long a page's read of the thread's files waits on a device before the server reads them itself.
 const FILES_WAIT: Duration = Duration::from_secs(8);
 /// How long a page's question waits for an agent's answer (ADR 0072).
@@ -49,6 +51,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}", get(sample_so_far))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/stop", post(sample_stop))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
@@ -122,6 +125,25 @@ async fn sample(
     let _forget = ask.map(|ask| Forget { server: server.clone(), user: browser.user, ask });
     let answered = ask_device_watched(&server, browser, thread, command, SAMPLE_WAIT, watched).await;
     Ok(Json(answered?))
+}
+
+/// The page stopped asking its question named `ask`: the device answering
+/// it hears so and ends its agent's run. Nothing is waited for.
+async fn sample_stop(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, _, ask)): Path<(String, String, String)>,
+) -> Result<StatusCode, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let Some((relay, device)) = server.shared.control.asked_on(browser.user, &ask) else { return Ok(StatusCode::NO_CONTENT) };
+    let command = RemoteCommand::StopSample { relay };
+    if let Err(needs) = browser.capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
+    }
+    let stop =
+        Relay { device, thread, sender: browser.user, from: None, capabilities: browser.capabilities, command, ttl: STOP_WAIT };
+    control::relay(&server, stop).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// What the agent has said so far of a page's question named `ask`, while
@@ -268,7 +290,7 @@ async fn ask_device_watched(
         };
         let id = control::relay(server, relay).await?;
         if let Some((user, ask)) = &watched {
-            server.shared.control.asked(*user, ask.clone(), id);
+            server.shared.control.asked(*user, ask.clone(), id, device.id);
         }
         match control::answer_of(server, id, wait).await? {
             Some(answer) if answer.ok => return Ok(answer.data),

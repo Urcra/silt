@@ -511,6 +511,21 @@ fn the_hosted_app_asks_a_pages_question_of_the_persons_computer() {
         asking.join().expect("asked")
     });
     assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 7]", "{answered}");
+
+    // A page that stops asking ends the run on the laptop, which waited on its tool.
+    let began = std::time::Instant::now();
+    let stopped = std::thread::scope(|scope| {
+        let asking = scope.spawn(|| {
+            browser.call("POST", &sample, Some(serde_json::json!({"ask": "h3", "input": "Which row?", "tools": tools})))
+        });
+        while !asking.is_finished() && began.elapsed() < std::time::Duration::from_secs(60) {
+            browser.call("POST", &format!("{sample}/h3/stop"), None);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        asking.join().expect("asked")
+    });
+    assert!(stopped["text"].is_null() && stopped.to_string().contains("stopped asking"), "{stopped}");
+    assert!(began.elapsed() < std::time::Duration::from_secs(60), "well before the question's own wait");
 }
 
 /// With none of the person's devices online, the hosted app lists a

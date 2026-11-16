@@ -1745,6 +1745,16 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await doc.getByLabel('what this version is').fill('Reviewed')
   await doc.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByText('Saved as v2')).toBeVisible()
+  // Rich text edits the heading as it reads, and writes back that block alone.
+  await doc.getByRole('button', { name: 'Rich text' }).click()
+  const heading = doc.getByTestId('doc-rich').getByRole('heading', { name: 'Plan' })
+  await heading.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' for Q4')
+  await doc.getByRole('button', { name: 'Rich text' }).click()
+  await expect(doc.getByText('Saved')).toBeVisible()
+  await doc.getByRole('button', { name: 'Edit' }).click()
+  await expect(doc.getByLabel("the doc's text")).toHaveValue(/^# Plan for Q4\n[\s\S]*- review/)
 
   await page.getByLabel('draft').fill('Artifact sheet')
   await page.getByLabel('draft').press('Enter')

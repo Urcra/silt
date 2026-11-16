@@ -15,6 +15,7 @@ import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { DocMarkdown } from './DocMarkdown'
+import { RichDoc } from './RichDoc'
 import { findAcross, renderedExcerpt } from '../textFind'
 
 /** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
@@ -111,7 +112,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   const queries = useQueryClient()
   const key = ['doc', thread, artifact]
   const doc = useQuery({ queryKey: key, queryFn: () => api.docData(thread, artifact, { op: 'read' }), refetchInterval: 5_000 })
-  const [view, setView] = useState<'write' | 'read' | 'compare'>('read')
+  const [view, setView] = useState<'write' | 'read' | 'rich' | 'compare'>('read')
   const [comparing, setComparing] = useState<ArtifactView | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
@@ -308,6 +309,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
         <Button size="sm" variant={view === 'read' ? 'secondary' : 'ghost'} aria-pressed={view === 'read'} onClick={() => setView('read')}>
           Read
         </Button>
+        <Button size="sm" variant={view === 'rich' ? 'secondary' : 'ghost'} aria-pressed={view === 'rich'} onClick={() => setView('rich')}>
+          Rich text
+        </Button>
         <Button size="sm" variant={view === 'write' ? 'secondary' : 'ghost'} aria-pressed={view === 'write'} onClick={() => setView('write')}>
           Edit
         </Button>
@@ -382,6 +386,13 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       )}
       {view === 'compare' && comparing ? (
         <DocCompare thread={thread} version={comparing} text={text} />
+      ) : view === 'rich' ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
+            <RichDoc text={text} onChange={typed} editable />
+          </article>
+          <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
+        </div>
       ) : view === 'write' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <textarea

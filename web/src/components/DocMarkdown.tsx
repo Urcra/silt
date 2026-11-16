@@ -52,12 +52,19 @@ const DOC_COMPONENTS: Components = {
       const day = href.slice('#silt-date:'.length)
       const date = new Date(`${day}T00:00:00`)
       return (
-        <time dateTime={day} className="rounded-sm bg-surface-1 px-1">
+        <time dateTime={day} className="rounded-sm bg-surface-1 px-1" data-md={`<?silt date ${day}?>`} contentEditable={false}>
           {Number.isNaN(date.getTime()) ? day : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
         </time>
       )
     }
-    if (href.startsWith('#silt-mention:')) return <span className="rounded-sm bg-accent/15 px-1 text-accent-fg">@{href.slice('#silt-mention:'.length)}</span>
+    if (href.startsWith('#silt-mention:')) {
+      const name = href.slice('#silt-mention:'.length)
+      return (
+        <span className="rounded-sm bg-accent/15 px-1 text-accent-fg" data-md={`<?silt mention ${name}?>`} contentEditable={false}>
+          @{name}
+        </span>
+      )
+    }
     return COMPONENTS.a ? (COMPONENTS.a as (given: typeof props) => ReactNode)(props) : null
   },
 }
