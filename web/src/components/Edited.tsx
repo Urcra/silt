@@ -335,6 +335,26 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   const [editing, setEditing] = useState<{ row: number; column: number; raw: string } | null>(null)
   const [selected, setSelected] = useState<{ row: number; column: number }>({ row: 0, column: 0 })
   const [renaming, setRenaming] = useState<string | null>(null)
+  // Comments on this sheet's cells, by where each cell is now (ADR 0082).
+  const comments = useQuery({ queryKey: keys.comments(thread), queryFn: () => api.comments(thread) })
+  const [commenting, setCommenting] = useState<string | null>(null)
+  const refreshComments = () => queries.invalidateQueries({ queryKey: keys.comments(thread) })
+  const onCells = new Map<string, CommentView[]>()
+  for (const comment of comments.data ?? []) {
+    const at = comment.location
+    if (at.at !== 'cell' || at.artifact !== artifact || at.sheet !== tab || at.outdated) continue
+    onCells.set(at.address, [...(onCells.get(at.address) ?? []), comment])
+  }
+  const addComment = async (address: string) => {
+    if (!commenting?.trim()) return
+    try {
+      await api.addComment(thread, { on: 'cell', artifact, sheet: tab, address }, commenting.trim())
+      setCommenting(null)
+      await refreshComments()
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   // A column being made wider or narrower by its header's edge, until it's let go.
   const [sizing, setSizing] = useState<{ column: number; width: number; from: number; start: number } | null>(null)
   // Only the rows near what's shown are drawn, so a sheet of thousands of rows stays quick (ADR 0077).
@@ -392,6 +412,8 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   const view = sheet.data
   if (!view) return null
   const shown = view.raw[selected.row]?.[selected.column] ?? ''
+  const selectedAddress = `${columnName(selected.column)}${selected.row + 1}`
+  const selectedComments = onCells.get(selectedAddress) ?? []
   const ROW = 29
   const windowed = view.rows.length > 200
   const first = windowed ? Math.max(0, Math.floor(window_.top / ROW) - 20) : 0
@@ -435,6 +457,9 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'columns', at: selected.column })}>
           Column left
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setCommenting(commenting === null ? '' : null)}>
+          Comment
         </Button>
         <Button size="sm" variant="ghost" onClick={csv}>
           CSV
@@ -488,11 +513,12 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                 {view.columns.map((columnId, column) => {
                   const active = selected.row === row && selected.column === column
                   const value = view.values[row]?.[column] ?? ''
+                  const commented = onCells.get(`${columnName(column)}${row + 1}`)
                   return (
                     <td
                       key={columnId}
                       style={sized(column)}
-                      className={cx('h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
+                      className={cx('relative h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
                       onClick={() => setSelected({ row, column })}
                       onDoubleClick={() => setEditing({ row, column, raw: view.raw[row]?.[column] ?? '' })}
                     >
@@ -512,6 +538,12 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                       ) : (
                         <span className={cx('block truncate px-2', /^-?[\d.,]+%?$/.test(value) ? 'text-right tabular-nums' : '', value.startsWith('#') ? 'text-danger' : 'text-fg-1')}>
                           {value}
+                          {commented && (
+                            <span
+                              aria-label={`${commented.length} comment${commented.length === 1 ? '' : 's'}`}
+                              className="absolute top-0 right-0 h-0 w-0 border-t-[6px] border-l-[6px] border-t-accent border-l-transparent"
+                            />
+                          )}
                         </span>
                       )}
                     </td>
@@ -523,6 +555,34 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
           </tbody>
         </table>
       </div>
+      {(commenting !== null || selectedComments.length > 0) && (
+        <section aria-label={`comments on ${selectedAddress}`} data-testid="cell-comments" className="flex max-h-48 shrink-0 flex-col gap-2 overflow-auto border-t border-line-subtle px-3 py-2">
+          {selectedComments.map((comment) => (
+            <div key={comment.id} className={cx('flex flex-col gap-1', comment.resolved && 'opacity-60')}>
+              <CommentThread thread={thread} comment={comment} onChanged={refreshComments} />
+              {!comment.resolved && (
+                <Button variant="ghost" size="sm" className="self-start" onClick={() => void api.resolveComment(thread, comment.id).then(refreshComments)}>
+                  Resolve
+                </Button>
+              )}
+            </div>
+          ))}
+          {commenting !== null && (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void addComment(selectedAddress)
+              }}
+            >
+              <Input autoFocus aria-label={`a comment on ${selectedAddress}`} value={commenting} onChange={(event) => setCommenting(event.target.value)} placeholder={`Comment on ${selectedAddress}`} />
+              <Button size="sm" type="submit" disabled={!commenting.trim()}>
+                Add
+              </Button>
+            </form>
+          )}
+        </section>
+      )}
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1">
         <div className="flex items-center gap-1" role="tablist" aria-label="sheets">
         {Array.from({ length: view.sheets ?? 1 }, (_, at) =>

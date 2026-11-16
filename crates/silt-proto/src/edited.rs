@@ -736,6 +736,39 @@ pub fn doc_comment_location(
     }
 }
 
+/// A comment's target on `address` of sheet `sheet`, `cells`, as it stands.
+pub fn cell_comment_target(
+    cells: &SheetCells,
+    artifact: ArtifactId,
+    sheet: u16,
+    address: &str,
+) -> Result<silt_log::CommentTarget, String> {
+    let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
+    let (Some(row), Some(column)) = (cells.rows.get(row), cells.columns.get(column)) else {
+        return Err(format!("{address} isn't in the sheet"));
+    };
+    Ok(silt_log::CommentTarget::Cell { artifact, sheet, row: *row, column: *column })
+}
+
+/// Where a comment on a sheet's cell is now: its address and what it holds,
+/// or outdated once its row or column was taken out.
+pub fn cell_comment_location(
+    cells: &SheetCells,
+    artifact: ArtifactId,
+    sheet: u16,
+    row: &silt_crdt::CharId,
+    column: &silt_crdt::CharId,
+) -> crate::view::CommentLocation {
+    let at = cells.rows.iter().position(|id| id == row).zip(cells.columns.iter().position(|id| id == column));
+    crate::view::CommentLocation::Cell {
+        artifact: artifact.to_string(),
+        sheet,
+        address: at.map(|(row, column)| format!("{}{}", silt_sheet::column_name(column), row + 1)).unwrap_or_default(),
+        excerpt: cells.cells.get(&(*row, *column)).map(|raw| raw.chars().take(120).collect()).unwrap_or_default(),
+        outdated: at.is_none(),
+    }
+}
+
 /// How many words a doc's or a sheet's search hit shows, as the index's
 /// snippets do.
 const SNIPPET_WORDS: usize = 12;

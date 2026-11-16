@@ -182,6 +182,10 @@ async fn add_comment(
             let (artifact, doc) = browse::seen_doc(&server, browser.user, &id, &artifact).await?;
             silt_proto::edited::doc_comment_target(&doc, artifact, start, end).map_err(bad_request)?
         }
+        CommentOn::Cell { artifact, sheet, address } => {
+            let (artifact, cells) = browse::seen_sheet(&server, browser.user, &id, &artifact, sheet).await?;
+            silt_proto::edited::cell_comment_target(&cells, artifact, sheet, &address).map_err(bad_request)?
+        }
         CommentOn::Lines { .. } | CommentOn::Anchored { .. } => {
             return Err(bad_request("comment on code from a machine with the thread checked out"));
         }

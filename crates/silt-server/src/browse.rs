@@ -1729,6 +1729,31 @@ pub(crate) async fn seen_doc(
     Ok((id, silt_log::doc_crdt_in(&browsed.log, browsed.graph(), row.id, id)))
 }
 
+/// Sheet `sheet` of `artifact` in a thread `user` reads, for a comment on
+/// one of its cells.
+pub(crate) async fn seen_sheet(
+    server: &Server,
+    user: UserId,
+    selector: &str,
+    artifact: &str,
+    sheet: u16,
+) -> Result<(silt_types::ArtifactId, silt_log::page::SheetCells), ApiError> {
+    let readable = Readable::load(server, user).await?;
+    let row = readable.row(selector)?;
+    let browsed = readable.deltas.get(&row.family).ok_or_else(not_found)?;
+    let entries = browsed.entries(row.id);
+    let kind = silt_proto::view::latest_artifacts(entries.iter().map(|(_, entry)| entry))
+        .into_iter()
+        .find(|(view, _)| view.id == artifact)
+        .map(|(view, _)| view.kind)
+        .ok_or_else(|| bad_request("this thread has no such artifact"))?;
+    if kind != "sheet" {
+        return Err(bad_request("only a sheet's cells take comments"));
+    }
+    let id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    Ok((id, silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, id, sheet)))
+}
+
 pub(crate) async fn seen_thread(server: &Server, user: UserId, selector: &str) -> Result<SeenThread, ApiError> {
     let readable = Readable::load(server, user).await?;
     let row = readable.row(selector)?;
@@ -1782,6 +1807,20 @@ pub(crate) async fn comments(
             .collect(),
         None => HashMap::new(),
     };
+    let on_cells: BTreeSet<(silt_types::ArtifactId, u16)> = comments
+        .iter()
+        .filter_map(|comment| match comment.target {
+            CommentTarget::Cell { artifact, sheet, .. } => Some((artifact, sheet)),
+            _ => None,
+        })
+        .collect();
+    let sheets: HashMap<_, _> = match readable.deltas.get(&row.family) {
+        Some(browsed) => on_cells
+            .into_iter()
+            .map(|(artifact, sheet)| ((artifact, sheet), silt_log::sheet_cells_in(log, browsed.graph(), row.id, artifact, sheet)))
+            .collect(),
+        None => HashMap::new(),
+    };
     Ok(Json(
         comments
             .into_iter()
@@ -1801,6 +1840,11 @@ pub(crate) async fn comments(
                     CommentTarget::Page { artifact, start, end } => docs.get(&artifact).map_or(CommentLocation::Unknown, |doc| {
                         silt_proto::edited::doc_comment_location(doc, artifact, &start, &end)
                     }),
+                    CommentTarget::Cell { artifact, sheet, row, column } => {
+                        sheets.get(&(artifact, sheet)).map_or(CommentLocation::Unknown, |cells| {
+                            silt_proto::edited::cell_comment_location(cells, artifact, sheet, &row, &column)
+                        })
+                    }
                     CommentTarget::Code { .. } => CommentLocation::Unknown,
                 },
                 replies: comment

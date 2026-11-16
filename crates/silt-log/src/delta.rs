@@ -192,6 +192,9 @@ pub enum CommentTarget {
     /// Text of an artifact's doc, anchored as code is (ADR 0077); last, as
     /// stored deltas name variants by position.
     Page { artifact: ArtifactId, start: Anchor, end: Anchor },
+    /// A sheet's cell, by its row's and column's ids, so it follows the cell
+    /// as rows and columns go in or out; last, as above.
+    Cell { artifact: ArtifactId, sheet: u16, row: silt_crdt::CharId, column: silt_crdt::CharId },
 }
 
 /// A merge request's life (ADR 0010). It is identified by the id of its

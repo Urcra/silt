@@ -2033,6 +2033,15 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     api.ok("POST", &path, Some(typed));
     let now = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
     assert_eq!((&now["raw"][0][0], &now["raw"][1][0]), (&"".into(), &"kept".into()), "{now}");
+    // A comment on a cell follows it as a row goes in above.
+    let on = serde_json::json!({"on": {"on": "cell", "artifact": sheet, "sheet": 1, "address": "A2"}, "text": "check this"});
+    api.ok("POST", &format!("/api/threads/{thread}/comments"), Some(on));
+    api.ok("POST", &path, Some(serde_json::json!({"op": "insert", "sheet": 1, "axis": "rows", "at": 0})));
+    let comments = api.ok("GET", &format!("/api/threads/{thread}/comments"), None);
+    let cell =
+        comments.as_array().expect("comments").iter().find(|comment| comment["text"] == "check this").expect("the comment");
+    assert_eq!((&cell["location"]["at"], &cell["location"]["address"]), (&"cell".into(), &"A3".into()), "{cell}");
+    api.ok("POST", &path, Some(serde_json::json!({"op": "remove", "sheet": 1, "axis": "rows", "at": 0})));
     // A sheet is named, and a column sized and shown as a percentage.
     api.ok("POST", &path, Some(serde_json::json!({"op": "set", "sheet": 2, "cells": {"A1": "0.25"}})));
     let format = serde_json::json!({"op": "format", "sheet": 2, "name": "Shares", "widths": {"A": 140}, "formats": {"A": "0%"}});
