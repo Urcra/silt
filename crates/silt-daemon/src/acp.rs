@@ -1842,8 +1842,12 @@ impl Core {
 /// environment leaves out.
 fn mcp_env(data_dir: &Path) -> Vec<(String, String)> {
     let mut env = vec![("SILT_HOME".to_owned(), data_dir.to_string_lossy().into_owned())];
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        env.push(("XDG_RUNTIME_DIR".to_owned(), runtime.to_string_lossy().into_owned()));
+    // Where the daemon's headless browser is, for `silt_artifact_check`,
+    // which the agent's filtered environment would leave out.
+    for name in ["XDG_RUNTIME_DIR", "PLAYWRIGHT_BROWSERS_PATH", "SILT_CHROMIUM"] {
+        if let Some(value) = std::env::var_os(name) {
+            env.push((name.to_owned(), value.to_string_lossy().into_owned()));
+        }
     }
     env
 }

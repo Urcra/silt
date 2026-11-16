@@ -486,7 +486,17 @@ fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
 /// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
-    let body = |name: &str| skills.iter().find(|skill| skill.name == name).and_then(|skill| skill.body().ok());
+    // A skill with its folder, so the files it names beside it can be read
+    // rather than searched for.
+    let body = |name: &str| {
+        let skill = skills.iter().find(|skill| skill.name == name)?;
+        let text = skill.body().ok()?;
+        Some(if skill.dir.is_dir() {
+            format!("{text}\n\nThe files beside this skill are in `{}`.\n", skill.dir.display())
+        } else {
+            text
+        })
+    };
     let mut out = String::new();
     match kind {
         "html" => match body("artifact-design") {

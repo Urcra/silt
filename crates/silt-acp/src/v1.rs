@@ -175,7 +175,8 @@ impl ConnectTo<Agent> for V1 {
                         let loaded = connection
                             .send_request(
                                 LoadSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
-                                    .mcp_servers(mcp_servers.clone()),
+                                    .mcp_servers(mcp_servers.clone())
+                                    .meta(crate::session_meta()),
                             )
                             .block_task()
                             .await;
@@ -207,7 +208,11 @@ impl ConnectTo<Agent> for V1 {
                     }
                     None => {
                         let created = match connection
-                            .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
+                            .send_request(
+                                NewSessionRequest::new(start.cwd.clone())
+                                    .mcp_servers(mcp_servers.clone())
+                                    .meta(crate::session_meta()),
+                            )
                             .block_task()
                             .await
                         {
