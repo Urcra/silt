@@ -502,6 +502,9 @@ pub enum Request {
         artifact: String,
         #[serde(default)]
         emit: Option<(String, serde_json::Value)>,
+        /// The agent's presence, as a view's: what it's on, say.
+        #[serde(default)]
+        presence: Option<serde_json::Value>,
     },
     /// The MCP servers this machine lists for pages (ADR 0080).
     PageConnectors,

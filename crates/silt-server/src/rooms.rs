@@ -77,6 +77,8 @@ pub(crate) struct AgentSays {
     artifact: String,
     #[serde(default)]
     emit: Option<(String, serde_json::Value)>,
+    #[serde(default)]
+    presence: Option<serde_json::Value>,
 }
 
 /// The thread's agent speaks in, or listens to, a page's room here, for a
@@ -99,8 +101,13 @@ pub(crate) async fn agent(
         let deliveries = rooms.hub.join(key.clone(), info, page.level, silt_proto::rooms::topic_levels(&config), now);
         rooms.deliver(deliveries);
     }
-    if let Some((topic, data)) = says.emit {
-        let sent = rooms.hub.sent(&key, &peer, Sent::Emit { topic, data }, now);
+    let said = says
+        .emit
+        .map(|(topic, data)| Sent::Emit { topic, data })
+        .into_iter()
+        .chain(says.presence.map(|state| Sent::Presence { state }));
+    for sent in said {
+        let sent = rooms.hub.sent(&key, &peer, sent, now);
         if let Some((_, Heard::Refused { reason })) = sent.iter().find(|(to, _)| *to == peer) {
             return Err(crate::bad_request(format!("the room refused it: {reason}")));
         }

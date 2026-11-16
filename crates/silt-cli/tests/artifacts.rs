@@ -335,13 +335,20 @@ async fn a_rooms_moments_reach_a_view_on_another_machine() {
     let mut said = Vec::new();
     for _ in 0..10 {
         said.extend(heard(&mut theirs).await);
-        if said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note") {
+        let noted = said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note");
+        if noted && said.iter().any(|event| event["event"] == "presence" && event["peer"]["kind"] == "agent") {
             break;
         }
     }
     let note = said.iter().find(|event| event["event"] == "moment" && event["topic"] == "note");
     let note = note.unwrap_or_else(|| panic!("bob hears the agent: {said:?}"));
     assert_eq!((&note["data"]["said"], &note["from"]["kind"]), (&"hello".into(), &"agent".into()), "{note}");
+    let present = said.iter().find(|event| event["event"] == "presence" && event["peer"]["kind"] == "agent");
+    assert_eq!(
+        present.map(|event| &event["peer"]["state"]["status"]),
+        Some(&"listening".into()),
+        "and sees what it's on: {said:?}"
+    );
     drop(mine);
     drop(theirs);
 }

@@ -516,7 +516,10 @@ async fn show(
         && let Some(last) = last.clone()
     {
         // The agent speaks in the page's room (ADR 0081).
-        ("silt_artifact_room", serde_json::json!({"id": last, "topic": "note", "data": {"said": "hello"}}))
+        (
+            "silt_artifact_room",
+            serde_json::json!({"id": last, "topic": "note", "data": {"said": "hello"}, "presence": {"status": "listening"}}),
+        )
     } else if let Some(asset) = prompt.split("Read asset ").nth(1).map(str::trim)
         && let Some(last) = last.clone()
     {

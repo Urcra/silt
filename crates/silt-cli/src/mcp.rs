@@ -251,7 +251,12 @@ impl silt_mcp::Backend for DaemonTools {
                     .map(|topic| (topic.to_owned(), arguments.get("data").cloned().unwrap_or(Value::Null)));
                 let heard: Value = ask_daemon(&Request::Scoped {
                     token,
-                    asking: Box::new(Request::RoomAgent { thread: String::new(), artifact, emit }),
+                    asking: Box::new(Request::RoomAgent {
+                        thread: String::new(),
+                        artifact,
+                        emit,
+                        presence: arguments.get("presence").cloned().filter(|presence| !presence.is_null()),
+                    }),
                 })?;
                 return Ok(serde_json::to_string_pretty(&heard).unwrap_or_default());
             }

@@ -166,7 +166,8 @@ fn show_tools() -> Vec<Value> {
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
                     "topic": {"type": "string", "description": "A topic to emit to, with data"},
-                    "data": {"description": "What to emit, JSON"}
+                    "data": {"description": "What to emit, JSON"},
+                    "presence": {"type": "object", "description": "Your presence, as a view's: what you're on, such as {\"status\": \"rewriting the risks\", \"item\": \"risk\"}, which the page's onPeers shows beside the people; it lapses 15 s after you last said anything"}
                 },
                 "required": ["id"]
             }

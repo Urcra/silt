@@ -614,7 +614,7 @@ impl Core {
                 let _ = reply.send(to_response(answer));
                 return;
             }
-            if let Request::RoomAgent { artifact, emit, .. } = *asking {
+            if let Request::RoomAgent { artifact, emit, presence, .. } = *asking {
                 // A thread that syncs with a server meets its views in the
                 // server's room, so the agent speaks there.
                 let remote = match self.run_thread(&token).await {
@@ -626,7 +626,7 @@ impl Core {
                 if let Some((thread, remote)) = remote {
                     tokio::spawn(async move {
                         let answer = remote
-                            .room_agent(&thread, &artifact, emit)
+                            .room_agent(&thread, &artifact, emit, presence)
                             .await
                             .map_err(|error| CoreError::Invalid(error.to_string()));
                         let _ = reply.send(to_response(answer));
@@ -634,7 +634,7 @@ impl Core {
                     return;
                 }
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
+                    Ok(thread) => self.room_agent(&thread, &artifact, emit, presence).map(|(deliveries, heard)| {
                         // What the agent said reaches the open views through the web server.
                         let _ = self.bus.send(crate::protocol::BusEvent::Room {
                             deliveries: serde_json::to_value(deliveries).unwrap_or_default(),
