@@ -207,7 +207,7 @@ function sampleClient(ns) {
     if (!signal || typeof signal.addEventListener !== 'function') return answered;
     // Stopping ends the page's wait and its stream at once; the agent's run ends on its own.
     return Promise.race([answered, new Promise(function (_, no) {
-      var quit = function () { done(); no(aborted()); };
+      var quit = function () { done(); no(aborted()); if (ns.stop) ns.stop({ ask: ask }).catch(function () {}); };
       signal.addEventListener('abort', quit, { once: true });
       stop = function () { signal.removeEventListener('abort', quit); };
     })]);

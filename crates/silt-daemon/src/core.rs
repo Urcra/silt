@@ -298,6 +298,8 @@ pub struct Core {
     pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Questions whose pages offered tools, by name (ADR 0072).
     pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
+    /// What stops each named question running now, by thread, artifact and name.
+    pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -541,6 +543,7 @@ impl Core {
             samples: HashMap::new(),
             sampling: std::sync::Arc::default(),
             sample_calls: HashMap::new(),
+            sample_stops: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
@@ -840,6 +843,7 @@ impl Core {
             Request::SampleToolResult { thread, artifact, ask, call, result } => {
                 to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
             }
+            Request::StopSample { thread, artifact, ask } => to_response(self.stop_sample(&thread, &artifact, &ask)),
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => {
                     let latest = self.version_view(thread, &artifact, None);

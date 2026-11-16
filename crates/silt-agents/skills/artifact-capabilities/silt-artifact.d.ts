@@ -418,7 +418,7 @@ interface SiltSampleOptions {
   images?: Blob[]
   /** The same question, with no tools or images, asked again within five minutes gets the answer it had, unless this is `false`, as a chat's turns should be. */
   cache?: boolean
-  /** Aborting it rejects the call with `aborted` (an `AbortError`) and stops `onText`. Use a new `AbortController` per call. */
+  /** Aborting it rejects the call with `aborted` (an `AbortError`), stops `onText`, and ends the viewer's agent's run. Use a new `AbortController` per call. */
   signal?: AbortSignal
 }
 

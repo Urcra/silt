@@ -463,6 +463,12 @@ pub enum Request {
         name: String,
         input: serde_json::Value,
     },
+    /// Stops the page's question named `ask` while it runs.
+    StopSample {
+        thread: String,
+        artifact: String,
+        ask: String,
+    },
     /// The page's answer to a call of one of its tools.
     SampleToolResult {
         thread: String,

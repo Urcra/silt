@@ -437,11 +437,17 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
     action: 'Allow',
   }))
   return {
-    methods: ['ask', 'limits', 'toolResult'],
+    methods: ['ask', 'limits', 'toolResult', 'stop'],
     // Each question asks once; its tools' answers are many.
     perMinute: 120,
     call: async (method, args, context) => {
       if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: true }
+      if (method === 'stop') {
+        // The page stopped asking: this computer's agent stops too; in the hosted app the device's run ends on its own.
+        const minted = asks.get(String((args as { ask?: unknown } | null)?.ask ?? ''))
+        if (minted && !hosted()) await api.sampleStop(thread, artifact.id, minted).catch(() => undefined)
+        return null
+      }
       if (method === 'toolResult') {
         const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
         const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }

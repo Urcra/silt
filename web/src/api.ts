@@ -241,6 +241,9 @@ export const api = {
   /** A doc or a deck printed to a PDF by this computer's headless browser, from the page drawn of it. */
   artifactPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
   /** A page's answer to the agent's call of a tool it gave its question. */
+  /** Stops a page's question while this machine's agent answers it. */
+  sampleStop: (id: string, artifact: string, ask: string) =>
+    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/stop`),
   sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */

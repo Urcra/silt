@@ -81,6 +81,7 @@ pub fn ask_claude(
     tools: Option<&OfferedTools>,
     model: Option<&str>,
     cwd: &Path,
+    stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     mut heard: impl FnMut(&str),
 ) -> Result<Answer, OneShotError> {
     if question.len() > QUESTION_BYTES {
@@ -118,12 +119,24 @@ pub fn ask_claude(
     // before anything is written, as a run that never reads would block it.
     let pid = child.id();
     let (finished, finishing) = std::sync::mpsc::channel::<()>();
+    // It's ended too when the page that asked stops asking.
     let watchdog = std::thread::spawn(move || {
-        let late = finishing.recv_timeout(RUN_LIMIT).is_err();
-        if late {
+        let started = std::time::Instant::now();
+        loop {
+            match finishing.recv_timeout(STOP_CHECK) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                _ => return Ended::Finished,
+            }
+            let ended = if stop.as_ref().is_some_and(|stop| stop.load(std::sync::atomic::Ordering::SeqCst)) {
+                Ended::Stopped
+            } else if started.elapsed() >= RUN_LIMIT {
+                Ended::Late
+            } else {
+                continue;
+            };
             silt_os::kill_tree(pid);
+            return ended;
         }
-        late
     });
     // On stdin, so a question starting with a dash isn't taken for an option;
     // from a thread of its own, so a run that doesn't read can't hold this one.
@@ -161,13 +174,17 @@ pub fn ask_claude(
     }
     let status = child.wait().map_err(|error| OneShotError::Run(error.to_string()))?;
     let _ = finished.send(());
-    let late = watchdog.join().unwrap_or(false);
+    let ended = watchdog.join().unwrap_or(Ended::Finished);
     if let Some(writing) = writing {
         let _ = writing.join();
     }
     let said = reading.and_then(|reading| reading.join().ok()).unwrap_or_default();
-    if late {
-        return Err(OneShotError::Failed(format!("the agent took longer than {} seconds", RUN_LIMIT.as_secs())));
+    match ended {
+        Ended::Late => {
+            return Err(OneShotError::Failed(format!("the agent took longer than {} seconds", RUN_LIMIT.as_secs())));
+        }
+        Ended::Stopped => return Err(OneShotError::Failed("the page stopped asking".into())),
+        Ended::Finished => {}
     }
     if let Some(error) = answer.error {
         return Err(OneShotError::Failed(error));
@@ -176,6 +193,17 @@ pub fn ask_claude(
         return Err(OneShotError::Failed(if said.is_empty() { status.to_string() } else { said }));
     }
     Ok(Answer { text: answer.text, truncated: answer.truncated })
+}
+
+/// How often a run checks whether the page that asked stopped asking.
+const STOP_CHECK: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// How a run ended: by itself, past its time, or stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Finished,
+    Late,
+    Stopped,
 }
 
 /// What print mode's stream said so far.

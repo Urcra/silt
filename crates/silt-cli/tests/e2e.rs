@@ -1723,6 +1723,47 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     assert!(!refused, "only an artifact that declares sample asks");
 }
 
+/// A page that stops asking ends its agent's run: here the run waits on a
+/// call of the page's tool, which the page never answers (ADR 0072).
+#[test]
+fn a_page_that_stops_asking_ends_its_agents_run() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Artifact saver"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Artifact saver");
+    let id = artifacts_of(&api, &thread)[0]["id"].as_str().expect("id").to_owned();
+    api.ok(
+        "PUT",
+        &format!("/api/threads/{thread}/artifacts/{id}/grants"),
+        Some(serde_json::json!({"capability": "sample", "state": "granted"})),
+    );
+    let sample = format!("/api/threads/{thread}/artifacts/{id}/sample");
+    let tools = serde_json::json!([{"name": "lookup", "description": "Finds a row by its name"}]);
+    let began = std::time::Instant::now();
+    let (answered, said) = std::thread::scope(|scope| {
+        let asking = scope
+            .spawn(|| api.call("POST", &sample, Some(serde_json::json!({"ask": "q9", "input": "Which row?", "tools": tools}))));
+        // The page stops asking, again until the question it asked has ended, as a stop
+        // that reaches the daemon before the question does stops nothing.
+        let stop = format!("/api/threads/{thread}/artifacts/{id}/sample/q9/stop");
+        while !asking.is_finished() && began.elapsed() < std::time::Duration::from_secs(60) {
+            api.ok("POST", &stop, None);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        asking.join().expect("asked")
+    });
+    assert!(!answered && said.to_string().contains("stopped asking"), "{said}");
+    assert!(began.elapsed() < std::time::Duration::from_secs(60), "well before the run's own limit");
+}
+
 /// A page is built from files beside it, which its frame fetches from its
 /// own address; a version can change one file alone, and the rest carry
 /// over. People add files to the page, served beside it too; and the page

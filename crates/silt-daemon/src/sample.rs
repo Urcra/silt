@@ -98,6 +98,12 @@ impl Core {
             (false, None, _) => return Err(CoreError::Invalid("a page's tools run only for a named question".into())),
         };
         let tools_file = offered.as_ref().and(ask.as_ref()).map(|ask| tools_file(&self.data_dir, ask));
+        // A named question can be stopped while it runs; those that ended are forgotten.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.sample_stops.retain(|_, running| std::sync::Arc::strong_count(running) > 1);
+        if let Some(ask) = &ask {
+            self.sample_stops.insert(format!("{thread_id}/{}/{ask}", artifact.unwrap_or_default()), stop.clone());
+        }
         let bus = self.bus.clone();
         let applied = model.clone();
         Ok(async move {
@@ -107,11 +113,19 @@ impl Core {
                     .iter()
                     .map(|image| silt_agents::oneshot::Image { media_type: &image.media_type, data: &image.data })
                     .collect();
-                silt_agents::oneshot::ask_claude(&question, &shown, offered.as_ref(), model.as_deref(), &cwd, |text| {
-                    if let Some(ask) = &ask {
-                        let _ = bus.send(BusEvent::Sample { ask: ask.clone(), text: text.to_owned() });
-                    }
-                })
+                silt_agents::oneshot::ask_claude(
+                    &question,
+                    &shown,
+                    offered.as_ref(),
+                    model.as_deref(),
+                    &cwd,
+                    Some(stop),
+                    |text| {
+                        if let Some(ask) = &ask {
+                            let _ = bus.send(BusEvent::Sample { ask: ask.clone(), text: text.to_owned() });
+                        }
+                    },
+                )
             })
             .await;
             drop(answering);
@@ -185,6 +199,16 @@ impl Core {
                 Err(_) => Err(CoreError::Invalid(format!("the page didn't answer within {} seconds", TOOL_WAIT.as_secs()))),
             }
         })
+    }
+
+    /// Stops a page's question named `ask` while its agent runs, ending the
+    /// run with what it started; a question that ended already is nothing.
+    pub(crate) fn stop_sample(&mut self, thread: &str, artifact: &str, ask: &str) -> Result<(), CoreError> {
+        let thread = self.find_thread(thread)?;
+        if let Some(stop) = self.sample_stops.remove(&format!("{thread}/{artifact}/{ask}")) {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     /// A page's answer to a call of one of its tools, for the question it

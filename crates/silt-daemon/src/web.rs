@@ -167,6 +167,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
             post(artifact_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
         )
         .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
+        .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/stop", post(stop_sample))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -920,6 +921,11 @@ async fn save_edited_version(
     ask(&web, Request::SaveEditedVersion { thread, artifact, note: save.note }).await
 }
 
+/// A page stops asking its question, which ends its agent's run.
+async fn stop_sample(State(web): State<Web>, Path((thread, artifact, ask_name)): Path<(String, String, String)>) -> HttpResponse {
+    ask(&web, Request::StopSample { thread, artifact, ask: ask_name }).await
+}
+
 /// A page's answer to the agent's call of one of the tools it gave a
 /// question (ADR 0072).
 async fn sample_tool_result(
@@ -1154,7 +1160,8 @@ async fn make_frame(
 /// its policy as a header that also makes its origin opaque.
 async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: HttpRequest) -> HttpResponse {
     let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
-    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+    // The viewer's storage goes into the page once, and isn't kept with the key after (ADR 0072).
+    let Some(grant) = web.frames.lock().expect("lock").open(&key, |grant| grant.boot = None) else {
         return not_found();
     };
     let request_version =

@@ -1426,7 +1426,9 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
     use axum::http::{HeaderValue, StatusCode, header};
     use axum::response::IntoResponse;
     let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
-    let grant = server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key);
+    // The viewer's storage goes into the page once, and isn't kept with the key after (ADR 0072).
+    let grant =
+        server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).open(&key, |grant| grant.boot = None);
     let Some(grant) = grant else {
         return not_found();
     };
