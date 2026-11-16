@@ -6,7 +6,7 @@ import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
 import { RoomSocket } from '../rooms'
-import { consentFor } from './consent'
+import { consentFor, refusedHere } from './consent'
 import { dbHandler } from './db'
 import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } from './voiceAndTools'
 
@@ -27,7 +27,7 @@ export type Holder = {
 }
 
 export function handlersFor(thread: string, artifact: ArtifactView, holder: Holder): Record<string, CapabilityHandler> {
-  return {
+  const served = {
     db: dbHandler(thread, artifact),
     artifact: artifactHandler(thread, artifact),
     user: userHandler(thread, artifact),
@@ -40,19 +40,25 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
     ...(ttsServed() ? { tts: ttsHandler(holder) } : {}),
     mcp: mcpHandler(thread, artifact, holder),
     room: roomHandler(thread, artifact),
-    permissions: permissionsHandler(thread, artifact, holder),
   }
+  return { ...served, permissions: permissionsHandler(thread, artifact, holder, Object.keys(served)) }
 }
 
 /** The capabilities that ask the viewer before they act, which `permissions` reports on. */
 const ASKED = ['sample', 'dictation', 'mcp', 'comments', 'files']
 
-/** `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. */
-function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+/**
+ * `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. A
+ * capability this view doesn't serve, as dictation in the hosted app, is `unavailable`.
+ */
+function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder, served: string[]): CapabilityHandler {
   const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]) && !(name === 'comments' && composerOnly(artifact)))
   const states = async () => {
     const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-    return Object.fromEntries(declared().map((name) => [name, grants[name] === 'granted' ? 'granted' : grants[name] === 'refused' ? 'denied' : 'prompt']))
+    const refused = refusedHere(holder)
+    const state = (name: string) =>
+      !served.includes(name) ? 'unavailable' : grants[name] === 'granted' ? 'granted' : refused.has(name) ? 'denied' : 'prompt'
+    return Object.fromEntries(declared().map((name) => [name, state(name)]))
   }
   // A refusal holds for the page's load: asking again shows nothing until it opens anew.
   const asked = new Set<string>()
@@ -72,13 +78,19 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
         if (pending.length > 0) {
           pending.forEach((name) => asked.add(name))
           const agreed = await holder.confirm({ title: `Let ${artifact.title} use ${pending.join(', ')}?`, detail: 'You can change this later from the page.', action: 'Allow' })
-          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused', artifact.version).catch(() => undefined)
+          for (const name of pending) {
+            if (agreed) await api.setArtifactGrant(thread, artifact.id, name, 'granted', artifact.version).catch(() => undefined)
+            else refusedHere(holder).add(name)
+          }
         }
         const now = await states()
         return Object.fromEntries(wanted.map((name) => [name, now[name] ?? 'unavailable']))
       }
       const forget = await holder.confirm({ title: `Forget what you allowed ${artifact.title}?`, detail: 'It asks again the next time it needs something.', action: 'Forget' })
-      if (forget) for (const name of declared()) await api.setArtifactGrant(thread, artifact.id, name, null).catch(() => undefined)
+      if (forget) {
+        for (const name of declared()) await api.setArtifactGrant(thread, artifact.id, name, null).catch(() => undefined)
+        refusedHere(holder).clear()
+      }
       return null
     },
   }

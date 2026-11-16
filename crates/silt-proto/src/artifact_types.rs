@@ -147,8 +147,8 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
         "whiteboard" => {
             let board: Value = serde_json::from_str(text).map_err(refused)?;
             let items = board.get("items").and_then(Value::as_array).ok_or("a whiteboard has items")?;
-            if items.len() > 2000 {
-                return Err("a whiteboard has at most 2,000 items".into());
+            if items.len() > crate::page::QUERY_LIMIT {
+                return Err("a whiteboard has at most 1,000 items".into());
             }
             let mut ids = std::collections::HashSet::new();
             for item in items {

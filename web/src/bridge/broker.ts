@@ -4,7 +4,7 @@
 import type { ArtifactView } from '../api'
 
 /** Why a call was refused, as a page reads it from the rejection's `code`. */
-export type RefusalCode = 'not_granted' | 'rate_limited' | 'conflict' | 'too_large' | 'refused' | 'unavailable'
+export type RefusalCode = 'not_granted' | 'rate_limited' | 'conflict' | 'too_large' | 'refused' | 'unavailable' | 'busy' | 'viewer_stopped'
 
 export class Refusal extends Error {
   code: RefusalCode

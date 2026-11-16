@@ -30,6 +30,10 @@ type SiltRefusalCode =
   | 'refused'
   /** This view can't do it now (no speech model, a connector that isn't running, tools in the hosted app). */
   | 'unavailable'
+  /** `tts`: the viewer is dictating, so nothing is spoken over them. */
+  | 'busy'
+  /** `tts`: the viewer stopped the reading. */
+  | 'viewer_stopped'
 
 interface SiltRefusal extends Error {
   code: SiltRefusalCode
@@ -218,11 +222,10 @@ interface SiltDocRef<T = any> {
   strReplace(field: keyof T & string, old: string, now: string): Promise<SiltWritten>
   /**
    * Calls `fn` with the document now and again whenever it changes (null
-   * while there's none). Returns a function that stops it. A watch that's
-   * refused never calls `fn`, so time-limit the loading state yourself.
-   * At most 32 watches per page.
+   * while there's none). Returns a function that stops it. A refused watch
+   * calls `onError` instead, with `rate_limited` past 32 watches a page.
    */
-  onSnapshot(fn: (doc: SiltDoc<T> | null) => void): () => void
+  onSnapshot(fn: (doc: SiltDoc<T> | null) => void, onError?: (refusal: SiltRefusal) => void): () => void
 }
 
 /** Ops for `where`: equality, order, `in` (the field is one of a list), `contains` (an array field holds the value). */
@@ -245,7 +248,7 @@ interface SiltCollection<T = any> {
   /** The documents the viewer may read, in order. */
   get(): Promise<SiltDoc<T>[]>
   /** As a document's `onSnapshot`, for the query's documents. */
-  onSnapshot(fn: (docs: SiltDoc<T>[]) => void): () => void
+  onSnapshot(fn: (docs: SiltDoc<T>[]) => void, onError?: (refusal: SiltRefusal) => void): () => void
 }
 
 type SiltDbWrite =
@@ -546,8 +549,8 @@ interface SiltTts {
   /**
    * Reads `text` (with `opts`), or each line in turn, replacing any reading
    * under way, whose promise then rejects. Resolves once the last line is
-   * spoken. Rejects `refused` with a message starting `busy` while the
-   * viewer dictates, and `refused` with `viewer_stopped` when stopped.
+   * spoken. Rejects `busy` while the viewer dictates, and `viewer_stopped`
+   * when they stop it.
    */
   speak(text: string | SiltTtsLine[], opts?: Omit<SiltTtsLine, 'text' | 'id'>): Promise<null>
   /** As `speak`, but queued after what's being read. */

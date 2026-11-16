@@ -95,7 +95,7 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
         rate = Math.min(Math.max(Number(given.rate) || 1, 0.7), 1.5)
         return null
       }
-      if (listening) throw new Refusal('refused', 'busy: the viewer is dictating')
+      if (listening) throw new Refusal('busy', 'the viewer is dictating')
       const lines = (Array.isArray(given.lines) ? given.lines : []).filter((line) => typeof line?.text === 'string' && line.text.trim())
       if (lines.length === 0 || lines.some((line) => line.text.length > 2000)) throw new Refusal('refused', 'speak takes lines of 1 to 2,000 characters')
       if (method === 'speak') reading?.cancel()
@@ -107,7 +107,7 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
             speechSynthesis.cancel()
             holder.voice?.('idle', null)
             state('idle', 'viewer_stopped')
-            fail(new Refusal('refused', 'viewer_stopped'))
+            fail(new Refusal('viewer_stopped', 'the viewer stopped it'))
           },
         }
         lines.forEach((line, index) => {

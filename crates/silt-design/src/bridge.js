@@ -85,14 +85,14 @@ function namespace(cap, methods) {
 // `db` as a page writes it (ADR 0072): documents at even paths, in
 // collections at odd ones, read once or watched.
 function database(ns) {
-  function watch(request, fn) {
+  function watch(request, fn, onError) {
     var id = null, gone = false;
     var off = ns.on('snapshot', function (d) { if (d && d.watch === id) fn(d.data); });
     ns.watch({ request: request }).then(function (answer) {
       if (gone) { ns.unwatch({ watch: answer.watch }); return; }
       id = answer.watch;
       fn(answer.data);
-    }, function () {});
+    }, function (refusal) { off(); if (!gone && typeof onError === 'function') onError(refusal); });
     return function () { gone = true; off(); if (id !== null) ns.unwatch({ watch: id }); };
   }
   function doc(path) {
@@ -104,7 +104,7 @@ function database(ns) {
       update: function (fields) { return ns.update({ path: path, fields: fields }); },
       delete: function () { return ns['delete']({ path: path }); },
       strReplace: function (field, old, now) { return ns.str_replace({ path: path, field: field, old: old, new: now }); },
-      onSnapshot: function (fn) { return watch({ op: 'get', path: path }, fn); }
+      onSnapshot: function (fn, onError) { return watch({ op: 'get', path: path }, fn, onError); }
     });
   }
   function collection(path, query) {
@@ -125,7 +125,7 @@ function database(ns) {
       orderBy: function (field, direction) { return also(function (q) { q.order_by = field; q.descending = direction === 'desc'; }); },
       limit: function (n) { return also(function (q) { q.limit = n; }); },
       get: function () { return ns.query({ collection: path, query: query }); },
-      onSnapshot: function (fn) { return watch({ op: 'query', collection: path, query: query }, fn); }
+      onSnapshot: function (fn, onError) { return watch({ op: 'query', collection: path, query: query }, fn, onError); }
     });
   }
   return Object.freeze({

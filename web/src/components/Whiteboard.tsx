@@ -5,6 +5,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../api'
+import { edgeOf } from '../boardGeometry'
 import { useTopic } from '../bus'
 import { message } from '../query'
 import { RoomSocket, type PeerPresence } from '../rooms'
@@ -43,11 +44,22 @@ function sizeOf(item: Item): [number, number] {
   return [item.w ?? 160, item.h ?? 100]
 }
 
-/** Where an item's middle is, for arrows to meet. */
-function middle(item: Item | undefined): [number, number] | null {
+/** An item's box, for arrows to meet. */
+function boxOf(item: Item | undefined): { x: number; y: number; w: number; h: number } | null {
   if (!item || item.x === undefined || item.y === undefined) return null
   const [w, h] = sizeOf(item)
-  return [item.x + w / 2, item.y + h / 2]
+  return { x: item.x, y: item.y, w, h }
+}
+
+/** An arrow's two ends, each at the edge of its item facing the other. */
+function ends(from: Item | undefined, to: Item | undefined): [[number, number], [number, number]] | null {
+  const [a, b] = [boxOf(from), boxOf(to)]
+  if (!a || !b) return null
+  const [middleA, middleB]: [number, number][] = [
+    [a.x + a.w / 2, a.y + a.h / 2],
+    [b.x + b.w / 2, b.y + b.h / 2],
+  ]
+  return [edgeOf(a, middleB, 2), edgeOf(b, middleA)]
 }
 
 /** An id for a new item, unlikely to meet another person's made at once. */
@@ -220,6 +232,15 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       toast(message(failure), 'danger')
     }
   }
+  // Only the fields changed, so what someone else changed meanwhile, the agent's text say, stays.
+  const patch = async (id: string, fields: Partial<Item>) => {
+    try {
+      await api.pageData(thread, artifact, { op: 'update', path: `items/${id}`, fields })
+      await refresh()
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   const remove = async (id: string) => {
     // An arrow to or from it goes with it.
     const gone = [id, ...items.filter((item) => item.type === 'arrow' && (item.from === id || item.to === id)).map((item) => item.id)]
@@ -292,11 +313,11 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     drag.current = null
     if (now?.kind === 'item' && moving) {
       const item = byId.get(now.id)
-      if (item && (moving.dx !== 0 || moving.dy !== 0)) void write({ ...item, x: Math.round((item.x ?? 0) + moving.dx), y: Math.round((item.y ?? 0) + moving.dy) })
+      if (item && (moving.dx !== 0 || moving.dy !== 0)) void patch(item.id, { x: Math.round((item.x ?? 0) + moving.dx), y: Math.round((item.y ?? 0) + moving.dy) })
     }
     if (now?.kind === 'resize' && resizing) {
       const item = byId.get(now.id)
-      if (item) void write({ ...item, w: Math.round(resizing.w), h: Math.round(resizing.h) })
+      if (item) void patch(item.id, { w: Math.round(resizing.w), h: Math.round(resizing.h) })
     }
     if (now?.kind === 'draw' && stroke && stroke.length > 1) void write({ id: newId('s'), type: 'stroke', points: stroke })
     setMoving(null)
@@ -334,7 +355,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const finishEditing = () => {
     if (!editing) return
     const item = byId.get(editing.id)
-    if (item && item.text !== editing.text) void write({ ...item, text: editing.text.slice(0, 2000) })
+    if (item && item.text !== editing.text) void patch(item.id, { text: editing.text.slice(0, 2000) })
     setEditing(null)
   }
   /** The board as an SVG document: what's on it, framed, without anyone's cursor. */
@@ -453,8 +474,9 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
               <BoardImage key={raw.id} thread={thread} artifact={artifact} item={placed(raw)} onDown={(event) => down(event, raw.id)} />
             ))}
             {items.filter((item) => item.type === 'arrow').map((item) => {
-              const [from, to] = [middle(placed(byId.get(item.from ?? '') ?? ({} as Item))), middle(placed(byId.get(item.to ?? '') ?? ({} as Item)))]
-              if (!from || !to) return null
+              const joined = ends(placed(byId.get(item.from ?? '') ?? ({} as Item)), placed(byId.get(item.to ?? '') ?? ({} as Item)))
+              if (!joined) return null
+              const [from, to] = joined
               return (
                 <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-testid="whiteboard-arrow">
                   {/* A wider line no one sees, so an arrow is easy to pick. */}
