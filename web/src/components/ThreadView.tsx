@@ -1731,8 +1731,8 @@ function ThreadBody({
     const before = seenArtifacts.current
     seenArtifacts.current = newest ?? -1
     if (before === null) {
-      const linked = /^#?artifact-([0-9a-f]{12})$/.exec(hash)
-      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1])
+      const linked = /^#?artifact-([0-9a-f]{12})(?:-v(\d+))?$/.exec(hash)
+      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1], linked[2] ? Number(linked[2]) : null)
       return
     }
     if (newest === undefined || newest <= before || !desktop) return
@@ -1812,7 +1812,7 @@ function ThreadBody({
     if (linked) follow.landed.current = true
     else toEnd()
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
-  const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry')
+  const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry' && comment.location.at !== 'doc')
   const files = stats.data ?? null
   const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
   const entryProps: EntryProps = {

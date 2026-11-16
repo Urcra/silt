@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
 import { PRESETS } from '../agentState'
-import { api, type ChatSettings, type Preset } from '../api'
+import { api, type ChatSettings, type PageConnector, type Preset } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { THEMES, type Theme, applyTheme, storedTheme } from '../theme'
@@ -156,6 +156,7 @@ function Appearance() {
         ))}
       </div>
       {!hosted() && <ArtifactLoading />}
+      {!hosted() && <PageConnectors />}
     </section>
   )
 }
@@ -182,6 +183,80 @@ function ArtifactLoading() {
         </span>
       </span>
     </label>
+  )
+}
+
+/**
+ * The MCP servers pages may call on this machine (ADR 0080): each one's tools are off until ticked, and pages reach
+ * only those, with every action confirmed.
+ */
+function PageConnectors() {
+  const queries = useQueryClient()
+  const key = ['page-connectors']
+  const list = useQuery({ queryKey: key, queryFn: api.pageConnectors })
+  const [open, setOpen] = useState<string | null>(null)
+  const tools = useQuery({ queryKey: ['page-connectors', open], queryFn: () => api.connectorTools(open!), enabled: open !== null, retry: false })
+  const save = (next: PageConnector[]) =>
+    api.setPageConnectors(next).then(
+      () => void queries.invalidateQueries({ queryKey: key }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  const importing = () =>
+    api.importPageConnectors().then(
+      () => void queries.invalidateQueries({ queryKey: key }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  const connectors = list.data ?? []
+  return (
+    <div className="flex flex-col gap-2 pt-4" data-testid="page-connectors">
+      <h3 className="text-sm font-medium text-fg-1">Connectors for pages</h3>
+      <p className="text-xs text-fg-2">
+        MCP servers an artifact's page may call on this computer, as you. Each tool is off until you tick it, and a page asks you before every action.
+      </p>
+      {connectors.length === 0 && <p className="text-xs text-fg-3">None yet.</p>}
+      <ul className="flex flex-col gap-2">
+        {connectors.map((connector) => (
+          <li key={connector.name} className="rounded-md border border-line p-2 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-medium">{connector.name}</span>
+              <code className="truncate text-xs text-fg-3">{connector.url ?? [connector.command, ...connector.args].join(' ')}</code>
+              <Button size="sm" variant="ghost" onClick={() => setOpen(open === connector.name ? null : connector.name)}>
+                Tools
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => void save(connectors.filter((other) => other.name !== connector.name))}>
+                Remove
+              </Button>
+            </div>
+            {open === connector.name && (
+              <div className="mt-2 flex flex-col gap-1">
+                {tools.isPending && <span className="text-xs text-fg-3">Starting {connector.name}…</span>}
+                {tools.error && <span className="text-xs text-danger">{message(tools.error)}</span>}
+                {tools.data?.map((tool) => (
+                  <label key={tool.name} className="flex items-start gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={connector.tools[tool.name] === true}
+                      onChange={(event) =>
+                        void save(connectors.map((other) => (other.name === connector.name ? { ...other, tools: { ...other.tools, [tool.name]: event.target.checked } } : other)))
+                      }
+                    />
+                    <span>
+                      <span className="font-mono text-fg-1">{tool.name}</span> <span className="text-fg-3">{tool.read_only ? 'reads' : 'acts'}</span>
+                      {tool.description && <span className="block text-fg-2">{tool.description}</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div>
+        <Button size="sm" onClick={() => void importing()}>
+          Import from Claude Code
+        </Button>
+      </div>
+    </div>
   )
 }
 

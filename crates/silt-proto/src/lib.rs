@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 use silt_log::Delta;
 use silt_types::{DeltaId, DeviceId, FamilyId, ThreadId};
 
+pub mod artifact;
+pub mod artifact_types;
+pub mod edited;
+pub mod frames;
+pub mod page;
+pub mod rooms;
+pub mod svg;
 pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark
@@ -15,8 +22,10 @@ pub mod view;
 /// (ADR 0059). 11: a thread's files marked seen, and the turn a person
 /// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
-/// through each server they use (ADR 0071).
-pub const PROTOCOL: u32 = 12;
+/// through each server they use (ADR 0071). 13: an artifact's page data
+/// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
+/// rooms that span machines through `/v1/rooms` (ADR 0081).
+pub const PROTOCOL: u32 = 14;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -288,6 +297,21 @@ pub struct ProjectsReply {
 
 /// The name a project shows when nobody gave it one: its remote's last
 /// path segment.
+/// The code a page reads for a refusal (ADR 0072), from the start Silt's
+/// own refusals give their message, so both serving modes answer alike:
+/// `conflict`, `rate_limited` or `not_granted`; none for anything else.
+pub fn refusal_of(message: &str) -> Option<&'static str> {
+    if message.starts_with("conflict") {
+        Some("conflict")
+    } else if message.starts_with("rate limited") {
+        Some("rate_limited")
+    } else if message.starts_with("not_granted") {
+        Some("not_granted")
+    } else {
+        None
+    }
+}
+
 pub fn project_name(repo: &str) -> String {
     repo.trim_end_matches('/').rsplit(['/', ':']).next().filter(|name| !name.is_empty()).unwrap_or(repo).to_owned()
 }
@@ -559,6 +583,9 @@ pub struct SearchHit {
     pub kind: String,
     pub snippet: String,
     pub time_ms: i64,
+    /// The doc or sheet whose text it's in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1301,6 +1328,34 @@ pub enum RemoteCommand {
         code: String,
     },
     SignInCancel,
+    /// A page's question for the device's agent, asked with no tools and no
+    /// session (ADR 0072); the answer is `{text, truncated}`.
+    Sample {
+        question: String,
+        /// What the page showed with it, which the server checked it
+        /// declared.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::artifact::SampleImage>,
+        #[serde(default)]
+        model: crate::artifact::SampleModel,
+        /// Tools the page runs, which the device's agent calls through the
+        /// server while it answers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<crate::artifact::SampleTool>,
+    },
+    /// The thread's files for a page that declares `files` (ADR 0078), as
+    /// the device that holds the family reads them.
+    PageFiles {
+        artifact: String,
+        asked: crate::page::FilesRequest,
+    },
+    /// A page's call of the person's page connectors, on the device that
+    /// has them (ADR 0080): `{op, server, tool, input}`.
+    PageMcp {
+        artifact: String,
+        #[cfg_attr(feature = "ts", ts(type = "unknown"))]
+        asked: serde_json::Value,
+    },
 }
 
 /// What a person lets one of their devices do to the others (ADR 0026).
@@ -1313,12 +1368,18 @@ pub struct Capabilities {
     pub send_prompts: bool,
     pub run_agents: bool,
     pub review: bool,
+    /// Ask one of the person's computers' agents a page's question (ADR 0072).
+    pub sample: bool,
+    /// Call the person's page connectors on one of their computers (ADR 0080).
+    pub page_tools: bool,
 }
 
 impl Capabilities {
-    pub const ALL: Self = Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true };
+    pub const ALL: Self =
+        Self { answer_permissions: true, send_prompts: true, run_agents: true, review: true, sample: true, page_tools: true };
     /// A paired phone's, unless its person gives it more (ADR 0028).
-    pub const PHONE: Self = Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true };
+    pub const PHONE: Self =
+        Self { answer_permissions: true, send_prompts: false, run_agents: false, review: true, sample: false, page_tools: false };
 
     /// Whether these let the device send `command`, and if not, what it
     /// would need, for saying so.
@@ -1337,9 +1398,14 @@ impl Capabilities {
             | RemoteCommand::SignIn { .. }
             | RemoteCommand::SignInCode { .. }
             | RemoteCommand::SignInCancel => (self.run_agents, "start and stop agents"),
-            RemoteCommand::MrShow { .. } | RemoteCommand::MrSeen { .. } | RemoteCommand::FileAt { .. } => {
+            RemoteCommand::MrShow { .. }
+            | RemoteCommand::MrSeen { .. }
+            | RemoteCommand::FileAt { .. }
+            | RemoteCommand::PageFiles { .. } => {
                 (self.review, "review merge requests")
             }
+            RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),
+            RemoteCommand::PageMcp { .. } => (self.page_tools, "call your page connectors"),
         };
         if allowed { Ok(()) } else { Err(needs) }
     }

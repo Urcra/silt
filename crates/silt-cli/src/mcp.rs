@@ -74,7 +74,7 @@ impl DaemonTools {
     /// Asks the daemon to keep what `silt_show` or `silt_artifact` shows.
     fn show(&self, artifact: NewArtifact) -> Result<ArtifactPut, String> {
         let token = self.token.clone().ok_or("only an agent the web UI runs can show the person something")?;
-        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact }) })
+        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact: Box::new(artifact) }) })
     }
 
     /// `path` as the agent meant it: relative to where it runs.
@@ -134,15 +134,7 @@ impl silt_mcp::Backend for DaemonTools {
             "silt_use_skill" => {
                 let skill = self.skill(&text_arg(arguments, "name")?)?;
                 let body = skill.body().map_err(|error| error.to_string())?;
-                let mut files: Vec<String> = std::fs::read_dir(&skill.dir)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                            .filter(|name| name != "SKILL.md")
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let mut files = skill_files(&skill.dir);
                 files.sort();
                 let mut out = format!("Skill {} from {}.", skill.name, skill.dir.display());
                 if !files.is_empty() {
@@ -156,6 +148,7 @@ impl silt_mcp::Backend for DaemonTools {
                 let caption = arguments.get("caption").and_then(Value::as_str).map(str::to_owned);
                 let title = caption.clone().unwrap_or_else(|| file_title(&path));
                 let artifact = NewArtifact {
+                    contract: None,
                     title,
                     kind: "image".into(),
                     content: None,
@@ -164,20 +157,44 @@ impl silt_mcp::Backend for DaemonTools {
                     caption,
                     inline: true,
                     design_system: None,
+                    edits: Vec::new(),
+                    note: None,
+                    description: None,
+                    capabilities: None,
+                    files: Default::default(),
+                    patch: None,
                 };
                 self.show(artifact)?;
                 return Ok("Shown to the person in the conversation.".into());
             }
             "silt_artifact" => {
+                let id = arguments.get("id").and_then(Value::as_str).map(str::to_owned);
+                let text = |name: &str| arguments.get(name).and_then(Value::as_str).map(str::to_owned);
+                let (title, kind) = match (&id, text("title"), text("kind")) {
+                    (None, None, _) => return Err("missing argument title".into()),
+                    (None, _, None) => return Err("missing argument kind".into()),
+                    (_, title, kind) => (title.unwrap_or_default(), kind.unwrap_or_default()),
+                };
                 let artifact = NewArtifact {
-                    title: text_arg(arguments, "title")?,
-                    kind: text_arg(arguments, "kind")?,
-                    content: arguments.get("content").and_then(Value::as_str).map(str::to_owned),
+                    title,
+                    kind,
+                    content: text("content"),
                     path: self.path_arg(arguments),
-                    id: arguments.get("id").and_then(Value::as_str).map(str::to_owned),
+                    id,
                     caption: None,
                     inline: false,
-                    design_system: arguments.get("design_system").and_then(Value::as_str).map(str::to_owned),
+                    design_system: text("design_system"),
+                    contract: text("contract"),
+                    edits: edits_arg(arguments)?,
+                    note: text("note"),
+                    description: text("description"),
+                    capabilities: match arguments.get("capabilities") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::Object(declared)) => Some(declared.clone()),
+                        Some(_) => return Err("capabilities is an object of names and configs".into()),
+                    },
+                    files: self.files_arg(arguments)?,
+                    patch: arguments.get("patch").filter(|patch| !patch.is_null()).cloned(),
                 };
                 let kept = self.show(artifact)?;
                 let mut out = format!(
@@ -191,6 +208,97 @@ impl silt_mcp::Backend for DaemonTools {
                     let _ = write!(out, "\nThe design system's tokens left out: {}.", kept.dropped.join("; "));
                 }
                 return Ok(out);
+            }
+            "silt_artifact_data" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reaches its artifacts' data")?;
+                let artifact = text_arg(arguments, "id")?;
+                let as_level = match arguments.get("as_level").and_then(Value::as_str) {
+                    None => None,
+                    Some(level @ ("read" | "comment" | "collaborator")) => silt_proto::page::Level::parse(level),
+                    Some(other) => return Err(format!("as_level is read, comment or collaborator, not {other}")),
+                };
+                let mut asked = arguments.clone();
+                if let Some(object) = asked.as_object_mut() {
+                    object.remove("id");
+                    object.remove("as_level");
+                }
+                let request: silt_proto::page::PageRequest =
+                    serde_json::from_value(asked).map_err(|error| format!("that isn't a request of page data: {error}"))?;
+                let answer: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::PageData { thread: String::new(), artifact, asked: request, as_level }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&answer).unwrap_or_default());
+            }
+            "silt_artifact_room" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs speaks in a room")?;
+                let artifact = text_arg(arguments, "id")?;
+                let emit = arguments
+                    .get("topic")
+                    .and_then(Value::as_str)
+                    .map(|topic| (topic.to_owned(), arguments.get("data").cloned().unwrap_or(Value::Null)));
+                let heard: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::RoomAgent { thread: String::new(), artifact, emit }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&heard).unwrap_or_default());
+            }
+            "silt_artifact_doc" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs edits its docs")?;
+                let artifact = text_arg(arguments, "id")?;
+                let asked = match arguments.get("edits") {
+                    None | Some(Value::Null) => silt_proto::edited::DocRequest::Read,
+                    Some(edits) => silt_proto::edited::DocRequest::Edit {
+                        edits: serde_json::from_value(edits.clone())
+                            .map_err(|error| format!("edits are {{old, new}}: {error}"))?,
+                        base: None,
+                    },
+                };
+                let answer: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::DocData { thread: String::new(), artifact, asked }),
+                })?;
+                return Ok(answer["text"].as_str().unwrap_or_default().to_owned());
+            }
+            "silt_artifact_sheet" => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs edits its sheets")?;
+                let artifact = text_arg(arguments, "id")?;
+                // The agent counts sheets from 1, as their tabs do.
+                let sheet = arguments
+                    .get("sheet")
+                    .and_then(Value::as_u64)
+                    .map_or(Ok(0), |sheet| u16::try_from(sheet.saturating_sub(1)).map_err(|_| "no such sheet".to_owned()))?;
+                let ask = |asked| {
+                    ask_daemon::<Value>(&Request::Scoped {
+                        token: token.clone(),
+                        asking: Box::new(Request::SheetData { thread: String::new(), artifact: artifact.clone(), asked }),
+                    })
+                };
+                if let Some(set) = arguments.get("set").and_then(Value::as_object) {
+                    let cells = set
+                        .iter()
+                        .map(|(address, raw)| (address.clone(), raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)))
+                        .collect();
+                    ask(silt_proto::edited::SheetRequest::Set { sheet, cells, ids: Default::default() })?;
+                }
+                let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
+                let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;
+                return Ok(match range {
+                    Some(_) => serde_json::to_string(&read["values"]).unwrap_or_default(),
+                    None => {
+                        let count = read["sheets"].as_u64().unwrap_or(1);
+                        let heading = if count > 1 { format!("Sheet {} of {count}\n", sheet + 1) } else { String::new() };
+                        format!("{heading}{}", sheet_text(&read))
+                    }
+                });
+            }
+            "silt_artifact_read" if arguments.get("asset").is_some() => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
+                let id = text_arg(arguments, "id")?;
+                let asset = text_arg(arguments, "asset")?;
+                let asking = Request::PageAsset { thread: String::new(), artifact: id.clone(), asset: asset.clone() };
+                let read: silt_proto::view::ArtifactContent = ask_daemon(&Request::Scoped { token, asking: Box::new(asking) })?;
+                return asset_back(&self.thread, &id, &asset, &read);
             }
             "silt_artifact_read" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reads its artifacts back")?;
@@ -308,6 +416,51 @@ const READ_INLINE_BYTES: usize = 64 << 10;
 
 /// Writes a version read back to a file of its own outside the checkout,
 /// and says where, with its source when it's short.
+/// A file someone added to a page, written outside the checkout for the
+/// agent to open; short text is returned whole too (ADR 0074).
+fn asset_back(thread: &str, artifact: &str, asset: &str, read: &silt_proto::view::ArtifactContent) -> Result<String, String> {
+    use base64::Engine as _;
+    if !silt_proto::page::asset_id_ok(asset) {
+        return Err(format!("{asset} isn't an asset's id"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;
+    let extension = read
+        .media_type
+        .split(';')
+        .next()
+        .and_then(|kind| kind.rsplit('/').next())
+        .map(|ext| {
+            if ext == "svg+xml" {
+                "svg"
+            } else if ext == "plain" {
+                "txt"
+            } else {
+                ext
+            }
+        })
+        .filter(|ext| ext.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .unwrap_or("bin");
+    let dir = env::temp_dir().join("silt-artifacts").join(short(thread));
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!("{artifact}-asset-{asset}.{extension}"));
+    std::fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    let mut out = format!(
+        "The file {asset} on artifact {artifact}'s page ({}, {} bytes) is at {}.",
+        read.media_type,
+        bytes.len(),
+        path.display()
+    );
+    if read.media_type.starts_with("text/") || read.media_type.starts_with("application/json") {
+        match std::str::from_utf8(&bytes) {
+            Ok(text) if text.len() <= READ_INLINE_BYTES => {
+                let _ = write!(out, "\n\n{text}");
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
     use base64::Engine as _;
     let bytes = base64::engine::general_purpose::STANDARD.decode(&read.data).map_err(|error| error.to_string())?;
@@ -345,10 +498,38 @@ fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
     Ok(out)
 }
 
+/// What `silt_artifact_guide` says of a doc, sheet or whiteboard when its
+/// built-in skill can't be read.
+const DOC_GUIDE: &str = "A doc is Markdown that people edit with you, in place. Give its first text as `content`; after that, change \
+it with silt_artifact_doc's edits, which merge with what people type at the same moment, never with a new version. \
+Read it first, since people may have changed it. Lead with the point, use headings a reader can scan, and keep raw \
+HTML out: it shows as text.\n";
+const SHEET_GUIDE: &str = "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
+{\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
+silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
+change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
+or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n";
+const WHITEBOARD_GUIDE: &str = "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
+`content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
+\"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \
+(a note; colour yellow, blue, green, pink or gray), arrow (from and to item ids, an optional label), section (a labelled \
+frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
+and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n";
+
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
 /// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
-    let body = |name: &str| skills.iter().find(|skill| skill.name == name).and_then(|skill| skill.body().ok());
+    // A skill with its folder, so the files it names beside it can be read
+    // rather than searched for.
+    let body = |name: &str| {
+        let skill = skills.iter().find(|skill| skill.name == name)?;
+        let text = skill.body().ok()?;
+        Some(if skill.dir.is_dir() {
+            format!("{text}\n\nThe files beside this skill are in `{}`.\n", skill.dir.display())
+        } else {
+            text
+        })
+    };
     let mut out = String::new();
     match kind {
         "html" => match body("artifact-design") {
@@ -368,9 +549,32 @@ names. The artifact-diagramming skill says what a diagram should show.\n",
             "Silt renders Markdown in its own styles, with no raw HTML. Lead with the point, use headings a reader can \
 scan, and tables for comparisons.\n",
         ),
+        kind if silt_proto::artifact_types::is_type(kind) => {
+            if let Some(text) = body(&format!("artifact-{kind}")) {
+                out.push_str(&text);
+            }
+            if let Some((schema, example)) = silt_proto::artifact_types::guide(kind) {
+                let pretty = |value: &Value| serde_json::to_string_pretty(value).unwrap_or_default();
+                let _ = write!(
+                    out,
+                    "\n# The content's schema\n\nGive `content` as JSON that fits this schema; a version that doesn't is refused \
+with why. Revise one with `patch`, an RFC 6902 JSON Patch, rather than resending it.\n\n```json\n{}\n```\n\n# An example\n\n```json\n{}\n```\n",
+                    pretty(&schema),
+                    pretty(&example)
+                );
+            }
+        }
+        "doc" | "sheet" | "whiteboard" => match body(&format!("artifact-{kind}")) {
+            Some(text) => out.push_str(&text),
+            None => out.push_str(match kind {
+                "doc" => DOC_GUIDE,
+                "sheet" => SHEET_GUIDE,
+                _ => WHITEBOARD_GUIDE,
+            }),
+        },
         _ => out.push_str("An image shows as it is; give it a short title.\n"),
     }
-    if kind != "html" {
+    if !matches!(kind, "html" | "slides" | "canvas") {
         return out;
     }
     let source = |source: DesignSource| match source {
@@ -418,8 +622,8 @@ from a small token set of your own, or pass `design_system` to silt_artifact wit
             writeln!(out, "Other design systems: {}. silt_artifact_guide with `design_system` reads one.\n", others.join(", "));
     }
     out.push_str(
-        "For a chart, also load the artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming; to \
-write a design system for this project, design-system.\n",
+        "For a chart, also load the artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming; for a \
+page that declares capabilities, artifact-capabilities; to write a design system for this project, design-system.\n",
     );
     out
 }
@@ -472,6 +676,142 @@ fn clip(text: &str) -> String {
     if text.chars().count() > 160 { text.chars().take(160).collect::<String>() + "…" } else { text }
 }
 
+/// The files of a skill's folder other than `SKILL.md`, by their paths in
+/// it, one folder deep, as a skill's `references/` holds them.
+fn skill_files(dir: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            for inner in std::fs::read_dir(entry.path()).into_iter().flatten().flatten() {
+                if inner.file_type().is_ok_and(|kind| kind.is_file()) {
+                    files.push(format!("{name}/{}", inner.file_name().to_string_lossy()));
+                }
+            }
+        } else if name != "SKILL.md" {
+            files.push(name);
+        }
+    }
+    files
+}
+
+impl DaemonTools {
+    /// `files`, as `{path: {content} | {base64} | {path} | null}`, a
+    /// relative `path` read from the working directory as `path` is.
+    fn files_arg(
+        &self,
+        arguments: &Value,
+    ) -> Result<std::collections::BTreeMap<String, Option<silt_daemon::protocol::NewFile>>, String> {
+        let Some(files) = arguments.get("files") else {
+            return Ok(Default::default());
+        };
+        let files = files.as_object().ok_or("files is an object of paths and files")?;
+        files
+            .iter()
+            .map(|(path, file)| {
+                if file.is_null() {
+                    return Ok((path.clone(), None));
+                }
+                let text = |name: &str| file.get(name).and_then(Value::as_str).map(str::to_owned);
+                let from = self.path_arg(file);
+                Ok((
+                    path.clone(),
+                    Some(silt_daemon::protocol::NewFile { content: text("content"), base64: text("base64"), path: from }),
+                ))
+            })
+            .collect()
+    }
+}
+
+/// A sheet as the agent reads it: each non-empty cell by address, what it
+/// holds and, for a formula, its value.
+fn sheet_text(view: &Value) -> String {
+    let mut out = String::new();
+    let rows = view["raw"].as_array().cloned().unwrap_or_default();
+    for (row, cells) in rows.iter().enumerate() {
+        for (column, raw) in cells.as_array().into_iter().flatten().enumerate() {
+            let raw = raw.as_str().unwrap_or_default();
+            if raw.is_empty() {
+                continue;
+            }
+            let value = view["values"][row][column].as_str().unwrap_or_default();
+            let address = silt_sheet::address(row, column);
+            if raw.starts_with('=') {
+                let _ = writeln!(out, "{address}: {raw} → {value}");
+            } else {
+                let _ = writeln!(out, "{address}: {raw}");
+            }
+        }
+    }
+    if out.is_empty() { "The sheet is empty.".into() } else { out }
+}
+
+/// `edits`, checked here as the MCP server checks only numbers: a list of
+/// `{old, new}` strings.
+fn edits_arg(arguments: &Value) -> Result<Vec<silt_proto::artifact::Edit>, String> {
+    let Some(edits) = arguments.get("edits") else {
+        return Ok(Vec::new());
+    };
+    let edits = edits.as_array().ok_or("edits is a list of {old, new}")?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(at, edit)| {
+            let field = |name: &str| edit.get(name).and_then(Value::as_str).map(str::to_owned);
+            match (field("old"), field("new")) {
+                (Some(old), Some(new)) => Ok(silt_proto::artifact::Edit { old, new, file: field("file") }),
+                _ => Err(format!("edit {} needs old and new text", at + 1)),
+            }
+        })
+        .collect()
+}
+
+/// How long a page's tool may take, past the daemon's own wait.
+const PAGE_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(70);
+
+/// `silt sample-tools`: the tools a page gave its question, served to the
+/// agent answering it; each call is run by the page (ADR 0072).
+struct PageTools {
+    ask: String,
+    listed: Value,
+}
+
+impl silt_mcp::Backend for PageTools {
+    fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String> {
+        let request = Request::SampleToolCall { ask: self.ask.clone(), name: tool.to_owned(), input: arguments.clone() };
+        match client::send(&paths::socket_path(), &request, Some(PAGE_TOOL_TIMEOUT)) {
+            Ok(Response::Ok { data: Value::String(text) }) => Ok(text),
+            Ok(Response::Ok { data }) => Ok(data.to_string()),
+            Ok(Response::Error { message }) => Err(message),
+            Err(error) => Err(format!("the Silt daemon is not answering: {error}")),
+        }
+    }
+
+    fn listed(&self) -> Option<Value> {
+        Some(self.listed.clone())
+    }
+}
+
+pub fn serve_page_tools(file: &std::path::Path) -> Result<(), Exn<CliError>> {
+    let text = std::fs::read_to_string(file).or_raise(|| CliError(format!("cannot read {}", file.display())))?;
+    let offered: Value = serde_json::from_str(&text).or_raise(|| CliError("the page's tools aren't JSON".into()))?;
+    let ask = offered["ask"].as_str().unwrap_or_default().to_owned();
+    let listed = offered["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            serde_json::json!({
+                "name": tool["name"],
+                "description": tool["description"],
+                "inputSchema": if tool["input_schema"].is_object() { tool["input_schema"].clone() } else { serde_json::json!({"type": "object"}) },
+            })
+        })
+        .collect();
+    let mut tools = PageTools { ask, listed: Value::Array(listed) };
+    silt_mcp::serve(io::stdin().lock(), io::stdout().lock(), &mut tools).or_raise(|| CliError("the MCP connection failed".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +848,20 @@ mod tests {
         assert!(guide_text("html", &none, &skills).contains("None applies"));
         let svg = guide_text("svg", &guide, &skills);
         assert!(svg.contains("artifact-dataviz") && !svg.contains("Other design systems"), "{svg}");
+    }
+
+    #[test]
+    fn the_guide_gives_each_edited_kind_its_skill_or_a_short_guide() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let root = silt_agents::builtin::builtin_skills_root(data.path()).expect("skills");
+        let checkout = tempfile::tempdir().expect("temp dir");
+        let skills = conventions::discover_skills_with(checkout.path(), None, Some(&root));
+        let guide = ArtifactGuide { system: None, why: None, systems: Vec::new() };
+        for (kind, short) in [("doc", DOC_GUIDE), ("sheet", SHEET_GUIDE), ("whiteboard", WHITEBOARD_GUIDE)] {
+            let skill = skills.iter().find(|skill| skill.name == format!("artifact-{kind}")).expect("built-in skill");
+            let body = skill.body().expect("skill body");
+            assert!(guide_text(kind, &guide, &skills).starts_with(body.as_str()), "{kind}");
+            assert!(guide_text(kind, &guide, &[]).starts_with(short), "{kind}");
+        }
     }
 }

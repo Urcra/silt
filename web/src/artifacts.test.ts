@@ -15,7 +15,11 @@ import {
   textOf,
   throughVendor,
   versionOf,
+  withFilesInlined,
+  artifactPath,
+  listingMatches,
 } from './artifacts'
+import { FRAME_FIXTURES, OFFLINE_STUB } from './frame.generated'
 
 function artifact(index: number, id: string, version: number, extra: Partial<ArtifactView> = {}): HistoryEntry {
   return {
@@ -74,7 +78,9 @@ describe('artifacts', () => {
     expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com'])
     expect(directives['font-src']).toEqual(['data:', 'https://fonts.gstatic.com'])
     expect(directives['img-src']).toEqual(['data:', 'blob:'])
-    expect(sandboxedDocument('<p>hi</p>', { probe: false })).toBe(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><p>hi</p>`)
+    expect(sandboxedDocument('<p>hi</p>', { probe: false })).toBe(
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><script>${OFFLINE_STUB}</script><p>hi</p>`,
+    )
   })
 
   it("gives the frame the design system's tokens and the viewer's theme before the page's own content", () => {
@@ -87,7 +93,7 @@ describe('artifacts', () => {
     expect(script).toBeGreaterThan(policy)
     expect(style).toBeGreaterThan(script)
     expect(own).toBeGreaterThan(style)
-    expect(page).toContain("d.silt!=='theme'")
+    expect(page).toContain("d.silt==='theme'")
     expect(page).toContain("'securitypolicyviolation'")
     expect(sandboxedDocument('<p>hi</p>')).not.toContain("root.setAttribute('data-theme','")
   })
@@ -150,5 +156,69 @@ describe('artifacts', () => {
     expect(prompt).toContain('Comments on the artifact "Rescan benchmark" (id aaaaaaaaaaaa, version 2):')
     expect(prompt).toContain('- > the bars\n  \n  Make it blue')
     expect(prompt).toContain('Make a new version with silt_artifact and id aaaaaaaaaaaa.')
+  })
+})
+
+describe('the frame contract', () => {
+  it('composes every frame as silt_design::frame::compose does', () => {
+    for (const fixture of FRAME_FIXTURES) {
+      const composed = sandboxedDocument(fixture.html, {
+        style: fixture.style,
+        theme: fixture.theme,
+        probe: fixture.probe,
+        vendor: fixture.vendor,
+        parent: fixture.parent,
+        policyMeta: fixture.policyMeta,
+        boot: fixture.boot,
+      })
+      expect(composed).toBe(fixture.out)
+    }
+  })
+})
+
+describe("the offline copy of a page with files", () => {
+  it('carries its files inside: as data URIs where named, and answered by fetch', async () => {
+    const files = { 'css/site.css': { media_type: 'text/css; charset=utf-8', data: btoa('h1{}') }, 'data.json': { media_type: 'application/json', data: btoa('{"n":3}') } }
+    const html = withFilesInlined('<!doctype html><link rel="stylesheet" href="./css/site.css"><img src="data.json">', files)
+    expect(html.startsWith('<!doctype html><script>')).toBe(true)
+    expect(html).toContain(`href="data:text/css;base64,${btoa('h1{}')}"`)
+    expect(html).not.toContain('"./css/site.css"')
+    expect(withFilesInlined('<p>none</p>', {})).toBe('<p>none</p>')
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]
+    const fetched: unknown[] = []
+    const scope = { fetch: (url: unknown) => (fetched.push(url), Promise.resolve(new Response('net'))) }
+    new Function('window', script)(scope)
+    expect(await (await scope.fetch('data.json')).json()).toEqual({ n: 3 })
+    await scope.fetch('https://example.com/x')
+    expect(fetched).toEqual(['https://example.com/x'])
+  })
+})
+
+describe('the Artifacts page', () => {
+  const row = {
+    thread: 't1',
+    thread_title: 'Bench',
+    repo: '/r/silt',
+    owner: 'ann',
+    mine: true,
+    artifact: { id: '0123456789ab', version: 2, title: 'Rescan benchmark', kind: 'html', media_type: 'text/html', blob: 'b', size: 1, inline: false, description: 'How long a rescan takes' },
+    time_ms: 1,
+    pinned: false,
+    archived: false,
+  }
+  const all = { text: '', kind: '', repo: '', mine: false, archived: false }
+  it('filters by text in the title or description, kind, project, ownership and archiving', () => {
+    expect(listingMatches(row, all)).toBe(true)
+    expect(listingMatches(row, { ...all, text: 'RESCAN never' })).toBe(false)
+    expect(listingMatches(row, { ...all, text: 'rescan' })).toBe(true)
+    expect(listingMatches(row, { ...all, text: 'how long' })).toBe(true)
+    expect(listingMatches(row, { ...all, kind: 'svg' })).toBe(false)
+    expect(listingMatches(row, { ...all, repo: '/r/other' })).toBe(false)
+    expect(listingMatches({ ...row, mine: false }, { ...all, mine: true })).toBe(false)
+    expect(listingMatches(row, { ...all, archived: true })).toBe(false)
+  })
+  it('links to an artifact, at a version when not the latest', () => {
+    expect(artifactPath('t1', '0123456789ab')).toBe('/t/t1/artifacts/0123456789ab')
+    expect(artifactPath('t1', '0123456789ab', 3)).toBe('/t/t1/artifacts/0123456789ab/v/3')
   })
 })

@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -475,8 +475,9 @@ async fn agent() -> Result<()> {
 /// shows an image with `silt_show`, `Guide` reads `silt_artifact_guide`,
 /// `Read back` reads the last artifact with `silt_artifact_read`,
 /// `Artifact` makes an artifact with `silt_artifact` (`FAKE_ACP_ARTIFACT`
-/// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), and `Artifact
-/// again` adds a version of the last one. Each call is reported as a tool
+/// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), `Artifact
+/// again` adds a version of the last one, and `Artifact edit` adds one by
+/// editing the last. Each call is reported as a tool
 /// call, with what it answered as its output.
 async fn show(
     worker: &ConnectionTo<Client>,
@@ -496,13 +497,156 @@ async fn show(
         ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
     } else if prompt.contains("Guide") {
         ("silt_artifact_guide", serde_json::json!({"kind": "html"}))
+    } else if prompt.contains("Doc edit")
+        && let Some(last) = last.clone()
+    {
+        // The agent edits a doc people may be typing in (ADR 0077).
+        ("silt_artifact_doc", serde_json::json!({"id": last, "edits": [{"old": "- ship", "new": "- ship on Friday"}]}))
+    } else if prompt.contains("Sheet set")
+        && let Some(last) = last.clone()
+    {
+        ("silt_artifact_sheet", serde_json::json!({"id": last, "set": {"B3": "=SUM(B1:B2)", "A3": "total"}, "read": "A1:B3"}))
+    } else if prompt.contains("Room say")
+        && let Some(last) = last.clone()
+    {
+        // The agent speaks in the page's room (ADR 0081).
+        ("silt_artifact_room", serde_json::json!({"id": last, "topic": "note", "data": {"said": "hello"}}))
+    } else if let Some(asset) = prompt.split("Read asset ").nth(1).map(str::trim)
+        && let Some(last) = last.clone()
+    {
+        // A file someone added to the page (ADR 0074).
+        ("silt_artifact_read", serde_json::json!({"id": last, "asset": asset}))
     } else if prompt.contains("Read back")
         && let Some(last) = last.clone()
     {
         ("silt_artifact_read", serde_json::json!({"id": last}))
+    } else if prompt.contains("Artifact deck more")
+        && let Some(last) = last.clone()
+    {
+        // A slide added by a patch of the deck (ADR 0076).
+        let slide = serde_json::json!({"title": "Next", "html": "<h1>What next</h1>", "notes": "Close here."});
+        (
+            "silt_artifact",
+            serde_json::json!({"id": last, "patch": [{"op": "add", "path": "/slides/-", "value": slide}], "note": "A closing slide"}),
+        )
+    } else if prompt.contains("Artifact files edit")
+        && let Some(last) = last.clone()
+    {
+        // A version that changes only one of its files (ADR 0074).
+        let edit = serde_json::json!({"old": "3", "new": "4", "file": "data.json"});
+        ("silt_artifact", serde_json::json!({"id": last, "edits": [edit], "note": "More"}))
+    } else if prompt.contains("Artifact edit")
+        && let Some(last) = last.clone()
+    {
+        // A version made by editing the last one in place (ADR 0073).
+        let edit = serde_json::json!({"old": "Rescan benchmark", "new": "Rescan benchmark, edited"});
+        (
+            "silt_artifact",
+            serde_json::json!({"id": last, "edits": [edit], "note": "Retitled", "description": "How long a rescan takes"}),
+        )
     } else {
-        let html = std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into());
+        // A page that counts its opens in the viewer's storage and asks for a
+        // capability it didn't declare (ADR 0072).
+        let counter = "<!doctype html><h1>Rescan benchmark</h1><p id=\"n\"></p><p id=\"cap\">db: asking</p><script>\
+var n=Number(localStorage.getItem('n')||0)+1;localStorage.setItem('n',String(n));\
+document.getElementById('n').textContent='Opened '+n+' times';\
+silt.use('db').then(function(db){document.getElementById('cap').textContent=db?'db: yes':'db: none'});</script>";
+        let html = if prompt.contains("Artifact counter") {
+            counter.to_owned()
+        } else {
+            std::env::var("FAKE_ACP_ARTIFACT").unwrap_or_else(|_| "<h1>Rescan benchmark</h1>".into())
+        };
         let mut arguments = serde_json::json!({"title": "Rescan benchmark", "kind": "html", "content": html});
+        if prompt.contains("Artifact checklist") {
+            // A page keeping its tasks in the thread's page data (ADR 0072).
+            let page = "<!doctype html><h1>Checklist</h1><button id=\"add\">Add a task</button><p id=\"count\">tasks: asking</p><script>\
+silt.use('db').then(function(db){if(!db){document.getElementById('count').textContent='no db';return}\
+db.collection('tasks').onSnapshot(function(docs){document.getElementById('count').textContent='tasks: '+docs.length});\
+document.getElementById('add').onclick=function(){db.collection('tasks').add({done:false})}});</script>";
+            arguments = serde_json::json!({"title": "Checklist", "kind": "html", "content": page, "capabilities": {"db": {}}});
+        }
+        if prompt.contains("Artifact deck") {
+            let deck = serde_json::json!({"aspect": "16:9", "style": "h1{font:64px sans-serif}", "slides": [
+                {"title": "Rescans", "html": "<h1>Rescans got 3x faster</h1>", "notes": "Open with the headline."},
+                {"title": "Why", "html": "<h1>One walk</h1>"}
+            ]});
+            arguments = serde_json::json!({"title": "Rescan talk", "kind": "slides", "content": deck.to_string()});
+        }
+        if prompt.contains("Artifact doc") {
+            arguments = serde_json::json!({"title": "Launch plan", "kind": "doc", "content": "# Plan\n- ship\n"});
+        }
+        if prompt.contains("Artifact sheet") {
+            let rows = serde_json::json!({"rows": [["apples", 3], ["pears", 5]]});
+            arguments = serde_json::json!({"title": "Tracker", "kind": "sheet", "content": rows.to_string()});
+        }
+        if prompt.contains("Artifact tools") {
+            let mcp = serde_json::json!({"servers": [{"server": "silt", "tools": ["silt_history_search"]}]});
+            arguments = serde_json::json!({"title": "History finder", "kind": "html", "content": "<!doctype html><h1>Finder</h1>", "capabilities": {"mcp": mcp}});
+        }
+        if prompt.contains("Artifact board") {
+            let items = serde_json::json!({"items": [
+                {"id": "goal", "type": "block", "x": 0, "y": 0, "w": 160, "h": 100, "text": "Ship rooms", "color": "yellow"},
+                {"id": "risk", "type": "block", "x": 240, "y": 0, "w": 160, "h": 100, "text": "Latency", "color": "pink"},
+                {"id": "a1", "type": "arrow", "from": "goal", "to": "risk", "label": "watch"}
+            ]});
+            arguments = serde_json::json!({"title": "Planning board", "kind": "whiteboard", "content": items.to_string()});
+        }
+        // Arguments written out in a file, for an artifact whose content a test authored.
+        if let Some(path) = prompt.split("Artifact from ").nth(1).map(str::trim)
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(given) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            arguments = given;
+        }
+        if prompt.contains("Artifact numbers") {
+            let page = serde_json::json!({"title": "Rescan benchmark", "sources": [
+                {"id": "bench", "name": "silt-bench rescan", "kind": "command", "detail": "silt-bench run --only rescan", "at": "2026-11-15T09:00:00Z"}
+            ], "blocks": [
+                {"type": "stat", "label": "p50", "value": 412, "unit": "ms", "change": -0.62, "source": "bench"},
+                {"type": "chart", "chart": "line", "title": "p50 by commit", "source": "bench", "series": [{"name": "p50", "points": [["a1", 1080], ["b2", 640], ["c3", 412]]}]}
+            ]});
+            arguments = serde_json::json!({"title": "Rescan numbers", "kind": "data", "content": page.to_string()});
+        }
+        if prompt.contains("Artifact boards") {
+            let board = |id: &str, width: u32, height: u32| serde_json::json!({"id": id, "name": id, "width": width, "height": height, "html": format!("<p>{id}</p>")});
+            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), board("Phone", 390, 844)]});
+            arguments = serde_json::json!({"title": "Settings screen", "kind": "canvas", "content": canvas.to_string()});
+        }
+        if prompt.contains("Artifact bad deck") {
+            arguments = serde_json::json!({"title": "Empty", "kind": "slides", "content": "{\"slides\": []}"});
+        }
+        if prompt.contains("Artifact files") {
+            // A page built from files beside it, that takes uploads and reads the thread's files (ADR 0074, 0078).
+            arguments = serde_json::json!({
+                "title": "Report",
+                "kind": "html",
+                "content": "<!doctype html><link rel=\"stylesheet\" href=\"css/site.css\"><h1>Report</h1><p id=\"n\">n: asking</p><script>fetch('data.json').then(function(r){return r.json()}).then(function(d){document.getElementById('n').textContent='n: '+d.n})</script>",
+                "files": {"data.json": {"content": "{\"n\": 3}"}, "css/site.css": {"content": "h1 { color: teal }"}},
+                "capabilities": {"assets": {}, "files": {"paths": ["src/**"]}}
+            });
+        }
+        if prompt.contains("Artifact saver") {
+            // A page that saves itself and asks an agent (ADR 0072).
+            arguments = serde_json::json!({
+                "title": "Saver",
+                "kind": "html",
+                "content": "<!doctype html><h1>Saver</h1>",
+                "capabilities": {"artifact": {}, "sample": {"images": true}, "user": {}}
+            });
+        }
+        if prompt.contains("Artifact poll") {
+            // Everyone reads the votes, and each writes their own (ADR 0072).
+            let rules = serde_json::json!([
+                {"path": "votes", "read": "read", "write": "owner"},
+                {"path": "votes/{self}", "write": "comment"}
+            ]);
+            arguments = serde_json::json!({
+                "title": "Lunch poll",
+                "kind": "html",
+                "content": "<!doctype html><h1>Lunch poll</h1>",
+                "capabilities": {"db": {"rules": rules}}
+            });
+        }
         if let Ok(system) = std::env::var("FAKE_ACP_DESIGN_SYSTEM") {
             arguments["design_system"] = serde_json::json!(system);
         }

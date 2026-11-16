@@ -14,13 +14,26 @@ pub struct BuiltinSkill {
     pub files: &'static [(&'static str, &'static str)],
 }
 
-pub const BUILTIN_SKILLS: [BuiltinSkill; 4] = [
+pub const BUILTIN_SKILLS: &[BuiltinSkill] = &[
     BuiltinSkill { name: "artifact-design", files: &[("SKILL.md", include_str!("../skills/artifact-design/SKILL.md"))] },
+    BuiltinSkill {
+        name: "artifact-capabilities",
+        files: &[
+            ("SKILL.md", include_str!("../skills/artifact-capabilities/SKILL.md")),
+            ("silt-artifact.d.ts", include_str!("../skills/artifact-capabilities/silt-artifact.d.ts")),
+        ],
+    },
     BuiltinSkill {
         name: "artifact-dataviz",
         files: &[
             ("SKILL.md", include_str!("../skills/artifact-dataviz/SKILL.md")),
-            ("validate-palette.mjs", include_str!("../skills/artifact-dataviz/validate-palette.mjs")),
+            ("references/form.md", include_str!("../skills/artifact-dataviz/references/form.md")),
+            ("references/colour.md", include_str!("../skills/artifact-dataviz/references/colour.md")),
+            ("references/marks.md", include_str!("../skills/artifact-dataviz/references/marks.md")),
+            ("references/interaction.md", include_str!("../skills/artifact-dataviz/references/interaction.md")),
+            ("references/components.md", include_str!("../skills/artifact-dataviz/references/components.md")),
+            ("references/palette.md", include_str!("../skills/artifact-dataviz/references/palette.md")),
+            ("references/anti-patterns.md", include_str!("../skills/artifact-dataviz/references/anti-patterns.md")),
         ],
     },
     BuiltinSkill {
@@ -28,6 +41,30 @@ pub const BUILTIN_SKILLS: [BuiltinSkill; 4] = [
         files: &[("SKILL.md", include_str!("../skills/artifact-diagramming/SKILL.md"))],
     },
     BuiltinSkill { name: "design-system", files: &[("SKILL.md", include_str!("../skills/design-system/SKILL.md"))] },
+    BuiltinSkill {
+        name: "artifact-slides",
+        files: &[
+            ("SKILL.md", include_str!("../skills/artifact-slides/SKILL.md")),
+            ("references/craft.md", include_str!("../skills/artifact-slides/references/craft.md")),
+        ],
+    },
+    BuiltinSkill {
+        name: "artifact-canvas",
+        files: &[
+            ("SKILL.md", include_str!("../skills/artifact-canvas/SKILL.md")),
+            ("references/boards.md", include_str!("../skills/artifact-canvas/references/boards.md")),
+        ],
+    },
+    BuiltinSkill {
+        name: "artifact-data",
+        files: &[
+            ("SKILL.md", include_str!("../skills/artifact-data/SKILL.md")),
+            ("references/charts.md", include_str!("../skills/artifact-data/references/charts.md")),
+        ],
+    },
+    BuiltinSkill { name: "artifact-doc", files: &[("SKILL.md", include_str!("../skills/artifact-doc/SKILL.md"))] },
+    BuiltinSkill { name: "artifact-sheet", files: &[("SKILL.md", include_str!("../skills/artifact-sheet/SKILL.md"))] },
+    BuiltinSkill { name: "artifact-whiteboard", files: &[("SKILL.md", include_str!("../skills/artifact-whiteboard/SKILL.md"))] },
 ];
 
 pub fn builtin_skill(name: &str) -> Option<&'static BuiltinSkill> {
@@ -39,7 +76,7 @@ pub fn builtin_skill(name: &str) -> Option<&'static BuiltinSkill> {
 /// folder, so an agent never reads a half-written or older copy.
 pub fn builtin_skills_root(data_dir: &Path) -> io::Result<PathBuf> {
     let mut hash = Sha256::new();
-    for skill in &BUILTIN_SKILLS {
+    for skill in BUILTIN_SKILLS {
         for (path, text) in skill.files {
             hash.update(skill.name.as_bytes());
             hash.update([0]);
@@ -57,11 +94,15 @@ pub fn builtin_skills_root(data_dir: &Path) -> io::Result<PathBuf> {
     }
     fs::create_dir_all(&parent)?;
     let staging = tempfile::tempdir_in(&parent)?;
-    for skill in &BUILTIN_SKILLS {
+    for skill in BUILTIN_SKILLS {
         let dir = staging.path().join(skill.name);
         fs::create_dir_all(&dir)?;
         for (path, text) in skill.files {
-            fs::write(dir.join(path), text)?;
+            let file = dir.join(path);
+            if let Some(parent) = file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(file, text)?;
         }
     }
     match fs::rename(staging.path(), &root) {
@@ -85,7 +126,7 @@ mod tests {
         let data = tempfile::tempdir().expect("temp dir");
         let root = builtin_skills_root(data.path()).expect("written");
         assert_eq!(builtin_skills_root(data.path()).expect("again"), root);
-        assert!(root.join("artifact-dataviz/validate-palette.mjs").is_file());
+        assert!(root.join("artifact-dataviz/references/colour.md").is_file());
 
         let checkout = tempfile::tempdir().expect("temp dir");
         let own = checkout.path().join(".silt/skills/artifact-design");
@@ -97,8 +138,34 @@ mod tests {
         assert_eq!((design.scope, design.description.as_str()), (SkillScope::Silt, "The project's own."));
         let dataviz = skills.iter().find(|skill| skill.name == "artifact-dataviz").expect("dataviz");
         assert_eq!(dataviz.scope, SkillScope::Builtin);
-        for skill in &BUILTIN_SKILLS {
+        for skill in BUILTIN_SKILLS {
             assert!(skills.iter().any(|found| found.name == skill.name && found.model_invocable), "{}", skill.name);
         }
+    }
+
+    /// A file a skill names but `BUILTIN_SKILLS` leaves out would be missing
+    /// for the agent, with nothing to say so.
+    #[test]
+    fn every_file_in_the_skills_folder_ships() {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+            for entry in fs::read_dir(dir).expect("read dir").map(|entry| entry.expect("entry").path()) {
+                if entry.is_dir() {
+                    walk(&entry, base, out);
+                } else {
+                    let relative = entry.strip_prefix(base).expect("under base");
+                    out.push(relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"));
+                }
+            }
+        }
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+        let mut on_disk = Vec::new();
+        walk(&base, &base, &mut on_disk);
+        on_disk.sort();
+        let mut shipped: Vec<String> = BUILTIN_SKILLS
+            .iter()
+            .flat_map(|skill| skill.files.iter().map(move |(path, _)| format!("{}/{path}", skill.name)))
+            .collect();
+        shipped.sort();
+        assert_eq!(shipped, on_disk);
     }
 }

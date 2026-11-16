@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ? AND capability = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "ca58ebe7ee6b01f55db5c2df58d9fabda62804caf54fef8d408bf05e449040e8"
+}

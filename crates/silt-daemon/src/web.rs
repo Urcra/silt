@@ -35,11 +35,18 @@ struct Web {
     /// The CDN files artifacts load through Silt, when the person turned
     /// that on (ADR 0071).
     vendor: Arc<silt_vendor::Vendor>,
+    /// What each frame key opens (ADR 0074).
+    frames: Arc<Mutex<crate::frames::FrameKeys>>,
+    /// Each room socket's way to its browser, by peer (ADR 0081).
+    room_peers: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
 /// daemon, which hands them out, and the web server, which trades them in.
 type OneTimeCodes = Arc<Mutex<HashMap<String, Instant>>>;
+
+/// The most a page's save or added file may send: the largest asset, as base64.
+const PAGE_FILE_BODY_BYTES: usize = 28 << 20;
 
 /// How long a one-time code may wait for its browser.
 const CODE_TTL: Duration = Duration::from_secs(60);
@@ -99,9 +106,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         codes: codes.clone(),
         voice: Arc::new(Voice::new()),
         vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
+        frames: Arc::default(),
+        room_peers: Arc::default(),
     };
     let api = Router::new()
         .route("/api/events", get(events_socket))
+        .route("/api/rooms", get(rooms_socket))
         .route("/api/status", get(status))
         .route("/api/threads", get(threads))
         .route("/api/threads/{id}/history", get(history))
@@ -124,6 +134,38 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
+        .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
+        .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
+        .route("/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/publish",
+            post(publish_artifact).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
+        .route("/api/threads/{id}/viewer", get(page_viewer))
+        .route("/api/artifacts", get(artifact_listing))
+        .route("/api/threads/{id}/artifacts/{artifact}/thumbnail", get(artifact_thumbnail))
+        .route("/api/threads/{id}/artifacts/{artifact}/pin", axum::routing::put(pin_artifact))
+        .route("/api/threads/{id}/artifacts/{artifact}/archive", axum::routing::put(archive_artifact))
+        .route("/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
+        .route("/api/threads/{id}/artifacts/{artifact}/doc", post(doc_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
+        .route("/api/page-connectors", get(page_connectors).put(set_page_connectors))
+        .route("/api/page-connectors/import", post(import_page_connectors))
+        .route("/api/page-connectors/{name}/tools", get(connector_tools))
+        .route("/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
+        .route("/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/assets",
+            post(page_assets).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
+        .route("/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/api/threads/{id}/artifacts/{artifact}/versions", post(save_edited_version))
+        .route("/api/threads/{id}/artifacts/{artifact}/assets/{asset}", get(page_asset_content))
+        .route(
+            "/api/threads/{id}/artifacts/{artifact}/pdf",
+            post(artifact_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
+        )
+        .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -205,6 +247,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         // An artifact's frame has an opaque origin and no token; this serves
         // only pinned files of the CDN allowlist.
         .route("/vendor/{host}/{*path}", get(vendor_file))
+        // A frame has no token either: its key is the whole permission, and
+        // serves only its own version (ADR 0074).
+        .route("/f/{key}/", get(serve_frame))
+        .route("/f/{key}/{*path}", get(frame_file))
         .fallback(asset)
         .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
         .with_state(web);
@@ -299,7 +345,8 @@ struct Failed {
 
 impl IntoResponse for Failed {
     fn into_response(self) -> HttpResponse {
-        (self.status, Json(json!({"error": self.message}))).into_response()
+        let refusal = silt_proto::refusal_of(&self.message);
+        (self.status, Json(json!({"error": self.message, "refusal": refusal}))).into_response()
     }
 }
 
@@ -314,6 +361,21 @@ async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed
         Ok(Response::Error { message }) => Err(Failed { status: StatusCode::BAD_REQUEST, message }),
         Err(_) => Err(unavailable("the daemon stopped")),
     }
+}
+
+/// Refuses a page's call of `capability` unless the person allowed what the
+/// artifact's latest version declares of it. The page holding the frame
+/// asks them; this stands behind it, for a document the frame navigated to
+/// (ADR 0072).
+async fn consented(web: &Web, thread: &str, artifact: &str, capability: &str) -> Result<(), Failed> {
+    let grants = answer(web, Request::ArtifactGrants { thread: thread.to_owned(), artifact: artifact.to_owned() }).await?;
+    if grants.get(capability).and_then(serde_json::Value::as_str) == Some("granted") {
+        return Ok(());
+    }
+    Err(Failed {
+        status: StatusCode::FORBIDDEN,
+        message: format!("not_granted: the person hasn't allowed this page {capability}"),
+    })
 }
 
 /// Asks the request `make` builds for this machine's clone of `thread`, as
@@ -334,6 +396,139 @@ async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Req
 async fn events_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
     let bus = web.bus.subscribe();
     upgrade.on_upgrade(move |socket| serve_events(socket, bus))
+}
+
+async fn rooms_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve_room(socket, web))
+}
+
+#[derive(Deserialize)]
+struct Join {
+    thread: String,
+    artifact: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// Hands each delivery to its peer's socket.
+fn deliver(web: &Web, deliveries: &serde_json::Value) {
+    let peers = web.room_peers.lock().expect("lock");
+    for pair in deliveries.as_array().into_iter().flatten() {
+        let (Some(peer), Some(heard)) = (pair.get(0).and_then(serde_json::Value::as_str), pair.get(1)) else { continue };
+        // A view that stops reading loses what it can't keep up with,
+        // rather than growing without end.
+        if let Some(sender) = peers.get(peer) {
+            let _ = sender.try_send(heard.to_string());
+        }
+    }
+}
+
+/// One view in one room (ADR 0081): it joins with its first message, then
+/// what it sends goes through the hub, and what others say comes back.
+async fn serve_room(mut socket: WebSocket, web: Web) {
+    let Some(Ok(Message::Text(first))) = socket.recv().await else { return };
+    let Ok(join) = serde_json::from_str::<Join>(&first) else { return };
+    // A thread that syncs with a server has its room there, spanning every
+    // machine viewing the page and the hosted app.
+    if let Ok(route) = answer(&web, Request::RoomRoute { thread: join.thread.clone() }).await
+        && let (Some(url), Some(token)) = (route["url"].as_str(), route["token"].as_str())
+    {
+        relay_room(socket, url, token, first.to_string()).await;
+        return;
+    }
+    let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
+    let peer = uuid::Uuid::new_v4().simple().to_string();
+    let (sender, mut heard) = mpsc::channel(silt_proto::rooms::QUEUED);
+    web.room_peers.lock().expect("lock").insert(peer.clone(), sender);
+    let mut bus = web.bus.subscribe();
+    match answer(&web, Request::RoomJoin { key: key.clone(), peer: peer.clone() }).await {
+        Ok(deliveries) => {
+            let _ = socket.send(Message::Text(json!({"event": "joined", "peer": peer}).to_string().into())).await;
+            deliver(&web, &deliveries);
+        }
+        Err(failed) => {
+            let _ = socket.send(Message::Text(json!({"event": "refused", "reason": failed.message}).to_string().into())).await;
+            web.room_peers.lock().expect("lock").remove(&peer);
+            return;
+        }
+    }
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    let Ok(sent) = serde_json::from_str::<silt_proto::rooms::Sent>(&text) else { continue };
+                    if let Ok(deliveries) = answer(&web, Request::RoomSend { key: key.clone(), peer: peer.clone(), sent }).await {
+                        deliver(&web, &deliveries);
+                    }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            out = heard.recv() => match out {
+                Some(text) => if socket.send(Message::Text(text.into())).await.is_err() { break },
+                None => break,
+            },
+            event = bus.recv() => {
+                // What the thread's agent said, for this view if it's addressed here.
+                if let Ok(BusEvent::Room { deliveries }) = event {
+                    let mine: Vec<&serde_json::Value> = deliveries.as_array().into_iter().flatten().filter(|pair| pair.get(0).and_then(serde_json::Value::as_str) == Some(peer.as_str())).collect();
+                    for pair in mine {
+                        if let Some(heard) = pair.get(1) && socket.send(Message::Text(heard.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    web.room_peers.lock().expect("lock").remove(&peer);
+    if let Ok(deliveries) = answer(&web, Request::RoomLeave { key, peer }).await {
+        deliver(&web, &deliveries);
+    }
+}
+
+/// Relays one view's room to its server's `/v1/rooms`, as this device,
+/// both ways until either side closes.
+async fn relay_room(mut socket: WebSocket, server: &str, token: &str, join: String) {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest as _};
+    let refuse = |reason: &str| Message::Text(json!({"event": "refused", "reason": reason}).to_string().into());
+    let address = format!("{}/v1/rooms", server.trim_end_matches('/').replacen("http", "ws", 1));
+    let Ok(mut request) = address.into_client_request() else {
+        let _ = socket.send(refuse("unavailable")).await;
+        return;
+    };
+    let headers = request.headers_mut();
+    if let (Ok(auth), Ok(version)) = (format!("Bearer {token}").parse(), silt_proto::PROTOCOL.to_string().parse()) {
+        headers.insert("authorization", auth);
+        headers.insert(silt_proto::PROTOCOL_HEADER, version);
+    }
+    let Ok((mut upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+        let _ = socket.send(refuse("unavailable: the server can't be reached")).await;
+        return;
+    };
+    if upstream.send(tungstenite::Message::Text(join.into())).await.is_err() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if upstream.send(tungstenite::Message::Text(text.to_string().into())).await.is_err() { break }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            heard = upstream.next() => match heard {
+                Some(Ok(tungstenite::Message::Text(text))) => {
+                    if socket.send(Message::Text(text.to_string().into())).await.is_err() { break }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+        }
+    }
+    let _ = upstream.close(None).await;
 }
 
 /// Sends the socket the events of the topics it subscribed to, until it
@@ -606,6 +801,432 @@ async fn artifact_settings(State(web): State<Web>) -> HttpResponse {
 
 async fn set_artifact_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::ArtifactSettings>) -> HttpResponse {
     ask(&web, Request::SetArtifactSettings { settings }).await
+}
+
+#[derive(Deserialize)]
+struct FrameAsk {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    theme: Option<String>,
+    /// The origin of the page that will hold the frame.
+    #[serde(default)]
+    parent: Option<String>,
+    /// What the holding page kept for this viewer: their storage, and the
+    /// last version's state (ADR 0072).
+    #[serde(default)]
+    boot: Option<serde_json::Value>,
+}
+
+/// A read or write of an artifact's page data, as its page asks through the
+/// bridge (ADR 0072).
+async fn page_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(request): Json<silt_proto::page::PageRequest>,
+) -> HttpResponse {
+    ask(&web, Request::PageData { thread, artifact, asked: request, as_level: None }).await
+}
+
+#[derive(Deserialize)]
+struct Publish {
+    html: String,
+    #[serde(default)]
+    base: Option<u32>,
+}
+
+/// A version a page saves itself as, through the `artifact` capability.
+async fn publish_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(publish): Json<Publish>,
+) -> HttpResponse {
+    ask(&web, Request::PublishArtifact { thread, artifact, html: publish.html, base: publish.base }).await
+}
+
+#[derive(Deserialize)]
+struct SampleAsk {
+    #[serde(default)]
+    ask: Option<String>,
+    input: serde_json::Value,
+    #[serde(default)]
+    images: Vec<silt_proto::artifact::SampleImage>,
+    #[serde(default)]
+    tools: Vec<silt_proto::artifact::SampleTool>,
+    #[serde(default)]
+    model: silt_proto::artifact::SampleModel,
+}
+
+/// A page's question for this machine's agent, its answer streamed on the
+/// bus as it comes (ADR 0072).
+async fn sample(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<SampleAsk>,
+) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "sample").await {
+        return refused.into_response();
+    }
+    let request = Request::Sample {
+        thread,
+        artifact: Some(artifact),
+        ask: asked.ask,
+        input: asked.input,
+        images: asked.images,
+        tools: asked.tools,
+        model: asked.model,
+    };
+    ask(&web, request).await
+}
+
+/// One of the files people added to a page, for a view Silt draws itself,
+/// such as a whiteboard's images (ADR 0081).
+async fn page_asset_content(
+    State(web): State<Web>,
+    Path((thread, artifact, asset)): Path<(String, String, String)>,
+) -> HttpResponse {
+    ask(&web, Request::PageAsset { thread, artifact, asset }).await
+}
+
+#[derive(Deserialize)]
+struct DocPage {
+    html: String,
+}
+
+/// A doc or a deck printed to a PDF by this machine's headless browser
+/// (ADRs 0076, 0077).
+async fn artifact_pdf(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(page): Json<DocPage>,
+) -> HttpResponse {
+    ask(&web, Request::ArtifactPdf { thread, artifact, html: page.html }).await
+}
+
+#[derive(Deserialize)]
+struct SaveVersion {
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Keeps a doc, a sheet or a whiteboard as it stands as its next version
+/// (ADR 0077).
+async fn save_edited_version(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(save): Json<SaveVersion>,
+) -> HttpResponse {
+    ask(&web, Request::SaveEditedVersion { thread, artifact, note: save.note }).await
+}
+
+/// A page's answer to the agent's call of one of the tools it gave a
+/// question (ADR 0072).
+async fn sample_tool_result(
+    State(web): State<Web>,
+    Path((thread, artifact, ask_name, call)): Path<(String, String, String, u32)>,
+    Json(result): Json<crate::protocol::SampleToolResult>,
+) -> HttpResponse {
+    ask(&web, Request::SampleToolResult { thread, artifact, ask: ask_name, call, result }).await
+}
+
+/// Adds, lists or deletes the files people added to a page (ADR 0074).
+async fn page_assets(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::AssetRequest>,
+) -> HttpResponse {
+    ask(&web, Request::PageAssets { thread, artifact, asked }).await
+}
+
+/// A page's call of one of the viewer's connectors' tools (ADR 0080).
+async fn page_mcp(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<crate::connectors::McpAsk>,
+) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "mcp").await {
+        return refused.into_response();
+    }
+    ask(&web, Request::PageMcp { thread, artifact, asked }).await
+}
+
+async fn page_connectors(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::PageConnectors).await
+}
+
+async fn set_page_connectors(
+    State(web): State<Web>,
+    Json(connectors): Json<Vec<crate::connectors::PageConnector>>,
+) -> HttpResponse {
+    ask(&web, Request::SetPageConnectors { connectors }).await
+}
+
+async fn import_page_connectors(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ImportPageConnectors).await
+}
+
+async fn connector_tools(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {
+    ask(&web, Request::ConnectorTools { name }).await
+}
+
+/// A doc's text, or edits of it (ADR 0077).
+async fn doc_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::DocRequest>,
+) -> HttpResponse {
+    ask(&web, Request::DocData { thread, artifact, asked }).await
+}
+
+/// A sheet's cells and values, or changes to it (ADR 0077).
+async fn sheet_data(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::edited::SheetRequest>,
+) -> HttpResponse {
+    ask(&web, Request::SheetData { thread, artifact, asked }).await
+}
+
+/// A sheet as an `.xlsx` workbook, formulas included (ADR 0077).
+async fn sheet_xlsx(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    let mut sheets = Vec::new();
+    let (mut sheet, mut count) = (0, 1);
+    while sheet < count {
+        let asked = silt_proto::edited::SheetRequest::Read { sheet, range: None };
+        let request = Request::SheetData { thread: thread.clone(), artifact: artifact.clone(), asked };
+        let view = match answer(&web, request).await {
+            Ok(view) => view,
+            Err(failed) => return failed.into_response(),
+        };
+        let Ok(view) = serde_json::from_value::<silt_proto::edited::SheetView>(view) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        count = view.sheets;
+        sheets.push((format!("Sheet{}", sheet + 1), view));
+        sheet += 1;
+    }
+    match silt_proto::edited::xlsx_book(&sheets) {
+        Ok(bytes) => xlsx_response(bytes),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
+}
+
+pub(crate) fn xlsx_response(bytes: Vec<u8>) -> HttpResponse {
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    );
+    headers.insert(header::CONTENT_DISPOSITION, header::HeaderValue::from_static("attachment; filename=\"sheet.xlsx\""));
+    response
+}
+
+/// The thread's files, read by a page that declares `files` (ADR 0078).
+async fn page_files(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::FilesRequest>,
+) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "files").await {
+        return refused.into_response();
+    }
+    ask(&web, Request::PageFiles { thread, artifact, asked }).await
+}
+
+/// Every artifact in the threads here, for the Artifacts page (ADR 0075).
+async fn artifact_listing(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::ArtifactListing).await
+}
+
+async fn artifact_thumbnail(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactThumbnail { thread, artifact }).await
+}
+
+#[derive(Deserialize)]
+struct Pinned {
+    pinned: bool,
+}
+
+async fn pin_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(pin): Json<Pinned>,
+) -> HttpResponse {
+    ask(&web, Request::PinArtifact { thread, artifact, pinned: pin.pinned }).await
+}
+
+#[derive(Deserialize)]
+struct Archived {
+    archived: bool,
+}
+
+async fn archive_artifact(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(archive): Json<Archived>,
+) -> HttpResponse {
+    ask(&web, Request::ArchiveArtifact { thread, artifact, archived: archive.archived }).await
+}
+
+async fn page_viewer(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::PageViewer { thread }).await
+}
+
+async fn artifact_grants(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
+    ask(&web, Request::ArtifactGrants { thread, artifact }).await
+}
+
+#[derive(Deserialize)]
+struct GrantChange {
+    capability: String,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
+}
+
+async fn set_artifact_grant(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(change): Json<GrantChange>,
+) -> HttpResponse {
+    ask(
+        &web,
+        Request::SetArtifactGrant {
+            thread,
+            artifact,
+            capability: change.capability,
+            state: change.state,
+            version: change.version,
+        },
+    )
+    .await
+}
+
+/// A key that opens one version of an HTML artifact in a frame (ADR 0074).
+async fn make_frame(
+    State(web): State<Web>,
+    Path((thread, artifact)): Path<(String, String)>,
+    Json(ask): Json<FrameAsk>,
+) -> HttpResponse {
+    let request = Request::ArtifactVersion { thread: thread.clone(), id: artifact.clone(), version: ask.version };
+    let read = match answer(&web, request).await {
+        Ok(read) => read,
+        Err(failed) => return failed.into_response(),
+    };
+    if read["kind"] != "html" {
+        return Failed { status: StatusCode::BAD_REQUEST, message: "only an HTML artifact opens in a frame".into() }
+            .into_response();
+    }
+    let grant = crate::frames::FrameGrant {
+        thread,
+        artifact,
+        version: ask.version,
+        theme: ask.theme.as_deref().and_then(silt_design::frame::Theme::parse),
+        parent: ask.parent.filter(|origin| silt_design::frame::is_origin(origin)),
+        boot: crate::frames::boot_of(ask.boot),
+    };
+    let key = crate::frames::new_key();
+    web.frames.lock().expect("lock").insert(key.clone(), grant, "");
+    let expires_ms = silt_proto::frames::FRAME_TTL.as_millis() as u64;
+    Json(json!({ "path": format!("/f/{key}/"), "expires_in_ms": expires_ms })).into_response()
+}
+
+/// The page a frame key opens, composed as every surface composes it, with
+/// its policy as a header that also makes its origin opaque.
+async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: HttpRequest) -> HttpResponse {
+    let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
+    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+        return not_found();
+    };
+    let request_version =
+        Request::ArtifactVersion { thread: grant.thread.clone(), id: grant.artifact.clone(), version: grant.version };
+    let Ok(read) = answer(&web, request_version).await else {
+        return not_found();
+    };
+    let Ok(read) = serde_json::from_value::<crate::protocol::ArtifactRead>(read) else {
+        return not_found();
+    };
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&read.data) else {
+        return not_found();
+    };
+    let proxied = answer(&web, Request::ArtifactSettings).await.is_ok_and(|settings| settings["proxy"] == true);
+    let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("127.0.0.1");
+    let vendor = proxied.then(|| format!("http://{host}/vendor/"));
+    let parts = silt_design::frame::FrameParts {
+        style: read.style.as_deref(),
+        theme: grant.theme,
+        probe: true,
+        vendor: vendor.as_deref(),
+        parent: grant.parent.as_deref(),
+        policy_meta: false,
+        boot: grant.boot.as_deref(),
+    };
+    let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
+    let files = format!("http://{host}/f/{key}/");
+    framed_response(page, &silt_design::frame::policy_with_files(vendor.as_deref(), &files))
+}
+
+/// A file beside a frame's version, or an asset someone added to its page
+/// (ADR 0074), fetched by the frame from its own address.
+async fn frame_file(State(web): State<Web>, Path((key, path)): Path<(String, String)>) -> HttpResponse {
+    let not_found = || (StatusCode::NOT_FOUND, "no such file").into_response();
+    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+        return not_found();
+    };
+    let request = match path.strip_prefix("_assets/") {
+        Some(asset) if silt_proto::page::asset_id_ok(asset) => {
+            Request::PageAsset { thread: grant.thread.clone(), artifact: grant.artifact.clone(), asset: asset.to_owned() }
+        }
+        Some(_) => return not_found(),
+        None if silt_proto::artifact::file_path_ok(&path) => {
+            Request::ArtifactFile { thread: grant.thread.clone(), id: grant.artifact.clone(), version: grant.version, path }
+        }
+        None => return not_found(),
+    };
+    let Ok(answer) = answer(&web, request).await else {
+        return not_found();
+    };
+    let Ok(content) = serde_json::from_value::<silt_proto::view::ArtifactContent>(answer) else {
+        return not_found();
+    };
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&content.data) else {
+        return not_found();
+    };
+    file_response(bytes, &content.media_type)
+}
+
+/// A frame's file: readable by the frame's opaque origin, never sniffed,
+/// and run as nothing if opened as a page of its own.
+fn file_response(bytes: Vec<u8>, media_type: &str) -> HttpResponse {
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    if let Ok(value) = header::HeaderValue::from_str(media_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, header::HeaderValue::from_static(silt_design::frame::FILE_POLICY));
+    headers.insert("cross-origin-resource-policy", header::HeaderValue::from_static("cross-origin"));
+    response
+}
+
+fn framed_response(page: String, policy: &str) -> HttpResponse {
+    let mut response = (StatusCode::OK, page).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, header::HeaderValue::from_static("text/html; charset=utf-8"));
+    if let Ok(value) = header::HeaderValue::from_str(&format!("sandbox allow-scripts; {policy}")) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    headers.insert(header::REFERRER_POLICY, header::HeaderValue::from_static("no-referrer"));
+    headers.insert("cross-origin-resource-policy", header::HeaderValue::from_static("same-site"));
+    response
 }
 
 /// A CDN file an artifact's frame loads through Silt (ADR 0071).
@@ -1261,6 +1882,8 @@ mod tests {
             codes,
             voice: Arc::new(Voice::new()),
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
+            frames: Arc::default(),
+            room_peers: Arc::default(),
         };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");

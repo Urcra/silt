@@ -21,6 +21,11 @@
 //! `lib.rs`;
 //! `git-by-hand`, the same with the merge run between two turns, outside
 //! any tool call, as a person would.
+//!
+//! `-p --output-format stream-json` answers the message on stdin as print
+//! mode does, in two chunks: `Sampled:` and the message's first words, or
+//! `FAKE_SAMPLE`. It checks no tools were allowed, and records the
+//! arguments in `FAKE_LOG_DIR/claude-print`.
 
 use std::env;
 use std::fs;
@@ -45,6 +50,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Step {
+    let given: Vec<String> = env::args().skip(1).collect();
+    if given.first().map(String::as_str) == Some("-p") && given.iter().any(|arg| arg == "stream-json") {
+        return print_mode(&given);
+    }
     let mut args = env::args().skip(1);
     let (mut session, mut resume, mut settings) = (String::new(), false, None);
     let log_dir = env::var_os("FAKE_LOG_DIR").map(PathBuf::from);
@@ -449,6 +458,104 @@ fn in_tool() -> Step {
     go.push(".go");
     while !Path::new(&go).exists() {
         std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// Print mode as `sample` runs it: no tools, no session, the answer streamed.
+/// Calls the first tool of the server `config` starts with `{"q": "fake"}`,
+/// and says what it answered.
+fn page_tool(config: &str) -> Result<String, Failed> {
+    use std::io::BufRead as _;
+    let config: serde_json::Value = serde_json::from_str(config).map_err(|error| Failed(2, error.to_string()))?;
+    let server = &config["mcpServers"]["page"];
+    let mut command = std::process::Command::new(server["command"].as_str().unwrap_or_default());
+    command.args(server["args"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str));
+    for (name, value) in server["env"].as_object().into_iter().flatten() {
+        command.env(name, value.as_str().unwrap_or_default());
+    }
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| Failed(2, format!("could not start the page's tools: {error}")))?;
+    let mut input = child.stdin.take().ok_or_else(|| Failed(2, "no stdin".into()))?;
+    let mut lines = std::io::BufReader::new(child.stdout.take().ok_or_else(|| Failed(2, "no stdout".into()))?).lines();
+    let mut ask = |message: serde_json::Value, id: i64| -> Result<serde_json::Value, Failed> {
+        writeln!(input, "{message}").map_err(io)?;
+        input.flush().map_err(io)?;
+        for line in lines.by_ref() {
+            let reply: serde_json::Value = serde_json::from_str(&line.map_err(io)?).unwrap_or_default();
+            if reply["id"] == id {
+                return Ok(reply);
+            }
+        }
+        Err(Failed(2, "the page's tools didn't answer".into()))
+    };
+    ask(
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+        1,
+    )?;
+    let listed = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), 2)?;
+    let name = listed["result"]["tools"][0]["name"].as_str().unwrap_or_default().to_owned();
+    let called =
+        ask(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": {"q": "fake"}}}), 3)?;
+    let _ = child.kill();
+    let said = called["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    Ok(format!(" [{name}: {said}]"))
+}
+
+fn print_mode(args: &[String]) -> Step {
+    if let Some(logs) = env::var_os("FAKE_LOG_DIR").map(PathBuf::from) {
+        write(&logs.join("claude-print"), args.join(" ").as_bytes())?;
+    }
+    let value = |flag: &str| args.iter().position(|arg| arg == flag).and_then(|at| args.get(at + 1)).map(String::as_str);
+    // Print mode is locked down: no built-in tools, only the asker's MCP
+    // servers, none of the person's settings, and nothing run unasked.
+    let locked = value("--tools") == Some("")
+        && args.iter().any(|arg| arg == "--strict-mcp-config")
+        && value("--setting-sources") == Some("project")
+        && value("--permission-mode") == Some("dontAsk");
+    let allowed = value("--allowedTools")
+        .is_some_and(|tools| tools.is_empty() || tools.split(',').all(|tool| tool.starts_with("mcp__page__")));
+    if !locked || !allowed {
+        return Err(Failed(2, format!("print mode wasn't locked down: {}", args.join(" "))));
+    }
+    let config = value("--mcp-config").filter(|config| config.contains("\"page\""));
+    let mut message = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut message).map_err(io)?;
+    // With stream-json input, the question is a user message, images and all.
+    let mut images = 0;
+    if args.iter().any(|arg| arg == "--input-format") {
+        let said: serde_json::Value = serde_json::from_str(message.trim()).map_err(|error| Failed(2, error.to_string()))?;
+        let content = said.pointer("/message/content").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        images = content.iter().filter(|part| part["type"] == "image").count();
+        message = content.iter().filter_map(|part| part["text"].as_str()).collect();
+    }
+    // With the asker's tools, it calls the first one, as an agent would.
+    let used = match config {
+        Some(config) => page_tool(config)?,
+        None => String::new(),
+    };
+    let answer = env::var("FAKE_SAMPLE").unwrap_or_else(|_| {
+        let words: Vec<&str> = message.split_whitespace().take(6).collect();
+        let mut seen = if images > 0 { format!(" ({images} images)") } else { String::new() };
+        if let Some(model) = args.iter().position(|arg| arg == "--model").and_then(|at| args.get(at + 1)) {
+            seen.push_str(&format!(" (on {model})"));
+        }
+        format!("Sampled: {}{seen}{used}", words.join(" "))
+    });
+    let (first, rest) = answer.split_at(answer.find(' ').unwrap_or(answer.len()));
+    let mut out = std::io::stdout().lock();
+    let chunk = |text: &str| json!({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}});
+    for line in [
+        json!({"type": "system", "subtype": "init"}),
+        chunk(first),
+        chunk(rest),
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": answer}),
+    ] {
+        writeln!(out, "{line}").map_err(io)?;
+        out.flush().map_err(io)?;
     }
     Ok(())
 }

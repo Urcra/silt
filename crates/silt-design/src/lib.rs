@@ -3,6 +3,7 @@
 //! `tokens.json`, compiled here into custom properties for every theme.
 
 pub mod frame;
+pub mod palette;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -741,6 +742,46 @@ mod tests {
             }
         }
         None
+    }
+
+    /// The built-in systems' chart colours pass the palette checks they ask
+    /// agents to run (ADR 0073): the categorical palette in order on `bg`,
+    /// the first three for all pairs, and the sequential and diverging
+    /// scales as ordinal ramps, in both themes.
+    #[test]
+    fn the_built_in_chart_colours_pass_the_palette_checks() {
+        use crate::frame::Theme;
+        use crate::palette::{Pairs, Srgb, categorical, ordinal};
+        for name in ["nous", "plain"] {
+            let tokens = parse(builtin(name).expect("built in").tokens).expect("tokens");
+            let colors = tokens.color.expect("colours").tokens;
+            for theme in [Theme::Light, Theme::Dark] {
+                let value = |token: &str| {
+                    let found =
+                        colors.iter().find(|candidate| candidate.name == token).unwrap_or_else(|| panic!("{name} has {token}"));
+                    let TokenValue::ByTheme(values) = &found.value else {
+                        panic!("{name}'s {token} has one value");
+                    };
+                    Srgb::parse(&values[theme.as_str()]).expect("a hex colour")
+                };
+                let bg = value("bg");
+                let slots: Vec<Srgb> = (1..=6).map(|slot| value(&format!("chart-{slot}"))).collect();
+                let report = categorical(&slots, bg, theme, Pairs::Adjacent);
+                assert!(report.passed(), "{name} in {}:\n{report}", theme.as_str());
+                let report = categorical(&slots[..3], bg, theme, Pairs::All);
+                assert!(report.passed(), "{name}'s first three in {}:\n{report}", theme.as_str());
+                let ramps = [
+                    (1..=7).map(|step| format!("chart-seq-{step}")).collect::<Vec<_>>(),
+                    (1..=3).rev().map(|step| format!("chart-div-neg-{step}")).collect(),
+                    (1..=3).map(|step| format!("chart-div-pos-{step}")).collect(),
+                ];
+                for ramp in ramps {
+                    let steps: Vec<Srgb> = ramp.iter().map(|token| value(token)).collect();
+                    let report = ordinal(&steps, bg, theme);
+                    assert!(report.passed(), "{name}'s {} in {}:\n{report}", ramp[0], theme.as_str());
+                }
+            }
+        }
     }
 
     #[test]

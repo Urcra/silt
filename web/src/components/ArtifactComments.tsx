@@ -18,6 +18,7 @@ export function ArtifactCommentsButton({
   quote,
   onClearQuote,
   onChanged,
+  opener,
 }: {
   thread: string
   group: ArtifactGroup
@@ -27,6 +28,8 @@ export function ArtifactCommentsButton({
   quote: string | null
   onClearQuote: () => void
   onChanged: () => Promise<unknown>
+  /** Handed what opens the composer, for a page's `comments.openComposer`. */
+  opener?: (open: (() => void) | null) => void
 }) {
   const { mine, waiting, add, send } = useArtifactComments(thread, group, shown, comments, onChanged)
   const [text, setText] = useState('')
@@ -54,6 +57,7 @@ export function ArtifactCommentsButton({
       align="right"
       triggerClassName="relative inline-flex items-center gap-1 rounded-sm p-1.5 text-fg-1 hover:bg-surface-2 max-md:min-h-11 max-md:min-w-11"
       panelClassName="flex w-80 flex-col gap-2 p-3"
+      opener={opener}
       trigger={
         <>
           <Icon name="comment" className="h-4 w-4" />

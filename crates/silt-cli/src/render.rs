@@ -137,6 +137,8 @@ pub fn comment_location(location: &CommentLocation) -> String {
             format!("{path}:{}{note}", span(*start, *end))
         }
         CommentLocation::Entry { index, excerpt } => format!("entry {index} ({})", clip(excerpt, 60)),
+        CommentLocation::Doc { artifact, outdated: true, .. } => format!("doc {artifact} (outdated: the text was deleted)"),
+        CommentLocation::Doc { artifact, excerpt, .. } => format!("doc {artifact} (\"{}\")", clip(excerpt, 60)),
         CommentLocation::Unknown => "an unknown place".into(),
     }
 }

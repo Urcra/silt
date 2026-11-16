@@ -384,7 +384,7 @@ pub enum Request {
     /// What an agent's run shows the person (ADR 0068); only inside
     /// [`Request::Scoped`], for the thread its token was made for.
     PutArtifact {
-        artifact: NewArtifact,
+        artifact: Box<NewArtifact>,
     },
     /// What a run reads before making an artifact: the design system that
     /// applies, or the one named, and the others it may use (ADR 0071);
@@ -403,6 +403,200 @@ pub enum Request {
     ArtifactSettings,
     SetArtifactSettings {
         settings: ArtifactSettings,
+    },
+    /// A read or write of an artifact's page data (ADR 0072).
+    PageData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::PageRequest,
+        /// Read as another person at this level, to check what the rules
+        /// hide from them; writes are refused with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_level: Option<silt_proto::page::Level>,
+    },
+    /// A version an HTML artifact's page saved itself as (ADR 0072); refused
+    /// as a conflict when `base` isn't the latest version.
+    PublishArtifact {
+        thread: String,
+        artifact: String,
+        html: String,
+        #[serde(default)]
+        base: Option<u32>,
+    },
+    /// A page's question for this machine's agent (ADR 0072); its answer
+    /// streams as `sample` bus events named `ask`. With no `artifact`, the
+    /// person asks from elsewhere and their server checked the page.
+    Sample {
+        thread: String,
+        #[serde(default)]
+        artifact: Option<String>,
+        #[serde(default)]
+        ask: Option<String>,
+        input: serde_json::Value,
+        #[serde(default)]
+        images: Vec<silt_proto::artifact::SampleImage>,
+        #[serde(default)]
+        tools: Vec<silt_proto::artifact::SampleTool>,
+        #[serde(default)]
+        model: silt_proto::artifact::SampleModel,
+    },
+    /// A doc or a deck as a PDF, printed from `html`, the page the browser
+    /// drew of it, by this machine's headless browser; a deck's page says
+    /// its own size.
+    ArtifactPdf {
+        thread: String,
+        artifact: String,
+        html: String,
+    },
+    /// Keeps a doc, a sheet or a whiteboard as it stands as its next
+    /// version, from the person's Save version.
+    SaveEditedVersion {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// The agent answering a page's question named `ask` calls one of the
+    /// page's tools, from `silt sample-tools`; answered once the page runs it.
+    SampleToolCall {
+        ask: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// The page's answer to a call of one of its tools.
+    SampleToolResult {
+        thread: String,
+        artifact: String,
+        ask: String,
+        call: u32,
+        result: SampleToolResult,
+    },
+    /// The files people added to an artifact's page (ADR 0074).
+    PageAssets {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::AssetRequest,
+    },
+    /// Where a page's room is relayed: the server the thread syncs with, so
+    /// the room spans every machine viewing it, or none to relay it here.
+    RoomRoute {
+        thread: String,
+    },
+    /// A view joins a page's room (ADR 0081); the answer is who hears what.
+    RoomJoin {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    RoomSend {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+        sent: silt_proto::rooms::Sent,
+    },
+    RoomLeave {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    /// The thread's agent emits to a page's room and reads what was said.
+    RoomAgent {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        emit: Option<(String, serde_json::Value)>,
+    },
+    /// The MCP servers this machine lists for pages (ADR 0080).
+    PageConnectors,
+    SetPageConnectors {
+        connectors: Vec<crate::connectors::PageConnector>,
+    },
+    /// Adds the servers Claude Code lists, every tool off.
+    ImportPageConnectors,
+    /// A page connector's tools, started if it isn't running.
+    ConnectorTools {
+        name: String,
+    },
+    /// A page's call of a connector's tool, or its description (ADR 0080).
+    PageMcp {
+        thread: String,
+        artifact: String,
+        asked: crate::connectors::McpAsk,
+    },
+    /// A doc's text, or edits of it (ADR 0077).
+    DocData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::DocRequest,
+    },
+    /// A sheet's cells and values, or changes to it (ADR 0077).
+    SheetData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::SheetRequest,
+    },
+    /// The thread's files, for a page that declares `files` (ADR 0078).
+    PageFiles {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::FilesRequest,
+    },
+    /// One added file's bytes, for the page's frame.
+    PageAsset {
+        thread: String,
+        artifact: String,
+        asset: String,
+    },
+    /// A file beside a version's page, for its frame (ADR 0074).
+    ArtifactFile {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+        path: String,
+    },
+    /// Every artifact in the threads here, for the Artifacts page (ADR 0075).
+    ArtifactListing,
+    /// An artifact's thumbnail as a JPEG, rendered the first time it's asked
+    /// for where a headless browser is installed.
+    ArtifactThumbnail {
+        thread: String,
+        artifact: String,
+    },
+    /// Keeps a thumbnail rendered off the event loop.
+    KeepThumbnail {
+        thread: String,
+        artifact: String,
+        version: u32,
+        jpeg: String,
+    },
+    PinArtifact {
+        thread: String,
+        artifact: String,
+        pinned: bool,
+    },
+    /// Hides an artifact for everyone, or shows it again; the owner's to do.
+    ArchiveArtifact {
+        thread: String,
+        artifact: String,
+        archived: bool,
+    },
+    /// Who views an artifact's page, as its `user` capability answers.
+    PageViewer {
+        thread: String,
+    },
+    /// What the person allowed or refused an artifact's page (ADR 0072).
+    ArtifactGrants {
+        thread: String,
+        artifact: String,
+    },
+    SetArtifactGrant {
+        thread: String,
+        artifact: String,
+        capability: String,
+        #[serde(default)]
+        state: Option<String>,
+        /// The version the viewer saw, whose declaration the grant is for;
+        /// the latest when none.
+        #[serde(default)]
+        version: Option<u32>,
     },
     /// The design system picked for each project on this machine.
     ProjectDesignSystems,
@@ -423,6 +617,14 @@ pub enum Request {
     ArtifactContent {
         thread: String,
         blob: String,
+    },
+    /// A version of one of the thread's artifacts, the latest when `version`
+    /// is none, for its frame (ADR 0074).
+    ArtifactVersion {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
     },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
@@ -767,7 +969,7 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// since it started, as installing Silt again does, it still runs the old
 /// build and serves the old web UI.
 /// What `silt_show` or `silt_artifact` asks to show.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewArtifact {
     pub title: String,
     /// `html`, `svg`, `markdown`, `mermaid` or `image`.
@@ -788,6 +990,46 @@ pub struct NewArtifact {
     /// The design system to style an HTML version with, or `none`.
     #[serde(default)]
     pub design_system: Option<String>,
+    /// The runtime contract an HTML version's page is written for, or
+    /// `latest`; by default its last version's.
+    #[serde(default)]
+    pub contract: Option<String>,
+    /// Changes to the latest version's source, in place of `content` or
+    /// `path` (ADR 0073).
+    #[serde(default)]
+    pub edits: Vec<silt_proto::artifact::Edit>,
+    /// What this version changed.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// What the artifact is, for its card; a version without one keeps the
+    /// last.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The capabilities the page may use (ADR 0072): none keeps the last
+    /// version's, `{}` clears them, and an object replaces them all.
+    #[serde(default)]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Files beside an HTML version's page, by path (ADR 0074): each one
+    /// added or replaced, or removed by `null`; the rest of the last
+    /// version's are kept.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, Option<NewFile>>,
+    /// An RFC 6902 JSON Patch of the latest version of a type's content
+    /// (ADR 0076), in place of content, a path or edits.
+    #[serde(default)]
+    pub patch: Option<serde_json::Value>,
+}
+
+/// A file of a version, as text, as base64, or read from a file of the
+/// run's checkout.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewFile {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub base64: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.
@@ -1486,6 +1728,23 @@ pub enum BusEvent {
     /// An import from the web UI has gone through `done` of its `total`
     /// sessions.
     Importing { done: usize, total: usize },
+    /// The answer so far to a page's `sample` question.
+    Sample { ask: String, text: String },
+    /// The agent answering a page's question calls one of the tools the
+    /// page gave it, for the page to run and answer.
+    SampleTool {
+        ask: String,
+        call: u32,
+        name: String,
+        #[cfg_attr(test, ts(type = "unknown"))]
+        input: serde_json::Value,
+    },
+    /// What the agent said to a room, for the web server to deliver; never
+    /// sent to browsers.
+    Room {
+        #[cfg_attr(test, ts(type = "unknown"))]
+        deliveries: serde_json::Value,
+    },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1512,10 +1771,22 @@ impl BusEvent {
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
             Self::Importing { .. } => Some("import".to_owned()),
+            Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
+            Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }
     }
+}
+
+/// How a page's tool answered: its value, or why it failed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SampleToolResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// What a browser sends on `/api/events`.
@@ -1612,6 +1883,10 @@ mod tests {
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
+            silt_proto::artifact::ArtifactFile::decl(&config),
+            silt_proto::view::ArtifactListed::decl(&config),
+            crate::connectors::PageConnector::decl(&config),
+            crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),

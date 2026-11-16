@@ -357,6 +357,15 @@ fn a_fork_inherits_history_and_a_pull_adds_upstream_progress() {
     assert_eq!(view_text(&family, FORK, main), "// fork\n// a\n// a2\nfn main() {}\n");
     assert_eq!(view_text(&family, THREAD, main), "// a\n// a2\nfn main() {}\n", "the source never changes");
     assert_eq!(lines(&family, THREAD), vec![("source 1".into(), Own), ("source 2".into(), Own)]);
+    same_history_from_the_log(&family, &[THREAD, FORK]);
+}
+
+/// A server works histories out from the log alone; it must tell what the
+/// family's projection does.
+fn same_history_from_the_log(family: &Family, threads: &[ThreadId]) {
+    for &thread in threads {
+        assert_eq!(silt_log::history_in(family.log(), family.graph(), thread), family.history(thread), "thread {}", thread.0);
+    }
 }
 
 #[test]
@@ -420,6 +429,7 @@ fn repeated_pulls_both_ways_keep_each_line_once() {
             (merge(FORK), Own),
         ]
     );
+    same_history_from_the_log(&family, &[THREAD, FORK]);
 }
 
 #[test]
@@ -641,4 +651,208 @@ fn merge_requests_open_and_resolve_once() {
     assert_eq!(family.merge_requests()[0].status, MrStatus::Approved);
     assert_eq!(view_text(&family, THREAD, main), "// fork\nfn main() {}\n");
     assert_eq!(view_text(&family, FORK, main), "// fork\nfn main() {}\n");
+}
+
+fn set(artifact: silt_types::ArtifactId, path: &str, value: &str) -> Op {
+    Op::Page(silt_log::PageOp::Set { artifact, path: path.into(), value: value.into() })
+}
+
+/// Page data folds alike whatever order the deltas came in, follows a
+/// fork's lineage, and a revert rewinds it with the conversation (ADR 0072).
+#[test]
+fn page_data_folds_alike_everywhere_and_follows_forks_and_rewinds() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    say(&mut family, THREAD, "make a poll");
+    let base = family.thread_head(THREAD);
+    // Two people vote at once, each on the same base.
+    let ann = family.delta(CHECKOUT_A, THREAD, Author::User, 0, base.clone(), set(artifact, "votes/ann", r#"{"pick":"a"}"#));
+    let bob = family.delta(CHECKOUT_B, THREAD, Author::User, 0, base.clone(), set(artifact, "votes/same", r#"{"pick":"b"}"#));
+    let bob_too = family.delta(ActorId(4), THREAD, Author::User, 0, base, set(artifact, "votes/same", r#"{"pick":"c"}"#));
+    let mut one = family.clone();
+    let mut other = family.clone();
+    for delta in [&ann, &bob, &bob_too] {
+        assert_eq!(one.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    for delta in [&bob_too, &bob, &ann] {
+        assert_eq!(other.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    let docs = one.page_documents(THREAD, artifact);
+    assert_eq!(docs, other.page_documents(THREAD, artifact), "replicas agree whatever the order");
+    assert_eq!(docs.len(), 2);
+    assert_eq!(silt_log::page_documents_in(one.log(), one.graph(), THREAD, artifact), docs, "a server folds the same");
+
+    // A fork inherits the data, then the two diverge.
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = one.thread_head(FORK);
+    on_thread(&mut one, ActorId(9), FORK, head, set(artifact, "votes/fork", r#"{"pick":"f"}"#));
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, DAEMON, THREAD, head, set(artifact, "votes/late", r#"{"pick":"l"}"#));
+    let forked = one.page_documents(FORK, artifact);
+    assert!(
+        forked.contains_key("votes/ann") && forked.contains_key("votes/fork") && !forked.contains_key("votes/late"),
+        "{forked:?}"
+    );
+    assert!(!one.page_documents(THREAD, artifact).contains_key("votes/fork"), "the source never sees the fork's");
+
+    // Reverting to before the votes rewinds them.
+    let said = say(&mut one, THREAD, "undo");
+    let _ = said;
+    let to = one
+        .log()
+        .iter()
+        .find(|delta| delta.thread == THREAD && matches!(delta.op, Op::Conv(_)))
+        .expect("the first line")
+        .span
+        .first();
+    let head = one.thread_head(THREAD);
+    on_thread(&mut one, DAEMON, THREAD, head, Op::Conv(ConvOp::Rewound { to }));
+    assert!(one.page_documents(THREAD, artifact).is_empty(), "{:?}", one.page_documents(THREAD, artifact));
+    assert_eq!(one.page_documents(FORK, artifact), forked, "the fork keeps its own");
+    let other_artifact: silt_types::ArtifactId = "ba9876543210".parse().expect("an id");
+    assert!(one.page_documents(FORK, other_artifact).is_empty());
+}
+
+fn doc_op(artifact: silt_types::ArtifactId, op: TextOp) -> Op {
+    Op::Page(silt_log::PageOp::Text { artifact, op })
+}
+
+/// A doc's text is a text CRDT: two people typing at once both keep what
+/// they typed, alike on every replica, and a server folds the same (ADR 0077).
+#[test]
+fn a_docs_text_converges_when_two_people_type_at_once() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    say(&mut family, THREAD, "write a plan");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON, THREAD, head, doc_op(artifact, TextOp::Insert { pos: 0, content: "Plan\n".into() }));
+    let base = family.thread_head(THREAD);
+    let ann = family.delta(
+        CHECKOUT_A,
+        THREAD,
+        Author::User,
+        0,
+        base.clone(),
+        doc_op(artifact, TextOp::Insert { pos: 5, content: "ann\n".into() }),
+    );
+    let bob = family.delta(
+        CHECKOUT_B,
+        THREAD,
+        Author::User,
+        0,
+        base,
+        doc_op(artifact, TextOp::Insert { pos: 0, content: "# ".into() }),
+    );
+    let mut one = family.clone();
+    let mut other = family.clone();
+    for delta in [&ann, &bob] {
+        assert_eq!(one.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    for delta in [&bob, &ann] {
+        assert_eq!(other.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    assert_eq!(one.doc_text(THREAD, artifact), "# Plan\nann\n");
+    assert_eq!(other.doc_text(THREAD, artifact), one.doc_text(THREAD, artifact));
+    assert_eq!(silt_log::doc_text_in(one.log(), one.graph(), THREAD, artifact), "# Plan\nann\n");
+}
+
+/// A sheet's rows and columns have ids, so a row inserted above a cell
+/// leaves the cell on its row (ADR 0077).
+#[test]
+fn a_cell_stays_on_its_row_when_a_row_goes_in_above() {
+    use silt_log::{Axis, PageOp};
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let lines = |axis, op| Op::Page(PageOp::Lines { artifact, sheet: 0, axis, op });
+    let mut family = Family::new();
+    say(&mut family, THREAD, "make a tracker");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON, THREAD, head, lines(Axis::Rows, TextOp::Insert { pos: 0, content: "rr".into() }));
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON, THREAD, head, lines(Axis::Columns, TextOp::Insert { pos: 0, content: "c".into() }));
+    let sheet = family.sheet_cells(THREAD, artifact, 0);
+    assert_eq!((sheet.rows.len(), sheet.columns.len()), (2, 1));
+    let (second, column) = (sheet.rows[1], sheet.columns[0]);
+    let head = family.thread_head(THREAD);
+    on_thread(
+        &mut family,
+        DAEMON,
+        THREAD,
+        head,
+        Op::Page(PageOp::Cell { artifact, sheet: 0, row: second, column, raw: "=1+1".into() }),
+    );
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON, THREAD, head, lines(Axis::Rows, TextOp::Insert { pos: 0, content: "r".into() }));
+    let sheet = family.sheet_cells(THREAD, artifact, 0);
+    assert_eq!(sheet.rows.len(), 3);
+    assert_eq!(sheet.rows[2], second, "the cell's row is now third");
+    assert_eq!(sheet.cells.get(&(second, column)).map(String::as_str), Some("=1+1"));
+}
+
+/// Page ops a peer made malformed are refused before they apply (ADR 0016).
+#[test]
+fn malformed_page_data_is_refused() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let family = Family::new();
+    for op in [
+        set(artifact, "votes", "{}"),
+        set(artifact, "votes/../x", "{}"),
+        set(artifact, "votes/ann", "{not json"),
+        set(artifact, "votes/ann", &format!("\"{}\"", "x".repeat(silt_log::page::DOC_BYTES))),
+        Op::Page(silt_log::PageOp::Patched { artifact, path: "votes/ann".into(), fields: "[1]".into() }),
+    ] {
+        let delta = family.delta(DAEMON, THREAD, Author::User, 0, family.thread_head(THREAD), op);
+        assert!(delta.check_shape().is_err(), "{:?}", delta.op);
+    }
+}
+
+/// A page write concurrent with a revert survives it on every replica,
+/// whatever order the two arrive in.
+#[test]
+fn a_page_write_concurrent_with_a_revert_folds_alike_everywhere() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    let first = say(&mut family, THREAD, "one");
+    say(&mut family, THREAD, "two");
+    let head = family.thread_head(THREAD);
+    let rewind = family.delta(
+        DAEMON.derive(THREAD.0),
+        THREAD,
+        Author::User,
+        0,
+        head.clone(),
+        Op::Conv(ConvOp::Rewound { to: first.span.first() }),
+    );
+    let vote = family.delta(ActorId(42), THREAD, Author::User, 0, head, set(artifact, "votes/v", r#"{"p":1}"#));
+    let (mut a, mut b) = (family.clone(), family.clone());
+    for delta in [&rewind, &vote] {
+        assert_eq!(a.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    for delta in [&vote, &rewind] {
+        assert_eq!(b.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    assert_eq!(a.page_documents(THREAD, artifact), b.page_documents(THREAD, artifact), "replicas agree");
+    assert!(a.page_documents(THREAD, artifact).contains_key("votes/v"), "a write the revert never saw stays");
+}
+
+/// Pulling a revert from upstream rewinds upstream's work, never the
+/// fork's own.
+#[test]
+fn pulling_an_upstream_revert_keeps_the_forks_own_page_data() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    let first = say(&mut family, THREAD, "one");
+    say(&mut family, THREAD, "two");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = family.thread_head(FORK);
+    on_thread(&mut family, ActorId(9), FORK, head, set(artifact, "votes/fork", r#"{"p":1}"#));
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, head, Op::Conv(ConvOp::Rewound { to: first.span.first() }));
+    let mut parents = family.thread_head(FORK);
+    for id in family.thread_head(THREAD).ids() {
+        parents.insert(*id);
+    }
+    on_thread(&mut family, CHECKOUT_B, FORK, parents, Op::Merge { from: THREAD, mr: None });
+    assert!(family.page_documents(FORK, artifact).contains_key("votes/fork"));
 }

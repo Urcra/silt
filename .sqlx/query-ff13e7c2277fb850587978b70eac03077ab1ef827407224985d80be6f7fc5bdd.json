@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT branch, merged, last_ms FROM thread_activity WHERE thread_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "branch",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "thread_activity",
+            "name": "branch"
+          }
+        }
+      },
+      {
+        "name": "merged",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_activity",
+            "name": "merged"
+          }
+        }
+      },
+      {
+        "name": "last_ms",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "thread_activity",
+            "name": "last_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "ff13e7c2277fb850587978b70eac03077ab1ef827407224985d80be6f7fc5bdd"
+}

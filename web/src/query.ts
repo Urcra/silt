@@ -32,6 +32,7 @@ export const keys = {
   diffTurns: (id: string, spec: DiffSpec) => ['thread', id, 'diff-turns', spec] as const,
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
+  artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
   mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
   inbox: (all: boolean) => ['inbox', all] as const,

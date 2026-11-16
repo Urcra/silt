@@ -1,6 +1,7 @@
 mod admin;
 mod artifact_check;
 mod commands;
+mod design;
 mod desktop;
 mod mcp;
 mod recording;
@@ -179,6 +180,11 @@ enum Command {
         #[command(subcommand)]
         command: workspace::WorkspaceCommand,
     },
+    /// Check chart palettes and text contrast, as artifacts' design guidance asks
+    Design {
+        #[command(subcommand)]
+        command: design::DesignCommand,
+    },
     /// List recorded threads, or with --commit the threads and turns that
     /// made a commit
     Log {
@@ -342,6 +348,9 @@ enum Command {
         #[arg(long)]
         ui: bool,
     },
+    /// Serve the tools a page gave its question to the agent answering it
+    #[command(hide = true)]
+    SampleTools { file: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -743,6 +752,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
+        Command::Design { command } => design::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
@@ -908,6 +918,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Compact => commands::daemon_compact(),
         },
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
+        Command::SampleTools { file } => mcp::serve_page_tools(&file),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

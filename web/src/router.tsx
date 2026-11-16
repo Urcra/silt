@@ -76,6 +76,22 @@ export const router = createRouter({
       validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === 'string' ? { q: search.q } : {}),
     }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: routes.ThreadRoute }),
+    createRoute({ getParentRoute: () => root, path: '/artifacts', component: lazyRouteComponent(() => import('./components/Gallery'), 'Gallery') }),
+    // A permalink to an artifact opens its thread with it open, at a version when one is named (ADR 0075).
+    createRoute({
+      getParentRoute: () => root,
+      path: '/t/$id/artifacts/$artifact',
+      beforeLoad: ({ params }) => {
+        throw redirect({ to: '/t/$id', params: { id: params.id }, hash: `artifact-${params.artifact}`, replace: true })
+      },
+    }),
+    createRoute({
+      getParentRoute: () => root,
+      path: '/t/$id/artifacts/$artifact/v/$n',
+      beforeLoad: ({ params }) => {
+        throw redirect({ to: '/t/$id', params: { id: params.id }, hash: `artifact-${params.artifact}-v${params.n}`, replace: true })
+      },
+    }),
     createRoute({
       getParentRoute: () => root,
       path: '/t/$id/review',
